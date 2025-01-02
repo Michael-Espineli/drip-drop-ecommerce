@@ -67,7 +67,7 @@ const CreateNew = () => {
                             streetAddress:customerDoc.billingAddress.streetAddress,
                             phoneNumber: customerDoc.phoneNumber,
                             email:customerDoc.email,
-                            label:customerDoc.firstName + ' ' + user.lastName,
+                            label:customerDoc.firstName + ' ' + customerDoc.lastName,
                         }
                         count = count + 1
 

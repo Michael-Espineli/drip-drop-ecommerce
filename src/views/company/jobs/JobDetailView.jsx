@@ -1,4 +1,4 @@
-import React, { useState,useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import {Link, useParams } from 'react-router-dom';
 import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
@@ -323,7 +323,7 @@ const JobDetailView = () => {
             }
         })();
     },[])
-    const handleCustomerChange = (selectedOption2) => {
+    const handleSelectedTaskTypeChange = (selectedOption2) => {
 
         (async () => {
             setSelectedTaskType(selectedOption2)
@@ -377,7 +377,8 @@ const JobDetailView = () => {
                 actualTime : '',
                 equipmentId : '',
                 serviceLocationId : '',
-                bodyOfWaterId : ''
+                bodyOfWaterId : '',
+                serviceStopId : ''
               });
             //Get Task
             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
@@ -415,7 +416,7 @@ const JobDetailView = () => {
     }
 
     return (
-                // 030811 - almost black
+        // 030811 - almost black
         // 282c28 - black green
         // 454b39 - dark olive green
         // 536546 - olive green
@@ -632,7 +633,7 @@ const JobDetailView = () => {
                             <Select
                                 value={selectedTaskType}
                                 options={taskTypeList}
-                                onChange={handleCustomerChange}
+                                onChange={handleSelectedTaskTypeChange}
                                 isSearchable
                                 placeholder="Select a Task Type"
                                 theme={(theme) => ({
@@ -802,7 +803,7 @@ const JobDetailView = () => {
                                     <th className='py-3 px-4'>type</th>
                                     <th className='py-3 px-4'>worker</th>
 
-                                    <th className='py-3 px-4'>workerType</th>
+                                    <th className='py-3 px-4'>worker Type</th>
                                     <th className='py-3 px-4'>taskId</th>
                                 </tr>
                             </thead>

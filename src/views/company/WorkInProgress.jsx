@@ -5,7 +5,7 @@ const WorkInProgress = () => {
 
     return (
         <div className='px-2 md:px-7 py-5'>
-            <h2>Please Forgive the Work In Progress</h2>
+            <h2>Please Forgive the Work In Progress Layla Jenner</h2>
         </div>
     );
 }

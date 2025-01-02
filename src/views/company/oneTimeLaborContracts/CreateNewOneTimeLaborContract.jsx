@@ -12,6 +12,7 @@ import {v4 as uuidv4} from 'uuid';
 
 
 const CreateNewOneTimeLaborContract = () => {
+    const navigate = useNavigate()
 
     const {name,recentlySelectedCompany} = useContext(Context);
 
@@ -75,7 +76,6 @@ const CreateNewOneTimeLaborContract = () => {
     const [description, setDescription] = useState('');
     const [rate, setRate] = useState('');
 
-    const navigate = useNavigate()
 
     useEffect(() => {
         (async () => {
@@ -240,7 +240,7 @@ const CreateNewOneTimeLaborContract = () => {
                 id : taskId,
                 name : task.name,
                 type : task.type, //Enum : workOrderTaskType
-                workerType : task.workerType,
+                workerType : 'Independent Contractor',
                 workerId : task.workerId,
                 workerName : task.workerName,
                 status : 'Offered', //Enum : laborContractTaskStatus
@@ -257,7 +257,9 @@ const CreateNewOneTimeLaborContract = () => {
         //Update Job Tasks
         await updateDoc(doc(db,'companies',recentlySelectedCompany,"workOrders",jobId,'tasks',task.id), {
             status : 'Offered',
-            laborContractId : laborContractId
+            laborContractId : laborContractId,
+            workerType : 'Independent Contractor',
+            workerName : task.workerName,
         });
         }
 
@@ -469,74 +471,74 @@ const CreateNewOneTimeLaborContract = () => {
                             </button>
                         </div>
                         <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
-                            <tr>
-                            <th className='py-3 px-4'></th>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Type</th>
-                                <th className='py-3 px-4'>Status</th>
-                                <th className='py-3 px-4'>Customer Approval</th>
-                                <th className='py-3 px-4'>Rate Offered</th>
+                            <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
+                                <tr>
                                 <th className='py-3 px-4'></th>
-
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            taskList?.map(task => (
-                                <tr key={task.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {       
-                                            (selectedTaskList.find(item => item.id === task.id))&&<button
-                                            onClick={(e) => removeTask(e,task.id)}
-                                            >
-                                                <IoMdCheckboxOutline />
-                                            </button>
-                                        }
-                                        {       
-                                            (!selectedTaskList.find(item => item.id === task.id))&&<button
-                                            onClick={(e) => selectTask(e,task.id)} 
-                                            >
-                                                <MdCheckBoxOutlineBlank />
-                                            </button>
-                                        }
-                                    </td>
-
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {
-                                            (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                Assign
-                                            </button>
-                                        }
-                                            {
-                                            (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                {task.status}
-                                                </p>
-                                        }
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <p>{task.contractedRate}</p>
-                                        <input 
-                                        className='w-full py-1 px-2 rounded-md mt-2'
-
-                                        onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Rate' value={description}></input>
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <button>
-                                            Edit
-                                        </button>
-                                    </td>
+                                    <th className='py-3 px-4'>Name</th>
+                                    <th className='py-3 px-4'>Type</th>
+                                    <th className='py-3 px-4'>Status</th>
+                                    <th className='py-3 px-4'>Customer Approval</th>
+                                    <th className='py-3 px-4'>Rate Offered</th>
+                                    <th className='py-3 px-4'></th>
 
                                 </tr>
-                            ))
-                        }
-                        </tbody>
-                    </table>
+                            </thead>
+                            <tbody>
+                            {
+                                taskList?.map(task => (
+                                    <tr key={task.id}>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            {       
+                                                (selectedTaskList.find(item => item.id === task.id))&&<button
+                                                onClick={(e) => removeTask(e,task.id)}
+                                                >
+                                                    <IoMdCheckboxOutline />
+                                                </button>
+                                            }
+                                            {       
+                                                (!selectedTaskList.find(item => item.id === task.id))&&<button
+                                                onClick={(e) => selectTask(e,task.id)} 
+                                                >
+                                                    <MdCheckBoxOutlineBlank />
+                                                </button>
+                                            }
+                                        </td>
+
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            {
+                                                (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
+                                                    Assign
+                                                </button>
+                                            }
+                                                {
+                                                (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
+                                                    {task.status}
+                                                    </p>
+                                            }
+                                        </td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            
+                                        </td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            <p>{task.contractedRate}</p>
+                                            <input 
+                                            className='w-full py-1 px-2 rounded-md mt-2'
+
+                                            onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Rate' value={description}></input>
+                                        </td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            <button>
+                                                Edit
+                                            </button>
+                                        </td>
+
+                                    </tr>
+                                ))
+                            }
+                            </tbody>
+                        </table>
                     </div>
                     <div>
                         <button

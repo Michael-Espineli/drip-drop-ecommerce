@@ -13,7 +13,7 @@ const CreateNewServiceStop = lazy(()=> import("../../views/company/serviceStops/
 const ServiceStopDetails = lazy(()=> import("../../views/company/serviceStops/ServiceStopDetails"))
 
 const PublicPage = lazy(()=> import("../../views/company/PublicPage"))
-const Settings = lazy(()=> import("../../views/company/Settings"))
+const Settings = lazy(()=> import("../../views/company/Settings/Settings"))
 const Chat = lazy(()=> import("../../views/company/Chat"))
 const WorkInProgress = lazy(()=> import("../../views/company/WorkInProgress"))
 
@@ -60,6 +60,8 @@ const OneTimeLaborContracts = lazy(()=> import("../../views/company/oneTimeLabor
 const CreateNewOneTimeLaborContract = lazy(()=> import("../../views/company/oneTimeLaborContracts/CreateNewOneTimeLaborContract"))
 const LaborContractDetails = lazy(()=> import("../../views/company/oneTimeLaborContracts/LaborContractDetails"))
 
+const TaskGroups = lazy(()=> import("../../views/company/Settings/TaskGroups/TaskGroups"))
+const TaskGroupDetails = lazy(()=> import("../../views/company/Settings/TaskGroups/TaskGroupDetails"))
 
 
 export const sellerRoutes = [
@@ -381,6 +383,20 @@ export const sellerRoutes = [
     {
         path:'/company/laborContracts/details/:laborContractId',
         element: <LaborContractDetails/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/taskGroups',
+        element: <TaskGroups/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/taskGroups/details/:taskGroupId',
+        element: <TaskGroupDetails/>,
         ability :['Admin','Seller'],
         role:'Company'
     }

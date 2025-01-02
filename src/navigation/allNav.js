@@ -135,6 +135,7 @@ export const allNav = [
         category:'Operations'
     }
     ,
+    
     {
         id : 34,
         title : 'Repair Requests',
@@ -145,12 +146,21 @@ export const allNav = [
     }
     ,
     {
-        id : 40,
+        id : 36,
+        title : 'Task Groups',
+        icon : <BiCategory/>,
+        role : 'Company',
+        path : '/company/taskGroups',
+        category:'Operations'
+    }
+    ,
+    {
+        id : 48,
         title : 'Items',
         icon : <AiOutlineShoppingCart/>,
         role : 'Company',
         path : '/company/seller',
-        category:'Monies'
+        category:'Operations'
     },
     {
         id : 50,

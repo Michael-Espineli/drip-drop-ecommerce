@@ -127,12 +127,49 @@ const ServiceStopDetails = () => {
         })();
     },[])
     return (
+                // 030811 - almost black
+        // 282c28 - black green
+        // 454b39 - dark olive green
+        // 536546 - olive green
+        // 747e79 - gray green
+        // ededed - off white
+        // 1D2E76 - Pool Blue
+        // CDC07B - Pool Yellow
+        // 9C0D38 - Pool Red
+        // 2B600F - Pool Green
+        // 919191 = gray
         <div className='px-2 md:px-7 py-5'>
             <div className='w-full bg-[#747e79] p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
-                    <h2>Please Forgive the Work In Progress</h2>
-                    <p>id - {serviceStop.id}</p>
-                    {/* <p>{companyUser.dateCreated}</p> */}
+                    <div className='flex justify-between py-1'>
+                        <p className='font-bold text-lg'>Service Stop Detail View</p>
+                        {
+                            (serviceStop.status=='Finished')&&
+                                <p className='py-1 px-2 bg-[#2B600F] rounded-md'>{serviceStop.status}</p>
+                        }
+                        {
+                            (serviceStop.status=='Not Finished')&&
+                                <p className='py-1 px-2 bg-[#CDC07B] rounded-md'>{serviceStop.status}</p>
+                        }
+                        {
+                            (serviceStop.status=='Skipped')&&
+                                <p className='py-1 px-2 bg-[#9C0D38] rounded-md'>{serviceStop.status}</p>
+                        }
+                    </div>
+                    <p>{serviceStop.billingStatus}</p>
+                    <hr/>
+                    <div>
+                        <p>Job Details</p>
+                        <Link to={`/company/jobs/detail/${serviceStop.jobId}`}>
+                            <p className="py-1 px-2 bg-[#1D2E76] text-[#919191] rounded-md">{serviceStop.jobId}</p> 
+                        </Link>
+                    </div>
+                    
+                    <p>rate -  {serviceStop.rate}</p>
+                    <p>recurringServiceStopId -  {serviceStop.recurringServiceStopId}</p>
+                    {/* <p>serviceDate  - {serviceStop.serviceDate}</p> */}
+                    <p>tech  - {serviceStop.tech}</p>
+                    <p>techId  - {serviceStop.techId}</p>
                     <p className='font-bold'>Address</p>
 
                     <p>{serviceStop.address.streetAddress}</p>
@@ -141,33 +178,36 @@ const ServiceStopDetails = () => {
                         <p>{serviceStop.address.city}</p>
                         <p>{serviceStop.address.zip}</p>
                     </div>
-                    
-                    <p>companyId  - {serviceStop.companyId}</p>
-                    <p>companyName  - {serviceStop.companyName}</p>
-                    <p>contractedCompanyId -  {serviceStop.contractedCompanyId}</p>
+                    <p>serviceLocationId -  {serviceStop.serviceLocationId}</p>
+
+                    <p className='font-bold'>Site Contact Info</p>
                     <p>companyName -  {serviceStop.companyName}</p>
                     <p>customerId  - {serviceStop.customerId}</p>
-                    {/* <p>dateCreated  - {serviceStop.dateCreated}</p> */}
-                    <p>description  - {serviceStop.description}</p>
-                    <p>duration -  {serviceStop.duration}</p>
-                    <p>status -  {serviceStop.status}</p>
-                    <p>billingStatus -  {serviceStop.billingStatus}</p>
-                    <p>includeDosages -  {serviceStop.includeDosages}</p>
-                    <p>includeReadings -  {serviceStop.includeReadings}</p>
-                    <p>jobId  - {serviceStop.jobId}</p>
-                    <p>otherCompany -  {serviceStop.otherCompany}</p>
-                    <p>rate -  {serviceStop.rate}</p>
-                    <p>status  - {serviceStop.status}</p>
-                    <p>recurringServiceStopId -  {serviceStop.recurringServiceStopId}</p>
-                    {/* <p>serviceDate  - {serviceStop.serviceDate}</p> */}
-                    <p>serviceLocationId -  {serviceStop.serviceLocationId}</p>
-                    <p>tech  - {serviceStop.tech}</p>
-                    <p>techId  - {serviceStop.techId}</p>
+                    {
+                        (!serviceStop.otherCompany)&&<div>
+                            <p className='font-bold' >Company Info</p>
+                            <p>companyId  - {serviceStop.companyId}</p>
+                            <p>companyName  - {serviceStop.companyName}</p>
+                        </div>
+                    }
+                    {
+                        (serviceStop.otherCompany)&&<div>
+                            <p className='font-bold' >Other Company Info</p>
+                            <p>contractedCompanyId -  {serviceStop.contractedCompanyId}</p>
 
+                        </div>
+                    }
+                    
+                    {/* <p>dateCreated  - {serviceStop.dateCreated}</p> */}
+                    
+                    
+                    
+                    
                 </div>
             </div>
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
+                    <p>Tasks</p>
                     <table className='w-full text-sm text-left text-[#d0d2d6]'>
                         <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
                             <tr>
@@ -216,6 +256,20 @@ const ServiceStopDetails = () => {
             </div>
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
+                <p>description  - {serviceStop.description}</p>
+                <p>duration -  {serviceStop.duration}</p>
+                {
+                    (serviceStop.includeReadings)&&<div>
+                        <p className='font-bold' >Readings</p>
+                        <hr/>
+                    </div>
+                }
+                {
+                    (serviceStop.includeDosages)&&<div>
+                        <p className='font-bold' >Dosages</p>
+                        <hr/>
+                    </div>
+                }
                 </div>
             </div>
         </div>

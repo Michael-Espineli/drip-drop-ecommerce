@@ -260,7 +260,7 @@ const CreateNewServiceStop = () => {
                 billingStatus: 'Not Invoiced', //Invoiced	Paid	Not Invoiced
                 serviceStopId : '',//Maybe Remove
                 includeDosages : true,
-                includeReadings : false,
+                includeReadings : true,
                 jobId : jobId,
                 otherCompany : false,
                 rate : '', //Maybe Remove

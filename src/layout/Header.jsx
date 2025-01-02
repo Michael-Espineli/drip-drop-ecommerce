@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Context } from "../context/AuthContext";
 
 const Header = ({showSidebar, setShowSidebar}) => {
-    const {name, accountType, photoUrl} = useContext(Context);
+    const {name, accountType, photoUrl,recentlySelectedCompanyName} = useContext(Context);
 
     return (
         // 030811 - almost black
@@ -35,9 +35,10 @@ const Header = ({showSidebar, setShowSidebar}) => {
                         <Link to='/company/profile' className="w-[180px] h-[50px]">
                             <div className='flex justify-center item-center gap-3'>
                                 {/* Name and title */}
+                                {/* {accountType} */}
                                 <div className='flex justify-center items-center flex-col text-end text-[#ededed]'>
                                     <h2 className='text-md font-bold'>{name}</h2>
-                                    <span className='text-[14px] w-full font-normal'>{accountType}</span>
+                                    <span className='text-[14px] w-full font-normal'>{recentlySelectedCompanyName} {accountType}</span>
                                 </div>
                                 {/* Profile Image */}
                                 <img className='w-[45px] h-[45px] rounded-full overflow-hidden bg-white' src={photoUrl} alt="profile" />
