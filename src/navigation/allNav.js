@@ -161,7 +161,8 @@ export const allNav = [
         role : 'Company',
         path : '/company/seller',
         category:'Operations'
-    },
+    }
+    ,
     {
         id : 50,
         title : 'Route Managment',
@@ -204,6 +205,16 @@ export const allNav = [
         path : '/company/contracts',
         category:'Monies'
     },
+    
+    {
+        id : 66,
+        title : 'Items',
+        icon : <AiOutlineShoppingCart/>,
+        role : 'Company',
+        path : '/company/items',
+        category:'Monies'
+    }
+    ,
     {
         id : 70,
         title : 'Subscription Management',

@@ -1,6 +1,6 @@
-import React, {useState, useEffect, useContext, lazy} from 'react';
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
-import { db } from "../../utils/config";
+import React, {useState, useEffect} from 'react';
+// import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
+// import { db } from "../../utils/config";
 
 const ChatCard = (props) => {
     const [participantList, setParticipantList] = useState([]);

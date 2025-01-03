@@ -3,6 +3,8 @@ import { signInWithEmailAndPassword } from 'firebase/auth';
 // import { auth } from '../../utils/config';
 import { getAuth } from "firebase/auth";
 import { useNavigate } from 'react-router-dom';
+import { Link, useLocation, Navigate } from 'react-router-dom';
+
 const SignIn = () => {
     const [email, setEmail] = useState();
     const [password, setPassword] = useState();
@@ -47,6 +49,9 @@ const SignIn = () => {
                         </div>
                     </div>
                 </form>
+                <Link to='/signUp' className={`px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
+                    <span>Sign Up</span>
+                </Link>
             </div>
         </div>
     );

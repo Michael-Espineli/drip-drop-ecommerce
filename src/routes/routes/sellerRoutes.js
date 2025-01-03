@@ -35,6 +35,8 @@ const Contracts = lazy(()=> import("../../views/company/contract/Contracts"))
 const CreateNew = lazy(()=> import("../../views/company/contract/CreateNew"))
 const ContractDetailView = lazy(()=> import("../../views/company/contract/ContractDetailView"))
 
+const PurchasesList = lazy(()=> import("../../views/company/purchases/PurchasesList"))
+
 const ServiceLocations = lazy(()=> import("../../views/company/serviceLocations/ServiceLocations"))
 const CreateNewServiceLocation = lazy(()=> import("../../views/company/serviceLocations/CreateNewServiceLocation"))
 
@@ -161,6 +163,13 @@ export const sellerRoutes = [
         ability :['Admin','Seller'],
         role:'Company'
     },
+    ,
+    {
+        path:'/company/items',
+        element: <PurchasesList/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    },
     {
         path:'/company/routing',
         element: <RouteDashboard/>,
@@ -186,15 +195,7 @@ export const sellerRoutes = [
         ability :['Admin','Seller'],
         role:'Company'
     }
-    // ,
-    // {
-    //     path:'/company/contracts/createNew',
-    //     element: <CreateNew/>,
-    //     ability :['Admin','Seller'],
-    //     role:'Company'
-    // }
     ,
-
     {
         path:'/company/subscription-management',
         element: <Subscriptions/>,
