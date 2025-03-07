@@ -109,7 +109,7 @@ export const allNav = [
 
     },
     {
-        id : 24,
+        id : 26,
         title : 'Equipment',
         icon : <FaSwimmingPool/>,
         role : 'Company',
@@ -159,7 +159,7 @@ export const allNav = [
         title : 'Items',
         icon : <AiOutlineShoppingCart/>,
         role : 'Company',
-        path : '/company/seller',
+        path : '/company/items',
         category:'Operations'
     }
     ,
@@ -198,7 +198,7 @@ export const allNav = [
         category:'Stripe'
     },
     {
-        id : 65,
+        id : 66,
         title : 'Contracts',
         icon : <IoDocumentTextOutline />,
         role : 'Company',
@@ -207,8 +207,8 @@ export const allNav = [
     },
     
     {
-        id : 66,
-        title : 'Items',
+        id : 68,
+        title : 'Purchased Items',
         icon : <AiOutlineShoppingCart/>,
         role : 'Company',
         path : '/company/items',
@@ -284,7 +284,7 @@ export const allNav = [
     }
     ,
     {
-        id : 114,
+        id : 115,
         title : 'One Time Labor Contracts',
         icon : <FaGear  />,
         role : 'Company',

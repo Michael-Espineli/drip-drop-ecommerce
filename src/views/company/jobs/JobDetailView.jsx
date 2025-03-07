@@ -1,15 +1,26 @@
 import React, { useState, useEffect, useContext } from "react";
 import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc } from "firebase/firestore";
+import {  query, collection, getDocs, limit, orderBy, startAt, deleteDoc, doc, getDoc, updateDoc , setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
 import {v4 as uuidv4} from 'uuid';
 import { format } from 'date-fns'; // Or any other date formatting library
+import { useNavigate } from 'react-router-dom';
 
 const JobDetailView = () => {
     const {name,recentlySelectedCompany} = useContext(Context);
+
+    const [edit,setEdit] = useState(false);
+
+    const [newShoppingList,setNewShoppingList] = useState(false);
+
+    const [newTask,setNewTask] = useState(false);
+
+    const navigate = useNavigate()
+    
     const {jobId} = useParams();
+
     const [job,setJob] = useState({
         adminId : '',
         adminName : '',
@@ -36,6 +47,7 @@ const JobDetailView = () => {
     });
 
     const [customer,setCustomer] = useState({
+         id:'',
         firstName : '',
         lastName : '',
         phoneNumber : '',
@@ -92,92 +104,108 @@ const JobDetailView = () => {
         id : '',
     });
 
-    const [formattedDateCreated,setFormattedDateCreated] = useState()
-
-    const [description, setDescription] = useState();
-    const [taskLaborCost, setTaskLaborCost] = useState();
-
-    const [taskTypeList, setTaskTypeList] = useState([]);
+    const [selectedGenericItem,setSelectedGenericItem] = useState({
+        UOM : "",
+        billable : "",
+        category : "",
+        color : "",
+        dateUpdated : "",
+        description : "",
+        id : "",
+        name : "",
+        rate : "",
+        size : "",
+        sku : "",
+        storeName :  "",
+        subCategory :  "",
+        timesPurchased :  "",
+        venderId :  "",
+        label:  "",
+    });
 
     const [selectedTaskType,setSelectedTaskType] = useState({
         id : '',
         name : '',
     });
-    const [taskList, setTaskList] = useState([]);
-    const [shoppingList, setShoppingList] = useState([]);
+
+    const [formattedDateCreated,setFormattedDateCreated] = useState()
+
+    const [description, setDescription] = useState();
+
+    const [taskLaborCost, setTaskLaborCost] = useState();
+
+    const [estimatedTime, setEstimatedTime] = useState();
+
+    const [shoppingListTypes, setShoppingListTypes] = useState([
+        {
+            id : '1',
+            name : 'Custom',
+            label : 'Custom',
+        },
+        {
+            id : '2',
+            name : 'Generic',
+            label : 'Generic',
+        }
+    ]);
+
+    const [newShoppingItemType, setNewShoppingItemType] = useState({
+        id : '',
+        name : '',
+    });
+    const [selectedAdmin, setSelectedAdmin] = useState(''); //Object
 
     const [bodyOfWaterList, setBodyOfWaterList] = useState([]);
+
     const [equipmentList, setEquipmentList] = useState([]);
     
+    const [taskTypeList, setTaskTypeList] = useState([]);
+
+    const [taskList, setTaskList] = useState([]);
+
+    const [shoppingList, setShoppingList] = useState([]);
+
+    const [genericItemList, setGenericItemList] = useState([]);
+
+    const [adminList, setAdminList] = useState([]);
+
+    //PNL
+    const [laborCost, setLaborCost] = useState(0.0);
+
+    const [totalCost, setTotalCost] = useState(0.0);
+
+
+    const [estimatedDuration, setEstimatedDuration] = useState(0);
+
+    const [hourlyRate, setHourlyRate] = useState(50.00);
+
+    const [employeeLaborCost, setEmployeeLaborCost] = useState('32.50');
+
+    const [subcontractorCost, setSubcontractorCost] = useState('50');
+
+    const [itemId, setItemId] = useState("");
+
+    const [itemQuantity, setItemQuantity] = useState("");
+
+    const [itemCost, setItemCost] = useState("");
+
+    const [itemPrice, setItemPrice] = useState("");
+
+    const [itemName, setItemName] = useState("");
+
+    const [estimatedRate, setEstimatedRate] = useState('1200.00');
+
+    const [offeredRate, setOfferedRate] = useState(0); 
+
+    const [materialCost, setMaterialCost] = useState(0);
+
+    const [estimatedProfit, setEstimatedProfit] = useState('$ 650.00 - $668.00');
+
+    const [estimatedProfitPercentage, setEstimatedProfitPercentage] = useState('25% - 28%');
+
     // handleBodyOfWaterListChange
+
     // handleEquipmentListChange
-    const tasks = [
-        {
-            id:0,
-            name:'Clean Pool',
-            type:'Basic',
-            workerType:'subContractor',
-            worker:'Michael Espineli',
-            status:'In Progress',
-            customerApproval:'Approved',
-
-
-        },
-        {
-            id:1,
-            name:'Clean Filter',
-            type:'Basic',
-            workerType:'employee',
-            worker:'Michael Espineli',
-            status:'Finished',
-            customerApproval:'Approved',
-
-        }
-        ,
-        {
-            id:2,
-            name:'Clean Filter',
-            type:'Replcing Equipment',
-            workerType:'',
-            worker:'',
-            status:'Unassigned',
-            customerApproval:'Not Approved',
-
-        }
-    ]
-    const shoppingList1 = [
-        {
-            id:0,
-            name:'Clean Pool',
-            type:'Basic',
-            workerType:'subContractor',
-            worker:'Michael Espineli',
-            status:'In Progress',
-            taskId:1
-
-
-        },
-        {
-            id:1,
-            name:'Clean Filter',
-            type:'Basic',
-            workerType:'employee',
-            worker:'Michael Espineli',
-            status:'Finished',
-            taskId:1
-        }
-        ,
-        {
-            id:2,
-            name:'Clean Filter',
-            type:'Replcing Equipment',
-            workerType:'',
-            worker:'',
-            status:'Unassigned',
-            taskId:1
-
-        }
-    ]
     useEffect(() => {
         (async () => {
             try{
@@ -186,7 +214,6 @@ const JobDetailView = () => {
                 const docSnap = await getDoc(docRef);
                 let customerId;
                 let serviceLocationId;
-
                 if (docSnap.exists()) {
                     console.log("Document data:", docSnap.data());
                     setJob((prevJob) => ({
@@ -220,16 +247,19 @@ const JobDetailView = () => {
                     setFormattedDateCreated(formattedDateCreated)
                     customerId = docSnap.data().customerId
                     serviceLocationId = docSnap.data().serviceLocationId
+                    console.log("ReceivedJob Information")
+
                 } else {
                   console.log("No such document!");
                 }
-                
+
                 //Get Customer Information
                 const customerDocRef = doc(db, "companies",recentlySelectedCompany,'customers',customerId);
                 const customerDocSnap = await getDoc(customerDocRef);
                 if (customerDocSnap.exists()) {
                     setCustomer((prevCustomer) => ({
                         ...prevCustomer,
+                        id: customerDocSnap.data().id,
                         firstName: customerDocSnap.data().firstName,
                         lastName: customerDocSnap.data().lastName,
                         phoneNumber: customerDocSnap.data().phoneNumber,
@@ -242,6 +272,8 @@ const JobDetailView = () => {
                         active : customerDocSnap.data().active,
                         verified : customerDocSnap.data().verified,
                     }));
+                    console.log("Retrived Customer information")
+
                 } else {
                     console.log("No such document!");
                 }
@@ -262,10 +294,11 @@ const JobDetailView = () => {
                         billingNotes : serviceLocationDocSnap.data().address,
                         active : serviceLocationDocSnap.data().active,
                     }));
+                    
+                    console.log("Retrived site information")
                 } else {
                     console.log("No such document!");
                 }
-
                 //Get Task Types
                 let taskTypeQuery = query(collection(db, 'universal','settings','taskTypes'));
                 const taskTypeQuerySnapshot = await getDocs(taskTypeQuery);       
@@ -280,6 +313,9 @@ const JobDetailView = () => {
                     }
                     setTaskTypeList(taskTypeList => [...taskTypeList, taskType]); 
                 });
+                    
+                console.log("Retrived Task Types")
+
                 //Get Task List
                 let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
                 const taskQuerySnapshot = await getDocs(taskQuery);       
@@ -295,41 +331,236 @@ const JobDetailView = () => {
                         status : taskData.status,
                         customerApproval : taskData.customerApproval,
                         laborContractId : taskData.laborContractId,
-                        serviceStopId : taskData.serviceStopId
+                        serviceStopId : taskData.serviceStopId,
+                        contractedRate : taskData.contractedRate,
+                        estimatedTime : taskData.estimatedTime
                     }
                     setTaskList(taskList => [...taskList, task]); 
                 });
-                //Get Shopping List
-                let shoppingListQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'shoppingList'));
-                const shoppingListQuerySnapshot = await getDocs(shoppingListQuery);       
+                    
+                console.log("Retrived Task List")
+
+                //Get shopping list items
+                let taskQuery2 = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
+                const querySnapshot2 = await getDocs(taskQuery2);       
                 setShoppingList([])      
-                shoppingListQuerySnapshot.forEach((doc) => {
-                    const shoppingListItemData = doc.data()
-                    const shoppingListItem = {
-                        id : shoppingListItemData.id,
-                        name : shoppingListItemData.name,
-                        type : shoppingListItemData.type,
-                        workerType : shoppingListItemData.workerType,
-                        workerName : shoppingListItemData.workerName,
-                        status : shoppingListItemData.status,
-                        customerApproval : shoppingListItemData.customerApproval,
+                querySnapshot2.forEach((doc) => {
+                    const itemData = doc.data()
+                    const item = {
+                        id : itemData.id,
+                        name : itemData.name,
+                        cost : itemData.cost,
+                        price : itemData.price,
+                        itemId : itemData.itemId,
+                        itemType : itemData.itemType,
+                        quantity : itemData.quantity, //Enum : ????????
                     }
-                    setShoppingList(shoppingList => [...shoppingList, shoppingListItem]); 
+                    setShoppingList(shoppingList => [...shoppingList, item]); 
                 });
+                    
+                console.log("Retrived Shopping List")
+
                 //Calculate Labor Cost
+
+                let totalLaborCost = 0 
+                let totalDuration = 0
+
+                for (let i = 0; i < taskList.length; i++) {
+                    let task = taskList[i]
+                    totalLaborCost = totalLaborCost + task.contractedRate
+                    totalDuration = totalDuration + task.estimatedTime
+
+                }
+                totalLaborCost = totalLaborCost / 100 
+                totalDuration = totalDuration /60
+
+                console.log("Calculated Labor Cost")
+                //Calculate Material Cost
+                console.log( 1 )
+                let totalMaterialCost = 0 
+                let totalMaterialPrice = 0
+    
+                for (let i = 0; i < shoppingList.length; i++) {
+                    let item = shoppingList[i]
+                    let lineItemTotalCost = item.cost * item.quantity
+                    let lineItemTotalPrice = item.price * item.quantity
+                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
+                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
+                }
+                totalMaterialCost = totalMaterialCost / 100 
+                totalMaterialPrice = totalMaterialPrice /100
+    
+
+                console.log("Calculated Material Cost")
+
                 // Calculate PNL
+                let totalCost = 0 
+                let totalRate = offeredRate
+                let totalProfit = 0
+                let profitPercentage = 0
+
+                totalCost = totalMaterialCost + totalLaborCost
+                totalProfit = totalRate - totalCost
+                profitPercentage = totalProfit/totalRate
+                console.log( 5 )
+
+                profitPercentage = profitPercentage.toFixed(2)
+                totalMaterialCost = totalMaterialCost.toFixed(2)
+                totalMaterialPrice = totalMaterialPrice.toFixed(2)
+                console.log( 10 )
+
+                totalDuration = totalDuration.toFixed(2)
+                totalLaborCost = totalLaborCost.toFixed(2)
+                totalCost = totalCost.toFixed(2)
+
+                console.log("Calculated PNL")
+
+                setTotalCost(totalCost)
+                setMaterialCost(totalMaterialCost)
+                setLaborCost(totalLaborCost)
+                setEstimatedDuration(totalDuration)
+                let formattedProfitUSD = formatCurrency(totalProfit);
+        
+                setEstimatedProfit(formattedProfitUSD)
+                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+
+                console.log("Finished Job Detail View Start Up ")
+
             } catch(error){
-                console.log('Error')
+                console.log('Error Location useEffect Job Detail View')
             }
         })();
     },[])
-    const handleSelectedTaskTypeChange = (selectedOption2) => {
 
-        (async () => {
-            setSelectedTaskType(selectedOption2)
+    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
+        return new Intl.NumberFormat(locale, {
+          style: 'currency',
+          currency: currency
+        }).format(number);
+      }
+
+    async function recalculatePNL(e) {
+        e.preventDefault()
+        setOfferedRate(estimatedRate)
+        // Calculate PNL
+        let totalRate = offeredRate
+        let totalProfit = 0
+        let profitPercentage = 0
+
+        totalProfit = totalRate - totalCost
+        profitPercentage = totalProfit/totalRate
+
+        let formattedProfitUSD = formatCurrency(totalProfit);
+
+        setEstimatedProfit(formattedProfitUSD)
+        setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+    }
+    async function editJob(e) {
+        e.preventDefault()
+        try{
+            setEdit(true);
             
-        })();
-    };
+            //Get Company Users
+            let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
+            const userQuerySnapshot = await getDocs(userQuery);       
+            setAdminList([])      
+            userQuerySnapshot.forEach((doc) => {
+                const taskData = doc.data()
+                const user = {
+                    id : taskData.id,
+                    name : taskData.userName,
+                    dateCreated : taskData.dateCreated,
+                    linkedCompanyId : taskData.linkedCompanyId,
+                    linkedCompanyName : taskData.linkedCompanyName,
+                    roleId : taskData.roleId,
+                    roleName : taskData.roleName,
+                    status : taskData.status,
+                    userId : taskData.userId,
+                    userName : taskData.userName,
+                    workerType : taskData.workerType,
+                    label : taskData.userName + ' - ' + taskData.roleName
+                }
+                setAdminList(adminList => [...adminList, user]); 
+            });
+        } catch(error){
+            console.log('Error')
+        }
+    }
+    const cancelEditJob = (event) => {
+        setEdit(false);
+    }
+    async function saveEditChanges(e) {
+        e.preventDefault()
+        setEdit(false);
+        try{
+            // await deleteDoc(doc(db, "companies",recentlySelectedCompany,'workOrders',jobId));
+            //Update Firestore
+            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
+            console.log('save Edit Changes')
+            console.log(selectedAdmin)
+
+            await updateDoc(docRef, {
+                adminName: selectedAdmin.name,
+                adminId: selectedAdmin.id,
+
+            });
+            console.log('Successfully Update Doc')
+
+            //Get Updated Job Information
+            const docSnap = await getDoc(docRef);
+            let customerId;
+            let serviceLocationId;
+            if (docSnap.exists()) {
+                console.log("Document data:", docSnap.data());
+                setJob((prevJob) => ({
+                    ...prevJob,
+                    adminId: docSnap.data().adminId,
+                    adminName: docSnap.data().adminName,
+                    billingStatus: docSnap.data().billingStatus,
+                    bodyOfWaterId: docSnap.data().bodyOfWaterId,
+                    bodyOfWaterName : docSnap.data().bodyOfWaterName,
+                    chemicals : docSnap.data().chemicals,
+                    customerId : docSnap.data().customerId,
+                    description : docSnap.data().description,
+                    electricalParts : docSnap.data().electricalParts,
+                    equipmentId : docSnap.data().equipmentId,
+                    equipmentName : docSnap.data().equipmentName,
+                    id : docSnap.data().id,
+                    installationParts : docSnap.data().installationParts,
+                    jobTemplateId : docSnap.data().jobTemplateId,
+                    laborCost : docSnap.data().laborCost,
+                    miscParts : docSnap.data().miscParts,
+                    operationStatus : docSnap.data().operationStatus,
+                    pvcParts : docSnap.data().pvcParts,
+                    rate : docSnap.data().rate,
+                    serviceLocationId : docSnap.data().serviceLocationId,
+                    serviceStopIds : docSnap.data().serviceStopIds,
+                    type : docSnap.data().type,
+
+                }));
+                const dateCreated = docSnap.data().dateCreated.toDate();
+                const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
+                setFormattedDateCreated(formattedDateCreated)
+                customerId = docSnap.data().customerId
+                serviceLocationId = docSnap.data().serviceLocationId
+                console.log("Successfully Received Job Information")
+
+            } else {
+                console.log("No such document!");
+            }
+        } catch(error){
+            console.log('Error')
+        }
+    }
+    async function deleteJob(e) {
+        e.preventDefault()
+        try{
+            await deleteDoc(doc(db, "companies",recentlySelectedCompany,'workOrders',jobId));
+            navigate('/company/jobs')
+            } catch(error){
+                console.log('Error')
+            }
+    }
 
     const handleBodyOfWaterListChange = (selectedOption2) => {
 
@@ -346,21 +577,40 @@ const JobDetailView = () => {
             
         })();
     };
+
+    // Task Functions
+    const handleSelectedTaskTypeChange = (selectedOption2) => {
+
+        (async () => {
+            setSelectedTaskType(selectedOption2)
+            
+        })();
+    };
+    async function showNewTaskItem(e) {
+        setNewTask(true)
+    }
+
     async function clearNewTask(e) {
         e.preventDefault()
         setSelectedTaskType({})
         setDescription('')
         setTaskLaborCost('')
+        setNewTask(false)
 
     }
+
     async function handleAddTask(e) {
         e.preventDefault()
         try{
             // Create New Task
+            console.log('Create New Task')
             let id = 'comp_wo_tas_' + uuidv4();
 
             //Guard Statments Based on Task
-            //Switch Statment Based ON TaskType
+            //Switch Statment Based ON TaskType            
+            let laborCostInt = parseFloat(taskLaborCost);
+            laborCostInt = laborCostInt*100
+            let estimatedTimeMin = parseFloat(estimatedTime);
 
             await setDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'tasks',id), {
                 id : id,
@@ -371,15 +621,16 @@ const JobDetailView = () => {
                 workerName : '',
                 status : 'Unassigned',
                 customerApproval : false,
-                contractedRate : taskLaborCost,
+                contractedRate : laborCostInt,
                 laborContractId : '',
-                estimatedTime : '',
+                estimatedTime : estimatedTimeMin,
                 actualTime : '',
                 equipmentId : '',
                 serviceLocationId : '',
                 bodyOfWaterId : '',
                 serviceStopId : ''
               });
+              console.log('Added New Task')
             //Get Task
             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
             const querySnapshot = await getDocs(taskQuery);       
@@ -406,14 +657,227 @@ const JobDetailView = () => {
                 }
                 setTaskList(taskList => [...taskList, task]); 
             });
+            console.log('Received New Tasks')
+
             setSelectedTaskType({})
             setDescription('')
             setTaskLaborCost('')
+            setEstimatedTime('')
 
+            //Calculate Labor Cost
+
+            let totalLaborCost = 0 
+            let totalDuration = 0
+
+            for (let i = 0; i < taskList.length; i++) {
+                let task = taskList[i]
+                totalLaborCost = totalLaborCost + task.contractedRate
+                totalDuration = totalDuration + task.estimatedTime
+
+            }
+            totalLaborCost = totalLaborCost / 100 
+            totalDuration = totalDuration /60
+
+            // Calculate PNL
+            let totalCost = 0 
+            let totalRate = offeredRate
+            let totalProfit = 0
+            let profitPercentage = 0
+
+            totalCost = materialCost + totalLaborCost
+            totalProfit = totalRate - totalCost
+            profitPercentage = totalProfit/totalRate
+            console.log( 5 )
+
+            profitPercentage = profitPercentage.toFixed(2)
+            console.log( 10 )
+
+            totalDuration = totalDuration.toFixed(2)
+            console.log( 15 )
+
+            totalLaborCost = totalLaborCost.toFixed(2)
+            console.log( 20 )
+
+            totalCost = totalCost.toFixed(2)
+            console.log( 25 )
+
+            setTotalCost(totalCost)
+            setLaborCost(totalLaborCost)
+            console.log( 30 )
+
+            setEstimatedDuration(totalDuration)
+            let formattedProfitUSD = formatCurrency(totalProfit);
+            console.log( 40 )
+
+            setEstimatedProfit(formattedProfitUSD)
+            setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+
+        } catch(error){
+            console.log('Error')
+        }
+    }
+
+    // Shopping List functions
+    
+    const handleSelectedGenericItemChange = (selectedOption2) => {
+
+        (async () => {
+            setSelectedGenericItem(selectedOption2)
+            setItemId(selectedOption2.id)
+            setItemCost(selectedOption2.rate)
+            setItemPrice(selectedOption2.rate)
+            setItemName(selectedOption2.name)
+        })();
+    };
+
+    const handleSelectedShoppingItemTypeChange = (selectedOption2) => {
+
+        (async () => {
+
+            setNewShoppingItemType(selectedOption2)
+            //Get Generic Data Base Items
+            // /companies/B06BD6B7-B23E-43BE-A637-7A824C48D0B7/settings/dataBase
+            let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'));
+            const genericItemQuerySnapshot = await getDocs(genericItemQuery);       
+            setGenericItemList([])
+            genericItemQuerySnapshot.forEach((doc) => {
+                const itemData = doc.data()
+                const genericItem = {
+                    UOM : itemData.id,
+                    billable : itemData.billable,
+                    category : itemData.category,
+                    color : itemData.color,
+                    dateUpdated : itemData.dateUpdated,
+                    description : itemData.description,
+                    id : itemData.id,
+                    name : itemData.name,
+                    rate : itemData.rate,
+                    size : itemData.size,
+                    sku : itemData.sku,
+                    storeName : itemData.storeName,
+                    subCategory : itemData.subCategory,
+                    timesPurchased : itemData.timesPurchased,
+                    venderId : itemData.venderId,
+                    label: itemData.name + ' ' + itemData.rate
+                }
+                setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
+            });
+        })();
+    };
+
+    async function showNewShoppingListItem(e) {
+        setNewShoppingList(true)
+    }
+
+    async function clearNewShoppingListItem(e) {
+        e.preventDefault()
+        setNewShoppingList(false)
+    }
+
+    async function handleAddShoppingListItem(e) {
+        e.preventDefault()
+        try{
+            // CreateShoppingItem
+            let id = 'comp_wo_ite_' + uuidv4();
+
+            //Guard Statments Based on Item
+            //Switch Statment Based ON Item Type
+            let cost = parseFloat(itemCost);
+
+            let price = parseFloat(itemPrice);
+
+            let quantity = parseInt(itemQuantity);
+            cost = cost*100
+
+            price = price*100
+            await setDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'items',id), {
+                id : id,
+                name : itemName,
+                cost : cost,
+                price : price,
+                itemId : itemId,
+                itemType : newShoppingItemType.name,
+                quantity : quantity,
+                status : 'Not Purchased'
+              });
+            //Get new shopping list items
+
+            let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
+            const querySnapshot = await getDocs(taskQuery);       
+            setShoppingList([])      
+            querySnapshot.forEach((doc) => {
+                const itemData = doc.data()
+                const item = {
+                    id : itemData.id,
+                    name : itemData.name,
+                    cost : itemData.cost,
+                    price : itemData.price,
+                    itemId : itemData.itemId,
+                    itemType : itemData.itemType, //Enum : ????????
+                    quantity : itemData.quantity,
+                }
+                setShoppingList(shoppingList => [...shoppingList, item]); 
+            });
+                        //Clear Fields
+                        setNewShoppingList(false)
+                        setItemName('')
+                        setItemQuantity('')
+                        setItemPrice('')
+                        setItemCost('')
+            
+                            //Calculate Material Cost
+                            console.log( 1 )
+                            let totalMaterialCost = 0 
+                            let totalMaterialPrice = 0
+                
+                            for (let i = 0; i < shoppingList.length; i++) {
+                                let item = shoppingList[i]
+                                let lineItemTotalCost = item.cost * item.quantity
+                                let lineItemTotalPrice = item.price * item.quantity
+                                totalMaterialCost = totalMaterialCost + lineItemTotalCost
+                                totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
+                            }
+                            totalMaterialCost = totalMaterialCost / 100 
+                            totalMaterialPrice = totalMaterialPrice /100
+                
+            
+                            // Calculate PNL
+                            let totalCost = 0 
+                            let totalRate = offeredRate
+                            let totalProfit = 0
+                            let profitPercentage = 0
+            
+                            totalCost = totalMaterialCost + laborCost
+                            totalProfit = totalRate - totalCost
+                            profitPercentage = totalProfit/totalRate
+                            console.log( 5 )
+            
+                            profitPercentage = profitPercentage.toFixed(2)
+                            totalMaterialCost = totalMaterialCost.toFixed(2)
+                            totalMaterialPrice = totalMaterialPrice.toFixed(2)
+                            console.log( 10 )
+            
+                            totalCost = totalCost.toFixed(2)
+                            console.log( 15 )
+            
+                            setTotalCost(totalCost)
+                            setMaterialCost(totalMaterialCost)
+                            let formattedProfitUSD = formatCurrency(totalProfit);
+                    
+                            setEstimatedProfit(formattedProfitUSD)
+                            setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
           } catch(error){
               console.log('Error')
           }
     }
+
+    const handleAdminChange = (option) => {
+
+        (async () => {
+            setSelectedAdmin(option)
+            
+        })();
+    };
 
     return (
         // 030811 - almost black
@@ -429,9 +893,32 @@ const JobDetailView = () => {
         // 919191 = gray
         <div className='px-2 md:px-7 py-5'>
             <Link 
-            className='py-1 px-2 bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'
+            className=' font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#1D2E76] cursor-pointer rounded mt-3'
             to={`/company/jobs`}>Back</Link>
-
+            {
+                edit ? <div className=' flex justify-between py-1'>
+                            <div className='py-1'>
+                                <div className='w-full flex justify-between py-1'>
+                                    <button onClick={(e) =>{saveEditChanges(e)}} className='bg-[#2B600F] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Save</h1></button>
+                                </div>
+                            </div> 
+                        <div className='py-1'>
+                            <div className='w-full flex justify-between py-1'>
+                                <button onClick={(e) =>{cancelEditJob(e)}} className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Cancel</h1></button>
+                            </div>
+                            <div className='w-full flex justify-between py-1'>
+                                <button 
+                                // onClick={(e) =>{deleteCustomer(e)}} 
+                                onClick={(e) => deleteJob(e)}
+                                className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Delete</h1></button>
+                            </div>
+                        </div> 
+                    </div>: <div className='w-full flex justify-between'>
+                        <h1></h1>
+                        <button onClick={(e) =>{editJob(e)}} className='bg-[#1D2E76] cursor-pointer font-normal ml-2 rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Edit</h1></button>
+                    </div>
+                
+            }
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
                     <p className='font-bold'>Job Over View</p>
@@ -439,8 +926,39 @@ const JobDetailView = () => {
                     
 
                     <p>Date Created : {formattedDateCreated}</p>
+
+                    {/* Admin */}
+                    {
+                        (edit===true)&&<div>
+                            <Select
+                            value={selectedAdmin}
+                            options={adminList}
+                            onChange={handleAdminChange}
+                            isSearchable
+                            placeholder="Select An Admin"
+                            theme={(theme) => ({
+                            ...theme,
+                            borderRadius: 0,
+                            colors: {
+                                ...theme.colors,
+                                primary25: 'green',
+                                primary: 'gray',
+                            },
+                            })}
+                        />
+
+                        </div>
+                    }
+
+                    {
+                        (edit===false)&&<div>
+                            <p>Admin : {job.adminName}</p>
+                        </div>
+                    }
+                    
+                    {/* <p>Customer Id: {customer.id}</p> */}
+
                     <p>Customer : {customer.firstName} {customer.lastName}</p>
-                    <p>Admin : {job.adminName}</p>
                     <div className='flex w-full justify-start items-center py-2'>
                         <p>Billing Status : </p>
                         {
@@ -527,16 +1045,20 @@ const JobDetailView = () => {
                     <p>Description : {job.description}</p>
                 </div>
             </div>
+
+            {/* Task List */}
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between'>
                         <p className='font-bold'>Task List</p>
                         <div className='py-1'>
-                            <p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                <Link to={`/company/laborContracts/createNew/${jobId}`}>Create Labor Contract</Link>  
-                            </p>
-                            <p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000] mt-2'>
+                            <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
                                 <Link to={`/company/serviceStops/createNew/${jobId}`}>Schedule Service Stop</Link>  
+                            </p>
+                        </div>
+                        <div className='py-1'>
+                            <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
+                                <Link to={`/company/laborContracts/createNew/${jobId}`}>Create Labor Contract</Link>  
                             </p>
                         </div>
                     </div>
@@ -558,9 +1080,11 @@ const JobDetailView = () => {
                                 <th className='py-3 px-4'>Name</th>
                                 <th className='py-3 px-4'>Type</th>
                                 <th className='py-3 px-4'>Status</th>
-                                <th className='py-3 px-4'>Worker</th>
-                                <th className='py-3 px-4 s:hidden'>Worker Type</th>
-                                <th className='py-3 px-4'>Customer Approval</th>
+                                <th className='py-3 px-4 sm:hidden md:hidden'>Worker</th>
+                                <th className='py-3 px-4 sm:hidden md:hidden'>Worker Type</th>
+                                <th className='py-3 px-4 sm:hidden md:hidden'>Customer Approval</th>
+                                <th className='py-3 px-4'>Labor Cost</th>
+                                <th className='py-3 px-4'>Time (Hr)</th>
                                 <th className='py-3 px-4'></th>
 
                             </tr>
@@ -583,9 +1107,11 @@ const JobDetailView = () => {
                                                 </p>
                                         }
                                     </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.workerName}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap s:hidden'>{task.workerType}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.customerApproval}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.workerName}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.workerType}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.customerApproval}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>${(task.contractedRate/100).toFixed(2)}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(task.estimatedTime/60).toFixed(2)}</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>
                                     {
                                         (task.workerType==='Independent Contractor')&&<div>
@@ -606,7 +1132,6 @@ const JobDetailView = () => {
                                             {
                                                 (task.serviceStopId!=='')&&<p className='py-3 px-4 font-medium whitespace-nonwrap'>
                                                     <Link to={`/company/serviceStops/detail/${task.serviceStopId}`}>Details</Link>
-
                                                 </p>
                                             }
                                             {
@@ -617,16 +1142,26 @@ const JobDetailView = () => {
                                         </div>
                                     }
                                     </td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'><button>Delete</button></td>
+
                                 </tr>
                             ))
                         }
                         </tbody>
                     </table>
-                    <hr/>
-                    <div className='py-2 flex justify-between items-center gap-2'>
+                    {
+                        (newTask==false)&&<button onClick={(e) => showNewTaskItem(e)} 
+                        className='px-2 rounded-md bg-[#1D2E76] text-[#ffffff] font-bold'>
+                            + Add New
+                        </button>
+                    }
+                    {
+                        (newTask==true)&&<div>
+                            <div className='py-2 flex justify-between items-center gap-2'>
                         <button onClick={(e) => clearNewTask(e)} 
-                        className='py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'
-                        >Clear</button>
+                        className='px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'>
+                            X
+                        </button>
                         <input onChange={(e) => {setDescription(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Description' value={description}></input>
 
                         <div className='w-full'>
@@ -647,10 +1182,11 @@ const JobDetailView = () => {
                                 })}
                             />
                         </div>
-                        <input onChange={(e) => {setTaskLaborCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='laborCost' value={taskLaborCost}></input>
+                        <input onChange={(e) => {setTaskLaborCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Labor Cost' value={taskLaborCost}></input>
+                        <input onChange={(e) => {setEstimatedTime(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Estimated Time (Min)' value={estimatedTime}></input>
 
                         <button onClick={(e) => handleAddTask(e)} 
-                        className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
+                        className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
                         >Add</button>
                     </div>
                     <hr/>
@@ -789,50 +1325,140 @@ const JobDetailView = () => {
                             </div>
                         }
                     </div>
+                        </div>
+                    }
+                    
                 </div>
             </div>
+
+            {/* Shopping List */}
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
                     <p className='font-bold'>Shopping List</p>
                     <hr/>
                     <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
-                                <tr>
-                                    <th className='py-3 px-4'>id</th>
-                                    <th className='py-3 px-4'>Name</th>
-                                    <th className='py-3 px-4'>type</th>
-                                    <th className='py-3 px-4'>worker</th>
+                        <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                            <tr>
+                                <th className='py-3 px-4'>Name</th>
+                                <th className='py-3 px-4'>Cost</th>
+                                <th className='py-3 px-4'>quantity</th>
 
-                                    <th className='py-3 px-4'>worker Type</th>
-                                    <th className='py-3 px-4'>taskId</th>
+                                <th className='py-3 px-4'>Price</th>
+                                <th className='py-3 px-4'>Item Id</th>
+                                <th className='py-3 px-4'>Task Id</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {
+                            shoppingList?.map(item => (
+                                <tr key={item.id}>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(item.cost/100).toFixed(2)}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
+
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(item.price/100).toFixed(2)}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.itemId}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.taskId}</td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'><button>Delete</button></td>
+
                                 </tr>
-                            </thead>
-                            <tbody>
-                            {
-                                shoppingList?.map(item => (
-                                        <tr key={item.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.id}</td>
+                            ))
+                        }
+                        </tbody>
+                    </table>
 
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.type}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.worker}</td>
+                    {
+                        (newShoppingList==false)&&<button onClick={(e) => showNewShoppingListItem(e)} 
+                        className='px-2 rounded-md bg-[#1D2E76] text-[#ffffff] font-bold'>
+                            + Add New
+                        </button>
+                    }
+                    
+                    {
+                        (newShoppingList==true)&&<div>{/* className='py-2 flex justify-between items-center gap-2' */}
+                   
+                        <div className='w-full'>
+                            <Select
+                                value={newShoppingItemType}
+                                options={shoppingListTypes}
+                                onChange={handleSelectedShoppingItemTypeChange}
+                                isSearchable
+                                placeholder="Select a Task Type"
+                                theme={(theme) => ({
+                                ...theme,
+                                borderRadius: 0,
+                                colors: {
+                                    ...theme.colors,
+                                    primary25: 'green',
+                                    primary: 'gray',
+                                },
+                                })}
+                            />
+                        </div>
+                        {/* Custom */}
+                        {
+                            (newShoppingItemType.name=='Custom')&&<div>
+                                <div className='py-2 flex justify-between items-center gap-2'>
+                                    <p className='w-full p-2 rounded-md'>Description</p>
+                                    <p className='w-full p-2 rounded-md'>Item Cost</p>
+                                    <p className='w-full p-2 rounded-md'>Item Price</p>
+                                    <p className='w-full p-2 rounded-md'>Item Quantity</p>
+                                </div>
+                                <div className='py-2 flex justify-between items-center gap-2'>
+                                    <input onChange={(e) => {setItemName(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Description' value={itemName}></input>
+                                    <input onChange={(e) => {setItemCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Cost' value={itemCost}></input>
+                                    <input onChange={(e) => {setItemPrice(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Price' value={itemPrice}></input>
+                                    <input onChange={(e) => {setItemQuantity(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Quantity' value={itemQuantity}></input>
+                                </div>
+                            </div>
+                        }
+                        {/* Generic Item */}
+                        {
+                            (newShoppingItemType.name=='Generic')&&<div className='py-2 flex justify-between items-center gap-2'>
+                                <div className='w-full'>
+                                    <Select
+                                        value={selectedGenericItem}
+                                        options={genericItemList}
+                                        onChange={handleSelectedGenericItemChange}
+                                        isSearchable
+                                        placeholder="Select an Item"
+                                        theme={(theme) => ({
+                                        ...theme,
+                                        borderRadius: 0,
+                                        colors: {
+                                            ...theme.colors,
+                                            primary25: 'green',
+                                            primary: 'gray',
+                                        },
+                                        })}
+                                    />
+                                </div>
+                                <input onChange={(e) => {setItemQuantity(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Quantity' value={itemQuantity}></input>
+                            </div>
+                        }
+                            <div className="">
+                                <button onClick={(e) => handleAddShoppingListItem(e)} 
+                                className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
+                                >Add</button>
+                                        <button onClick={(e) => clearNewShoppingListItem(e)} 
+                                className='px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'>
+                                    X
+                                </button>
+                            </div>
+                        <p>have options for adding different kinds of items, (custom) generic</p>
+                    </div>
+                    }
+                    
 
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.workerType}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.taskId}</td>
-                                        </tr>
-                                ))
-                            }
-                            </tbody>
-                        </table>
                 </div>
             </div>
-            {/* Second Section Of Body */}
-            <div className='w-full flex flex-wrap mt-7'>
-                <div className='w-full  lg:w-5/12 lg:pl-4 mt-6 lg:mt-0'>
+
+            {/* Third Section Of Body */}
+            <div className='w-full flex flex-wrap mt-2'>
+                <div className='w-full lg:w-5/12'>
                     <div className='w-full h-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
                     <p className='font-bold'>Customer Status</p>
                     <hr/>
-
                     </div>
                 </div>
                 <div className='w-full lg:w-7/12 lg:pl-4 mt-6 lg:mt-0'>
@@ -841,48 +1467,50 @@ const JobDetailView = () => {
                     <hr/>
                     <div className='flex justify-between'>
                         <p>Suggested Rate : {job.rate}</p>
-                        <button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>Use Suggested Rate</button>
+                        <button className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>Use Suggested Rate</button>
                     </div>
                     <hr/>
                     <p>Check to see if the Rate Has Already Been Approved</p>
                     <p>Maybe I should have a few versions of rate. Accepted Rate. Suggested Rate. Offered Rate</p>
                     <hr/>
-
                     <p>Rate: {job.rate}</p>
 
                     </div>
                 </div>
             </div>
-           
+           {/* -------------- */}
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <p>Scheduling</p>
-                    <p>{job.laborCost} - laborCost</p>
-                    <p>Hours - Rate - Total</p>
-                    <p>15 - 20 - 300</p>
-
-                    <hr/>
-                    <p>Labor Contracts</p>
-                    <p>Hours - Rate - Total</p>
-                </div>
-            </div>
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <p>PNL</p>
-                    <p>Rate - 1200</p>
+                <div className='left-0 w-full justify-end'>
+                    <p className='font-bold text-[#d0d2d6]'> Estimated PNL</p>
+                    <div className='flex justify-between'>
+                        <p>Rate - $ {offeredRate}</p>
+                        <div className='flex justify-end gap-2'>
+                            <input 
+                            className='py-1 px-2 rounded-md mt-2 bg-[#ededed]'
+                            onChange={(e) => {setEstimatedRate(e.target.value)}} type="text" placeholder='Offered Rate' value={estimatedRate}></input>
+                            <button
+                             onClick={(e) => recalculatePNL(e)} 
+                            className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
+                            >Use Offered Rate</button>
+                        </div>
+                    </div>
                     <hr className='w-1/2'/>
-
-                    <p>Material Cost - 500</p>
+                    <p>Material Cost - $ {materialCost}</p>
                     <hr className='w-1/4'/>
-                    <p>Employee Cost - 300</p>
-                    <p>Sub Contractor Cost - 100</p>
+                    <p>Estimated Duration - {estimatedDuration} hrs</p>
+                    <p>Employee Cost - $ {(estimatedDuration*hourlyRate).toFixed(2)}</p>
+                    <p>Sub Contractor Cost - $ {laborCost}</p>
                     <hr className='w-1/4'/>
 
-                    <p>Total Labor Cost - 400</p>
+                    <p>Total Labor Cost - {laborCost}</p>
+                    <hr className='w-1/2'/>
+                    <p>Total Cost - {totalCost}</p>
                     <hr className='w-3/4'/>
-                    <p>Profit - 300  (25%)</p>
+
+                    <p>Profit : {estimatedProfit}  ( {estimatedProfitPercentage}% )</p>
                 </div>
             </div>
+           {/* -------------- */}
         </div>
     );
 }

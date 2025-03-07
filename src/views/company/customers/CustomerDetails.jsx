@@ -2,14 +2,17 @@
 
 import React, {useState, useEffect, useContext} from 'react';
 import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where } from "firebase/firestore";
+import {  query, collection, getDocs, limit, orderBy, updateDoc , deleteDoc, doc, getDoc, where } from "firebase/firestore";
 import { db } from '../../../utils/config'
 import { getAuth } from "firebase/auth";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
+import { useNavigate } from 'react-router-dom';
 
 
 const CustomerDetails = () => {
+    const navigate = useNavigate()
+    
     const {name,recentlySelectedCompany} = useContext(Context);
 
     const {customerId} = useParams();
@@ -34,7 +37,7 @@ const CustomerDetails = () => {
         notes : '',
     });
 
-        // Edit Customer
+    // Edit Customer
     const [firstName,setFirstName] = useState('');
     const [lastName,setLastName] = useState('');
     const [phoneNumber,setPhoneNumber] = useState('');
@@ -89,9 +92,19 @@ const CustomerDetails = () => {
     } 
     const cancelEditCustomer = (event) => {
         setEdit(false);
-    } 
-    const saveCustomer = (event) => {
-        //Update Local Customer
+    }
+    async function deleteCustomer(e) {
+        e.preventDefault()
+        try{
+            await deleteDoc(doc(db, "companies",recentlySelectedCompany,'customers',customerId));
+            navigate('/company/customers')
+            } catch(error){
+                console.log('Error')
+            }
+    }
+
+    async function saveCustomer(e) {
+        e.preventDefault()        //Update Local Customer
         setCustomer((prevCustomer) => ({
             ...prevCustomer,
             firstName: firstName,
@@ -105,7 +118,23 @@ const CustomerDetails = () => {
         }));
         
         setEdit(false);
+        
         //Update Firebase Function
+
+        const docRef = doc(db, "companies",recentlySelectedCompany,'customers',customerId);
+        console.log('Save Edit Changes')
+
+        await updateDoc(docRef, {
+            firstName: firstName,
+            lastName: lastName,
+            phoneNumber: phoneNumber,
+            email: email,
+            billingStreetAddress: billingStreetAddress,
+            billingCity : billingCity,
+            billingState : billingState,
+            billingZip : billingZip
+
+        });
     } 
     useEffect(() => {
         (async () => {
@@ -220,6 +249,7 @@ const CustomerDetails = () => {
             }
         })();
     },[])
+
     const handleServiceLocationChange = (selectedOption2) => {
 
         (async () => {
@@ -275,10 +305,18 @@ const CustomerDetails = () => {
                 <div className='w-full lg:pr-3'> 
                     <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
                         {
-                            edit ? <div className='w-full flex justify-between'>
-                            <button onClick={(e) =>{saveCustomer(e)}} className='bg-[#82D173] cursor-pointer font-normal rounded'><h1 className='font-bold text-[#000000] px-4 py-1 text-base'>Save</h1></button>
-                            <button onClick={(e) =>{cancelEditCustomer(e)}} className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Cancel</h1></button>
-                        </div> : <div className='w-full flex justify-between'>
+                            edit ? <div className='px-4 py-1'>
+                                <div className='w-full flex justify-between py-1'>
+                                    <button onClick={(e) =>{saveCustomer(e)}} className='bg-[#82D173] cursor-pointer font-normal rounded'><h1 className='font-bold text-[#000000] px-4 py-1 text-base'>Save</h1></button>
+                                    <button onClick={(e) =>{cancelEditCustomer(e)}} className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Cancel</h1></button>
+                                </div>
+                                <div className='w-full flex justify-between py-1'>
+                                    <button 
+                                    // onClick={(e) =>{deleteCustomer(e)}} 
+                                    onClick={(e) => deleteCustomer(e)}
+                                    className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Delete</h1></button>
+                                </div>
+                            </div> : <div className='w-full flex justify-between'>
                             <h1></h1>
                             <button onClick={(e) =>{editCustomer(e)}} className='bg-[#1D2E76] cursor-pointer font-normal ml-2 rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Edit</h1></button>
                         </div>

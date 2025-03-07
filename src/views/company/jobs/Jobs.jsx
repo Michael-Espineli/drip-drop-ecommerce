@@ -61,9 +61,9 @@ const Jobs = () => {
         // 9C0D38 - Pool Red
         // 2B600F - Pool Green
         <div className='px-2 md:px-7 py-5'>
+
             <Link 
-            className='py-1 px-2 bg-[#CDC07B] rounded-md  mt-3'
-            to={`/company/jobs/createNew`}>Create New</Link>
+            to={`/company/jobs/createNew`}><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#CDC07B] cursor-pointer rounded mt-3'>Create New</h1></Link>
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-3'>
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between items-center'>
@@ -71,12 +71,12 @@ const Jobs = () => {
                         <table className='w-full text-sm text-left text-[#d0d2d6]'>
                             <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
                                 <tr>
-                                    <th className='py-3 px-4'>customerName</th>
-                                    <th className='py-3 px-4'>adminName</th>
-                                    <th className='py-3 px-4'>billingStatus</th>
-                                    <th className='py-3 px-4'>operationStatus</th>
-                                    <th className='py-3 px-4 sm:hidden'>laborCost</th>
-                                    <th className='py-3 px-4 sm:hidden'>rate</th>
+                                    <th className='py-3 px-4'>Customer Name</th>
+                                    <th className='py-3 px-4'>Admin Name</th>
+                                    <th className='py-3 px-4'>Billing Status</th>
+                                    <th className='py-3 px-4'>Operation Status</th>
+                                    <th className='py-3 px-4 sm:hidden'>Labor Cost</th>
+                                    <th className='py-3 px-4 sm:hidden'>Rate</th>
                                     <th className='py-3 px-4'></th>
                                 </tr>
                             </thead>
@@ -84,12 +84,12 @@ const Jobs = () => {
                             {
                                 laborContractlist?.map(laborContract => (
                                         <tr key={laborContract.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.customerName}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.adminName}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.billingStatus}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.operationStatus}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'>{laborContract.laborCost}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'>{laborContract.rate}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.customerName}</Link></td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.adminName}</Link></td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.billingStatus}</Link></td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.operationStatus}</Link></td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.laborCost}</Link></td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.rate}</Link></td>
                                             <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>Details</Link></td>
                                         </tr>
                                 ))
@@ -103,5 +103,5 @@ const Jobs = () => {
         </div>
     );
 }
-    export default Jobs;
+export default Jobs;
 

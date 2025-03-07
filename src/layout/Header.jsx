@@ -31,16 +31,17 @@ const Header = ({showSidebar, setShowSidebar}) => {
                 </div>
                 {/*  */}
                 <div className='flex justify-center items-center gap-8 relative' >
-                    <div className='flex justify-center items-center'>
+                    <div className=''>
+                    {/* <div className='flex justify-center items-center'> */}
+
                         <Link to='/company/profile' className="w-[180px] h-[50px]">
                             <div className='flex justify-center item-center gap-3'>
-                            <span className='text-[14px] w-full font-normal'>{accountType}</span>
                                 <div className='flex justify-center items-center flex-col text-end text-[#ededed]'>
-                                    <h2 className='text-md font-bold'>{name}</h2>
+                                    <h2 className='text-md font-bold line-clamp-1'>{name} - {accountType}</h2>
                                     <span className='text-[14px] w-full font-normal'>{recentlySelectedCompanyName}</span>
                                 </div>
                                 {/* Profile Image */}
-                                <img className='w-[45px] h-[45px] rounded-full overflow-hidden bg-white' src={photoUrl} alt="profile" />
+                                <img className='w-[45px] h-[45px] rounded-full bg-white' src={photoUrl} alt="profile" />
                             </div>
                         </Link>
                     </div>

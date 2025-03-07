@@ -8,157 +8,31 @@ const Customers = () => {
     const {name,recentlySelectedCompany} = useContext(Context);
 
     const [customerList, setCustomerList] = useState([]);
-    const [page, setPage] = useState(1);
-    const [firstDoc, setFirstDoc] = useState();
-    const [lastDoc, setLastDoc] = useState();
+    const [filterCustomerList, setFilterCustomerList] = useState([]);
+    const [searchTerm, setSearchTerm] = useState('');
 
-    const [pageCount, setPageCount] = useState(5);
-    const [pageValue, setPageValue] = useState('5');
-
-    const handlePageChange = (event) => {
-
-        (async () => {
-            console.log('Change in Page Count ' + event.target.value)
-            setPageValue(event.target.value);
-            setPageCount(parseInt(event.target.value))
-                
-                try{
-                    let q;
-            
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), limit(parseInt(event.target.value)));
-                    
-                    const querySnapshot = await getDocs(q);       
-                    let count = 1   
-                    setCustomerList([])      
-                    querySnapshot.forEach((doc) => {
-                        if (count == 1) {
-                            setFirstDoc(doc)
-                        } else {
-                            setLastDoc(doc)
-                        }
-                        const user = doc.data()
-                        const userData = {
-                            id:user.id,
-                            name:user.firstName + ' ' + user.lastName,
-                            streetAddress:user.billingAddress.streetAddress,
-                            phoneNumber: user.phoneNumber,
-                            email:user.email
-                        }
-                        count = count + 1
-                        setCustomerList(customerList => [...customerList, userData]); 
-                    });
-                } catch(error){
-                    console.log('Error')
-                }
-            
-        })();
-    }
-
-    async function nextPage(page){
-        setPage(page + 1)
-        let q;
-        if (lastDoc) {
-
-            q = query(collection(db, 'companies','B06BD6B7-B23E-43BE-A637-7A824C48D0B7','customers'), orderBy("firstName"), limit(pageCount), startAfter(lastDoc));
-
-        } else {
-
-            q = query(collection(db, 'companies','B06BD6B7-B23E-43BE-A637-7A824C48D0B7','customers'), orderBy("firstName"), limit(pageCount));
-
-        }
-        const querySnapshot = await getDocs(q);
-        let count = 1
-        setCustomerList([])
-        querySnapshot.forEach((doc) => {
-          // doc.data() is never undefined for query doc snapshots
-
-            if (count === 1) {
-                setFirstDoc(doc)
-            }
-                setLastDoc(doc)
-
-            const user = doc.data()
-
-            const userData = {
-                id:user.id,
-                name:user.firstName + ' ' + user.lastName,
-                streetAddress:user.billingAddress.streetAddress,
-                phoneNumber: user.phoneNumber,
-                email:user.email
-            }
-
-            count = count + 1
-
-            setCustomerList(customerList => [...customerList, userData]); 
-
-        });
-    }
-    async function previousPage(page){
-        setPage(page - 1)
-        let q;
-        if (firstDoc) {
-
-            q = query(collection(db, 'companies','B06BD6B7-B23E-43BE-A637-7A824C48D0B7','customers'), orderBy("firstName"), limit(pageCount), startAt(firstDoc));
-
-        } else {
-
-            q = query(collection(db, 'companies','B06BD6B7-B23E-43BE-A637-7A824C48D0B7','customers'), orderBy("firstName"), limit(pageCount));
-
-        }
-        const querySnapshot = await getDocs(q);
-        let count = 1        
-        setCustomerList([])
-        querySnapshot.forEach((doc) => {
-            // doc.data() is never undefined for query doc snapshots
-
-            if (count === 1) {
-                setFirstDoc(doc)
-            }
-                setLastDoc(doc)
-
-            const user = doc.data()
-
-            const userData = {
-                id:user.id,
-                name:user.firstName + ' ' + user.lastName,
-                streetAddress:user.billingAddress.streetAddress,
-                phoneNumber: user.phoneNumber,
-                email:user.email
-            }
-
-            count = count + 1
-
-            setCustomerList(customerList => [...customerList, userData]); 
-        });
-    }
     useEffect(() => {
         (async () => {
-            if (customerList.length < 3) {
-                
+            if (customerList.length < 1 ) {
                 try{
                     let q;
-            
-                        q = query(collection(db, 'companies','B06BD6B7-B23E-43BE-A637-7A824C48D0B7','customers'), orderBy("firstName"), limit(pageCount));
-                    
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"));   
                     const querySnapshot = await getDocs(q);       
                     let count = 1   
-                    setCustomerList([])      
+                    setCustomerList([])
+                    setFilterCustomerList([])      
                     querySnapshot.forEach((doc) => {
-                        if (count == 1) {
-                            setFirstDoc(doc)
-                        } else {
-                            setLastDoc(doc)
-                        }
-                        const user = doc.data()
-                        const userData = {
-                            id:user.id,
-                            name:user.firstName + ' ' + user.lastName,
-                            streetAddress:user.billingAddress.streetAddress,
-                            phoneNumber: user.phoneNumber,
-                            email:user.email
+                        const customer = doc.data()
+                        const customerData = {
+                            id:customer.id,
+                            name:customer.firstName + ' ' + customer.lastName,
+                            streetAddress:customer.billingAddress.streetAddress,
+                            phoneNumber: customer.phoneNumber,
+                            email:customer.email
                         }
                         count = count + 1
-                        setCustomerList(customerList => [...customerList, userData]); 
+                        setCustomerList(customerList => [...customerList, customerData]); 
+                        setFilterCustomerList(filterCustomerList => [...filterCustomerList, customerData]); 
                     });
                 } catch(error){
                     console.log('Error')
@@ -166,6 +40,45 @@ const Customers = () => {
             }
         })();
     },[])
+    const searchHandler = (e) => {
+        e.preventDefault();
+
+        let newInput = e.target.value
+
+        setSearchTerm(newInput);
+
+        if (newInput.length > 0) {
+            //Better Way
+            setFilterCustomerList(
+                customerList.filter(customer => 
+                    // customer.name == newInput
+                    customer.name.toLowerCase().includes(newInput.toLowerCase()) ||
+                    customer.streetAddress.toLowerCase().includes(newInput.toLowerCase()) ||
+                    customer.phoneNumber.toLowerCase().includes(newInput.toLowerCase()) ||
+                    customer.email.toLowerCase().includes(newInput.toLowerCase())
+
+                )
+            )
+
+            //Bad Way
+
+            // console.log('Search')
+            // for (let i = 0; i < customerList.length; i++) {
+            //     const item = customerList[i];
+            //     if (item.name == newInput) {
+            //         console.log('Found')
+            //         newList.push(item)
+            //     }
+            // }
+
+        } else {
+            console.log('Empty')
+
+            setFilterCustomerList(customerList)
+        }
+    };
+ 
+
 
     return (
         // 030811 - almost black
@@ -180,49 +93,31 @@ const Customers = () => {
         // 2B600F - Pool Green
 
         <div className='px-2 md:px-7 py-5'>
-            <button></button>
-            <Link 
-            className='py-1 px-2 bg-[#1D2E76] rounded-md'
-            to={`/company/customers/createNew`}>Create New</Link>
+            <div className='px-2 py-2'>
+                <Link 
+                className='py-1 px-2 bg-[#1D2E76] rounded-md text-[#ffffff]'
+                to={`/company/customers/createNew`}>Create New</Link>
+            </div>
             <div className='w-full bg-[#747e79] p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between items-center'>
-
-                        <h1>Customers: {(page*pageCount)-pageCount+1} - {page*pageCount}</h1>
-                        {/* Search Bar */}
-                        <input className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
-                        text-[#ededed] focus:border-[#ededed] overflow-hidden" type="text" name='search' placeholder='Search'  />
-
-                        {/* Drop Down */}
-                        <select value={pageValue} onChange={(e) => handlePageChange(e)}>
-                            <option value="5">5</option>
-                            <option value="10">10</option>
-                            <option value="25">25</option>
-                            <option value="50">50</option>
-
-                        </select>
-                        <div className='left-0 w-full justify-between'>
-                            <div className='flex justify-between items-center'>
-                                {
-                                    page != 1 ?
-                                    <div>
-                                        <button onClick={() => previousPage(page)} >
-                                            <h1>Previous</h1>
-                                        </button>
-                                    
-                                    </div> :
-                                    <div>
-                                        <h1></h1>
-                                    </div>
-                                }
-                                <div>
-                                    <button onClick={() => nextPage(page)} >
-                                        <h1>Next</h1>
-                                    </button>
-                                </div>
-                            </div>                                         
+                        <div className='flex justify-between items-center'>
+                            {/* <h1>Customers : {customerList.length}</h1> */}
+                                <input 
+                                onChange={(e) => {searchHandler(e)}}
+                                // onChange={searchHandler} 
+                                value={searchTerm}
+                                className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
+                                text-[#030811] focus:border-[#ededed] overflow-hidden" 
+                                type="text" 
+                                name='search' 
+                                placeholder='Search'/>
+                            {/* <div className='p-2'>
+                                <button 
+                                onClick={(e) => searchForCustomer(e)} 
+                                className='py-1 px-2 bg-[#1D2E76] rounded-md text-[#ffffff]'
+                                >Search</button>
+                            </div> */}
                         </div>
-                    </div>
                     <div className='relative overflow-x-auto'>
                         <table className='w-full text-sm text-left text-[#d0d2d6]'>
                             <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
@@ -235,42 +130,17 @@ const Customers = () => {
                             </thead>
                             <tbody>
                             {
-                                customerList?.map(customer => (
-                                        <tr key={customer.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/customers/details/${customer.id}`}>{customer.name}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{customer.streetAddress}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{customer.phoneNumber}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{customer.email}</td>
-                                        </tr>
-                                    
+                                filterCustomerList?.map(customer => (
+                                    <tr key={customer.id}>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/customers/details/${customer.id}`}>{customer.name}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/customers/details/${customer.id}`}>{customer.streetAddress}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/customers/details/${customer.id}`}>{customer.phoneNumber}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/customers/details/${customer.id}`}>{customer.email}</Link></td>
+                                    </tr>
                                 ))
                             }
                             </tbody>
                         </table>
-                    </div>
-                </div>
-                <hr/>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between items-center'>
-                        {
-
-                            page != 1 ?
-                            <div>
-                                <button onClick={() => previousPage(page)} >
-                                    <h1>{((page-1)*pageCount)-pageCount+1} - {(page-1)*pageCount}</h1>
-                                </button>
-                                
-                            </div> :
-                            <div>
-                                <h1></h1>
-                            </div>
-                        }
-
-                        <div>
-                            <button onClick={() => nextPage(page)} >
-                                <h1>{((page+1)*pageCount)-pageCount+1} - {(page+1)*pageCount}</h1>
-                            </button>
-                        </div>
                     </div>
                 </div>
             </div>

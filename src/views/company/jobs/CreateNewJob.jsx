@@ -26,7 +26,23 @@ const CreateNewJob = () => {
     const [userList, setUserList] = useState([]);
 
     const [selectedAdmin, setSelectedAdmin] = useState(''); //Object
-    const [selectedCustomer, setSelectedCustomer] = useState(''); //Object
+    const [selectedCustomer, setSelectedCustomer] = useState({
+        id: "",
+        name: "",
+        streetAddress: "",
+        phoneNumber: "",
+        email: "",
+        label: "",
+    }); 
+    const [customerData, setCustomerData] = useState({
+        id: "",
+        name: "",
+        streetAddress: "",
+        phoneNumber: "",
+        email: "",
+        label: "",
+    }); 
+    //Object
     const [selectedServiceLocation, setSelectedServiceLocation] = useState(''); //Object
     const [selectedTaskGroup, setSelectedTaskGroup] = useState(''); //Object
     const [selectedBodyOfWater,setSelectedBodyOfWater] = useState({
@@ -58,6 +74,7 @@ const CreateNewJob = () => {
         name : '',
     });
     const [taskLaborCost, setTaskLaborCost] = useState();
+    const [estimatedTime, setEstimatedTime] = useState();
 
     const [description, setDescription] = useState('');
     const [taskDescription, setTaskDescription] = useState('');
@@ -70,7 +87,7 @@ const CreateNewJob = () => {
 
     const [employeeLaborCost, setEmployeeLaborCost] = useState('32.50');
     const [subcontractorCost, setSubcontractorCost] = useState('50');
-    const [estimatedLaborCost, setEstimatedLaborCost] = useState('50');
+    const [estimatedLaborCost, setEstimatedLaborCost] = useState(50);
 
     const [estimatedRate, setEstimatedRate] = useState('1200.00');
     const [materialCost, setMaterialCost] = useState(500.00);
@@ -165,6 +182,19 @@ const CreateNewJob = () => {
 
         (async () => {
             setSelectedCustomer(option)
+            console.log('Change in Customer')
+            console.log(option)
+            console.log(option.id)
+            console.log(option.name)
+
+            setCustomerData({
+                id: option.id,
+                name: option.name,
+                streetAddress: option.streetAddress,
+                phoneNumber: option.phoneNumber,
+                email: option.email,
+                label: option.label,
+            })
             try{
                 let q;
         
@@ -239,8 +269,11 @@ const CreateNewJob = () => {
     };
     async function handleAddTask(e) {
         e.preventDefault()
-        let taskId = 'lc_tas_' + uuidv4();
+        let taskId = 'comp_wo_tas_' + uuidv4();
         try{
+            const laborCostInt = parseFloat(taskLaborCost);
+            let time = parseFloat(estimatedTime)
+            laborCostInt = laborCostInt*100
             let task = {
                 id : taskId,
                 name : taskDescription,
@@ -250,9 +283,9 @@ const CreateNewJob = () => {
                 workerName : '',
                 status : 'Unassigned',
                 customerApproval : false,
-                contractedRate : taskLaborCost,
+                contractedRate : laborCostInt,
                 laborContractId : '',
-                estimatedTime : '',
+                estimatedTime : time,
                 actualTime : '',
                 equipmentId : '',
                 serviceLocationId : '',
@@ -297,7 +330,6 @@ const CreateNewJob = () => {
         // setSelectedTaskList([])
         setTaskList(newArr)
 
-
         //Updates Time
         // const taskRemoving = taskList.find(item => item.id === taskId);
         // setEstimatedDuration(0)
@@ -331,19 +363,24 @@ const CreateNewJob = () => {
         //If not tasks are selected do not allow completion
         //if Draft Do not Update Job/Do not Notify Receiver / Please do on google function
         //Upload Contract
-        
+        console.log("create new job")
         if (selectedAdmin.id!=='') {
             if (selectedCustomer.id!=='') {
                 if (selectedServiceLocation.id!=='') {
-                    if (taskList.length!==0) {
+
+                        console.log(customerData.id)
+                        console.log(customerData.name)
 
                         await setDoc(doc(db,"companies",recentlySelectedCompany,'workOrders',jobId), {
                             adminId : selectedAdmin.id,
                             adminName : selectedAdmin.userName,
                             billingStatus : 'Draft',
-                            customerId : selectedCustomer.id,
+                            customerId : customerData.id,
+                            customerName: customerData.name,
+                            dateCreated: new Date(),
                             description : description,
                             id : jobId,
+                            internalId:jobId,
                             laborCost : estimatedLaborCost,
                             operationStatus : 'Estimate Pending',
                             rate : offeredRate,
@@ -351,6 +388,8 @@ const CreateNewJob = () => {
                             serviceStopIds : [],
                         });
                         //Upload Tasks
+                        console.log('Uploading Task List')
+                        console.log(taskList.length)
                         for (let i = 0; i < taskList.length; i++) {
                             let taskId = 'lc_tas_' + uuidv4();
                             let task = taskList[i]
@@ -372,11 +411,9 @@ const CreateNewJob = () => {
                                 bodyOfWaterId : task.bodyOfWaterId,
                             });
                         }
-                    } else {
-                        console.log('Task List')
-                    }
+                        navigate(`/company/jobs/detail/${jobId}`)
                 } else {
-                    console.log('Location Guard Statement')
+                    console.log('Error Location Guard Statement')
                 }
             } else {
                 console.log('Customer Guard Statement')
@@ -388,7 +425,6 @@ const CreateNewJob = () => {
         }
         //Maybe have google function update these. 
         //Navigate To Job Detail View
-        navigate(`/company/jobs/detail/${jobId}`)
     }
     return (
         // 030811 - almost black
@@ -404,8 +440,8 @@ const CreateNewJob = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='flex justify-between'>
                 <Link 
-                className='py-1 px-2 bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'
-                to={`/company/laborContracts`}>Back</Link>
+                className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#CDC07B] cursor-pointer rounded mt-3'
+                to={`/company/jobs`}>Back To Jobs</Link>
                 <p className='font-bold text-lg'>Create New Job</p>
             </div>
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
@@ -427,7 +463,7 @@ const CreateNewJob = () => {
                             })}
                         />
                         <hr/>
-                        <p>customerId</p>
+                        <p>Customer</p>
 
                         <Select
                             value={selectedCustomer}
@@ -446,7 +482,7 @@ const CreateNewJob = () => {
                             })}
                         />
                         <hr/>
-                        <p>serviceLocationId</p>
+                        <p>Service Location</p>
 
                         <Select
                             value={selectedServiceLocation}
@@ -495,11 +531,8 @@ const CreateNewJob = () => {
                                 <th className='py-3 px-4'>Status</th>
                                 <th className='py-3 px-4'>Rate Offered</th>
                                 <th className='py-3 px-4'>Estimated Time</th>
-
-                                <th className='py-3 px-4'></th>
                                 <th className='py-3 px-4'>Customer Cost</th>
-
-
+                                <th className='py-3 px-4'></th>
                             </tr>
                         </thead>
                         <tbody>
@@ -507,8 +540,6 @@ const CreateNewJob = () => {
                             taskList?.map(task => (
                                 <tr key={task.id}>
                                     
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.id}</td>
-
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>
@@ -524,15 +555,14 @@ const CreateNewJob = () => {
                                         }
                                     </td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
                                         <p>{task.contractedRate}</p>
                                         <input 
                                         className='w-full py-1 px-2 rounded-md mt-2'
 
                                         onChange={(e) => {setTaskDescription(e.target.value)}} type="text" placeholder='Rate' value={taskDescription}></input>
                                     </td>
+                                    
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>Time</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>
                                         {
                                             (taskToEdit.id===task.id)&&<div>
@@ -576,7 +606,6 @@ const CreateNewJob = () => {
                         className='py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'
                         >Clear</button>
                         <input onChange={(e) => {setTaskDescription(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Description' value={taskDescription}></input>
-
                         <div className='w-full'>
                             <Select
                                 value={selectedTaskType}
@@ -596,6 +625,7 @@ const CreateNewJob = () => {
                             />
                         </div>
                         <input onChange={(e) => {setTaskLaborCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='laborCost' value={taskLaborCost}></input>
+                        <input onChange={(e) => {setEstimatedTime(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Estimated Time (Min)' value={estimatedTime}></input>
 
                         <button onClick={(e) => handleAddTask(e)} 
                         className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
@@ -847,6 +877,7 @@ const CreateNewJob = () => {
                             onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Description' value={description}></input>
                     </div>
                 </div>
+
                 <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                     <div className='left-0 w-full justify-end'>
                         <p className='font-bold'>Time</p>
@@ -884,6 +915,7 @@ const CreateNewJob = () => {
                         <p>Profit - {estimatedProfit}  ({estimatedProfitPercentage})</p>
                     </div>
                 </div>
+
                 <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                     <div className='left-0 w-full justify-between'>
                         <button
