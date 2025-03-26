@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { Link, useLocation, Navigate } from 'react-router-dom';
 import toast, { Toaster } from 'react-hot-toast';
 
-const SignIn = () => {
+const HomeOwnerSignIn = () => {
     const [email, setEmail] = useState();
     const [password, setPassword] = useState();
     const auth = getAuth()
@@ -51,13 +51,11 @@ const SignIn = () => {
         // 2B600F - Pool Green
         <div className='px-2 md:px-7 py-5 bg-[#0e245c] text-[#ffffff] font-bold'>
             <div className='w-full h-full '>
-                <Link to='/'>
-                    <h2 className='w-[300px] px-[20px] font-bold text-4xl line-clamp-1'>
-                        Drip Drop
-                    </h2>
+                <Link to='/' className={`px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1 font-bold`}>
+                    Home
                 </Link>
                 <div className='p-2'>
-                    <h1>Company Sign In Page</h1>
+                    <h1>Home Owner Sign In Page</h1>
                 </div>
                 <form>
                     <div className='left-0 w-full justify-between gap-3 text-[#000000]'>
@@ -72,7 +70,7 @@ const SignIn = () => {
                         </div>
                     </div>
                 </form>
-                <Link to='/signUp' className={` text-[#cfcfcf] px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:text-[#de3c6d] transition-all w-full mb-1 underline`}>
+                <Link to='/homeOwnerSignUp' className={` text-[#cfcfcf] px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:text-[#de3c6d] transition-all w-full mb-1 underline`}>
                     <span>
                         Don't have an account? Sign up here.
                     </span>
@@ -83,4 +81,4 @@ const SignIn = () => {
 };
 
 
-export default SignIn;
+export default HomeOwnerSignIn;

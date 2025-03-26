@@ -3,7 +3,7 @@ import { FaShoppingCart, FaUsers } from 'react-icons/fa';
 import { MdCurrencyExchange, MdProductionQuantityLimits } from 'react-icons/md';
 import Chart from 'react-apexcharts';
 import { Link } from 'react-router-dom';
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
+import { query, collection, getDocs, limit, orderBy, startAt, getCountFromServer, where } from "firebase/firestore";
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
 
@@ -11,6 +11,10 @@ const Dashboard = () => {
     const {recentlySelectedCompany, user} = useContext(Context);
 
     const [ alertList, setAlertList] = useState([]);
+
+    const [ customerCount, setCustomerCount] = useState(0);
+    
+    const [ techCount, setTechCount] = useState(0);
 
     const state = {
         series : [
@@ -78,6 +82,7 @@ const Dashboard = () => {
             //Fire base
             console.log(recentlySelectedCompany)
             try{
+
                 //alerts
                 let q = query(collection(db, 'companies',recentlySelectedCompany,'alerts'));
                 const querySnapshot = await getDocs(q);       
@@ -93,7 +98,22 @@ const Dashboard = () => {
                     count = count + 1
                     setAlertList(alertList => [...alertList, contract]); 
                 });
-    
+
+                //Get Customers
+                let q1 = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), where("active", "==", true));   
+                const snapshot1 = await getCountFromServer(q1);
+                console.log('count: ', snapshot1.data().count);
+                setCustomerCount(snapshot1.data().count)
+             
+                //Get Users
+
+                let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
+                const snapshot2 = await getCountFromServer(userQuery);
+                console.log('count: ', snapshot2.data().count);
+                setTechCount(snapshot2.data().count)
+         
+                
+
             } catch (error){
                 console.log(error)
             }
@@ -117,7 +137,7 @@ const Dashboard = () => {
 
                 <div className='flex justify-between items-center p-5 bg-[#cc7c7c] rounded-md gap-3'>
                     <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                        <h2 className='text-3xl font-bold'>$3232</h2>
+                        <h2 className='text-3xl font-bold'>$32,232.78</h2>
                         <span className='text-md font-medium'>Total Sales</span>
                     </div>
                     <div className='w-[40px] h-[47px] rounded-full bg-[#fa0305] flex justify-center items-center text-xl'>
@@ -127,18 +147,18 @@ const Dashboard = () => {
 
                 <div className='flex justify-between items-center p-5 bg-[#282c28] rounded-md gap-3'>
                     <div className='flex flex-col justify-start items-start text-[#ededed]'>
-                        <h2 className='text-3xl font-bold'>50</h2>
-                        <span className='text-md font-medium'>Products</span>
+                        <h2 className='text-3xl font-bold'>{customerCount}</h2>
+                        <span className='text-md font-medium'>Active Customers</span>
                     </div>
                     <div className='w-[40px] h-[47px] rounded-full bg-[#030811] flex justify-center items-center text-xl'>
-                        <MdProductionQuantityLimits className='text-[#fae8e8]'/>
+                    <FaUsers className='text-[#fae8e8]'/>
                     </div>
                 </div>
 
                 <div className='flex justify-between items-center p-5 bg-[#e9feea] rounded-md gap-3'>
                     <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                        <h2 className='text-3xl font-bold'>10</h2>
-                        <span className='text-md font-medium'>Sellers</span>
+                        <h2 className='text-3xl font-bold'>{techCount}</h2>
+                        <span className='text-md font-medium'>Technicians</span>
                     </div>
                     <div className='w-[40px] h-[47px] rounded-full bg-[#038000] flex justify-center items-center text-xl'>
                         <FaUsers className='text-[#fae8e8]'/>
@@ -148,7 +168,7 @@ const Dashboard = () => {
                 <div className='flex justify-between items-center p-5 bg-[#ecebff] rounded-md gap-3'>
                     <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
                         <h2 className='text-3xl font-bold'>54</h2>
-                        <span className='text-md font-medium'>Orders</span>
+                        <span className='text-md font-medium'>Work Orders</span>
                     </div>
                     <div className='w-[40px] h-[47px] rounded-full bg-[#0200f8] flex justify-center items-center text-xl'>
                         <FaShoppingCart className='text-[#fae8e8]'/>

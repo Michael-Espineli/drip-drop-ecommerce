@@ -10,7 +10,7 @@ export function Protected({route,children}){
 
     if (!user) {
 
-        return <Navigate to='/signIn' replace />
+        return <Navigate to='/' replace />
 
     } else {
 

@@ -62,6 +62,7 @@ const CustomerDetails = () => {
     const [selectedServiceLocation,setSelectedServiceLocation] = useState({
         id:'',
         customerName: '',
+        label: '',
         streetAddress:'',
         bodiesOfWaterId:[]
     });
@@ -87,6 +88,10 @@ const CustomerDetails = () => {
         streetAddress:'',
         bodiesOfWaterId:[]
     });
+    //Recurring Service Stop 
+    const [recurringServiceStopList, setRecurringServiceStopList] = useState([]);
+
+
     const editCustomer = (event) => {
         setEdit(true);
     } 
@@ -189,6 +194,7 @@ const CustomerDetails = () => {
                     console.log(contract)
                     setContractList(contractList => [...contractList, contract]); 
                 });
+                
                 //   Get serviceLocations By Customer
 
                 let q1;
@@ -212,7 +218,7 @@ const CustomerDetails = () => {
                 });
 
                 //Check to see if serviceLocation is not empty
-                if (serviceLocationList.length!==0) {
+                if (serviceLocationList.length>0) {
                     setSelectedServiceLocation(serviceLocationList[0])
                 }
 
@@ -243,6 +249,46 @@ const CustomerDetails = () => {
                         setSelectedBodyOfWater(bodyOfWaterList[0])
                     });
                 }
+                
+                let q5 = query(collection(db, 'companies',recentlySelectedCompany,'recurringServiceStop'),where('customerId','==',customerId));
+                const querySnapshot5 = await getDocs(q5);       
+                setRecurringServiceStopList([])
+                querySnapshot5.forEach((doc) => {
+                    const rssData = doc.data()
+                    const rss = {
+                        id:rssData.id,
+                        internalId : rssData.internalId,
+                        type:rssData.type,
+                        typeId:rssData.typeId,
+                        typeImage: rssData.typeImage,
+                        customerId:rssData.customerId,
+                        customerName: rssData.customerName,
+
+                        streetAddress:rssData.address.streetAddress,
+                        city:rssData.address.city,
+                        state:rssData.address.state,
+                        zip:rssData.address.zip,
+                        latitude:rssData.address.latitude,
+                        longitude:rssData.address.longitude,
+
+                        tech:rssData.tech,
+                        techId:rssData.techId,
+                        dateCreated:rssData.dateCreated,
+                        startDate:rssData.startDate,
+                        endDate:rssData.endDate,
+                        noEndDate:rssData.noEndDate,
+                        frequency:rssData.frequency,
+                        daysOfWeek:rssData.daysOfWeek,
+                        lastCreated:rssData.lastCreated,
+
+                        serviceLocationId:rssData.serviceLocationId,
+                        estimatedTime:rssData.estimatedTime,
+                        otherCompany:rssData.otherCompany,
+                        laborContractId:rssData.laborContractId,
+                        contractedCompanyId:rssData.contractedCompanyId
+                    }
+                    setRecurringServiceStopList(recurringServiceStopList => [...recurringServiceStopList, rss]); 
+                });
                 console.log('Successful')
             } catch(error){
                 console.log('Error')
@@ -303,11 +349,11 @@ const CustomerDetails = () => {
                         
             <div className='w-full flex flex-wrap mt-7'>
                 <div className='w-full lg:pr-3'> 
-                    <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
+                    <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
                         {
                             edit ? <div className='px-4 py-1'>
                                 <div className='w-full flex justify-between py-1'>
-                                    <button onClick={(e) =>{saveCustomer(e)}} className='bg-[#82D173] cursor-pointer font-normal rounded'><h1 className='font-bold text-[#000000] px-4 py-1 text-base'>Save</h1></button>
+                                    <button onClick={(e) =>{saveCustomer(e)}} className='bg-[#82D173] cursor-pointer font-normal rounded'><h1 className='font-bold text-[#cfcfcf] px-4 py-1 text-base'>Save</h1></button>
                                     <button onClick={(e) =>{cancelEditCustomer(e)}} className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Cancel</h1></button>
                                 </div>
                                 <div className='w-full flex justify-between py-1'>
@@ -321,7 +367,7 @@ const CustomerDetails = () => {
                             <button onClick={(e) =>{editCustomer(e)}} className='bg-[#1D2E76] cursor-pointer font-normal ml-2 rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Edit</h1></button>
                         </div>
                         }
-                        <h1 className='font-bold text-[#000000] text-xl'>Customer Information</h1>
+                        <h1 className='font-bold text-[#cfcfcf] text-xl'>Customer Information</h1>
 
                         {
                             edit ? <div>
@@ -349,7 +395,7 @@ const CustomerDetails = () => {
                                 </div>
     
                             </div> : 
-                            <div className='text-black'>
+                            <div className='text-[#cfcfcf]'>
                                 <p>{customer.firstName} {customer.lastName}</p>
                                 <p>{customer.phoneNumber}</p>
                                 <p>{customer.email}</p>
@@ -360,8 +406,8 @@ const CustomerDetails = () => {
                 </div>
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:w-7/12 lg:pr-3'> 
-                        <div className='w-full h-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                        <h1 className='font-bold text-[#000000]'>Billing Address</h1>
+                        <div className='w-full h-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
+                        <h1 className='font-bold text-[#cfcfcf]'>Billing Address</h1>
                         {
                             edit ? <div>
                                 <div className='flex flex-col w-full gap-1 mb-2'>
@@ -395,7 +441,7 @@ const CustomerDetails = () => {
                                         window.location.href = url;
                                     }
                                 }}>
-                                <div className='text-black'>
+                                <div className='text-[#cfcfcf]'>
                                     <p>{customer.billingStreetAddress}</p>
                                     <div className='w-full flex justify-between gap-2'>
                                         <p>{customer.billingCity}</p>
@@ -408,28 +454,30 @@ const CustomerDetails = () => {
                         </div>
                     </div>
                     <div className='w-full lg:w-5/12 lg:pr-3'>  
-                        <div className='w-full h-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                            <h1 className='font-bold text-[#000000]'>Billing Notes</h1>
+                        <div className='w-full h-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6]'>
+                            <h1 className='font-bold text-[#cfcfcf]'>Billing Notes</h1>
                             <p>{customer.billingNotes}</p>
-                            <h1 className='font-bold text-[#000000]'>Notes</h1>
+                            <h1 className='font-bold text-[#cfcfcf]'>Notes</h1>
                             <p>{customer.notes}</p>
                             <p>{customer.active ? 'true':'false'}</p>
                             <p>{customer.verified ? 'true':'false'}</p>
                         </div>
                     </div>
                 </div>
-                  {/* Money */}
-                  <div className='w-full flex flex-wrap mt-7 '>
+
+                {/* Money */}
+                <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                        <h1 className='font-bold text-[#000000]'>Money</h1>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
+                        <h1 className='font-bold text-[#cfcfcf]'>Money</h1>
                         </div>
                     </div>
                 </div>
+
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#000000]'>
-                            <h1 className='font-bold text-[#000000]'>Contracts - {contractList.length}</h1>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
+                            <h1 className='font-bold text-[#cfcfcf]'>Contracts - {contractList.length}</h1>
                             <Link 
                             className='bg-[#CDC07B] rounded-md py-1 px-2 text-[#000000]'
                             to={`/company/contracts/createNew/${customerId}`}>Offer New Contract</Link>
@@ -446,14 +494,15 @@ const CustomerDetails = () => {
                         </div>
                     </div>
                 </div>
+
                 {/* Service Location */}
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#000000]'>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
                             <div className='flex justify-between items-center'>
                                 <h1 className='font-bold text-[#000000]'>Service Locations - {serviceLocationList.length}</h1>
                           
-                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md'>Add New</button>
+                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md text-[#000000]'>Add New</button>
                             </div>
                       
                             <table className='w-full text-sm text-left text-[#d0d2d6]'>
@@ -472,7 +521,6 @@ const CustomerDetails = () => {
                                                 <td className='py-3 px-4 font-medium whitespace-nonwrap'>{n.streetAddress}</td>
                                                 <td className='py-3 px-4 font-medium whitespace-nonwrap'>{n.bodiesOfWaterId.length}</td>
                                                 <td className='py-3 px-4 font-medium whitespace-nonwrap'>Select</td>
-
                                             </tr>
                                         ))
                                     }
@@ -511,12 +559,12 @@ const CustomerDetails = () => {
 
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                            <div className='flex justify-between items-center text-[#000000]'>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6]'>
+                            <div className='flex justify-between items-center text-[#d0d2d6]'>
 
-                                <h1 className='font-bold text-[#000000]'>Bodies Of Water - {bodyOfWaterList.length}</h1>
+                                <h1 className='font-bold text-[#cfcfcf]'>Bodies Of Water - {bodyOfWaterList.length}</h1>
 
-                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md'>Add New</button>
+                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md text-[#000000]'>Add New</button>
                             </div>
                             <ul className='py-2'>
                                 {
@@ -555,14 +603,15 @@ const CustomerDetails = () => {
                         </div>
                     </div>
                 }
+
                 {/* Equipment */}
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                            <div className='flex justify-between items-center text-[#000000]'>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6]'>
+                            <div className='flex justify-between items-center text-[#d0d2d6]'>
 
-                                <h1 className='font-bold text-[#000000]'>Equipment</h1>
-                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md'>Add New</button>
+                                <h1 className='font-bold text-[#cfcfcf]'>Equipment</h1>
+                                <button className='bg-[#CDC07B] py-1 px-2 rounded-md text-[#000000]'>Add New</button>
                             </div>
 
                             <div className='flex justify-between py-2'>
@@ -572,24 +621,58 @@ const CustomerDetails = () => {
                         </div>
                     </div>
                 </div>
+
                 {/* Work Orders */}
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                        <h1 className='font-bold text-[#000000]'>Work Orders</h1>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6]'>
+                        <h1 className='font-bold text-[#cfcfcf]'>Work Orders</h1>
                         </div>
                     </div>
                 </div>
+
                 {/* Recurring Service Stops */}
                 <div className='w-full flex flex-wrap mt-7 '>
                     <div className='w-full lg:pr-3'> 
-                        <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                        <h1 className='font-bold text-[#000000]'>Recurring Service Stops</h1>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6]'>
+                            <div className='flex justify-between items-center text-[#cfcfcf]'>
+                                <h1 className='font-bold text-[#cfcfcf]'>Recurring Service Stops</h1>
+                                <Link to={`/company/recurringServiceStop/createNew/${customerId}`}>
+                                    <h1 className='bg-[#CDC07B] py-1 px-2 rounded-md text-[#000000]'>
+                                        Add New 
+                                    </h1>
+                                </Link>
+                            </div>
+                            <div className='relative overflow-x-auto'>
+                                <table className='w-full text-sm text-left text-[#d0d2d6]'>
+                                    <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                                        <tr>
+                                            <th className='py-3 px-4'>Customer Name</th>
+                                            <th className='py-3 px-4'>Street Address</th>
+                                            <th className='py-3 px-4'>Tech Name</th>
+                                            <th className='py-3 px-4'>Day</th>
+                                            <th className='py-3 px-4'>Frequency</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                    {
+                                        recurringServiceStopList?.map(rss => (
+                                            <tr key={rss.id}>
+                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/recurringServiceStop/details/${rss.id}`}>{rss.customerName}</Link></td>
+                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/recurringServiceStop/details/${rss.id}`}>{rss.streetAddress}</Link></td>
+                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/recurringServiceStop/details/${rss.id}`}>{rss.tech}</Link></td>
+                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/recurringServiceStop/details/${rss.id}`}>{rss.daysOfWeek[0]}</Link></td>
+                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/recurringServiceStop/details/${rss.id}`}>{rss.frequency}</Link></td>
+                                            </tr>
+                                        ))
+                                    }
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
                 </div>
-             
-                 
+            
             </div>
         </div>
     );

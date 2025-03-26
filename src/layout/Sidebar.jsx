@@ -40,13 +40,20 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
         // CDC07B - Pool Yellow
         // 9C0D38 - Pool Red
         // 2B600F - Pool Green
+        //9a9b9c
         <div>
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 ${!showSidebar ? 'invisible' : 'visible'} w-screen h-screen bg-[#000000] top-0 left-0 z-10`}>
             </div>
-            <div className={`w-[260px] fixed bg-[#747e79] z-50 top-0 h-screen shadow-[0_0_15px_0rgb(34_41_47_/_5%)] transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
+            <div className={`w-[260px] fixed bg-[#0e245c] z-50 top-0 h-screen shadow-[0_0_15px_0rgb(34_41_47_/_5%)] transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
                 <div className='h-[70px] flex justify-center items-center'>
-                    <Link to='/' className="w-[180px] h-[50px]">
-                    <h1 className='text-4xl font-serif font-family:Times New Roman'>Drip Drop </h1> {/* Drip Drop Logo */}
+                    <Link to='/company/dashboard' className="w-[250px] h-[75px]">
+                        <div className='flex justify-start items-center'>
+                            <img class="h-[50px] w-[50px]" src="/duck512.png" alt="Foreman"></img>
+                            <div>
+                                <h1 className='text-4xl font-serif font-family:Times New Roman text-[#cfcfcf]'>Drip Drop </h1> {/* Drip Drop Logo */}
+                                <p className='text-xs font-bold font-serif font-family:Times New Roman text-[#cfcfcf] py-1'>The Pool App</p>
+                            </div>
+                        </div>
                     </Link>
                 </div>
                 <hr className='bg-[#030811]'/>
@@ -57,13 +64,13 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                                 <div key={i}>
                                     {
                                         //  Categorized
-
                                     (category!=='NA')&&
                                     <div>
                                         <li>
                                             <button 
+                                            className='bg-[#606675] text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'
                                             onClick={(e)=>(setSelectedCategory(category))}
-                                            ><span className='font-bold'>{category}</span></button>
+                                            ><span >{category} ▼</span></button>
                                         </li>
                                         {
                                             (selectedCategory===category)&&
@@ -72,9 +79,8 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                                                     allNav.map((nn,ii) => <div>
                                                         {
                                                         (nn.category===category)&&<li key={ii}>
-                                                        
-                                                        <Link to={nn.path} className={`${pathname === nn.path ? 'bg-[#1D2E76] shadow-indigo-500/50 text-[#ffffff] duration-500' : 'bg-[#454b39] text-[#000000] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
-                                                            <span>{nn.icon}</span>
+                                                        <Link to={nn.path} className={`${pathname === nn.path ? 'bg-[#CDC07B] shadow-indigo-500/50 text-[#000000] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
+                                                            <span className='px-3'>{nn.icon}</span>
                                                             <span>{nn.title}</span>
                                                         </Link>
                                                     </li>
@@ -99,7 +105,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                                                 {
                                                 (n.category==='NA')&&<li key={i}>
                                                 
-                                                <Link to={n.path} className={`${pathname === n.path ? 'bg-[#1D2E76] shadow-indigo-500/50 text-[#ffffff] duration-500' : 'text-[#000000] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
+                                                <Link to={n.path} className={`${pathname === n.path ? 'bg-[#606675] shadow-indigo-500/50 text-[#ffffff] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
                                                     <span>{n.icon}</span>
                                                     <span>{n.title}</span>
                                                 </Link>
@@ -122,7 +128,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                             </li>)
                         } */}
                         <li>
-                            <button onClick={() => {handleSignOut()}}className='text-[#000000] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'>
+                            <button onClick={() => {handleSignOut()}}className='text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'>
                                 <span> <RiLogoutBoxLine/> </span>
                                 <span>Logout</span>
                             </button>

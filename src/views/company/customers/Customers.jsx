@@ -93,12 +93,12 @@ const Customers = () => {
         // 2B600F - Pool Green
 
         <div className='px-2 md:px-7 py-5'>
-            <div className='px-2 py-2'>
-                <Link 
-                className='py-1 px-2 bg-[#1D2E76] rounded-md text-[#ffffff]'
+            <div className='py-2'>
+            <Link 
+                className='py-1 px-2 bg-[#CDC07B] rounded-md text-[#000000]'
                 to={`/company/customers/createNew`}>Create New</Link>
             </div>
-            <div className='w-full bg-[#747e79] p-4 rounded-md'>
+            <div className='w-full bg-[#0e245c] p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
                         <div className='flex justify-between items-center'>
                             {/* <h1>Customers : {customerList.length}</h1> */}
@@ -120,7 +120,7 @@ const Customers = () => {
                         </div>
                     <div className='relative overflow-x-auto'>
                         <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
+                            <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
                                 <tr>
                                     <th className='py-3 px-4'>Name</th>
                                     <th className='py-3 px-4'>Street Address</th>

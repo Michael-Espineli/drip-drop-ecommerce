@@ -31,9 +31,10 @@ const TaskGroups = () => {
     },[])
     return (
         <div className='px-2 md:px-7 py-5'>
-            <button
-            className='py-1 px-2 rounded-md bg-[#CDC07B]'
-            >Create New Task Group</button>
+            <Link className='py-1 px-2 rounded-md bg-[#CDC07B]'
+             to='/company/taskGroups/createNew'>
+            Create New Task Group
+            </Link>
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between items-center'>
@@ -51,17 +52,16 @@ const TaskGroups = () => {
                                     <th className='py-3 px-4'>Group Name</th>
                                     <th className='py-3 px-4'>Number Of Tasks</th>
                                     <th className='py-3 px-4'></th>
-
                                 </tr>
                             </thead>
                             <tbody>
                             {
                                 companyUserList?.map(group => (
-                                        <tr key={group.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{group.groupName}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{group.numberOfTasks}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/taskGroups/details/${group.id}`}>Details</Link></td>
-                                        </tr>
+                                    <tr key={group.id}>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/taskGroups/details/${group.id}`}>{group.groupName}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/taskGroups/details/${group.id}`}>{group.numberOfTasks}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/taskGroups/details/${group.id}`}>Details</Link></td>
+                                    </tr>
                                     
                                 ))
                             }

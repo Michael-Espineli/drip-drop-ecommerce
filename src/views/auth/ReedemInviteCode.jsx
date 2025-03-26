@@ -3,7 +3,7 @@ import { createUserWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '../../utils/config';
 import { Link, useLocation, Navigate } from 'react-router-dom';
 
-const SignUp = () => {
+const ReedemInviteCode = () => {
     const [email, setEmail] = useState();
     const [password, setPassword] = useState();
     const [inviteCode, setInviteCode] = useState();
@@ -39,18 +39,19 @@ const SignUp = () => {
                 <div className=''>
                     <div className='w-full'>
                         <div className='p-2  font-bold'>
-                            <h1>Company Sign Up Page</h1>
+                        <h1>Company Invite </h1>
                         </div>            
                         <form>
                             <div className='left-0 w-full justify-between gap-3 text-[#000000]'>
+                        
                                 <div className='p-2'>
-                                    <input onChange={(e) => {setEmail(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Email'></input>
+                                    <input onChange={(e) => {setInviteCode(e.target.value)}} className='w-full p-2 rounded-md' type="text"placeholder='Invite Code' valve={inviteCode}></input>
                                 </div>
                                 <div className='p-2'>
                                     <input onChange={(e) => {setPassword(e.target.value)}} className='w-full p-2 rounded-md' type="text"placeholder='Password'></input>
                                 </div>
                                 <div className='p-2  text-[#cfcfcf]  font-bold'>
-                                    <button onClick={(e) => handleSignUp(e)} >Sign up</button>
+                                    <button onClick={(e) => handleSignUp(e)} >Check</button>
                                 </div>
                             </div>
                         </form>
@@ -66,4 +67,4 @@ const SignUp = () => {
     );
 };
 
-export default SignUp;
+export default ReedemInviteCode;

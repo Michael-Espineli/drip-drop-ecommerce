@@ -35,15 +35,15 @@ export default function ProfilePage() {
             method: "POST",
 
         })
-            .then((result) => {
-                // Handle the result from the function
-                setMessage(result.data.message);
+        .then((result) => {
+            // Handle the result from the function
+            setMessage(result.data.message);
 
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
+        })
+        .catch((error) => {
+            // Handle any errors
+            console.error(error);
+        });
         // try {
         //   const helloWorldFunction = httpsCallable(functions, 'helloWorldTest');
         //   const result = await helloWorldFunction({ name: 'John' });
@@ -52,6 +52,7 @@ export default function ProfilePage() {
         //   console.error('Error calling function:', error);
         // }
       };
+
     async function createAnAccount(){
         const createNewStripeAccount = httpsCallable(functions, 'createNewStripeAccount');
         

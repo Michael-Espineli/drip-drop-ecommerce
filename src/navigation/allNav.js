@@ -170,7 +170,17 @@ export const allNav = [
         role : 'Company',
         path : '/company/routeManagement',
         category:'Routing'
-    },
+    }
+    ,
+    {
+        id : 51,
+        title : 'Recurring Service Stops',
+        icon : <FaRoute/>,
+        role : 'Company',
+        path : '/company/recurringServiceStop',
+        category:'Routing'
+    }
+    ,
     {
         id : 52,
         title : 'Route Dashboard',
@@ -178,7 +188,8 @@ export const allNav = [
         role : 'Company',
         path : '/company/routeDashboard',
         category:'Routing'
-    },
+    }
+    ,
     {
         id : 54,
         title : 'Route Builder',
@@ -204,14 +215,23 @@ export const allNav = [
         role : 'Company',
         path : '/company/contracts',
         category:'Monies'
-    },
-    
+    }
+    ,
     {
         id : 68,
         title : 'Purchased Items',
         icon : <AiOutlineShoppingCart/>,
         role : 'Company',
-        path : '/company/items',
+        path : '/company/purchasedItems',
+        category:'Monies'
+    }
+    ,
+    {
+        id : 69,
+        title : 'Venders',
+        icon : <AiOutlineShoppingCart/>,
+        role : 'Company',
+        path : '/company/venders',
         category:'Monies'
     }
     ,

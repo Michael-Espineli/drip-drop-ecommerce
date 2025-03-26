@@ -2,13 +2,13 @@ import React, { useContext } from "react";
 import { FaList } from 'react-icons/fa'
 import { Link } from 'react-router-dom';
 import { Context } from "../context/AuthContext";
-
+ 
 const Header = ({showSidebar, setShowSidebar}) => {
     const {name, accountType, photoUrl,recentlySelectedCompanyName} = useContext(Context);
 
     return (
         // 030811 - almost black 
-        // 282c28 - black green
+        // 282c28 - black green 
         // 454b39 - dark olive green
         // 536546 - olive green
         // 747e79 - gray green

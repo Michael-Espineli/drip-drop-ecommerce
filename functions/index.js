@@ -2,6 +2,7 @@
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const functions = require("firebase-functions");
 const functions1 = require('firebase-functions/v1');
+const {getFirestore} = require("firebase-admin/firestore");
 const { v4: uuidv4 } = require('uuid');
 
 // The Firebase Admin SDK to access Firestore.
@@ -17,25 +18,224 @@ const stripe = require("stripe")(
     apiVersion: "2023-10-16",
   }
 );
+
+
 //----------------Tester Functions --------------------
-//Delete Later
-// exports.helloWorldTest = functions.https.onCall( async(data, context) => {
-//   console.log('helloWorldTest')
-//   console.log(data)
-//     console.log(data.data.name)
-//     return { message: `Hello, ${data.data.name || 'San Diego'}!` };
-// });
-// exports.exampleFunctionTest = functions.https.onCall(async(data,context) => {
-//   console.log(data)
 
-//   try {
 
-//   } catch(error) {
-//     console.error(error)
-//   }
-// });
-//------------------Callable------------------
-//------------------CRUD Products------------------
+
+
+//-----------------Callable----------------------------
+exports.createFirstRecurringServiceStop = functions.https.onCall( async(data, context) => {
+  console.log('create FirstRecurring ServiceStop')
+  console.log(data)
+
+  let rssData = data.data.recurringServiceStop
+  let companyId = data.data.companyId
+  console.log(rssData)  
+  try {
+
+      console.log("Creating More Service Stops For Rss", rssData.id);
+      // const counter = 0;
+      // const monthCounter = 0;
+      let numFrequency = 0;
+      // const lastCreated = new Date();
+      const standardFrequency = rssData.frequency;
+      // const customFrequencyType = rssData.customFrequencyType;
+      // let custom = false;
+      // let skipWeekEnds = false;
+
+      //Create RSS
+      
+    let counterPush = 0;
+    const InCol = "companies/"+companyId+"/settings";
+    const RSSCol = "companies/"+companyId+"/recurringServiceStop";
+    const rssDocRef = "companies/"+companyId+"/serviceStops";
+    const docRef = "companies/"+companyId+"/serviceStops";
+    await getFirestore()
+      .collection(rssDocRef).doc(rssData.id)
+      .set(rssData);
+
+    switch (standardFrequency) {
+      // Daily
+      case "Daily":
+        const dateDaily = rssData.lastCreated.toDate();
+        // const date = new Date();
+        // parseInt(rssData.customFrequency);
+        // date = date + (cusFreq*60);
+        const yearDaily = dateDaily.getFullYear();
+        const monthDaily = dateDaily.getMonth();
+        const dayDaily = dateDaily.getDate();
+        // const pushDate = new Date(year, month, day);
+        dateDaily.setFullYear(yearDaily, monthDaily, dayDaily + 7);
+        const newSSIdDaily = "S" + String(counterPush + 1);
+        console.log("New SS ID =>", newSSIdDaily);
+        counterPush = counterPush + 1;
+        // Set the 'capital' field of the city
+
+        await getFirestore()
+            .collection(docRef).doc(newSSIdDaily)
+            .set({
+              address: {
+                city: rssData.address.city,
+                state: rssData.address.state,
+                streetAddress: rssData.address.streetAddress,
+                zip: rssData.address.zip,
+                latitude: rssData.address.latitude,
+                longitude:rssData.address.longitude,
+              },
+              customerId: rssData.customerId,
+              customerName: rssData.customerName,
+              description: rssData.description,
+              duration: Int(rssData.estimatedTime),
+              dateCreated: curDate,
+              serviceDate: date,
+                operationStatus: "Not Started",
+                billingStatus: "Not Invoiced",
+              rate: 0,
+              recurringServiceStopId: rssData.id,
+              tech: rssData.tech,
+              serviceLocationId: rssData.serviceLocationId,
+              techId: rssData.techId,
+              type: rssData.type,
+              typeId: rssData.typeId,
+              typeImage: rssData.typeImage,
+              jobId: "",
+              jobName:"Cleaning - Update",
+              id: newSSIdDaily,
+              checkList: [],
+              includeReadings:true,
+              includeDosages:true,
+                contractedCompanyId:rssData.contractedCompanyId,
+                laborContractId:rssData.laborContractId,
+                otherCompany:rssData.otherCompany,
+            });
+
+        break;
+      case "WeekDay":
+        numFrequency = 7;
+        // monthly
+        break;
+      case "Weekly":
+        console.log("Updating Weekly")
+        const date = rssData.lastCreated.toDate();
+        const serviceDate = rssData.lastCreated.toDate();
+        const cityRefDaily = getFirestore().collection(RSSCol).doc(RssDoc.id);
+
+        await cityRefDaily.update({lastCreated: date});
+
+        const rssRef = getFirestore().collection(RSSCol).doc(RssDoc.id);
+        // Set the 'capital' field of the city
+
+        // const date = new Date();
+        // parseInt(rssData.customFrequency);
+        // date = date + (cusFreq*60);
+        const year = date.getFullYear();
+        const month = date.getMonth();
+        const day = date.getDate();
+        // const pushDate = new Date(year, month, day);
+        serviceDate.setFullYear(year, month, day + 7);
+        const newSSId = "S" + String(counterPush + 1);
+        console.log("Uploading New Service Stop =>", newSSId);
+        counterPush = counterPush + 1;
+        await rssRef.update({lastCreated: serviceDate});
+        console.log("Last Updated RSS", RssDoc.id, "To Date", serviceDate);
+        await getFirestore()
+            .collection(docRef).doc(newSSId)
+            .set({
+                address: {
+                  city: rssData.address.city,
+                  state: rssData.address.state,
+                  streetAddress: rssData.address.streetAddress,
+                  zip: rssData.address.zip,
+                  latitude: rssData.address.latitude,
+                  longitude:rssData.address.longitude,
+                },
+                customerId: rssData.customerId,
+                customerName: rssData.customerName,
+                description: rssData.description,
+                //duration: Int(rssData.estimatedTime),
+                duration: 15,
+                dateCreated: curDate,
+                serviceDate: serviceDate,
+                operationStatus: "Not Started",
+                billingStatus: "Not Invoiced",
+                rate: 0,
+                recurringServiceStopId: rssData.id,
+                tech: rssData.tech,
+                serviceLocationId: rssData.serviceLocationId,
+                techId: rssData.techId,
+                type:rssData.type,
+                  typeId: rssData.typeId,
+                typeImage: rssData.typeImage,
+                jobId: "",
+                jobName:"Cleaning - Update",
+                id: newSSId,
+                checkList: [],
+                includeReadings:true,
+                includeDosages:true,
+                contractedCompanyId:rssData.contractedCompanyId,
+                laborContractId:rssData.laborContractId,
+                otherCompany:rssData.otherCompany,
+
+              });
+
+        break;
+      case "Monthly":
+        numFrequency = 30;
+        // everyweekday
+        break;
+      case "Yearly":
+        numFrequency = 1;
+        // skipWeekEnds = true;
+        // Custom
+        break;
+      // case 5:
+        // custom = true;
+        // switch (customFrequencyType){
+        //   case "Day":
+        //     print("Day")
+        //   case "Week":
+        //     print("Day")
+        //   case "Month":
+        //     print("Day")
+        //   case "Year":
+        //     print("Year")
+        //   default:
+        //     print("Year")
+        //   }
+        // break;
+      default:
+        numFrequency = 100;
+    }
+    await getFirestore()
+    .collection(InCol)
+    .doc("serviceStops")
+    .set({
+      increment: counterPush,
+      category: "serviceStops",
+    });
+    console.log("New Service Stop Count", counterPush);
+    
+
+    console.log('Successfully Created')
+    return {
+      status: 200,
+      account: "Account Id"
+    };
+  } catch (error) {
+    console.error(
+      "An error occurred when calling the Stripe API to create an account",
+      error
+    );
+    return {
+      status: 500,
+      error: error.message
+    };
+  }
+});
+
+//-----------------CRUD Products-----------------------
 exports.createNewProduct = functions.https.onCall(async(data,context) => {
   const receivedData = data.data
   try {

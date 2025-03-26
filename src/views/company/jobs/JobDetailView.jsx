@@ -7,8 +7,11 @@ import Select from 'react-select';
 import {v4 as uuidv4} from 'uuid';
 import { format } from 'date-fns'; // Or any other date formatting library
 import { useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
 
 const JobDetailView = () => {
+    const {jobId} = useParams();
+
     const {name,recentlySelectedCompany} = useContext(Context);
 
     const [edit,setEdit] = useState(false);
@@ -18,8 +21,6 @@ const JobDetailView = () => {
     const [newTask,setNewTask] = useState(false);
 
     const navigate = useNavigate()
-    
-    const {jobId} = useParams();
 
     const [job,setJob] = useState({
         adminId : '',
@@ -128,6 +129,88 @@ const JobDetailView = () => {
         name : '',
     });
 
+    const [billingStatusList,setBillingStatusList] = useState([
+        {
+            id : 'Draft',
+            name : 'Draft',
+            label : 'Draft',
+        }
+        ,
+        {
+            id : 'Estimate',
+            name : 'Estimate',
+            label : 'Estimate',
+        }
+        ,
+        {
+            id : 'Accepted',
+            name : 'Accepted',
+            label : 'Accepted',
+        }
+        ,
+        {
+            id : 'In Progress',
+            name : 'In Progress',
+            label : 'In Progress',
+        }
+        ,
+        {
+            id : 'Invoiced',
+            name : 'Invoiced',
+            label : 'Invoiced',
+        }
+        ,
+        {
+            id : 'Paid',
+            name : 'Paid',
+            label : 'Paid',
+        }
+    ]);
+
+    const [selectedBillingStatus,setSelectedBillingStatus] = useState( {
+        id : 'Draft',
+        name : 'Draft',
+        label : 'Draft',
+    });
+
+    const [operationStatusList,setOperationStatusList] = useState([
+        {
+            id : 'Estimate Pending',
+            name : 'Estimate Pending',
+            label : 'Estimate Pending',
+        }
+        ,
+        {
+            id : 'Unscheduled',
+            name : 'Unscheduled',
+            label : 'Unscheduled',
+        }
+        ,
+        {
+            id : 'Scheduled',
+            name : 'Scheduled',
+            label : 'Scheduled',
+        }
+        ,
+        {
+            id : 'In Progress',
+            name : 'In Progress',
+            label : 'In Progress',
+        }
+        ,
+        {
+            id : 'Finished',
+            name : 'Finished',
+            label : 'Finished',
+        }
+    ]);
+
+    const [selectedOperationStatus,setSelectedOperationStatus] = useState( {
+        id : 'Draft',
+        name : 'Draft',
+        label : 'Draft',
+    });
+
     const [formattedDateCreated,setFormattedDateCreated] = useState()
 
     const [description, setDescription] = useState();
@@ -153,6 +236,7 @@ const JobDetailView = () => {
         id : '',
         name : '',
     });
+
     const [selectedAdmin, setSelectedAdmin] = useState(''); //Object
 
     const [bodyOfWaterList, setBodyOfWaterList] = useState([]);
@@ -174,7 +258,6 @@ const JobDetailView = () => {
 
     const [totalCost, setTotalCost] = useState(0.0);
 
-
     const [estimatedDuration, setEstimatedDuration] = useState(0);
 
     const [hourlyRate, setHourlyRate] = useState(50.00);
@@ -195,7 +278,7 @@ const JobDetailView = () => {
 
     const [estimatedRate, setEstimatedRate] = useState('1200.00');
 
-    const [offeredRate, setOfferedRate] = useState(0); 
+    const [offeredRate, setOfferedRate] = useState('1000'); 
 
     const [materialCost, setMaterialCost] = useState(0);
 
@@ -230,6 +313,7 @@ const JobDetailView = () => {
                         equipmentId : docSnap.data().equipmentId,
                         equipmentName : docSnap.data().equipmentName,
                         id : docSnap.data().id,
+                        internalId : docSnap.data().internalId,
                         installationParts : docSnap.data().installationParts,
                         jobTemplateId : docSnap.data().jobTemplateId,
                         laborCost : docSnap.data().laborCost,
@@ -242,6 +326,16 @@ const JobDetailView = () => {
                         type : docSnap.data().type,
 
                     }));
+                    setSelectedOperationStatus({
+                        id : docSnap.data().operationStatus,
+                        name : docSnap.data().operationStatus,
+                        label : docSnap.data().operationStatus,
+                    })
+                    setSelectedBillingStatus({
+                        id : docSnap.data().billingStatus,
+                        name : docSnap.data().billingStatus,
+                        label : docSnap.data().billingStatus,
+                    })
                     const dateCreated = docSnap.data().dateCreated.toDate();
                     const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
                     setFormattedDateCreated(formattedDateCreated)
@@ -578,6 +672,67 @@ const JobDetailView = () => {
         })();
     };
 
+    const handleSelectedOperationStatus = (selectedOption2) => {
+
+        (async () => {
+            setSelectedOperationStatus(selectedOption2)
+            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
+            console.log('Save Edit Changes')
+            console.log(selectedOption2)
+
+            await updateDoc(docRef, {
+                operationStatus: selectedOption2.name,
+
+            });
+            toast.success("Updated Operation Status")
+            console.log('Successfully Update Doc')
+            //Get Updated Job Information
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                console.log("Document data:", docSnap.data());
+                setJob((prevJob) => ({
+                    ...prevJob,
+                    billingStatus: docSnap.data().billingStatus,
+                    operationStatus : docSnap.data().operationStatus,
+                }));
+
+            } else {
+                console.log("No such document!");
+            }
+            
+        })();
+    };
+
+    const handleSelectedBillingStatus = (selectedOption2) => {
+
+        (async () => {
+            setSelectedBillingStatus(selectedOption2)
+            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
+            console.log('Save Edit Changes')
+            console.log(selectedOption2)
+
+            await updateDoc(docRef, {
+                billingStatus: selectedOption2.name,
+
+            });
+            toast.success("Updated Billing Status")
+            console.log('Successfully Update Doc')
+            //Get Updated Job Information
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+                console.log("Document data:", docSnap.data());
+                setJob((prevJob) => ({
+                    ...prevJob,
+                    billingStatus: docSnap.data().billingStatus,
+                    operationStatus : docSnap.data().operationStatus,
+                }));
+
+            } else {
+                console.log("No such document!");
+            }
+        })();
+    };
+
     // Task Functions
     const handleSelectedTaskTypeChange = (selectedOption2) => {
 
@@ -586,6 +741,7 @@ const JobDetailView = () => {
             
         })();
     };
+
     async function showNewTaskItem(e) {
         setNewTask(true)
     }
@@ -631,6 +787,7 @@ const JobDetailView = () => {
                 serviceStopId : ''
               });
               console.log('Added New Task')
+
             //Get Task
             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
             const querySnapshot = await getDocs(taskQuery);       
@@ -717,6 +874,98 @@ const JobDetailView = () => {
         }
     }
 
+    async function deleteTaskItem(e,id) {
+        e.preventDefault()
+        try{
+            //Delete Task
+            await deleteDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'tasks',id));
+            toast.success('Successfully Deleted Task') 
+
+             //Get New Tasks
+             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
+             const querySnapshot = await getDocs(taskQuery);       
+             setTaskList([])      
+             querySnapshot.forEach((doc) => {
+                 const taskData = doc.data()
+                 const task = {
+                     id : taskData.id,
+                     name : taskData.name,
+                     type : taskData.type, //Enum : workOrderTaskType
+                     workerType : taskData.workerType,
+                     workerId : taskData.workerId,
+                     workerName : taskData.workerName,
+                     status : taskData.status, //Enum : laborContractTaskStatus
+                     customerApproval : taskData.customerApproval,
+                     laborContractId : taskData.laborContractId,
+                     contractedRate : taskData.contractedRate,
+                     estimatedTime : taskData.estimatedTime,
+                     actualTime : '',
+                     equipmentId : '',
+                     serviceLocationId : '',
+                     bodyOfWaterId : '',
+                     serviceStopId : taskData.serviceStopId
+                 }
+                 setTaskList(taskList => [...taskList, task]); 
+             });
+             console.log('Received New Tasks')
+ 
+             setSelectedTaskType({})
+             setDescription('')
+             setTaskLaborCost('')
+             setEstimatedTime('')
+ 
+             //Calculate Labor Cost
+ 
+             let totalLaborCost = 0 
+             let totalDuration = 0
+ 
+             for (let i = 0; i < taskList.length; i++) {
+                 let task = taskList[i]
+                 totalLaborCost = totalLaborCost + task.contractedRate
+                 totalDuration = totalDuration + task.estimatedTime
+ 
+             }
+             totalLaborCost = totalLaborCost / 100 
+             totalDuration = totalDuration /60
+ 
+             // Calculate PNL
+             let totalCost = 0 
+             let totalRate = offeredRate
+             let totalProfit = 0
+             let profitPercentage = 0
+ 
+             totalCost = materialCost + totalLaborCost
+             totalProfit = totalRate - totalCost
+             profitPercentage = totalProfit/totalRate
+             console.log( 5 )
+ 
+             profitPercentage = profitPercentage.toFixed(2)
+             console.log( 10 )
+ 
+             totalDuration = totalDuration.toFixed(2)
+             console.log( 15 )
+ 
+             totalLaborCost = totalLaborCost.toFixed(2)
+             console.log( 20 )
+ 
+             totalCost = totalCost.toFixed(2)
+             console.log( 25 )
+ 
+             setTotalCost(totalCost)
+             setLaborCost(totalLaborCost)
+             console.log( 30 )
+ 
+             setEstimatedDuration(totalDuration)
+             let formattedProfitUSD = formatCurrency(totalProfit);
+             console.log( 40 )
+ 
+             setEstimatedProfit(formattedProfitUSD)
+             setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+          } catch(error){
+              console.log('Error')
+          }
+    }
+
     // Shopping List functions
     
     const handleSelectedGenericItemChange = (selectedOption2) => {
@@ -800,6 +1049,7 @@ const JobDetailView = () => {
                 quantity : quantity,
                 status : 'Not Purchased'
               });
+
             //Get new shopping list items
 
             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
@@ -818,54 +1068,134 @@ const JobDetailView = () => {
                 }
                 setShoppingList(shoppingList => [...shoppingList, item]); 
             });
-                        //Clear Fields
-                        setNewShoppingList(false)
-                        setItemName('')
-                        setItemQuantity('')
-                        setItemPrice('')
-                        setItemCost('')
-            
-                            //Calculate Material Cost
-                            console.log( 1 )
-                            let totalMaterialCost = 0 
-                            let totalMaterialPrice = 0
-                
-                            for (let i = 0; i < shoppingList.length; i++) {
-                                let item = shoppingList[i]
-                                let lineItemTotalCost = item.cost * item.quantity
-                                let lineItemTotalPrice = item.price * item.quantity
-                                totalMaterialCost = totalMaterialCost + lineItemTotalCost
-                                totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
-                            }
-                            totalMaterialCost = totalMaterialCost / 100 
-                            totalMaterialPrice = totalMaterialPrice /100
-                
-            
-                            // Calculate PNL
-                            let totalCost = 0 
-                            let totalRate = offeredRate
-                            let totalProfit = 0
-                            let profitPercentage = 0
-            
-                            totalCost = totalMaterialCost + laborCost
-                            totalProfit = totalRate - totalCost
-                            profitPercentage = totalProfit/totalRate
-                            console.log( 5 )
-            
-                            profitPercentage = profitPercentage.toFixed(2)
-                            totalMaterialCost = totalMaterialCost.toFixed(2)
-                            totalMaterialPrice = totalMaterialPrice.toFixed(2)
-                            console.log( 10 )
-            
-                            totalCost = totalCost.toFixed(2)
-                            console.log( 15 )
-            
-                            setTotalCost(totalCost)
-                            setMaterialCost(totalMaterialCost)
-                            let formattedProfitUSD = formatCurrency(totalProfit);
-                    
-                            setEstimatedProfit(formattedProfitUSD)
-                            setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+            //Clear Fields
+            setNewShoppingList(false)
+            setItemName('')
+            setItemQuantity('')
+            setItemPrice('')
+            setItemCost('')
+
+                //Calculate Material Cost
+                console.log( 1 )
+                let totalMaterialCost = 0 
+                let totalMaterialPrice = 0
+    
+                for (let i = 0; i < shoppingList.length; i++) {
+                    let item = shoppingList[i]
+                    let lineItemTotalCost = item.cost * item.quantity
+                    let lineItemTotalPrice = item.price * item.quantity
+                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
+                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
+                }
+                totalMaterialCost = totalMaterialCost / 100 
+                totalMaterialPrice = totalMaterialPrice /100
+    
+
+                // Calculate PNL
+                let totalCost = 0 
+                let totalRate = offeredRate
+                let totalProfit = 0
+                let profitPercentage = 0
+
+                totalCost = totalMaterialCost + laborCost
+                totalProfit = totalRate - totalCost
+                profitPercentage = totalProfit/totalRate
+                console.log( 5 )
+
+                profitPercentage = profitPercentage.toFixed(2)
+                totalMaterialCost = totalMaterialCost.toFixed(2)
+                totalMaterialPrice = totalMaterialPrice.toFixed(2)
+                console.log( 10 )
+
+                totalCost = totalCost.toFixed(2)
+                console.log( 15 )
+
+                setTotalCost(totalCost)
+                setMaterialCost(totalMaterialCost)
+                let formattedProfitUSD = formatCurrency(totalProfit);
+        
+                setEstimatedProfit(formattedProfitUSD)
+                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+          } catch(error){
+              console.log('Error')
+          }
+    }
+
+    async function deleteShoppingListItem(e,id) {
+        e.preventDefault()
+        try{
+            //Delete Task
+            await deleteDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'items',id));
+
+            toast.success('Successfully Deleted Item') 
+
+
+            //Get new shopping list items
+
+            let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
+            const querySnapshot = await getDocs(taskQuery);       
+            setShoppingList([])      
+            querySnapshot.forEach((doc) => {
+                const itemData = doc.data()
+                const item = {
+                    id : itemData.id,
+                    name : itemData.name,
+                    cost : itemData.cost,
+                    price : itemData.price,
+                    itemId : itemData.itemId,
+                    itemType : itemData.itemType, //Enum : ????????
+                    quantity : itemData.quantity,
+                }
+                setShoppingList(shoppingList => [...shoppingList, item]); 
+            });
+            //Clear Fields
+            setNewShoppingList(false)
+            setItemName('')
+            setItemQuantity('')
+            setItemPrice('')
+            setItemCost('')
+
+                //Calculate Material Cost
+                console.log( 1 )
+                let totalMaterialCost = 0 
+                let totalMaterialPrice = 0
+    
+                for (let i = 0; i < shoppingList.length; i++) {
+                    let item = shoppingList[i]
+                    let lineItemTotalCost = item.cost * item.quantity
+                    let lineItemTotalPrice = item.price * item.quantity
+                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
+                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
+                }
+                totalMaterialCost = totalMaterialCost / 100 
+                totalMaterialPrice = totalMaterialPrice /100
+    
+
+                // Calculate PNL
+                let totalCost = 0 
+                let totalRate = offeredRate
+                let totalProfit = 0
+                let profitPercentage = 0
+
+                totalCost = totalMaterialCost + laborCost
+                totalProfit = totalRate - totalCost
+                profitPercentage = totalProfit/totalRate
+                console.log( 5 )
+
+                profitPercentage = profitPercentage.toFixed(2)
+                totalMaterialCost = totalMaterialCost.toFixed(2)
+                totalMaterialPrice = totalMaterialPrice.toFixed(2)
+                console.log( 10 )
+
+                totalCost = totalCost.toFixed(2)
+                console.log( 15 )
+
+                setTotalCost(totalCost)
+                setMaterialCost(totalMaterialCost)
+                let formattedProfitUSD = formatCurrency(totalProfit);
+        
+                setEstimatedProfit(formattedProfitUSD)
+                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
           } catch(error){
               console.log('Error')
           }
@@ -917,14 +1247,12 @@ const JobDetailView = () => {
                         <h1></h1>
                         <button onClick={(e) =>{editJob(e)}} className='bg-[#1D2E76] cursor-pointer font-normal ml-2 rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Edit</h1></button>
                     </div>
-                
             }
             <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
                 <div className='left-0 w-full justify-between'>
-                    <p className='font-bold'>Job Over View</p>
+                    <p className='font-bold'>Job Detail View :{job.internalId}</p>
                     <hr/>
                     
-
                     <p>Date Created : {formattedDateCreated}</p>
 
                     {/* Admin */}
@@ -946,84 +1274,118 @@ const JobDetailView = () => {
                             },
                             })}
                         />
-
                         </div>
                     }
-
                     {
                         (edit===false)&&<div>
                             <p>Admin : {job.adminName}</p>
                         </div>
                     }
-                    
-                    {/* <p>Customer Id: {customer.id}</p> */}
-
                     <p>Customer : {customer.firstName} {customer.lastName}</p>
                     <div className='flex w-full justify-start items-center py-2'>
-                        <p>Billing Status : </p>
-                        {
-                            (job.billingStatus==='Draft')&&<div>
-                                <p className='py-1 px-2 bg-[#919191] text-[#] rounded-md'>Draft</p>
-
+                        <p>Billing Status :  </p>
+                        <div className='px-2'>
+                            {
+                                (job.billingStatus==='Draft')&&<div>
+                                    <p className='py-1 px-2 bg-[#919191] text-[#] rounded-md'>Draft</p>
+                                </div>
+                            }
+                            {
+                                (job.billingStatus==='Estimate')&&<div>
+                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Estimate</p>
+                                </div>
+                            }
+                            {
+                                (job.billingStatus==='Accepted')&&<div>
+                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Accepted</p>
+                                </div>
+                            }
+                            {
+                                (job.billingStatus==='In Progress')&&<div>
+                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>In Progress</p>
+                                </div>
+                            }
+                            {
+                                (job.billingStatus==='Invoiced')&&<div>
+                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Invoiced</p>
+                                </div>
+                            }
+                            {
+                                (job.billingStatus==='Paid')&&<div>
+                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Paid</p>
+                                </div>
+                            }
+                        </div>
+                        <div className="flex px-2 justify-between">
+                            <div className="px-2">
+                            <Select
+                                value={selectedBillingStatus}
+                                options={billingStatusList}
+                                onChange={handleSelectedBillingStatus}
+                                isSearchable
+                                placeholder="Select a Status"
+                                theme={(theme) => ({
+                                ...theme,
+                                borderRadius: 0,
+                                colors: {
+                                    ...theme.colors,
+                                    primary25: 'green',
+                                    primary: 'gray',
+                                },
+                                })}
+                            />
                             </div>
-                        }
-                        {
-                            (job.billingStatus==='Estimate')&&<div>
-                                <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Estimate</p>
-
-                            </div>
-                        }
-                        {
-                            (job.billingStatus==='Accepted')&&<div>
-                                <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Accepted</p>
-                            </div>
-                        }
-                        {
-                            (job.billingStatus==='In Progress')&&<div>
-                                <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>In Progress</p>
-
-                            </div>
-                        }
-                        {
-                            (job.billingStatus==='Invoiced')&&<div>
-                                <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Invoiced</p>
-
-                            </div>
-                        }
-                        {
-                            (job.billingStatus==='Paid')&&<div>
-                                <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Paid</p>
-
-                            </div>
-                        }
+                        </div>
                     </div>
                     <div className='flex w-full justify-start items-center py-2'>
-                        <p>Operational Status : </p>
+                        <p>Operational Status :  </p>
+                        <div className='px-2'>
                         {
-                            (job.operationStatus==='Estimate Pending')&&<div>
-                                <p className='py-1 px-2 bg-[#919191] text-[#000000] rounded-md'>Estimate Pending</p>
+                                (job.operationStatus==='Estimate Pending')&&<div>
+                                    <p className='py-1 px-2 bg-[#919191] text-[#000000] rounded-md'>Estimate Pending</p>
+                                </div>
+                            }
+                            {
+                                (job.operationStatus==='Unscheduled')&&<div>
+                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Unscheduled</p>
+                                </div>
+                            }
+                            {
+                                (job.operationStatus==='Scheduled')&&<div>
+                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Scheduled</p>
+                                </div>
+                            }
+                            {
+                                (job.operationStatus==='In Progress')&&<div>
+                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>In Progress</p>
+                                </div>
+                            }
+                            {
+                                (job.operationStatus==='Finished')&&<div>
+                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Finished</p>
+                                </div>
+                            }
+                        </div>
+                        <div className="flex px-2 justify-between">
+                            <div className="px-2">
+                            <Select
+                                value={selectedOperationStatus}
+                                options={operationStatusList}
+                                onChange={handleSelectedOperationStatus}
+                                isSearchable
+                                placeholder="Select a Status"
+                                theme={(theme) => ({
+                                ...theme,
+                                borderRadius: 0,
+                                colors: {
+                                    ...theme.colors,
+                                    primary25: 'green',
+                                    primary: 'gray',
+                                },
+                                })}
+                            />
                             </div>
-                        }
-                        {
-                            (job.operationStatus==='Unscheduled')&&<div>
-                                <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Unscheduled</p>
-                            </div>
-                        }
-                        {
-                            (job.operationStatus==='Scheduled')&&<div>
-                                <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Scheduled</p>
-                            </div>
-                        }
-                        {
-                            (job.operationStatus==='In Progress')&&<div>
-                                <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>In Progress</p>
-                            </div>
-                        }
-                        {
-                            (job.operationStatus==='Finished')&&<div>
-                                <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Finished</p>
-                            </div>
-                        }
+                        </div>
                     </div>
                 </div>
                 <div className='left-0 w-full justify-between'>
@@ -1051,14 +1413,21 @@ const JobDetailView = () => {
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between'>
                         <p className='font-bold'>Task List</p>
-                        <div className='py-1'>
-                            <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
-                                <Link to={`/company/serviceStops/createNew/${jobId}`}>Schedule Service Stop</Link>  
-                            </p>
+                        <div>
+                            <div className='py-1'>
+                                <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
+                                    <Link to={`/company/serviceStops/createNew/${jobId}`}>Schedule Service Stop</Link>  
+                                </p>
+                            </div>
+                            <div className='py-1'>
+                                <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
+                                    <Link to={`/company/laborContracts/createNew/${jobId}`}>Create Labor Contract</Link>  
+                                </p>
+                            </div>
                         </div>
-                        <div className='py-1'>
+                        <div>
                             <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
-                                <Link to={`/company/laborContracts/createNew/${jobId}`}>Create Labor Contract</Link>  
+                                <Link to={`/company/jobs/history/${jobId}`}>See History</Link>  
                             </p>
                         </div>
                     </div>
@@ -1142,7 +1511,11 @@ const JobDetailView = () => {
                                         </div>
                                     }
                                     </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'><button>Delete</button></td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                        <button
+                                         onClick={(e) => deleteTaskItem(e,task.id)} 
+                                        >Delete</button>
+                                    </td>
 
                                 </tr>
                             ))
@@ -1359,7 +1732,11 @@ const JobDetailView = () => {
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(item.price/100).toFixed(2)}</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.itemId}</td>
                                     <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.taskId}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'><button>Delete</button></td>
+                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                        <button
+                                         onClick={(e) => deleteShoppingListItem(e,item.id)} 
+                                        >Delete</button>
+                                    </td>
 
                                 </tr>
                             ))
@@ -1440,7 +1817,8 @@ const JobDetailView = () => {
                                 <button onClick={(e) => handleAddShoppingListItem(e)} 
                                 className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
                                 >Add</button>
-                                        <button onClick={(e) => clearNewShoppingListItem(e)} 
+                                        <button
+                                        onClick={(e) => clearNewShoppingListItem(e)} 
                                 className='px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'>
                                     X
                                 </button>

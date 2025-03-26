@@ -7,6 +7,8 @@ const Dashboard = lazy(()=> import("../../views/company/Dashboard"))
 const Jobs = lazy(()=> import("../../views/company/jobs/Jobs"))
 const CreateNewJob = lazy(()=> import("../../views/company/jobs/CreateNewJob"))
 const JobDetailView = lazy(()=> import("../../views/company/jobs/JobDetailView"))
+const JobHistoryView = lazy(()=> import("../../views/company/jobs/JobHistoryView"))
+
 
 const ServiceStops = lazy(()=> import("../../views/company/serviceStops/ServiceStops"))
 const CreateNewServiceStop = lazy(()=> import("../../views/company/serviceStops/CreateNewServiceStop"))
@@ -25,6 +27,10 @@ const RouteDashboard = lazy(()=> import("../../views/company/routing/RouteDashbo
 const RouteManagement = lazy(()=> import("../../views/company/routing/RouteManagement"))
 const RouteBuilder = lazy(()=> import("../../views/company/routing/RouteBuilder"))
 
+const RecurringServiceStopList = lazy(()=> import("../../views/company/recurringServiceStops/RecurringServiceStopList"))
+const RecurringServiceStopDetails = lazy(()=> import("../../views/company/recurringServiceStops/RecurringServiceStopDetails"))
+const CreateNewRecurringServiceStops = lazy(()=> import("../../views/company/recurringServiceStops/CreateNewRecurringServiceStop"))
+
 const Subscriptions = lazy(()=> import("../../views/company/stripe-subscriptions/Subscriptions"))
 const CreateNewProduct = lazy(()=> import("../../views/company/stripe-subscriptions/products/CreateNewProduct"))
 const Products = lazy(()=> import("../../views/company/stripe-subscriptions/products/Products"))
@@ -37,6 +43,14 @@ const ContractDetailView = lazy(()=> import("../../views/company/contract/Contra
 
 const PurchasesList = lazy(()=> import("../../views/company/purchases/PurchasesList"))
 const CreateNewPurchase = lazy(()=> import("../../views/company/purchases/CreateNewPurchase"))
+const PurchaseDetailView = lazy(()=> import("../../views/company/purchases/PurchaseDetailView"))
+
+const DataBaseItemDetailView = lazy(()=> import("../../views/company/databaseItems/DataBaseItemDetailView"))
+const CreateNewDataBaseItem = lazy(()=> import("../../views/company/databaseItems/CreateNewDataBaseItem"))
+const DataBaseItems = lazy(()=> import("../../views/company/databaseItems/DataBaseItems"))
+
+  
+const ReceiptDetailView = lazy(()=> import("../../views/company/purchases/ReceiptDetailView"))
 
 const ServiceLocations = lazy(()=> import("../../views/company/serviceLocations/ServiceLocations"))
 const CreateNewServiceLocation = lazy(()=> import("../../views/company/serviceLocations/CreateNewServiceLocation"))
@@ -54,6 +68,7 @@ const WorkLogDetails = lazy(()=> import("../../views/company/worklogs/WorkLogDet
 
 const CompanyUsers = lazy(()=> import("../../views/company/companyUsers/CompanyUsers"))
 const CompanyUserDetails = lazy(()=> import("../../views/company/companyUsers/CompanyUserDetails"))
+const CreateNewCompanyUser = lazy(()=> import("../../views/company/companyUsers/CreateNewCompanyUser"))
 
 const LaborContracts = lazy(()=> import("../../views/company/laborContracts/LaborContracts"))
 const RecurringLaborContractDetails = lazy(()=> import("../../views/company/laborContracts/RecurringLaborContractDetails"))
@@ -64,8 +79,11 @@ const CreateNewOneTimeLaborContract = lazy(()=> import("../../views/company/oneT
 const LaborContractDetails = lazy(()=> import("../../views/company/oneTimeLaborContracts/LaborContractDetails"))
 
 const TaskGroups = lazy(()=> import("../../views/company/Settings/TaskGroups/TaskGroups"))
+const CreateNewTaskGroup = lazy(()=> import("../../views/company/Settings/TaskGroups/CreateNewTaskGroup"))
 const TaskGroupDetails = lazy(()=> import("../../views/company/Settings/TaskGroups/TaskGroupDetails"))
 
+const Venders = lazy(()=> import("../../views/company/venders/Venders"))
+const CreateNewVender = lazy(()=> import("../../views/company/venders/CreateNewVenders"))
 
 export const sellerRoutes = [
     
@@ -128,7 +146,13 @@ export const sellerRoutes = [
         role:'Company'
     }
     ,
-
+    {
+        path:'/company/jobs/history/:jobId',
+        element: <JobHistoryView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
     {
         path:'/company/serviceStops',
         element: <ServiceStops/>,
@@ -163,22 +187,73 @@ export const sellerRoutes = [
         element: <Home/>,
         ability :['Admin','Seller'],
         role:'Company'
-    },
-    
+    }
+    ,
+    //DataBase Items
     {
         path:'/company/items',
+        element: <DataBaseItems/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/items/createNew',
+        element: <CreateNewDataBaseItem/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    } 
+    ,
+    {
+        path:'/company/items/detail/:id',
+        element: <DataBaseItemDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    //Purchased Items
+    ,
+    {
+        path:'/company/purchasedItems',
         element: <PurchasesList/>,
         ability :['Admin','Seller'],
         role:'Company'
-    },
+    }
+    ,
     {
-        path:'/company/items/createNew',
+        path:'/company/purchasedItems/createNew',
         element: <CreateNewPurchase/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
     ,
-
+    {
+        path:'/company/purchasedItems/detail/:purchaseId',
+        element: <PurchaseDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/receipts/detail/:receiptId',
+        element: <ReceiptDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/venders',
+        element: <Venders/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/venders/createNew',
+        element: <CreateNewVender/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
     {
         path:'/company/routing',
         element: <RouteDashboard/>,
@@ -287,6 +362,27 @@ export const sellerRoutes = [
     }
     ,
     {
+        path:'/company/recurringServiceStop',
+        element: <RecurringServiceStopList/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/recurringServiceStop/createNew/:customerId',
+        element: <CreateNewRecurringServiceStops/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/recurringServiceStop/details/:recurringServiceStopId',
+        element: <RecurringServiceStopDetails/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
         path:'/company/roles',
         element: <Roles/>,
         ability :['Admin','Seller'],
@@ -314,6 +410,14 @@ export const sellerRoutes = [
         role:'Company'
     }
     ,
+    {
+        path:'/company/companyUsers/createNew',
+        element: <CreateNewCompanyUser/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    
     {
         path:'/company/recurringLaborContracts',
         element: <LaborContracts/>,
@@ -401,6 +505,13 @@ export const sellerRoutes = [
     {
         path:'/company/taskGroups',
         element: <TaskGroups/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/taskGroups/createNew',
+        element: <CreateNewTaskGroup/>,
         ability :['Admin','Seller'],
         role:'Company'
     }

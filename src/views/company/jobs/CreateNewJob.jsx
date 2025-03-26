@@ -98,24 +98,25 @@ const CreateNewJob = () => {
         (async () => {
             try{
                 //Get Customers
-                    let q;
-                        // q = query(collection(db, 'companies',recentlySelectedCompany,'customers'),limit(10));
-                     q = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), where('active','==',true));
+                let q;
+                    // q = query(collection(db, 'companies',recentlySelectedCompany,'customers'),limit(10));
+                    q = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), where('active','==',true));
 
-                    const querySnapshot = await getDocs(q);       
-                    setCustomerList([])      
-                    querySnapshot.forEach((doc) => {
-                        const customerDoc = doc.data()
-                        const customerData = {
-                            id:customerDoc.id,
-                            name:customerDoc.firstName + ' ' + customerDoc.lastName,
-                            streetAddress:customerDoc.billingAddress.streetAddress,
-                            phoneNumber: customerDoc.phoneNumber,
-                            email:customerDoc.email,
-                            label:customerDoc.firstName + ' ' + customerDoc.lastName,
-                        }
-                        setCustomerList(customerList => [...customerList, customerData]); 
-                    });
+                const querySnapshot = await getDocs(q);       
+                setCustomerList([])      
+                querySnapshot.forEach((doc) => {
+                    const customerDoc = doc.data()
+                    const customerData = {
+                        id:customerDoc.id,
+                        name:customerDoc.firstName + ' ' + customerDoc.lastName,
+                        streetAddress:customerDoc.billingAddress.streetAddress,
+                        phoneNumber: customerDoc.phoneNumber,
+                        email:customerDoc.email,
+                        label:customerDoc.firstName + ' ' + customerDoc.lastName,
+                    }
+                    setCustomerList(customerList => [...customerList, customerData]); 
+                });
+
                 //Get Task Types
                 let taskTypeQuery = query(collection(db, 'universal','settings','taskTypes'));
                 const taskTypeQuerySnapshot = await getDocs(taskTypeQuery);       
@@ -224,6 +225,7 @@ const CreateNewJob = () => {
             }
         })();
     };
+    
     const handleUserChange = (option) => {
 
         (async () => {
@@ -260,6 +262,7 @@ const CreateNewJob = () => {
             
         })();
     };
+    
     const handleSelectedTaskTypeChange = (option) => {
 
         (async () => {
@@ -356,6 +359,7 @@ const CreateNewJob = () => {
         e.preventDefault()
         setOfferedRate(estimatedRate)
     }
+    
     async function createNewJob(e) {
         e.preventDefault()
         let jobId = 'com_wo_' + uuidv4();
@@ -371,6 +375,19 @@ const CreateNewJob = () => {
                         console.log(customerData.id)
                         console.log(customerData.name)
 
+                        const docRef = doc(db, "companies",recentlySelectedCompany,'settings','workOrders');
+                        const docSnap = await getDoc(docRef);
+                        let internalId = 'WO'
+                        let WOCount = 0
+                        if (docSnap.exists()) {
+                            internalId = 'WO' + docSnap.data().increment
+                            WOCount = docSnap.data().increment
+                        }
+
+                        await updateDoc(docRef, {
+                            increment: WOCount + 1
+                          });
+                          
                         await setDoc(doc(db,"companies",recentlySelectedCompany,'workOrders',jobId), {
                             adminId : selectedAdmin.id,
                             adminName : selectedAdmin.userName,
@@ -380,13 +397,14 @@ const CreateNewJob = () => {
                             dateCreated: new Date(),
                             description : description,
                             id : jobId,
-                            internalId:jobId,
+                            internalId:internalId,
                             laborCost : estimatedLaborCost,
                             operationStatus : 'Estimate Pending',
                             rate : offeredRate,
                             serviceLocationId : selectedServiceLocation.id,
                             serviceStopIds : [],
                         });
+
                         //Upload Tasks
                         console.log('Uploading Task List')
                         console.log(taskList.length)
@@ -426,6 +444,7 @@ const CreateNewJob = () => {
         //Maybe have google function update these. 
         //Navigate To Job Detail View
     }
+
     return (
         // 030811 - almost black
         // 282c28 - black green
@@ -921,7 +940,9 @@ const CreateNewJob = () => {
                         <button
                         className='text-[#ededed] w-full bg-[#2B600F] py-1 px-2 rounded-md'
                         onClick={(e) => createNewJob(e)} 
-                        >Create New Job</button>
+                        >
+                            Create New Job
+                        </button>
                     </div>
                 </div>
             </form>
