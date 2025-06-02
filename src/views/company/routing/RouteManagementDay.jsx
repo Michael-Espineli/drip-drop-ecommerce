@@ -8,6 +8,7 @@ import {v4 as uuidv4} from 'uuid';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import { format } from 'date-fns'; 
 import RouteManagementTech from "./RouteManagementTech";
 

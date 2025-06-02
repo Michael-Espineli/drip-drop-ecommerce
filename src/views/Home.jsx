@@ -5,9 +5,9 @@ import PublicHeader from "../layout/PublicHeader";
 
 export default function Home() {
     return (
-        <div className=' w-full bg-cover h-full bg-[#0e245c]'>
+        <div className=' w-full bg-cover h-full black-fg'>
             <PublicHeader/>
-            <div className='flex px-7 py-5 text-[#cfcfcf] px-[200px] pt-[225px]'>
+            <div className='flex px-7 py-5 px-[200px] pt-[225px]'>
                 <div className='px-[200px]'>
                     <div className="pb-10">
                         <p className="text-lg font-bold">
@@ -32,7 +32,7 @@ export default function Home() {
                 </div>
                 
             </div>
-            <div className='flex px-7 py-5 text-[#cfcfcf] px-[200px]'>
+            <div className='flex px-7 py-5 px-[200px]'>
                 <div className='px-[200px]'>
                     <div className="pb-10">
                         <p className="text-lg font-bold">
@@ -57,7 +57,7 @@ export default function Home() {
                 </div>
                 
             </div>
-            <div className='flex px-7 py-5 text-[#cfcfcf] px-[200px]'>
+            <div className='flex px-7 py-5 px-[200px]'>
                 <div className='px-[200px]'>
                     <div className="pb-10">
                         <p className="text-lg font-bold">

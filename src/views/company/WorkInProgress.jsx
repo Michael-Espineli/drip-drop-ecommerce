@@ -12,7 +12,7 @@ const WorkInProgress = () => {
                 <div className="flex justify-center p-5">
                     <h2>Please Forgive the Work In Progress </h2>
                 </div>
-                    <img class="h-auto max-w-xl rounded-lg shadow-xl dark:shadow-gray-800" src="/constructionDuck.png" alt="Foreman"></img>
+                    <img className="h-auto max-w-xl rounded-lg shadow-xl dark:shadow-gray-800" src="/constructionDuck.png" alt="Foreman"></img>
             </div>
         </div>
     );//Layla Jenner

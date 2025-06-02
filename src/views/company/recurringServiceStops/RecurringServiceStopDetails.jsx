@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, deleteDoc, doc, getDoc, updateDoc , setDoc } from "firebase/firestore";
+import {  query, collection, getDocs, limit, orderBy, where, deleteDoc, doc, getDoc, updateDoc , setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
@@ -22,6 +22,10 @@ const RecurringServiceStopDetails = () => {
     const [endDate, setEndDate] = useState("");
     
     const [edit, setEdit] = useState(false);
+    
+    const [serviceStopList, setServiceStopList] = useState([]);
+    
+    const [pastServiceStopList, setPastServiceStopList] = useState([]);
         
     const [recurringServiceStop,setRecurringServiceStop] = useState({
         id: "",
@@ -97,18 +101,61 @@ const RecurringServiceStopDetails = () => {
                         contractedCompanyId:rssData.contractedCompanyId
                     }));
 
-                    const startDate1 = docSnap.data().startDate.toDate();
-                    const formattedDateCreated1 = format(startDate1, 'MMMM d, yyyy'); 
-                    setStartDate(formattedDateCreated1)
+                    // const startDate1 = rssData.startDate.toDate();
+                    // const formattedDateCreated1 = format(startDate1, 'MMMM d, yyyy'); 
+                    // setStartDate(formattedDateCreated1)
 
-                    const dateCreated = docSnap.data().endDate.toDate();
-                    const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
-                    setEndDate(formattedDateCreated)
+                    // const dateCreated = rssData.endDate.toDate();
+                    // const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
+                    // setEndDate(formattedDateCreated)
+
+                    // Get Service Stops Future
+                    let q = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), where('recurringServiceStopId','==',recurringServiceStopId), where('serviceDate','>=',new Date()),limit(5) ); //,limit(10)
+                    const querySnapshot = await getDocs(q);       
+                    setServiceStopList([])      
+                    querySnapshot.forEach((doc) => {
+
+                        const serviceStopData = doc.data()
+                        const date = serviceStopData.serviceDate.toDate();
+                        const formattedDate = format(date, 'MMMM d, yyyy'); 
+
+                        const serviceStop = {
+                            id:serviceStopData.id,
+                            tech:serviceStopData.tech,
+                            customerName:serviceStopData.customerName,
+                            streetAddress: serviceStopData.address.streetAddress,
+                            jobId:serviceStopData.jobId,
+                            date:formattedDate
+                        }
+                        setServiceStopList(serviceStopList => [...serviceStopList, serviceStop]); 
+                    });
+                    
+                    // Get Service Past Future
+                    let q1 = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), where('recurringServiceStopId','==',recurringServiceStopId), where('serviceDate','<',new Date()),limit(5) ); //,limit(10)
+                    const querySnapshot1 = await getDocs(q1);       
+                    setPastServiceStopList([])      
+                    querySnapshot1.forEach((doc) => {
+
+                        const serviceStopData = doc.data()
+                        const date = serviceStopData.serviceDate.toDate();
+                        const formattedDate = format(date, 'MMMM d, yyyy'); 
+
+                        const serviceStop = {
+                            id:serviceStopData.id,
+                            tech:serviceStopData.tech,
+                            customerName:serviceStopData.customerName,
+                            streetAddress: serviceStopData.address.streetAddress,
+                            jobId:serviceStopData.jobId,
+                            date:formattedDate
+                        }
+                        setPastServiceStopList(pastServiceStopList => [...pastServiceStopList, serviceStop]); 
+                    });
                 } else {
                     console.log("No such document!");
                 }
             } catch(error){
                 console.log('Error')
+                console.log(error)
             }
         })();
     },[])
@@ -162,7 +209,12 @@ const RecurringServiceStopDetails = () => {
                                 Cancel
                             </button>
                         </div>
-                    </div>:<div className="flex justify-end">
+                    </div>:<div className="flex justify-between">
+                        <div className='bg-[#0e245c] rounded-md text-[#cfcfcf] px-2 py-1'>
+                            <Link 
+                            className=''
+                            to={`/company/recurringServiceStop`}>Back</Link>
+                        </div>
                         <div className='bg-[#0e245c] rounded-md text-[#cfcfcf] px-2 py-1'>
                     
                             <button
@@ -176,19 +228,102 @@ const RecurringServiceStopDetails = () => {
             </div>
             <div className='py-2'>
                 <div className='w-full bg-[#0e245c] rounded-md text-[#cfcfcf] p-4'>
-                    <h1>{recurringServiceStop.internalId}</h1>
-                    <h1>{recurringServiceStop.type}</h1>
-                    <h1>{recurringServiceStop.customerName}</h1>
-                    <h1>{recurringServiceStop.streetAddress}</h1>
-                    <h1>{recurringServiceStop.tech}</h1>
-                    <h1>{startDate}</h1>
-                    <h1>{endDate}</h1>
-                    <h1>{recurringServiceStop.frequency}</h1>
-                    <h1>{recurringServiceStop.daysOfWeek}</h1>
-                    <h1>{recurringServiceStop.serviceLocationId}</h1>
-                    <h1>{recurringServiceStop.estimatedTime}</h1>
+                    <h1>Internal Id - {recurringServiceStop.internalId}</h1>
+                    <h1>type - {recurringServiceStop.type}</h1>
+                    <h1>customerName - {recurringServiceStop.customerName}</h1>
+                    <h1>streetAddress - {recurringServiceStop.streetAddress}</h1>
+                    <h1>tech - {recurringServiceStop.tech}</h1>
+                    <h1>startDate - {startDate}</h1>
+                    <h1>endDate - {endDate}</h1>
+                    <h1>frequency - {recurringServiceStop.frequency}</h1>
+                    <h1>daysOfWeek - {recurringServiceStop.daysOfWeek}</h1>
+                    <h1>serviceLocationId - {recurringServiceStop.serviceLocationId}</h1>
+                    <h1>estimatedTime - {recurringServiceStop.estimatedTime}</h1>
                 </div>
             </div>
+            
+            <div className='py-2 text-[#00000] font-bold'>
+                <p>Upcoming Jobs</p>
+            </div>
+            
+            <div className='py-2'>
+                <div className='w-full bg-[#0e245c] rounded-md text-[#cfcfcf] p-4'>
+                    <div className='relative overflow-x-auto'>
+                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
+                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                                <tr>
+                                    <th className='py-3 px-4'>Date</th>
+                                    <th className='py-3 px-4'>Tech</th>
+                                    <th className='py-3 px-4'>Customer Name</th>
+                                    <th className='py-3 px-4'>Street Address</th>
+                                    <th className='py-3 px-4'>Job Id</th>
+                                    <th className='py-3 px-4'>Status</th>
+                                    <th className='py-3 px-4'></th>
+
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {
+                                serviceStopList?.map(serviceStop => (
+                                        <tr key={serviceStop.id}>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.date}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.tech}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.customerName}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.streetAddress}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.jobId}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.status}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>Details</Link></td>
+                                        </tr>
+                                    
+                                ))
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            
+            <div className='py-2 text-[#00000] font-bold'>
+                <p>Most Recent Jobs</p>
+            </div>
+            
+            <div className='py-2'>
+                <div className='w-full bg-[#0e245c] rounded-md text-[#cfcfcf] p-4'>
+                    <div className='relative overflow-x-auto'>
+                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
+                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                                <tr>
+                                    <th className='py-3 px-4'>Date</th>
+                                    <th className='py-3 px-4'>Tech</th>
+                                    <th className='py-3 px-4'>Customer Name</th>
+                                    <th className='py-3 px-4'>Street Address</th>
+                                    <th className='py-3 px-4'>Job Id</th>
+                                    <th className='py-3 px-4'>Status</th>
+                                    <th className='py-3 px-4'></th>
+
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {
+                                pastServiceStopList?.map(serviceStop => (
+                                        <tr key={serviceStop.id}>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.date}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.tech}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.customerName}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.streetAddress}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.jobId}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.status}</td>
+                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>Details</Link></td>
+                                        </tr>
+                                    
+                                ))
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
         </div>
     );
 }

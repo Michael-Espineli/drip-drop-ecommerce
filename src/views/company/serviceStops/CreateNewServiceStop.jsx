@@ -221,6 +221,7 @@ const CreateNewServiceStop = () => {
             }
         })();
     },[])
+    
     async function createNewServiceStop(e) {
         e.preventDefault()
         let serviceStopId = 'comp_ss_' + uuidv4();

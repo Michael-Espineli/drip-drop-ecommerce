@@ -5,6 +5,7 @@ import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where 
 import { getAuth } from "firebase/auth";
 import { Link } from 'react-router-dom';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import { format } from 'date-fns/format'; 
 import Select from 'react-select';
 
@@ -54,6 +55,78 @@ const PurchasesList = () => {
 
     const [selectedOption,setSelectedOption] = useState()
 
+
+    useEffect(() => {
+        (async () => {
+            try{
+
+                const currentDate = new Date();
+                const newStartDate = new Date();
+                const newEndDate = new Date();
+                let dayOfMonth = currentDate.getDate();
+                // newStartDate.setDate(currentDate.getDate() -58);
+                // newEndDate.setDate(currentDate.getDate() -26);
+                newStartDate.setDate(currentDate.getDate() - dayOfMonth + 1);
+                newEndDate.setDate(currentDate.getDate() + 31 - dayOfMonth);
+                setEndDate(newEndDate)
+                setStartDate(newStartDate)
+                
+                let q;
+                // q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", new Date(endDate)), orderBy("date"));
+                q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", newEndDate), orderBy("date"));
+                const querySnapshot = await getDocs(q);
+                let count = 1 
+                setPurchaseList([])  
+                querySnapshot.forEach((doc) => {
+                    const purchaseData = doc.data()
+                    const dateCreated = purchaseData.date.toDate();
+                    const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
+                    const userData = {
+                        id:purchaseData.id,
+                        name:purchaseData.name,
+                        invoiceNum:purchaseData.invoiceNum,
+                        price:formatCurrency(purchaseData.price/100),
+                        quantityString: purchaseData.quantityString,
+                        techName:purchaseData.techName,
+                        venderName:purchaseData.venderName,
+                        date:formattedDate1,
+                        receiptId:purchaseData.receiptId,
+                        total: formatCurrency((purchaseData.price/100)*parseFloat(purchaseData.quantityString)),
+                        billable:purchaseData.billable,
+                        invoiced:purchaseData.invoiced,
+                        customerName:purchaseData.customerName,
+                    }
+                    count = count + 1
+                    setPurchaseList(purchaseList => [...purchaseList, userData]); 
+                });
+
+                let qu = query(collection(db, 'companies',recentlySelectedCompany,'companyUsers'));
+                const querySnapshotu = await getDocs(qu);       
+                setUserList([])      
+                querySnapshotu.forEach((doc) => {
+                    const companyUserData = doc.data()
+                    const companyUser = {
+                        id:companyUserData.id,
+                        userName:companyUserData.userName,
+                        roleName:companyUserData.roleName,
+                        status: companyUserData.status,
+                        workerType: companyUserData.workerType,
+                        linkedCompanyId: companyUserData.linkedCompanyId,
+                        linkedCompanyName:companyUserData.linkedCompanyName,
+                        value : companyUserData.userName,
+                        label : companyUserData.userName
+                    }
+                    setUserList(userList => [...userList, companyUser]); 
+                });
+
+            } catch(error){
+                console.log('Error')
+                console.log(error)
+            }
+            
+        })();
+    },[])
+
     async function handleStartDateChange(dateOption) {
         setStartDate(dateOption)
         console.log(dateOption)
@@ -101,6 +174,7 @@ const PurchasesList = () => {
             console.log(error)
         }
     }
+
     async function handleEndDateChange(dateOption) {
         setEndDate(dateOption)
         console.log(dateOption)
@@ -147,69 +221,172 @@ const PurchasesList = () => {
         }
     }
 
+    async function thisMonth(e) {        
+        e.preventDefault()
+        try{
 
-    useEffect(() => {
-        (async () => {
+            const currentDate = new Date();
+            const newStartDate = new Date();
+            const newEndDate = new Date();
+            let dayOfMonth = currentDate.getDate();
+            let month = currentDate.getMonth()+1; //Add 1 cause is an index of array
+            let year = currentDate.getFullYear();
+            console.log(dayOfMonth)
+            console.log(month)
+            console.log(year)
 
-                const currentDate = new Date();
-                const newStartDate = new Date();
-                newStartDate.setDate(currentDate.getDate() -7);
-                setStartDate(newStartDate)
-                try{
-                    let q;
-                    q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", new Date(endDate)), orderBy("date"));
-                    const querySnapshot = await getDocs(q);
-                    let count = 1 
-                    setPurchaseList([])  
-                    querySnapshot.forEach((doc) => {
-                        const purchaseData = doc.data()
-                        const dateCreated = purchaseData.date.toDate();
-                        const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
-                        const userData = {
-                            id:purchaseData.id,
-                            name:purchaseData.name,
-                            invoiceNum:purchaseData.invoiceNum,
-                            price:formatCurrency(purchaseData.price/100),
-                            quantityString: purchaseData.quantityString,
-                            techName:purchaseData.techName,
-                            venderName:purchaseData.venderName,
-                            date:formattedDate1,
-                            receiptId:purchaseData.receiptId,
-                            total: formatCurrency((purchaseData.price/100)*parseFloat(purchaseData.quantityString)),
-                            billable:purchaseData.billable,
-                            invoiced:purchaseData.invoiced,
-                            customerName:purchaseData.customerName,
-                        }
-                        count = count + 1
-                        setPurchaseList(purchaseList => [...purchaseList, userData]); 
-                    });
-
-                    let qu = query(collection(db, 'companies',recentlySelectedCompany,'companyUsers'));
-                    const querySnapshotu = await getDocs(qu);       
-                    setUserList([])      
-                    querySnapshotu.forEach((doc) => {
-                        const companyUserData = doc.data()
-                        const companyUser = {
-                            id:companyUserData.id,
-                            userName:companyUserData.userName,
-                            roleName:companyUserData.roleName,
-                            status: companyUserData.status,
-                            workerType: companyUserData.workerType,
-                            linkedCompanyId: companyUserData.linkedCompanyId,
-                            linkedCompanyName:companyUserData.linkedCompanyName,
-                            value : companyUserData.userName,
-                            label : companyUserData.userName
-                        }
-                        setUserList(userList => [...userList, companyUser]); 
-                    });
-
-                } catch(error){
-                    console.log('Error')
-                    console.log(error)
-                }
+            let daysThisMonth = new Date(year, month, 0).getDate();
             
-        })();
-    },[])
+            newStartDate.setDate(currentDate.getDate() - dayOfMonth + 1);
+            newEndDate.setDate(currentDate.getDate() + daysThisMonth - dayOfMonth);
+            setEndDate(newEndDate)
+            setStartDate(newStartDate)
+
+            let q;
+            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", newEndDate), orderBy("date"));
+            const querySnapshot = await getDocs(q);
+            let count = 1 
+            setPurchaseList([])  
+            querySnapshot.forEach((doc) => {
+                const purchaseData = doc.data()
+                const dateCreated = purchaseData.date.toDate();
+                const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
+                const userData = {
+                    id:purchaseData.id,
+                    name:purchaseData.name,
+                    invoiceNum:purchaseData.invoiceNum,
+                    price:formatCurrency(purchaseData.price/100),
+                    quantityString: purchaseData.quantityString,
+                    techName:purchaseData.techName,
+                    venderName:purchaseData.venderName,
+                    date:formattedDate1,
+                    receiptId:purchaseData.receiptId,
+                    total: formatCurrency((purchaseData.price/100)*parseFloat(purchaseData.quantityString)),
+                    billable:purchaseData.billable,
+                    invoiced:purchaseData.invoiced,
+                    customerName:purchaseData.customerName,
+                }
+                count = count + 1
+                setPurchaseList(purchaseList => [...purchaseList, userData]); 
+            });
+
+        } catch(error){
+            console.log('Error')
+            console.log(error)
+        }
+    }
+
+    async function lastMonth(e) {     
+        try{
+
+            const currentDate = new Date();
+            const newStartDate = new Date();
+            const newEndDate = new Date();
+            let dayOfMonth = currentDate.getDate();
+            let month = currentDate.getMonth()+1; //Add 1 cause is an index of array
+            let year = currentDate.getFullYear();
+            console.log(dayOfMonth)
+            console.log(month)
+            console.log(year)
+    
+            let daysLastMonth = new Date(year, month-1, 0).getDate();
+    
+            let daysThisMonth = new Date(year, month, 0).getDate();
+            
+            newStartDate.setDate(currentDate.getDate() - dayOfMonth + 1 - daysLastMonth);
+            newEndDate.setDate(currentDate.getDate() + daysThisMonth - dayOfMonth - daysLastMonth);
+            setEndDate(newEndDate)
+            setStartDate(newStartDate)
+    
+            let q;
+            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", newEndDate), orderBy("date"));
+            const querySnapshot = await getDocs(q);
+            let count = 1 
+            setPurchaseList([])  
+            querySnapshot.forEach((doc) => {
+                const purchaseData = doc.data()
+                const dateCreated = purchaseData.date.toDate();
+                const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
+                const userData = {
+                    id:purchaseData.id,
+                    name:purchaseData.name,
+                    invoiceNum:purchaseData.invoiceNum,
+                    price:formatCurrency(purchaseData.price/100),
+                    quantityString: purchaseData.quantityString,
+                    techName:purchaseData.techName,
+                    venderName:purchaseData.venderName,
+                    date:formattedDate1,
+                    receiptId:purchaseData.receiptId,
+                    total: formatCurrency((purchaseData.price/100)*parseFloat(purchaseData.quantityString)),
+                    billable:purchaseData.billable,
+                    invoiced:purchaseData.invoiced,
+                    customerName:purchaseData.customerName,
+                }
+                count = count + 1
+                setPurchaseList(purchaseList => [...purchaseList, userData]); 
+            });
+
+        } catch(error){
+            console.log('Error')
+            console.log(error)
+        }
+    }
+
+    async function yearToDate(e) {
+
+        const currentDate = new Date();
+        let newStartDate = new Date();
+        const newEndDate = new Date();
+
+        let dayOfMonth = currentDate.getDate();
+        let month = currentDate.getMonth()+1; //Add 1 cause is an index of array
+        let year = currentDate.getFullYear();
+
+        console.log(dayOfMonth)
+        console.log(month)
+        console.log(year)
+        newStartDate = new Date(year, 0, 0);
+        newStartDate.setDate(newStartDate.getDate() + 1);
+
+        
+
+        setEndDate(newEndDate)
+        setStartDate(newStartDate)
+
+        try{
+            let q;
+            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", newStartDate), where("date", "<=", newEndDate), orderBy("date"));
+            const querySnapshot = await getDocs(q);
+            let count = 1 
+            setPurchaseList([])  
+            querySnapshot.forEach((doc) => {
+                const purchaseData = doc.data()
+                const dateCreated = purchaseData.date.toDate();
+                const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
+                const userData = {
+                    id:purchaseData.id,
+                    name:purchaseData.name,
+                    invoiceNum:purchaseData.invoiceNum,
+                    price:formatCurrency(purchaseData.price/100),
+                    quantityString: purchaseData.quantityString,
+                    techName:purchaseData.techName,
+                    venderName:purchaseData.venderName,
+                    date:formattedDate1,
+                    receiptId:purchaseData.receiptId,
+                    total: formatCurrency((purchaseData.price/100)*parseFloat(purchaseData.quantityString)),
+                    billable:purchaseData.billable,
+                    invoiced:purchaseData.invoiced,
+                    customerName:purchaseData.customerName,
+                }
+                count = count + 1
+                setPurchaseList(purchaseList => [...purchaseList, userData]); 
+            });
+
+        } catch(error){
+            console.log('Error')
+            console.log(error)
+        }
+    }
 
     function formatCurrency(number, locale = 'en-US', currency = 'USD') {
         return new Intl.NumberFormat(locale, {
@@ -416,7 +593,7 @@ const PurchasesList = () => {
             setSelectedOption(option)
 
         })();
-    };   
+    };  
 
     const handleUserChange = (option) => {
 
@@ -629,16 +806,35 @@ const PurchasesList = () => {
         // CDC07B - Pool Yellow
         // 9C0D38 - Pool Red
         // 2B600F - Pool Green
-
         <div className='px-2 md:px-7 py-5'>
-            <div className='px-2 py-2'>
+            <div className='py-2'>
                 <Link 
-                className='py-1 px-2 bg-[#0e245c] rounded-md text-[#ffffff]'
+                className='py-1 px-2 yellow-bg rounded-md text-[#ffffff]'
                 to={`/company/purchasedItems/createNew`}
                 >Create New</Link>
             </div>
-            <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                <div className='left-0 w-full justify-between'>
+            <div className='w-full light-blue-grey-bg p-4 rounded-md text-[#ffffff]'>
+                <div className='left-0 w-full'>
+                    
+                    <div className='flex justify-end items-center gap-2'>
+                        {/* Quick Access Buttons */}
+                        
+                        <button
+                         onClick={(e) => yearToDate(e)} 
+                        className='py-1 px-2 blue-bg rounded-md text-[#ffffff]'>
+                            Year to Date
+                        </button>
+                        <button
+                         onClick={(e) => lastMonth(e)} 
+                        className='py-1 px-2 blue-bg rounded-md text-[#ffffff]'>
+                            Last Month
+                        </button>
+                        <button
+                         onClick={(e) => thisMonth(e)} 
+                        className='py-1 px-2 blue-bg rounded-md text-[#ffffff]'>
+                            This Month
+                        </button>
+                    </div>
                     <div className='flex justify-between items-center'>
                         {/* Search Bar */}
                         <input className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
@@ -654,7 +850,6 @@ const PurchasesList = () => {
                                     className="basic-multi-select"
                                     classNamePrefix="select"
                                 />
-        
                             </div>
                         {/* User List */}
                             <div className="w-1/3 text-[#000000]">

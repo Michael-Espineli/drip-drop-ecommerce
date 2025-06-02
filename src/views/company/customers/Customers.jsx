@@ -1,7 +1,7 @@
 import React, {useState, useEffect, useContext} from 'react';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter } from "firebase/firestore";
+import { query, collection, getDocs, doc, orderBy, updateDoc, startAfter } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { Link } from 'react-router-dom';
 const Customers = () => {
@@ -60,17 +60,6 @@ const Customers = () => {
                 )
             )
 
-            //Bad Way
-
-            // console.log('Search')
-            // for (let i = 0; i < customerList.length; i++) {
-            //     const item = customerList[i];
-            //     if (item.name == newInput) {
-            //         console.log('Found')
-            //         newList.push(item)
-            //     }
-            // }
-
         } else {
             console.log('Empty')
 
@@ -78,7 +67,61 @@ const Customers = () => {
         }
     };
  
+    async function updateEquipment(e) {
+        e.preventDefault()
 
+        try{
+            
+            let qComp;
+            qComp = query(collection(db, 'companies'));   
+            const querySnapshotComp = await getDocs(qComp);       
+            let companyList = []
+            
+            console.log("Start Update: operationStatus")
+                    
+            querySnapshotComp.forEach((doc) => {
+                const compData = doc.data()
+                const comp = {
+                    id: compData.id,
+                    name: compData.name
+                }
+                companyList.push(comp)
+            });
+            for (let i = 0; i < companyList.length; i++) {
+
+                let company = companyList[i]
+                console.log("Getting ServiceStops for: ", company.name)
+                let q;
+                    q = query(collection(db, 'companies',company.id,'serviceStops'));   
+                const querySnapshot = await getDocs(q);       
+                let serviceStopList = []
+                    
+                querySnapshot.forEach((doc) => {
+                    const serviceStopData = doc.data()
+                    const serviceStop = {
+                        id:serviceStopData.id,
+                        operationStatus:serviceStopData.operationStatus
+                    }
+                    serviceStopList.push(serviceStop)
+                });
+                
+                
+                console.log("Updating Service Stop: " + serviceStopList.length)
+                for (let i = 0; i < serviceStopList.length; i++) {
+                    let serviceStop = serviceStopList[i]
+                    if (serviceStop.operationStatus == "Not Started") {
+                        await updateDoc(doc(db, "companies",company.id, "serviceStops",serviceStop.id), {
+                            operationStatus: "Not Finished"
+                        });
+                        console.log("Successfully Updated Service Stop operationStatus:" + serviceStop.id)
+                    }
+                }
+            }
+        } catch(error){
+            console.log('Error')
+            console.log(error)
+        }
+    }
 
     return (
         // 030811 - almost black
@@ -95,10 +138,13 @@ const Customers = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='py-2'>
             <Link 
-                className='py-1 px-2 bg-[#CDC07B] rounded-md text-[#000000]'
+                className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
                 to={`/company/customers/createNew`}>Create New</Link>
             </div>
-            <div className='w-full bg-[#0e245c] p-4 rounded-md'>
+            <button onClick={(e) => {updateEquipment(e)}} 
+            className='bg-[#000000] text-[#ffffff] p-2 rounded-md'
+            >Update Service Stop</button>
+            <div className='w-full light-blue-grey-bg p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
                         <div className='flex justify-between items-center'>
                             {/* <h1>Customers : {customerList.length}</h1> */}

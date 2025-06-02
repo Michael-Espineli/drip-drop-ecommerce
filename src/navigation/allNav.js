@@ -277,6 +277,15 @@ export const allNav = [
     }
     ,
     {
+        id : 102,
+        title : 'Reports',
+        icon : <FaGear  />,
+        role : 'Company',
+        path : '/company/reports',
+        category:'NA'
+    }
+    ,
+    {
         id : 110,
         title : 'Roles',
         icon : <FaGear  />,

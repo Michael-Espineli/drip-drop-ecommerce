@@ -5,6 +5,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import Select from 'react-select';
 import {v4 as uuidv4} from 'uuid';
 // import { console } from "inspector";

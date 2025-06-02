@@ -465,6 +465,7 @@ const JobDetailView = () => {
                     totalDuration = totalDuration + task.estimatedTime
 
                 }
+                
                 totalLaborCost = totalLaborCost / 100 
                 totalDuration = totalDuration /60
 

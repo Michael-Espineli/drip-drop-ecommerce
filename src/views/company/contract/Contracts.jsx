@@ -87,6 +87,7 @@ function Contracts () {
             });
         })();
     },[])
+
     async function acceptContract(e) {
         e.preventDefault()
         console.log('acceptContract')
@@ -112,6 +113,7 @@ function Contracts () {
             console.error(error);
         });
     }
+    
     async function acceptContract2(e) {
         e.preventDefault()
         console.log('acceptContract2')

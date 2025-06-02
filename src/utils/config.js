@@ -22,5 +22,7 @@ const analytics = getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const functions = getFunctions(getApp());
+
+//Disable and enable Live verse tester functions
 connectFunctionsEmulator(functions, "127.0.0.1", 5001);
 export {app, analytics, auth, db};

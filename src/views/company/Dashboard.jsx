@@ -6,6 +6,9 @@ import { Link } from 'react-router-dom';
 import { query, collection, getDocs, limit, orderBy, startAt, getCountFromServer, where } from "firebase/firestore";
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
+import { getFunctions, httpsCallable } from 'firebase/functions';
+
+const functions = getFunctions();
 
 const Dashboard = () => {
     const {recentlySelectedCompany, user} = useContext(Context);
@@ -76,6 +79,8 @@ const Dashboard = () => {
             ]
         }
     }
+
+
     useEffect(() => {
         (async () => {
             console.log('On Load')
@@ -120,6 +125,29 @@ const Dashboard = () => {
 
         })();
     },[])
+
+    
+    
+    async function sendServiceReportOnFinish(e) {
+        e.preventDefault()
+        console.log('sendServiceReportOnFinish')
+
+        const functionName = httpsCallable(functions, 'sendServiceReportOnFinish');
+        functionName({ 
+            email: 'michaelespineli2000@gmail.com',
+            customerName: 'Brett Murdock',
+        })
+        .then((result) => {
+            console.log(result)
+            // Handle the result from the function
+        
+        })
+        .catch((error) => {
+            // Handle any errors
+            console.error(error);
+        });
+    }
+
     return (
         // 030811 - almost black
         // 282c28 - black green
@@ -178,9 +206,11 @@ const Dashboard = () => {
             </div>
                 {/* Alerts Section Of Body */}
 
-                <div className='w-full p-4 bg-[#747e79] rounded-md mt-6'>
+                <div className='w-full p-4 light-blue-grey-bg rounded-md mt-6'>
                     <div className='flex justify-between items-center text-[#ffffff] pb-3 font-bold'>
                         <h2>Alerts</h2>
+                        <button onClick={(e) => sendServiceReportOnFinish(e)} >Tester Function</button>
+
                         <Link to='/company/alerts' className='font-semibold text-sm text-[#d0d2d6]'>View All</Link>
                     </div>
 
@@ -208,7 +238,7 @@ const Dashboard = () => {
             <div className='w-full flex flex-wrap mt-7'>
                 {/* Chart */}
                 <div className='w-full lg:w-7/12 lg:pr-3'>
-                    <div className='w-full bg-[#747e79] p-4 rounded-md'>
+                    <div className='w-full light-blue-grey-bg  p-4 rounded-md'>
                         <Chart options={state.options} series={state.series} type='bar' height={350}/>
                     </div>
                 </div>
@@ -216,7 +246,7 @@ const Dashboard = () => {
 
                 {/* Recent Seller Message */}
                 <div className='w-full lg:w-5/12 lg:pl-4 mt-6 lg:mt-0'>
-                    <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
+                    <div className='w-full light-blue-grey-bg  p-4 rounded-md text-[#d0d2d6]'>
                         {/* Message Header */}
                         <div className='flex justify-between items-center'>
                             <h2 className='font-semibold text-lg text-[#ffffff] bp-3'>Recent Seller Message</h2>
@@ -283,7 +313,7 @@ const Dashboard = () => {
             </div>
 
             {/* Recent Orders */}
-            <div className='w-full p-4 bg-[#747e79] rounded-md mt-6'>
+            <div className='w-full p-4 light-blue-grey-bg rounded-md mt-6'>
                 <div className='flex justify-between items-center text-[#ffffff] pb-3 font-bold'>
                     <h2>Recent Orders</h2>
                     <Link className='font-semibold text-sm text-[#d0d2d6]'>View All</Link>

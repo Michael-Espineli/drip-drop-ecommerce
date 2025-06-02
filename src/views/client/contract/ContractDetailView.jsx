@@ -216,7 +216,9 @@ const ContractDetailView = () => {
                         <div className='flex justify-between items-center gap-2'>
                             <button className='py-1 px-2 bg-[#2B600F] rounded-md'
                             onClick={(e) => acceptContract(e)}
-                            ><p>Accept Contract</p></button>
+                            >
+                                <p>Accept Contract</p>
+                            </button>
                             <button className='py-1 px-2 bg-[#9C0D38] rounded-md'
                             onClick={(e) => rejectContract(e)}
                             ><p>Reject Contract</p></button>

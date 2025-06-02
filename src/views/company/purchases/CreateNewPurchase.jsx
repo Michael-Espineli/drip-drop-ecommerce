@@ -1,13 +1,15 @@
 import React, { useState,useEffect, useContext } from "react";
 import {Link, useParams } from 'react-router-dom';
-import { query, doc, setDoc, collection, getDocs } from "firebase/firestore";
+import { query, doc, setDoc, collection, getDocs, orderBy } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import Select from 'react-select';
 import {v4 as uuidv4} from 'uuid';
 // import { console } from "inspector";
+import toast from 'react-hot-toast';
 
 const CreateNewPurchase = () => {
     const {name,recentlySelectedCompany} = useContext(Context);
@@ -247,7 +249,7 @@ const CreateNewPurchase = () => {
                 });
 
                 //Get Generic Data Base Items
-                let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'));
+                let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'), orderBy('name') );
                 const genericItemQuerySnapshot = await getDocs(genericItemQuery);       
                 setGenericItemList([])
                 genericItemQuerySnapshot.forEach((doc) => {
@@ -269,7 +271,6 @@ const CreateNewPurchase = () => {
                         timesPurchased : itemData.timesPurchased,
                         venderId : itemData.venderId,
                         label: itemData.name + ' - ' + formatCurrency(itemData.rate/100) + ' - ' + itemData.sku
-
                     }
                     setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
                 });
@@ -360,6 +361,8 @@ const CreateNewPurchase = () => {
 
     async function addNewItem(e) {
         e.preventDefault()
+        
+        toast.dismiss()
         let rate = parseFloat( selectedGenericItem.rate)/100//Need to Change to *100. because I store all numbers as cents, rather than dollars
         let quantityFloat = parseFloat( quantity)
 
@@ -377,6 +380,7 @@ const CreateNewPurchase = () => {
             quantity: quantityFloat,
             description: selectedGenericItem.description,
             totalCost: totalCost.toFixed(2),
+            category:selectedGenericItem.category,
         }
         
         setPurchaseItemList(purchaseItemlist => [...purchaseItemlist, newItem]); 
@@ -428,6 +432,7 @@ const CreateNewPurchase = () => {
                 date : purchaseDate,
                 customerId : "",
                 customerName : "",
+                category:item.category,
                 sku : item.sku,
                 notes : "",
                 description : item.description,
@@ -537,6 +542,7 @@ const CreateNewPurchase = () => {
     async function createNewItem(e) {
         e.preventDefault()
         try{
+
             //Create New Item
             let id = 'com_sett_db_' + uuidv4()
     
@@ -545,12 +551,12 @@ const CreateNewPurchase = () => {
             let rateCents = Math.floor(parseFloat(rateUSD*100))
 
             let billingRateCents = Math.floor(parseFloat(billingRateUSD*100))
-
             let item = {
-                UOM : uom,
+
+                UOM : uom.label,
                 id : id,
                 billable : billable,
-                category : category,
+                category : category.label,
                 color : color,
                 dateUpdated : new Date(),
                 description : description,
@@ -559,11 +565,13 @@ const CreateNewPurchase = () => {
                 size : size,
                 sku : sku, 
                 storeName : "",
-                subCategory : subcategory,
+                subCategory : "",
                 timesPurchased : 0,
                 venderId : "",
                 billingRate : billingRateCents
+                
             }
+
             console.log(item)
 
             console.log('2')
@@ -611,12 +619,13 @@ const CreateNewPurchase = () => {
                     subCategory : itemData.subCategory,
                     timesPurchased : itemData.timesPurchased,
                     venderId : itemData.venderId,
-                    label: itemData.name + ' ' + itemData.rate + ' ' + itemData.sku
+                    label: itemData.name + ' - ' + formatCurrency(itemData.rate/100) + ' - ' + itemData.sku
                 }
                 setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
             });
             console.log('Got New Items')
 
+            toast.dismiss()
             setShowSidebar(false)
 
         } catch(error){
@@ -974,20 +983,21 @@ const CreateNewPurchase = () => {
 
                                         </div>
                                         <div className="px-2">
-                                            <button
-                                            onClick={(e) => addNewItem(e)}
-                                            className='w-[50px] py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
-                                            >
-                                                Add
-                                            </button>
+                                        <button
+                                        onClick={(e) => showSideBar(e)}
+                                        className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
+
+                                            >Create New Item</button>
                                         </div>
                                     </div>
                                     <div className='flex justify-between w-full items-center gap-2'>
                                         <div className='w-full'>
-                                        <button
-                                        onClick={(e) => showSideBar(e)}
+                                            <button
+                                            onClick={(e) => addNewItem(e)}
                                             className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
-                                            >Create New Item</button>
+                                            >
+                                                Add
+                                            </button>
                                         </div>
                                     </div>
                                 </form>

@@ -38,7 +38,7 @@ const DataBaseItemDetailView = () => {
     
     const [sku, setSku] = useState('');
 
-    useEffect(() => {
+    useEffect(() => { 
         (async () => {
             try{
                 const docRef = doc(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase',id);
@@ -140,7 +140,7 @@ const DataBaseItemDetailView = () => {
             style: 'currency',
             currency: currency
         }).format(number);
-        }
+    }
     return (
         // 030811 - almost black
         // 282c28 - black green

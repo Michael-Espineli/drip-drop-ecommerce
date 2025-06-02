@@ -85,6 +85,8 @@ const TaskGroupDetails = lazy(()=> import("../../views/company/Settings/TaskGrou
 const Venders = lazy(()=> import("../../views/company/venders/Venders"))
 const CreateNewVender = lazy(()=> import("../../views/company/venders/CreateNewVenders"))
 
+const Reports = lazy(()=> import("../../views/company/reports/Reports"))
+
 export const sellerRoutes = [
     
     //Basic Pages
@@ -200,7 +202,7 @@ export const sellerRoutes = [
     {
         path:'/company/items/createNew',
         element: <CreateNewDataBaseItem/>,
-        ability :['Admin','Seller'],
+        ability :['Admin','Seller'], 
         role:'Company'
     } 
     ,
@@ -519,6 +521,13 @@ export const sellerRoutes = [
     {
         path:'/company/taskGroups/details/:taskGroupId',
         element: <TaskGroupDetails/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/reports',
+        element: <Reports/>,
         ability :['Admin','Seller'],
         role:'Company'
     }

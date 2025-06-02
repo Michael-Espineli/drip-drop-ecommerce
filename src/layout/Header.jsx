@@ -22,7 +22,7 @@ const Header = ({showSidebar, setShowSidebar}) => {
                 {/* Hamburger */}
                 <div onClick={() => setShowSidebar(!showSidebar)} className='w-[35px] flex lg:hidden h-[35px] rounded-sm bg-[#454b39] text-[#ffffff]
                 shadow-lg hover:shadow-[#454b39] justify-center items-center cursor-pointer'>
-                    <span><FaList/> </span>
+                    <span>三</span>
                 </div>
                 {/* Search Input */}
                 <div className='hidden md:block'>

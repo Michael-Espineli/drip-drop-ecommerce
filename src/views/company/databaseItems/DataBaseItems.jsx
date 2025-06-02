@@ -5,6 +5,7 @@ import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where 
 import { getAuth } from "firebase/auth";
 import { Link } from 'react-router-dom';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import { format } from 'date-fns'; // Or any other date formatting library
 
 const DatabaseItems = () => {

@@ -333,10 +333,10 @@ const CreateNewDataBaseItem = () => {
             let billingRateCents = billingRateUSD*100
 
             let item = {
-                UOM : uom,
+                UOM : uom.label,
                 id : id,
                 billable : billable,
-                category : category,
+                category : category.label,
                 color : color,
                 dateUpdated : new Date(),
                 description : description,
@@ -345,7 +345,7 @@ const CreateNewDataBaseItem = () => {
                 size : size,
                 sku : sku, 
                 storeName : "",
-                subCategory : subcategory,
+                subCategory : subcategory.label,
                 timesPurchased : 0,
                 venderId : "",
                 billingRate : billingRateCents

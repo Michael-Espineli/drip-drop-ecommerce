@@ -2,7 +2,7 @@ import { createContext, useState,useEffect } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { useFormAction } from "react-router-dom";
 import { db } from "../utils/config";
-import { getDoc, doc } from "firebase/firestore";
+import { getDoc, doc } from "firebase/firestore"; 
 
 export const Context = createContext();
 export function AuthContext({children}) {
@@ -19,7 +19,7 @@ export function AuthContext({children}) {
 
     useEffect(() => {
         (async () => {
-
+            console.log('Auth Context')
             let unsubscribe;
             unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
                 setLoading(false)

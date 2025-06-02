@@ -6,7 +6,7 @@ const PublicHeader = ({showSidebar, setShowSidebar}) => {
 
    return (
         <div className=' w-full bg-cover h-full bg-[#0e245c]'>
-            <div className='flex px-[300px] pt-[100px] pb-12 text-[#cfcfcf] bg-[#0e245c] w-full justify-start shadow-md shadow-[#cfcfcf] fixed top-0 left-0'>
+            <div className='flex py-6 text-[#cfcfcf] bg-[#0e245c] w-full justify-start shadow-md shadow-[#cfcfcf] fixed top-0 left-0'>
                 <Link to='/'>
                     <h2 className='w-[300px] px-[20px] font-bold text-4xl line-clamp-1'>
                         Drip Drop

@@ -1,3 +1,49 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+
+
+:root {
+    background-color: #ededed;;
+  }
+  @layer utilities {
+    /* BackGrounds */
+    .red-bg {background-color: #9C0D38;}
+    .yellow-bg {background-color: #e0ae36;}
+    .grey-bg {background-color: #7a7a7a;}
+    .light-blue-grey-bg { background-color: #70737c;}
+    .blue-grey-bg { background-color: #314158;}
+    .green-grey-bg { background-color: #747e79;}
+    .black-bg {background-color: #030811;}
+    .white-bg {background-color: #ededed;}
+    .light-green-bg {background-color: #C8EAC2;}
+    .green-bg {background-color: #2B600F;}
+    .dark-green-bg {background-color: #282c28;}
+    .dark-olive-green-bg {background-color: #454b39;}
+    .olive-green-bg {background-color: #536546;}
+    
+    .tan-bg {background-color: #AA9790;}
+    .blue-bg {background-color: #1D2E76;}
+    .dark-blue-bg {background-color: #1d2238;}
+  
+    
+    /* Foregrounds */
+    .red-fg {color: #9C0D38;}
+    .yellow-fg {color: #e0ae36;}
+    .grey-fg {color: #7a7a7a;}
+    .light-blue-grey-fg { color: #70737c;}
+    .blue-grey-fg { color: #314158;}
+    .green-grey-fg { color: #747e79;}
+    .black-fg { color: #030811;}
+    .white-fg { color: #ededed;}
+    .light-green-fg { color: #C8EAC2;}
+    .green-fg { color: #2B600F;}
+    .dark-green-fg { color: #282c28;}
+    .dark-olive-green-fg { color: #454b39;}
+    .olive-green-fg { color: #536546;}
+  
+    .tan-fg { color: #AA9790;}
+    .blue-fg { color: #1D2E76;}
+    .dark-blue-fg { color: #1d2238;}
+  }

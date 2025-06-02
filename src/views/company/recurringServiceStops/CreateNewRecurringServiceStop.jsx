@@ -8,6 +8,7 @@ import {v4 as uuidv4} from 'uuid';
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import DatePicker from "react-datepicker";
+import 'react-datepicker/dist/react-datepicker.css'
 import { format } from 'date-fns'; 
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
@@ -44,6 +45,8 @@ const CreateNewRecurringServiceStop = () => {
         city:'',
         state:'',
         zip:'',
+        latitude:0,
+        longitude:0,
         label:'Select a Service Location',
         bodiesOfWaterId:[]
     });
@@ -273,6 +276,8 @@ const CreateNewRecurringServiceStop = () => {
                     city:serviceLocationData.address.city,
                     state:serviceLocationData.address.state,
                     zip:serviceLocationData.address.zip,
+                    latitude:serviceLocationData.address.latitude,
+                    longitude:serviceLocationData.address.longitude,
                     bodiesOfWaterId:serviceLocationData.bodiesOfWaterId,
                     label:serviceLocationData.address.streetAddress
 
@@ -292,6 +297,8 @@ const CreateNewRecurringServiceStop = () => {
                     city:  location.city,
                     state:  location.state,
                     zip:  location.zip,
+                    latitude:location.latitude,
+                    longitude:location.longitude,
                     bodiesOfWaterId: location.bodiesOfWaterId,
                     label: location.streetAddress,
                 })
@@ -350,88 +357,118 @@ const CreateNewRecurringServiceStop = () => {
     async function createNewRecurringServiceStop(e) {
 
         e.preventDefault()
+        //
+        // Guard Statements
+        //
 
-        //Add Guard Statements
-        let rssId = 'com_rss_' + uuidv4();
-        const docRef = doc(db, "companies",recentlySelectedCompany,'settings','recurringServiceStops');
-        const docSnap = await getDoc(docRef);
-        let internalId = 'RSS'
-        let WOCount = 0
+        if (frequencyName  != '') { 
+            if (serviceLocation.id  != '') { 
+                if (customer.id  != '') { 
+                    if (techId != '') {
+                        let rssId = 'com_rss_' + uuidv4();
+                        const docRef = doc(db, "companies",recentlySelectedCompany,'settings','recurringServiceStops');
+                        const docSnap = await getDoc(docRef);
+                        let internalId = 'RSS'
+                        let WOCount = 0
 
-        if (docSnap.exists()) {
-            internalId = 'RSS' + docSnap.data().increment
-            WOCount = docSnap.data().increment
+                        if (docSnap.exists()) {
+                            internalId = 'RSS' + docSnap.data().increment
+                            WOCount = docSnap.data().increment
+                        }
+
+                        let rss = {
+                            id : rssId,
+                            internalId:internalId,
+                            type : type,
+                            typeId : typeId,
+                            typeImage : typeImage,
+                            customerName : customerName,
+                            customerId: customer.id,
+                            address : {
+                                streetAddress:serviceLocation.streetAddress,
+                                city:serviceLocation.city,
+                                state:serviceLocation.state,
+                                zip:serviceLocation.zip,
+                                latitude:serviceLocation.latitude,
+                                longitude:serviceLocation.longitude
+                            },
+                            tech : techName,
+                            techId: techId,
+                            dateCreated: new Date(),
+                            startDate : startDate,
+                            endDate : endDate,
+                            noEndDate : noEndDate,
+                            frequency : frequencyName,
+                            daysOfWeek : daysOfWeekName,
+                            description : description,
+                            lastCreated : startDate, //Maybe Something Else
+                            serviceLocationId : serviceLocation.id,
+                            estimatedTime : "",
+                            otherCompany : "",
+                            laborContractId : "",
+                            contractedCompanyId : "",
+                        }
+
+                        console.log(rss)
+
+                        // await setDoc(doc(db,"companies",recentlySelectedCompany,'recurringServiceStop',rssId), rss);
+
+                        console.log('Created New Recurring Service Stop')
+
+                        //Create First few Service Stops
+
+                        const newRss = httpsCallable(functions, 'createFirstRecurringServiceStop');
+                        let data = { 
+                            recurringServiceStop: rss,
+                            companyId:recentlySelectedCompany,
+                            method: "POST",
+                            headers: {
+                            "Content-Type": "application/json",
+                            },
+
+                        }
+                        console.log('RSS DATA')
+                        console.log(data)
+                        
+                            
+                        toast.loading('Loading...')
+                        newRss(data)
+                        .then((response) => response.data)
+                        .then( async (data) => {
+
+                            // Handle the result from the function
+                            toast.dismiss()
+                            
+                            toast.success('Successfully Uploaded')
+                            console.log(data);
+                            navigate('/company/recurringServiceStop')
+
+                        })
+                        .catch((error) => {
+                            
+                            // Handle any errors
+                            toast.dismiss()
+                            toast.error('error')
+                            console.error('Error');
+                            console.error(error);
+                        });
+                            
+                    } else {
+                        console.log('Form not fully filled out')
+                        toast.error('Please Fill Out Form Fully');
+                    }
+                } else {
+                    console.log('Form not fully filled out')
+                    toast.error('Please Fill Out Form Fully');
+                }
+            } else {
+                console.log('Form not fully filled out')
+                toast.error('Please Fill Out Form Fully');
+            }
+        } else {
+            console.log('Form not fully filled out')
+            toast.error('Please Fill Out Form Fully');
         }
-
-        let rss = {
-            id : rssId,
-            internalId:internalId,
-            type : type,
-            typeId : typeId,
-            typeImage : typeImage,
-            customerName : customerName,
-            customerId: customer.id,
-            address : {
-                streetAddress:serviceLocation.streetAddress,
-                city:serviceLocation.city,
-                state:serviceLocation.state,
-                zip:serviceLocation.zip
-            },
-            tech : techName,
-            techId: techId,
-            dateCreated: new Date(),
-            startDate : startDate,
-            endDate : endDate,
-            noEndDate : noEndDate,
-            frequency : frequencyName,
-            daysOfWeek : daysOfWeekName,
-            description : description,
-            lastCreated : startDate, //Maybe Something Else
-            serviceLocationId : "",
-            estimatedTime : "",
-            otherCompany : "",
-            laborContractId : "",
-            contractedCompanyId : "",
-        }
-
-        console.log(rss)
-
-        // await setDoc(doc(db,"companies",recentlySelectedCompany,'recurringServiceStop',rssId), rss);
-
-        console.log('Created New Recurring Service Stop')
-
-        //Create First few Service Stops
-
-        const newRss = httpsCallable(functions, 'createFirstRecurringServiceStop');
-        let data = { 
-            recurringServiceStop: rss,
-            companyId:recentlySelectedCompany,
-            method: "POST",
-            headers: {
-            "Content-Type": "application/json",
-            },
-
-        }
-        console.log('RSS DATA')
-        console.log(data)
-        newRss(data)
-        .then((response) => response.data)
-        .then( async (data) => {
-            // Handle the result from the function
-            
-            toast.success('Message')
-            console.log(data);
-            // console.error(result.data.message);
-        })
-        .catch((error) => {
-            // Handle any errors
-            toast.error('error')
-            console.error('error');
-            console.error(error);
-        });
-                
-        toast.success('After calling function')
-
         //Clear Form
 
         // navigate('/company/recurringServiceStop')
@@ -565,7 +602,7 @@ const CreateNewRecurringServiceStop = () => {
                             />
                         </div>
 
-                        <div className='py-2 w-full'>
+                        <div className='py-2 w-full text-[#000000]'>
                             <Select
                                 value={daysOfWeek}
                                 options={dayList}
@@ -583,7 +620,7 @@ const CreateNewRecurringServiceStop = () => {
                                 })}
                             />
                         </div>
-                        <div className='py-2 w-full'>
+                        <div className='py-2 w-full text-[#000000]'>
                             <Select
                                 value={frequency}
                                 options={frequencyList}

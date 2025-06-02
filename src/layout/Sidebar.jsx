@@ -48,7 +48,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                 <div className='h-[70px] flex justify-center items-center'>
                     <Link to='/company/dashboard' className="w-[250px] h-[75px]">
                         <div className='flex justify-start items-center'>
-                            <img class="h-[50px] w-[50px]" src="/duck512.png" alt="Foreman"></img>
+                            <img className="h-[50px] w-[50px]" src="/duck512.png" alt="Foreman"></img>
                             <div>
                                 <h1 className='text-4xl font-serif font-family:Times New Roman text-[#cfcfcf]'>Drip Drop </h1> {/* Drip Drop Logo */}
                                 <p className='text-xs font-bold font-serif font-family:Times New Roman text-[#cfcfcf] py-1'>The Pool App</p>
@@ -128,7 +128,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                             </li>)
                         } */}
                         <li>
-                            <button onClick={() => {handleSignOut()}}className='text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'>
+                            <button onClick={() => {handleSignOut()}} className='text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'>
                                 <span> <RiLogoutBoxLine/> </span>
                                 <span>Logout</span>
                             </button>
