@@ -31,6 +31,7 @@ const CreateNewOneTimeLaborContract = () => {
         equipmentId : '',
         equipmentName : '',
         id : '',
+        internalId : "",
         installationParts : '',
         jobTemplateId : '',
         laborCost : '',
@@ -132,11 +133,13 @@ const CreateNewOneTimeLaborContract = () => {
                             bodyOfWaterName : docSnap.data().bodyOfWaterName,
                             chemicals : docSnap.data().chemicals,
                             customerId : docSnap.data().customerId,
+                            customerName : docSnap.data().customerName,
                             description : docSnap.data().description,
                             electricalParts : docSnap.data().electricalParts,
                             equipmentId : docSnap.data().equipmentId,
                             equipmentName : docSnap.data().equipmentName,
                             id : docSnap.data().id,
+                            internalId : docSnap.data().internalId,
                             installationParts : docSnap.data().installationParts,
                             jobTemplateId : docSnap.data().jobTemplateId,
                             laborCost : docSnap.data().laborCost,
@@ -355,7 +358,8 @@ const CreateNewOneTimeLaborContract = () => {
 
                     <div className='w-full bg-[#747e79] p-4 rounded-md'>
                         <div className='left-0 w-full justify-between'>
-                            <h2>Create New Labor Contract - {jobId}</h2>
+                            <h2>Create New Labor Contract</h2>
+                            <h1>{selectedJob.internalId}: {selectedJob.customerName}</h1>
                             {
                                 (jobId==='NA')&&<div className='w-full'>
                                 <Select
@@ -438,6 +442,9 @@ const CreateNewOneTimeLaborContract = () => {
                         </div>
                     </div>
                 </div>
+                <div>
+                    
+                </div>
                 <div className='py-2'>
                     <div className='w-full bg-[#747e79] p-4 rounded-md'>
                         <div className='flex jw-full justify-between items-center gap-2'>
@@ -488,19 +495,23 @@ const CreateNewOneTimeLaborContract = () => {
                                 taskList?.map(task => (
                                     <tr key={task.id}>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                            {       
-                                                (selectedTaskList.find(item => item.id === task.id))&&<button
-                                                onClick={(e) => removeTask(e,task.id)}
-                                                >
-                                                    <IoMdCheckboxOutline />
-                                                </button>
-                                            }
-                                            {       
-                                                (!selectedTaskList.find(item => item.id === task.id))&&<button
-                                                onClick={(e) => selectTask(e,task.id)} 
-                                                >
-                                                    <MdCheckBoxOutlineBlank />
-                                                </button>
+                                            {
+                                                (task.status=="Unassigned")&& <div>
+                                                    {       
+                                                        (selectedTaskList.find(item => item.id === task.id))&&<button
+                                                        onClick={(e) => removeTask(e,task.id)}
+                                                        >
+                                                            <IoMdCheckboxOutline />
+                                                        </button>
+                                                    }
+                                                    {       
+                                                        (!selectedTaskList.find(item => item.id === task.id))&&<button
+                                                        onClick={(e) => selectTask(e,task.id)} 
+                                                        >
+                                                            <MdCheckBoxOutlineBlank />
+                                                        </button>
+                                                    }
+                                                </div>
                                             }
                                         </td>
 
@@ -522,7 +533,7 @@ const CreateNewOneTimeLaborContract = () => {
                                             
                                         </td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                            <p>{task.contractedRate}</p>
+                                            <p>$ {(task.contractedRate/100).toFixed(2)}</p>
                                             <input 
                                             className='w-full py-1 px-2 rounded-md mt-2'
 

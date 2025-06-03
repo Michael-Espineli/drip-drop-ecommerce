@@ -297,6 +297,8 @@ const JobDetailView = () => {
                 const docSnap = await getDoc(docRef);
                 let customerId;
                 let serviceLocationId;
+                
+                let totalRate = 0
                 if (docSnap.exists()) {
                     console.log("Document data:", docSnap.data());
                     setJob((prevJob) => ({
@@ -326,6 +328,8 @@ const JobDetailView = () => {
                         type : docSnap.data().type,
 
                     }));
+                    totalRate = docSnap.data().rate
+                    setOfferedRate(docSnap.data().rate)
                     setSelectedOperationStatus({
                         id : docSnap.data().operationStatus,
                         name : docSnap.data().operationStatus,
@@ -463,10 +467,12 @@ const JobDetailView = () => {
                     let task = taskList[i]
                     totalLaborCost = totalLaborCost + task.contractedRate
                     totalDuration = totalDuration + task.estimatedTime
-
+                    console.log('')
+                    console.log('totalLaborCost' + totalLaborCost)
+                    console.log('totalDuration' + totalDuration)
+                    console.log('')
                 }
-                
-                totalLaborCost = totalLaborCost / 100 
+                totalLaborCost = totalLaborCost
                 totalDuration = totalDuration /60
 
                 console.log("Calculated Labor Cost")
@@ -482,26 +488,29 @@ const JobDetailView = () => {
                     totalMaterialCost = totalMaterialCost + lineItemTotalCost
                     totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
                 }
-                totalMaterialCost = totalMaterialCost / 100 
-                totalMaterialPrice = totalMaterialPrice /100
+                totalMaterialCost = totalMaterialCost
+                totalMaterialPrice = totalMaterialPrice
     
 
-                console.log("Calculated Material Cost")
+                console.log("Calculated Material Cost ")
 
                 // Calculate PNL
                 let totalCost = 0 
-                let totalRate = offeredRate
                 let totalProfit = 0
                 let profitPercentage = 0
 
                 totalCost = totalMaterialCost + totalLaborCost
                 totalProfit = totalRate - totalCost
-                profitPercentage = totalProfit/totalRate
-                console.log( 5 )
 
-                profitPercentage = profitPercentage.toFixed(2)
-                totalMaterialCost = totalMaterialCost.toFixed(2)
-                totalMaterialPrice = totalMaterialPrice.toFixed(2)
+                profitPercentage = totalProfit/totalRate
+                
+                console.log("totalRate: " + totalRate)
+                console.log("totalCost: " + totalCost)
+                console.log("totalLaborCost: " + totalLaborCost)
+                console.log("totalMaterialCost: " + totalMaterialCost)
+                console.log("totalProfit: " + totalProfit)
+                console.log("profitPercentage: " + profitPercentage)
+
                 console.log( 10 )
 
                 totalDuration = totalDuration.toFixed(2)
@@ -510,11 +519,11 @@ const JobDetailView = () => {
 
                 console.log("Calculated PNL")
 
-                setTotalCost(totalCost)
-                setMaterialCost(totalMaterialCost)
-                setLaborCost(totalLaborCost)
+                setTotalCost((totalCost/100).toFixed(2))
+                setMaterialCost((totalMaterialCost/100).toFixed(2))
+                setLaborCost((totalLaborCost/100).toFixed(2))
                 setEstimatedDuration(totalDuration)
-                let formattedProfitUSD = formatCurrency(totalProfit);
+                let formattedProfitUSD = formatCurrency(totalProfit/100);
         
                 setEstimatedProfit(formattedProfitUSD)
                 setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
@@ -1443,7 +1452,7 @@ const JobDetailView = () => {
                     <hr/>
                     <p>Should I prevent Offering or scheduling until I have the customer Approval</p>
                     <hr/>
-                    <p>{job.serviceStopIds} - serviceStopIds</p>
+                    <p>Service Stop Ids: {job.serviceStopIds}</p>
                     <table className='w-full text-sm text-left text-[#d0d2d6]'>
                         <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
                             <tr>
@@ -1845,14 +1854,14 @@ const JobDetailView = () => {
                     <p className='font-bold'>Monies</p>
                     <hr/>
                     <div className='flex justify-between'>
-                        <p>Suggested Rate : {job.rate}</p>
+                        <p>Suggested Rate : $ {(job.rate/100).toFixed(2)}</p>
                         <button className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>Use Suggested Rate</button>
                     </div>
                     <hr/>
                     <p>Check to see if the Rate Has Already Been Approved</p>
                     <p>Maybe I should have a few versions of rate. Accepted Rate. Suggested Rate. Offered Rate</p>
                     <hr/>
-                    <p>Rate: {job.rate}</p>
+                    <p>Rate: $ {(job.rate/100).toFixed(2)}</p>
 
                     </div>
                 </div>
@@ -1862,7 +1871,7 @@ const JobDetailView = () => {
                 <div className='left-0 w-full justify-end'>
                     <p className='font-bold text-[#d0d2d6]'> Estimated PNL</p>
                     <div className='flex justify-between'>
-                        <p>Rate - $ {offeredRate}</p>
+                        <p>Rate - $ {(offeredRate/100).toFixed(2)}</p>
                         <div className='flex justify-end gap-2'>
                             <input 
                             className='py-1 px-2 rounded-md mt-2 bg-[#ededed]'

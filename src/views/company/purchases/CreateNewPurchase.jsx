@@ -31,6 +31,7 @@ const CreateNewPurchase = () => {
     const [purchaseDate, setPurchaseDate] = useState(new Date());
     const [formattedPurchaseDate,setFormattedPurchaseDate] = useState('')
 
+    const [notes,setNotes] = useState('')
     const [companyUserList, setCompanyUserList] = useState([]);
     
     const [selectedUser,setSelectedUser] = useState({})
@@ -434,7 +435,7 @@ const CreateNewPurchase = () => {
                 customerName : "",
                 category:item.category,
                 sku : item.sku,
-                notes : "",
+                notes : notes,
                 description : item.description,
                 jobId : "",
             }
@@ -604,13 +605,13 @@ const CreateNewPurchase = () => {
             genericItemQuerySnapshot.forEach((doc) => {
                 const itemData = doc.data()
                 const genericItem = {
+                    id : itemData.id,
                     UOM : itemData.id,
                     billable : itemData.billable,
                     category : itemData.category,
                     color : itemData.color,
                     dateUpdated : itemData.dateUpdated,
                     description : itemData.description,
-                    id : itemData.id,
                     name : itemData.name,
                     rate : itemData.rate,
                     size : itemData.size,
@@ -876,6 +877,16 @@ const CreateNewPurchase = () => {
                                             onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
                                             
                                     </div>
+                                    
+                                    
+                                    <div className='flex justify-between w-full items-center gap-2'>
+                                            <h2>Notes</h2>
+                                            <input 
+                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
+                                            onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
+                                            
+                                    </div>
+
                                     <div className='flex justify-between w-full items-center gap-2'>
                                         <div className='w-full'>
                                             <h1>Store</h1>

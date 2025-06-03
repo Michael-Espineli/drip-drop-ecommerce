@@ -32,6 +32,7 @@ const CreateNewServiceStop = () => {
         equipmentId : '',
         equipmentName : '',
         id : '',
+        internalId : '',
         installationParts : '',
         jobTemplateId : '',
         laborCost : '',
@@ -106,6 +107,7 @@ const CreateNewServiceStop = () => {
                                 equipmentId : docSnap.data().equipmentId,
                                 equipmentName : docSnap.data().equipmentName,
                                 id : docSnap.data().id,
+                                internalId : docSnap.data().internalId,
                                 installationParts : docSnap.data().installationParts,
                                 jobTemplateId : docSnap.data().jobTemplateId,
                                 laborCost : docSnap.data().laborCost,
@@ -402,9 +404,7 @@ const CreateNewServiceStop = () => {
                     <div className='flex left-0 w-full justify-between'>
                         <p className='font-bold'>Create New Service Stop</p>
                     </div>
-                    <p>{jobId}</p>
-                    <p>Job Picker</p>
-                    <p>{job.customerName}</p>
+                    <p>{job.internalId} - {job.customerName}</p>
                     <hr/>
                     <p className=' font-bold'>Site Info</p>
                     <p>{serviceLocation.customerName}</p>

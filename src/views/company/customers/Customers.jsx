@@ -1,7 +1,7 @@
 import React, {useState, useEffect, useContext} from 'react';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, doc, orderBy, updateDoc, startAfter } from "firebase/firestore";
+import { query, collection, getDocs, doc, orderBy, updateDoc, setDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { Link } from 'react-router-dom';
 const Customers = () => {
@@ -72,51 +72,60 @@ const Customers = () => {
 
         try{
             
-            let qComp;
-            qComp = query(collection(db, 'companies'));   
-            const querySnapshotComp = await getDocs(qComp);       
-            let companyList = []
+            // let qComp;
+            // qComp = query(collection(db, 'companies'));   
+            // const querySnapshotComp = await getDocs(qComp);       
+            // let companyList = []
             
-            console.log("Start Update: operationStatus")
+            // console.log("Start Update: operationStatus")
                     
-            querySnapshotComp.forEach((doc) => {
-                const compData = doc.data()
-                const comp = {
-                    id: compData.id,
-                    name: compData.name
-                }
-                companyList.push(comp)
-            });
-            for (let i = 0; i < companyList.length; i++) {
+            // querySnapshotComp.forEach((doc) => {
+            //     const compData = doc.data()
+            //     const comp = {
+            //         id: compData.id,
+            //         name: compData.name
+            //     }
+            //     companyList.push(comp)
+            // });
+            // for (let i = 0; i < companyList.length; i++) {
 
-                let company = companyList[i]
-                console.log("Getting ServiceStops for: ", company.name)
-                let q;
-                    q = query(collection(db, 'companies',company.id,'serviceStops'));   
-                const querySnapshot = await getDocs(q);       
-                let serviceStopList = []
+            //     let company = companyList[i]
+            //     console.log("Getting ServiceStops for: ", company.name)
+            //     let q;
+            //         q = query(collection(db, 'companies',company.id,'serviceLocations'));   
+            //     const querySnapshot = await getDocs(q);       
+            //     let serviceStopList = []
+            //     querySnapshot.forEach((doc) => {
+            //         const serviceStopData = doc.data()
+            //         const serviceStop = {
+            //             id:serviceStopData.id,
+            //             mainContact:serviceStopData.mainContact,
+            //             customerId:serviceStopData.customerId
+            //         }
+            //         serviceStopList.push(serviceStop)
+            //     });
+                
+                
+            //     console.log("Updating Service Stop: " + serviceStopList.length)
+            //     for (let i = 0; i < serviceStopList.length; i++) {
+            //         let serviceStop = serviceStopList[i]
+            //         // setDoc
+            //         // updateDoc
+            //         if (serviceStop.mainContact.id != "") {
+
+            //             console.log("Location " + serviceStop.id)
+            //             await setDoc(doc(db, "companies",company.id, "customers",serviceStop.customerId,'contacts',serviceStop.mainContact.id), {
+            //                 email: serviceStop.mainContact.email,
+            //                 id: serviceStop.mainContact.id,
+            //                 name: serviceStop.mainContact.name,
+            //                 notes: serviceStop.mainContact.notes,
+            //                 phoneNumber: serviceStop.mainContact.phoneNumber
+            //             });
+            //             console.log("Successfully Creating New Contact:" + serviceStop.mainContact.id)
+            //         }
                     
-                querySnapshot.forEach((doc) => {
-                    const serviceStopData = doc.data()
-                    const serviceStop = {
-                        id:serviceStopData.id,
-                        operationStatus:serviceStopData.operationStatus
-                    }
-                    serviceStopList.push(serviceStop)
-                });
-                
-                
-                console.log("Updating Service Stop: " + serviceStopList.length)
-                for (let i = 0; i < serviceStopList.length; i++) {
-                    let serviceStop = serviceStopList[i]
-                    if (serviceStop.operationStatus == "Not Started") {
-                        await updateDoc(doc(db, "companies",company.id, "serviceStops",serviceStop.id), {
-                            operationStatus: "Not Finished"
-                        });
-                        console.log("Successfully Updated Service Stop operationStatus:" + serviceStop.id)
-                    }
-                }
-            }
+            //     }
+            // }
         } catch(error){
             console.log('Error')
             console.log(error)
@@ -143,7 +152,7 @@ const Customers = () => {
             </div>
             <button onClick={(e) => {updateEquipment(e)}} 
             className='bg-[#000000] text-[#ffffff] p-2 rounded-md'
-            >Update Service Stop</button>
+            >Update Contact</button>
             <div className='w-full light-blue-grey-bg p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
                         <div className='flex justify-between items-center'>
