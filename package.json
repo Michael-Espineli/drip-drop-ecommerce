@@ -9,6 +9,7 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^13.5.0",
     "date-fns": "^4.1.0",
+    "firebase": "^11.9.0",
     "firebase-functions": "^6.3.2",
     "install": "^0.13.0",
     "npm": "^10.9.0",

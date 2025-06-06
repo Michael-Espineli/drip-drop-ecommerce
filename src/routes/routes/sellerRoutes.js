@@ -41,7 +41,7 @@ const Contracts = lazy(()=> import("../../views/company/contract/Contracts"))
 const CreateNew = lazy(()=> import("../../views/company/contract/CreateNew"))
 const ContractDetailView = lazy(()=> import("../../views/company/contract/ContractDetailView"))
 
-const PurchasesList = lazy(()=> import("../../views/company/purchases/PurchasesList"))
+const PurchaseListView = lazy(()=> import("../../views/company/purchases/PurchaseListView"))
 const CreateNewPurchase = lazy(()=> import("../../views/company/purchases/CreateNewPurchase"))
 const PurchaseDetailView = lazy(()=> import("../../views/company/purchases/PurchaseDetailView"))
 
@@ -216,7 +216,7 @@ export const sellerRoutes = [
     ,
     {
         path:'/company/purchasedItems',
-        element: <PurchasesList/>,
+        element: <PurchaseListView/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
