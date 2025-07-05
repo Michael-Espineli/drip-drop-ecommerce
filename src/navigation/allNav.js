@@ -329,6 +329,7 @@ export const allNav = [
         path : '/company/workLogs',
         category:'Users'
     }
+
     // ------------------- Client Routes -----------------------
     ,
     {

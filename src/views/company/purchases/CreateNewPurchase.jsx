@@ -8,8 +8,8 @@ import DatePicker from "react-datepicker";
 import 'react-datepicker/dist/react-datepicker.css'
 import Select from 'react-select';
 import {v4 as uuidv4} from 'uuid';
-// import { console } from "inspector";
 import toast from 'react-hot-toast';
+import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 
 const CreateNewPurchase = () => {
     const {name,recentlySelectedCompany} = useContext(Context);
@@ -19,15 +19,8 @@ const CreateNewPurchase = () => {
     // Purchase Fields
     const [showSidebar, setShowSidebar] = useState();
     
-    const [email, setEmail] = useState();
     const [refrence, setRefrence] = useState();
     const [quantity, setQuantity] = useState();
-    const [phoneNumber, setPhoneNumber] = useState();
-    const [billingAddressStreetAddress, setBillingAddressStreetAddress] = useState();
-    const [billingAddressCity, setBillingAddressCity] = useState();
-    const [billingAddressState, setBillingAddressState] = useState();
-    const [billingAddressZip, setBillingAddressZip] = useState();
-    const [billingNotes, setBillingNotes] = useState();
     const [purchaseDate, setPurchaseDate] = useState(new Date());
     const [formattedPurchaseDate,setFormattedPurchaseDate] = useState('')
 
@@ -46,10 +39,6 @@ const CreateNewPurchase = () => {
     
     const [purchaseItemlist, setPurchaseItemList] = useState([]);
 
-    const [selectedTaskType,setSelectedTaskType] = useState({
-        id : '',
-        name : '',
-    });
     // Add new Data Base Items
     
         const [billable, setBillable] = useState(false);
@@ -238,6 +227,7 @@ const CreateNewPurchase = () => {
                     const companyUserData = doc.data()
                     const companyUser = {
                         id:companyUserData.id,
+                        userId:companyUserData.userId,
                         userName:companyUserData.userName,
                         roleName:companyUserData.roleName,
                         status: companyUserData.status,
@@ -301,6 +291,7 @@ const CreateNewPurchase = () => {
 
             } catch(error){
                 console.log('Error')
+                console.log(error)
             }
         })();
     },[])
@@ -319,37 +310,25 @@ const CreateNewPurchase = () => {
 
         (async () => {
             setSelectedGenericItem(selectedOption2)
-            // setItemId(selectedOption2.id)
-            // setItemCost(selectedOption2.rate)
-            // setItemPrice(selectedOption2.rate)
-            // setItemName(selectedOption2.name)
         })();
     };
     const handleSelectedUserChange = (selectedOption2) => {
-
         (async () => {
-
             setSelectedUser(selectedOption2)
-            
         })();
     };
     
 
     const handleSelectedVenderChange = (selectedOption2) => {
-
         (async () => {
-
             setSelectedVender(selectedOption2)
-            
         })();
     };
-    
-
     async function createNewDBItem(e) {
         e.preventDefault()
     }
 
-    async function showSideBar(e) {
+    async function revealSideBar(e) {
         e.preventDefault()
         setShowSidebar(true)
     }
@@ -364,29 +343,32 @@ const CreateNewPurchase = () => {
         e.preventDefault()
         
         toast.dismiss()
-        let rate = parseFloat( selectedGenericItem.rate)/100//Need to Change to *100. because I store all numbers as cents, rather than dollars
-        let quantityFloat = parseFloat( quantity)
+        if (quantity != "" && selectedGenericItem.id != "") {
+            let rate = parseFloat( selectedGenericItem.rate)/100//Need to Change to *100. because I store all numbers as cents, rather than dollars
+            let quantityFloat = parseFloat( quantity)
 
-        let totalCost = rate*quantityFloat
+            let totalCost = rate*quantityFloat
 
-        let id = "comp_pi_" + uuidv4()
+            let id = "comp_pi_" + uuidv4()
 
-        let newItem = {
-            id: id,
-            sku: selectedGenericItem.sku,
-            itemId: selectedGenericItem.id,
-            name: selectedGenericItem.name,
-            billable: selectedGenericItem.billable,
-            rate: rate.toFixed(2),
-            quantity: quantityFloat,
-            description: selectedGenericItem.description,
-            totalCost: totalCost.toFixed(2),
-            category:selectedGenericItem.category,
+            let newItem = {
+                id: id,
+                sku: selectedGenericItem.sku,
+                itemId: selectedGenericItem.id,
+                name: selectedGenericItem.name,
+                billable: selectedGenericItem.billable,
+                rate: rate.toFixed(2),
+                quantity: quantityFloat,
+                quantityString: quantity,
+                description: selectedGenericItem.description,
+                totalCost: totalCost.toFixed(2),
+                category:selectedGenericItem.category,
+            }
+            
+            setPurchaseItemList(purchaseItemlist => [...purchaseItemlist, newItem]); 
+            setQuantity('')
+            setSelectedGenericItem({})
         }
-        
-        setPurchaseItemList(purchaseItemlist => [...purchaseItemlist, newItem]); 
-        setQuantity('')
-        setSelectedGenericItem({})
     }
 
     async function removeItem(e,itemId) {
@@ -406,6 +388,7 @@ const CreateNewPurchase = () => {
         let receiptId = 'com_rec_' + uuidv4()
 
         let cost = 0
+        let purchaseItemIds = []
         for (let i = 0; i < purchaseItemlist.length; i++) {
             let item = purchaseItemlist[i]
             
@@ -414,30 +397,30 @@ const CreateNewPurchase = () => {
             cost = cost + parseFloat(item.totalCost)
             let price = Math.floor(parseFloat(item.rate*100))
             let priceBillable = Math.floor(parseFloat(item.billable*100))
+
+            purchaseItemIds.push(item.id)
             let purchaseItem = {
                 id : item.id,
                 receiptId : receiptId,
                 invoiceNum : refrence,
                 venderId : selectedVender.id,
                 venderName : selectedVender.name,
-                techId : selectedUser.id,
+                techId : selectedUser.userId,
                 techName : selectedUser.userName,
                 itemId: item.itemId,
                 name: item.name,
                 price: price,
+                quantityString: item.quantityString,
+                date : purchaseDate,
                 billable: item.billable,
-                billingRate: priceBillable,
                 invoiced: false,
                 returned: false,
-                quantityString: item.quantity,
-                date : purchaseDate,
                 customerId : "",
                 customerName : "",
-                category:item.category,
                 sku : item.sku,
                 notes : notes,
-                description : item.description,
                 jobId : "",
+                billingRate: priceBillable,
             }
             console.log(purchaseItem)
             await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
@@ -453,10 +436,10 @@ const CreateNewPurchase = () => {
             date : purchaseDate,
             storeId : selectedVender.id,
             storeName : selectedVender.name,
-            techId : selectedUser.id,
-            techName : selectedUser.userName,
-            purchasedItemIds : [],
-            numberOfItems : '',
+            tech : selectedUser.userName,
+            techId : selectedUser.userId,
+            purchasedItemIds : purchaseItemIds,
+            numberOfItems : purchaseItemIds.length,
             cost : cost,
             costAfterTax : costAfterTax,
             pdfUrlList : [],
@@ -540,7 +523,8 @@ const CreateNewPurchase = () => {
         setBillable(false)
     }
 
-    async function createNewItem(e) {
+    async function createNewDataBaseItem(e) {
+        //Create New DataBase Item
         e.preventDefault()
         try{
 
@@ -636,6 +620,7 @@ const CreateNewPurchase = () => {
     }
 
     return (
+
         // 030811 - almost black
         // 282c28 - black green
         // 454b39 - dark olive green
@@ -648,75 +633,296 @@ const CreateNewPurchase = () => {
         // 9C0D38 - Pool Red
         // 2B600F - Pool Green
         // 919191 - gray
-        <div className='px-2 md:px-7 py-5'>
-            <div className={` ${!showSidebar ? '' : ''} lg:flex`}>
-                <div className={` ${!showSidebar ? 'hidden' : 'visible duration-200 w-1/4 sm:w-2/3 shadow-md shadow-[#000000] p-2 bg-[#0e245c] text-[#cfcfcf] rounded-md'} lg:absolute z-141 lg:top-100 lg:right-10 `}>
-                    <button 
-                    onClick={(e) => closeSideBar(e)}
-                    className="py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#000000]">
-                        Close
-                    </button>
-                    <div>
-                        <div className="flex py-1 ">
-                            <p className="px-2 items-center line-clamp-1 w-[150px]">Item Name</p>
-                            <input 
-                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                            onChange={(e) => {setItemName(e.target.value)}} type="text" placeholder='Item Name' value={itemName}>
-                            </input>
+        <div>
+            <div className='px-2 md:px-7 py-5'>
+                <div className='lg:flex'>
+                    <div className='w-full'>
+                        <div className='w-full'>
+                            <div className='py-2 flex justify-between'>
+                                <Link 
+                                className='py-1 px-2 bg-[#0e245c] rounded-md py-1 px-2 text-[#d0d2d6]'
+                                to={`/company/purchasedItems`}>
+                                    Back
+                                </Link>
+                                <div className="">
+                                    <button
+                                    className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
+                                    onClick={(e) => submitReceipt(e)} 
+                                    >Submit</button>
+
+                                </div>
+                            </div>
+                            <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
+                                <div className='left-0 w-full justify-between'>
+                                    <h2 className="font-bold">Create New Receipt</h2>
+                                    <form className='gap-2'>
+                                        <div className='flex justify-between w-full items-center gap-2 text-[#000000]'>
+                                            <h2 className="text-[#ffffff]">Purchase Date</h2>
+                                            <div>
+                                                <DatePicker 
+                                                    showIcon
+                                                    selected={purchaseDate} 
+                                                    onChange={(purchaseDate) => handlePurchaseDateChange(purchaseDate)}
+                                                    icon={
+                                                    <svg
+                                                        xmlns="http://www.w3.org/2000/svg"
+                                                        width="1em"
+                                                        height="1em"
+                                                        viewBox="0 0 48 48"
+                                                    >
+                                                        <mask id="ipSApplication0">
+                                                        <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
+                                                            <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
+                                                            <path
+                                                            fill="#fff"
+                                                            d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
+                                                            ></path>
+                                                        </g>
+                                                        </mask>
+                                                        <path
+                                                        fill="currentColor"
+                                                        d="M0 0h48v48H0z"
+                                                        mask="url(#ipSApplication0)"
+                                                        ></path>
+                                                    </svg>
+                                                    }
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className='flex justify-between w-full items-center gap-2'>
+                                                <h2>Refrence</h2>
+                                                <input 
+                                                className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
+                                                onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
+                                                
+                                        </div>
+                                        <div className='flex justify-between w-full items-center gap-2'>
+                                                <h2>Notes</h2>
+                                                <input 
+                                                className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
+                                                onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
+                                        </div>
+                                        <div className='flex justify-between w-full items-center gap-2'>
+                                            <div className='w-full'>
+                                                <h1>Store</h1>
+                                                <Select
+                                                    value={selectedVender}
+                                                    options={venderList}
+                                                    onChange={handleSelectedVenderChange}
+                                                    isSearchable
+                                                    placeholder="Select a Vender"
+                                                    theme={(theme) => ({
+                                                    ...theme,
+                                                    borderRadius: 0,
+                                                    colors: {
+                                                        ...theme.colors,
+                                                        primary25: 'green',
+                                                        primary: 'gray',
+                                                    },
+                                                    })}
+                                                />
+                                            </div>
+                                            <div className='w-full'>
+                                                <h1>Tech</h1>
+                                                <Select
+                                                    value={selectedUser}
+                                                    options={companyUserList}
+                                                    onChange={handleSelectedUserChange}
+                                                    isSearchable
+                                                    placeholder="Select a Task Type"
+                                                    theme={(theme) => ({
+                                                    ...theme,
+                                                borderRadius: 0,
+                                                    colors: {
+                                                        ...theme.colors,
+                                                        primary25: 'green',
+                                                        primary: 'gray',
+                                                    },
+                                                    })}
+                                                />
+                                            </div>
+                                        </div>
+                                        <hr className='mt-2'/>
+                                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
+                                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                                                <tr>
+                                                    <th className='py-3 px-4'>Sku</th>
+                                                    <th className='py-3 px-4'>Name</th>
+                                                    <th className='py-3 px-4'>Description</th>
+                                                    <th className='py-3 px-4'>Cost</th>
+                                                    <th className='py-3 px-4'>Quantity</th>
+                                                    <th className='py-3 px-4'>Total Cost</th>
+                                                    <th className='py-3 px-4'></th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                            {
+                                                purchaseItemlist?.map( item => (
+                                                    <tr key={item.id}>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.sku}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.description}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.rate}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.totalCost}</td>
+                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                                            <button
+                                                            onClick={(e) => removeItem(e,item.id)} 
+                                                            className='w-full py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff] mt-2'
+                                                            >Remove</button>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            }
+                                            </tbody>
+                                        </table>
+                                        {/* <button
+                                        className='w-full py-1 px-2 rounded-md bg-[#1D2E76] text-[#ffffff] mt-2'
+                                        >Add First Line Item</button> */}
+                                        <div className='flex justify-between items-center py-1'>
+
+
+                                            <button
+                                            onClick={(e) => revealSideBar(e)}
+                                            className='py-1 px-2 red-fg'
+                                            >Create Item</button>
+                                            <div className='w-full px-1'>
+                                                <div className='w-full px-1'>
+                                                    <Select
+                                                        value={selectedGenericItem}
+                                                        options={genericItemList}
+                                                        onChange={handleSelectedGenericItemChange}
+                                                        isSearchable
+                                                        placeholder="Select a Generic Item"
+                                                        theme={(theme) => ({
+                                                        ...theme,
+                                                        borderRadius: 0,
+                                                        colors: {
+                                                            ...theme.colors,
+                                                            primary25: 'green',
+                                                            primary: 'gray',
+                                                        },
+                                                        })}
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="px-2 w-1/4">
+                                                <input 
+                                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                                onChange={(e) => {setQuantity(e.target.value)}} type="text" placeholder='Quantity' value={quantity}>
+                                                </input>
+                                            </div>
+                                            <div className="px-2">
+                                                <button
+                                                onClick={(e) => addNewItem(e)}
+                                                className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
+                                                >Add</button>
+                                            </div>
+                                        </div>
+                                        <div className='flex justify-between w-full items-center gap-2'>
+                                            <div className='w-full'>
+                                                <button
+                                                    onClick={(e) => submitReceipt(e)} 
+                                                    className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
+                                                >Submit</button>
+                                            </div>
+                                        </div>
+                                    </form>
+                                </div>
+                            </div>
                         </div>
-                        <div className="flex  py-1">
-                            <p className="px-2 items-center">Rate</p>
-                            <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff]'>
-                                
-                                <p className="px-2">$</p>
+                    </div>
+                </div>
+            </div>
+                {/* Basic Filter Modal Structure */}
+            {showSidebar && (
+            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">
+                <div className="top-20 lg:top-100 relative p-10">
+                    <div className='w-1/2 visible duration-200 sm:w-2/3 shadow-md shadow-[#000000] p-2 blue-bg text-[#cfcfcf] rounded-md lg:absolute z-141 lg:right-10'>
+                        <button 
+                        onClick={(e) => closeSideBar(e)}
+                        className="py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#000000]">
+                            Close
+                        </button>
+                        <div>
+                            <div className="flex py-1 ">
+                                <p className="px-2 items-center line-clamp-1 w-[150px]">Item Name</p>
                                 <input 
-                                className='flex w-full'
-                                onChange={(e) => {rateInput(e)}} type="text" placeholder='Rate' value={rate}>
+                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                onChange={(e) => {setItemName(e.target.value)}} type="text" placeholder='Item Name' value={itemName}>
                                 </input>
                             </div>
-                        </div>
-                        {
-                            billable ? <div className="py-1">
-                                <button
-                                onClick={(e) =>{billableFalse(e)}}
-                                className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                    Billable
-                                </button>
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center line-clamp-1 w-[150px]">Billing Rate</p>
-                                    <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff] items-center'>
-                                        
-                                        <p className="px-2">$</p>
-                                        <input 
-                                        className='flex w-full'
-                                        onChange={(e) => {billingRateInput(e)}} type="text" placeholder='Billing Rate' value={billingRate}>
-                                        </input>
-                                    </div>
+                            <div className="flex  py-1">
+                                <p className="px-2 items-center">Rate</p>
+                                <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff]'>
+                                    <p className="px-2">$</p>
+                                    <input 
+                                    className='flex w-full'
+                                    onChange={(e) => {rateInput(e)}} type="text" placeholder='Rate' value={rate}>
+                                    </input>
                                 </div>
-                            </div> : <div className="flex  py-1">
-                                <button
-                                onClick={(e) =>{billableTrue(e)}}
-                                className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff] w-full'>
-                                    Not Billable
-                                </button>
                             </div>
-                        }
-                        
-                        <div className="flex py-1">
-                            <p className="px-2 items-center">SKU</p>
-                            <input 
-                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                            onChange={(e) => {setSku(e.target.value)}} type="text" placeholder='sku' value={sku}>
-                            </input>
-                        </div>
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2">Vender</p>
+                            {
+                                billable ? <div className="py-1">
+                                    <button
+                                    onClick={(e) =>{billableFalse(e)}}
+                                    className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
+                                        Billable
+                                    </button>
+                                    <div className="flex  py-1">
+                                        <p className="px-2 items-center line-clamp-1 w-[150px]">Billing Rate</p>
+                                        <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff] items-center'>
+                                            
+                                            <p className="px-2">$</p>
+                                            <input 
+                                            className='flex w-full'
+                                            onChange={(e) => {billingRateInput(e)}} type="text" placeholder='Billing Rate' value={billingRate}>
+                                            </input>
+                                        </div>
+                                    </div>
+                                </div> : <div className="flex  py-1">
+                                    <button
+                                    onClick={(e) =>{billableTrue(e)}}
+                                    className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff] w-full'>
+                                        Not Billable
+                                    </button>
+                                </div>
+                            }
+                            
+                            <div className="flex py-1">
+                                <p className="px-2 items-center">SKU</p>
+                                <input 
+                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                onChange={(e) => {setSku(e.target.value)}} type="text" placeholder='sku' value={sku}>
+                                </input>
+                            </div>
+                            <div className="flex py-1 justify-between items-center">
+                                <p className="px-2">Vender</p>
+                                    <Select
+                                        value={vender}
+                                        options={venderList}
+                                        onChange={handleVenderChange}
+                                        isSearchable
+                                        placeholder="Select a Vender"
+                                        theme={(theme) => ({
+                                        ...theme,
+                                        borderRadius: 0,
+                                        colors: {
+                                            ...theme.colors,
+                                            primary25: 'green',
+                                            primary: 'gray',
+                                        },
+                                        })}
+                                    />
+                            </div>
+                            <div className="flex py-1 justify-between items-center">
+                                <p className="px-2 ">U.O.M. <p className="text-sm px-5">unit of measurment</p></p>
                                 <Select
-                                    value={vender}
-                                    options={venderList}
-                                    onChange={handleVenderChange}
+                                    value={uom}
+                                    options={uomList}
+                                    onChange={handleUOMChange}
                                     isSearchable
-                                    placeholder="Select a Vender"
+                                    placeholder="Select a UOM"
                                     theme={(theme) => ({
                                     ...theme,
                                     borderRadius: 0,
@@ -727,297 +933,77 @@ const CreateNewPurchase = () => {
                                     },
                                     })}
                                 />
-                        </div>
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2 ">U.O.M. <p className="text-sm px-5">unit of measurment</p></p>
-                            <Select
-                                value={uom}
-                                options={uomList}
-                                onChange={handleUOMChange}
-                                isSearchable
-                                placeholder="Select a UOM"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                        </div>
-                        
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2">Category</p>
-                            <Select
-                                value={category}
-                                options={categoryList}
-                                onChange={handleCategoryChange}
-                                isSearchable
-                                placeholder="Select a Category"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                        </div>  
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2 line-clamp-1 w-[150px]">Sub-category</p>
-                            <Select
-                                value={subcategory}
-                                options={subcategoryList}
-                                onChange={handleSubcategoryChange}
-                                isSearchable
-                                placeholder="Select a Sub-category"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
+                            </div>
+                            <div className="flex py-1 justify-between items-center">
+                                <p className="px-2">Category</p>
+                                <Select
+                                    value={category}
+                                    options={categoryList}
+                                    onChange={handleCategoryChange}
+                                    isSearchable
+                                    placeholder="Select a Category"
+                                    theme={(theme) => ({
+                                    ...theme,
+                                    borderRadius: 0,
+                                    colors: {
+                                        ...theme.colors,
+                                        primary25: 'green',
+                                        primary: 'gray',
+                                    },
+                                    })}
+                                />
+                            </div>  
+                            <div className="flex py-1 justify-between items-center">
+                                <p className="px-2 line-clamp-1 w-[150px]">Sub-category</p>
+                                <Select
+                                    value={subcategory}
+                                    options={subcategoryList}
+                                    onChange={handleSubcategoryChange}
+                                    isSearchable
+                                    placeholder="Select a Sub-category"
+                                    theme={(theme) => ({
+                                    ...theme,
+                                    borderRadius: 0,
+                                    colors: {
+                                        ...theme.colors,
+                                        primary25: 'green',
+                                        primary: 'gray',
+                                    },
+                                    })}
+                                />
+                            </div> 
+                            <div className="flex  py-1">
+                                <p className="px-2 items-center">Color</p>
+                                <input 
+                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                onChange={(e) => {setColor(e.target.value)}} type="text" placeholder='Color' value={color}>
+                                </input>
+                            </div>
+                            <div className="flex py-1 ">
+                                <p className="px-2 items-center">Size</p>
+                                <input 
+                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                onChange={(e) => {setSize(e.target.value)}} type="text" placeholder='Size' value={size}>
+                                </input>
+                            </div>
+                            <div className="flex py-1 ">
+                                <p className="px-2 items-center">Description</p>
+                                <input 
+                                className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Description' value={description}>
+                                </input>
+                            </div>
+                            <button
+                                onClick={(e) =>{createNewDataBaseItem(e)}}
+                                className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
+                                    Create New
+                            </button>
                         </div> 
-                        <div className="flex  py-1">
-                            <p className="px-2 items-center">Color</p>
-                            <input 
-                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                            onChange={(e) => {setColor(e.target.value)}} type="text" placeholder='Color' value={color}>
-                            </input>
-                        </div>
-                        <div className="flex py-1 ">
-                            <p className="px-2 items-center">Size</p>
-                            <input 
-                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                            onChange={(e) => {setSize(e.target.value)}} type="text" placeholder='Size' value={size}>
-                            </input>
-                        </div>
-                        <div className="flex py-1 ">
-                            <p className="px-2 items-center">Description</p>
-                            <input 
-                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                            onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Description' value={description}>
-                            </input>
-                        </div>
-                        <button
-                            onClick={(e) =>{createNewItem(e)}}
-                            className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                Create New
-                        </button>
-        
-                    </div> 
-                </div>
-
-                <div className={` ${!showSidebar ? 'w-full' : 'w-2/3 sm:invisible'} flex justify `}>
-                    <div className='w-full'>
-                        <div className='py-2 flex justify-between'>
-                            <Link 
-                            className='py-1 px-2 bg-[#0e245c] rounded-md py-1 px-2 text-[#d0d2d6]'
-                            to={`/company/purchasedItems`}>
-                                Back
-                            </Link>
-                            <div className="">
-                                <button
-                                className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
-                                onClick={(e) => submitReceipt(e)} 
-                                >Submit</button>
-
-                            </div>
-                        </div>
-                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                            Use Quickbooks as template Purchase
-                            <div className='left-0 w-full justify-between'>
-                                <h2>Create New Receipt</h2>
-                                <form className='gap-2'>
-                                    <div className='flex justify-between w-full items-center gap-2 text-[#000000]'>
-                                        <h2 className="text-[#ffffff]">Purchase Date</h2>
-                                        <div>
-                                            <DatePicker 
-                                                showIcon
-                                                selected={purchaseDate} 
-                                                onChange={(purchaseDate) => handlePurchaseDateChange(purchaseDate)}
-                                                icon={
-                                                  <svg
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                    width="1em"
-                                                    height="1em"
-                                                    viewBox="0 0 48 48"
-                                                  >
-                                                    <mask id="ipSApplication0">
-                                                      <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
-                                                        <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
-                                                        <path
-                                                          fill="#fff"
-                                                          d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
-                                                        ></path>
-                                                      </g>
-                                                    </mask>
-                                                    <path
-                                                      fill="currentColor"
-                                                      d="M0 0h48v48H0z"
-                                                      mask="url(#ipSApplication0)"
-                                                    ></path>
-                                                  </svg>
-                                                }
-                                            />
-                                        </div>
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                            <h2>Refrence</h2>
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                            onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
-                                            
-                                    </div>
-                                    
-                                    
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                            <h2>Notes</h2>
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                            onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
-                                            
-                                    </div>
-
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                        <div className='w-full'>
-                                            <h1>Store</h1>
-                                            <Select
-                                                value={selectedVender}
-                                                options={venderList}
-                                                onChange={handleSelectedVenderChange}
-                                                isSearchable
-                                                placeholder="Select a Vender"
-                                                theme={(theme) => ({
-                                                ...theme,
-                                                borderRadius: 0,
-                                                colors: {
-                                                    ...theme.colors,
-                                                    primary25: 'green',
-                                                    primary: 'gray',
-                                                },
-                                                })}
-                                            />
-                                        </div>
-                                        <div className='w-full'>
-                                            <h1>Tech</h1>
-
-                                            <Select
-                                                value={selectedUser}
-                                                options={companyUserList}
-                                                onChange={handleSelectedUserChange}
-                                                isSearchable
-                                                placeholder="Select a Task Type"
-                                                theme={(theme) => ({
-                                                ...theme,
-                                            borderRadius: 0,
-                                                colors: {
-                                                    ...theme.colors,
-                                                    primary25: 'green',
-                                                    primary: 'gray',
-                                                },
-                                                })}
-                                            />
-                                        </div>
-                                    </div>
-                                    <hr className='mt-2'/>
-
-                                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                                        <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                            <tr>
-                                                <th className='py-3 px-4'>Sku</th>
-                                                <th className='py-3 px-4'>Name</th>
-                                                <th className='py-3 px-4'>Description</th>
-                                                <th className='py-3 px-4'>Cost</th>
-                                                <th className='py-3 px-4'>Quantity</th>
-                                                <th className='py-3 px-4'>Total Cost</th>
-                                                <th className='py-3 px-4'></th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                        {
-                                            purchaseItemlist?.map( item => (
-                                                <tr key={item.id}>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.sku}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.description}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.rate}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.totalCost}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                        <button
-                                                        onClick={(e) => removeItem(e,item.id)} 
-                                                        className='w-full py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff] mt-2'
-                                                        >Remove</button>
-                                                    </td>
-                                                </tr>
-                                            ))
-                                        }
-                                        </tbody>
-                                    </table>
-                                    {/* <button
-                                    className='w-full py-1 px-2 rounded-md bg-[#1D2E76] text-[#ffffff] mt-2'
-                                    >Add First Line Item</button> */}
-                                    <div className='flex justify-between items-center py-1'>
-                                        <div className='w-full px-1'>
-                                            <Select
-                                                value={selectedGenericItem}
-                                                options={genericItemList}
-                                                onChange={handleSelectedGenericItemChange}
-                                                isSearchable
-                                                placeholder="Select a Generic Item"
-                                                theme={(theme) => ({
-                                                ...theme,
-                                                borderRadius: 0,
-                                                colors: {
-                                                    ...theme.colors,
-                                                    primary25: 'green',
-                                                    primary: 'gray',
-                                                },
-                                                })}
-                                            />
-                                        </div>
-                                        <div className="px-2 w-full">
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                            onChange={(e) => {setQuantity(e.target.value)}} type="text" placeholder='Quantity' value={quantity}>
-
-                                            </input>
-
-                                        </div>
-                                        <div className="px-2">
-                                        <button
-                                        onClick={(e) => showSideBar(e)}
-                                        className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
-
-                                            >Create New Item</button>
-                                        </div>
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                        <div className='w-full'>
-                                            <button
-                                            onClick={(e) => addNewItem(e)}
-                                            className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
-                                            >
-                                                Add
-                                            </button>
-                                        </div>
-                                    </div>
-                                </form>
-                            </div>
-                        </div>
                     </div>
                 </div>
             </div>
+            )}
         </div>
     );
 }
-    export default CreateNewPurchase;
+export default CreateNewPurchase;

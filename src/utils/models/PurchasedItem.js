@@ -67,10 +67,10 @@ export class PurchasedItem {
             return false;
         }
         return this.id === otherItem.id &&
-               this.name === otherItem.name &&
-               this.invoiceNum === otherItem.invoiceNum &&
-               this.receiptId === otherItem.receiptId &&
-               this.itemId === otherItem.itemId;
+            this.name === otherItem.name &&
+            this.invoiceNum === otherItem.invoiceNum &&
+            this.receiptId === otherItem.receiptId &&
+            this.itemId === otherItem.itemId;
     }
 
     toFirestore() {

@@ -8,6 +8,8 @@ import {v4 as uuidv4} from 'uuid';
 import { format } from 'date-fns'; // Or any other date formatting library
 import { useNavigate } from 'react-router-dom';
 import toast from 'react-hot-toast';
+import JobOperationStatusCard from "../../components/JobOperationStatusCard";
+import JobBillingStatusCard from "../../components/JobBillingStatusCard";
 
 const JobDetailView = () => {
     const {jobId} = useParams();
@@ -1295,37 +1297,12 @@ const JobDetailView = () => {
                     <div className='flex w-full justify-start items-center py-2'>
                         <p>Billing Status :  </p>
                         <div className='px-2'>
-                            {
-                                (job.billingStatus==='Draft')&&<div>
-                                    <p className='py-1 px-2 bg-[#919191] text-[#] rounded-md'>Draft</p>
-                                </div>
-                            }
-                            {
-                                (job.billingStatus==='Estimate')&&<div>
-                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Estimate</p>
-                                </div>
-                            }
-                            {
-                                (job.billingStatus==='Accepted')&&<div>
-                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Accepted</p>
-                                </div>
-                            }
-                            {
-                                (job.billingStatus==='In Progress')&&<div>
-                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>In Progress</p>
-                                </div>
-                            }
-                            {
-                                (job.billingStatus==='Invoiced')&&<div>
-                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Invoiced</p>
-                                </div>
-                            }
-                            {
-                                (job.billingStatus==='Paid')&&<div>
-                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Paid</p>
-                                </div>
-                            }
+                            <JobBillingStatusCard
+                            status = {job.billingStatus}
+                            />
                         </div>
+                        {
+                        (edit===true)&&
                         <div className="flex px-2 justify-between">
                             <div className="px-2">
                             <Select
@@ -1346,37 +1323,17 @@ const JobDetailView = () => {
                             />
                             </div>
                         </div>
+                        }
                     </div>
                     <div className='flex w-full justify-start items-center py-2'>
                         <p>Operational Status :  </p>
                         <div className='px-2'>
-                        {
-                                (job.operationStatus==='Estimate Pending')&&<div>
-                                    <p className='py-1 px-2 bg-[#919191] text-[#000000] rounded-md'>Estimate Pending</p>
-                                </div>
-                            }
-                            {
-                                (job.operationStatus==='Unscheduled')&&<div>
-                                    <p className='py-1 px-2 bg-[#CDC07B] text-[#] rounded-md'>Unscheduled</p>
-                                </div>
-                            }
-                            {
-                                (job.operationStatus==='Scheduled')&&<div>
-                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>Scheduled</p>
-                                </div>
-                            }
-                            {
-                                (job.operationStatus==='In Progress')&&<div>
-                                    <p className='py-1 px-2 bg-[#1D2E76] text-[#] rounded-md'>In Progress</p>
-                                </div>
-                            }
-                            {
-                                (job.operationStatus==='Finished')&&<div>
-                                    <p className='py-1 px-2 bg-[#2B600F] text-[#] rounded-md'>Finished</p>
-                                </div>
-                            }
+                            <JobOperationStatusCard
+                            status = {job.operationStatus}
+                            />
                         </div>
-                        <div className="flex px-2 justify-between">
+                        {
+                        (edit===true)&&<div className="flex px-2 justify-between">
                             <div className="px-2">
                             <Select
                                 value={selectedOperationStatus}
@@ -1396,6 +1353,9 @@ const JobDetailView = () => {
                             />
                             </div>
                         </div>
+                        }
+                        
+                        
                     </div>
                 </div>
                 <div className='left-0 w-full justify-between'>

@@ -12,7 +12,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
     const {pathname} = useLocation()
     const [allNav,setAllNav] = useState([])
     const role = accountType //'Client'
-    const categories=['Physical Locations','Routing','Users','Operations','Monies','Stripe','NA'];
+    const categories = ['Physical Locations','Operations','Routing','Users','Monies','Stripe','NA'];
     const [selectedCategory,setSelectedCategory] = useState('Physical Locations')
 
     useEffect(() => {
@@ -61,16 +61,18 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                     <ul>
                         {
                             categories.map((category,i) =>
-                                <div key={i}>
+                                <div>
                                     {
                                         //  Categorized
                                     (category!=='NA')&&
                                     <div>
-                                        <li>
+                                        <li key={category}>
                                             <button 
                                             className='bg-[#606675] text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'
                                             onClick={(e)=>(setSelectedCategory(category))}
-                                            ><span >{category} ▼</span></button>
+                                            >
+                                                <span >{category} ▼</span>
+                                            </button>
                                         </li>
                                         {
                                             (selectedCategory===category)&&
@@ -78,7 +80,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                                                 {
                                                     allNav.map((nn,ii) => <div>
                                                         {
-                                                        (nn.category===category)&&<li key={ii}>
+                                                        (nn.category===category)&&<li key={nn.id}>
                                                         <Link to={nn.path} className={`${pathname === nn.path ? 'bg-[#CDC07B] shadow-indigo-500/50 text-[#000000] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
                                                             <span className='px-3'>{nn.icon}</span>
                                                             <span>{nn.title}</span>
@@ -103,7 +105,7 @@ const Sidebar = ({showSidebar,setShowSidebar}) => {
                                         {
                                             allNav.map((n,i) => <div>
                                                 {
-                                                (n.category==='NA')&&<li key={i}>
+                                                (n.category==='NA')&&<li key={n.id}>
                                                 
                                                 <Link to={n.path} className={`${pathname === n.path ? 'bg-[#606675] shadow-indigo-500/50 text-[#ffffff] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
                                                     <span>{n.icon}</span>

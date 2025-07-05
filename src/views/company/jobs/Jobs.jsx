@@ -3,6 +3,7 @@ import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where 
 import { db } from "../../../utils/config";
 import {Link } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
+import { format } from 'date-fns'; // Or any other date formatting library
 
 const Jobs = () => {
     const [laborContractlist, setLaborContractlist] = useState([]);
@@ -11,43 +12,43 @@ const Jobs = () => {
     useEffect(() => {
         (async () => {                
             try{
+                console.log("Recently Selected Company: " + recentlySelectedCompany)
                 let q = query(collection(db, 'companies',recentlySelectedCompany,'workOrders'));
                 const querySnapshot = await getDocs(q);       
                 setLaborContractlist([])
                 querySnapshot.forEach((doc) => {
-                    const laborContractData = doc.data()
-                    const laborContract = {
-                        id:laborContractData.id,
-                        internalId : laborContractData.internalId,
-                        adminId:laborContractData.adminId,
-                        adminName:laborContractData.adminName,
-                        billingStatus: laborContractData.billingStatus,
-                        bodyOfWaterName: laborContractData.bodyOfWaterName,
-                        chemicals:laborContractData.chemicals,
-                        customerId:laborContractData.customerId,
-                        customerName:laborContractData.customerName,
-                        dateCreated:laborContractData.dateCreated,
-                        description:laborContractData.description,
-                        electricalParts:laborContractData.electricalParts,
-                        equipmentId:laborContractData.equipmentId,
-                        equipmentName:laborContractData.equipmentName,
-                        jobTemplateId:laborContractData.jobTemplateId,
-                        laborCost:laborContractData.laborCost,
-                        miscParts:laborContractData.miscParts,
-                        operationStatus:laborContractData.operationStatus,
-                        pvcParts:laborContractData.pvcParts,
-                        rate:laborContractData.rate,
-                        serviceLocationId:laborContractData.serviceLocationId,
-                        serviceStopIds:laborContractData.serviceStopIds,
-                        type:laborContractData.type,
+                    const jobData = doc.data()
 
+                    const dateCreated = jobData.dateCreated.toDate();
+                    const formattedDateCreated = format(dateCreated, 'MM / d / yyyy'); 
+                    const laborContract = {
+                        id:jobData.id,
+                        internalId : jobData.internalId,
+                        type: jobData.type,
+                        adminId: jobData.adminId,
+                        adminName: jobData.adminName,
+                        billingStatus: jobData.billingStatus,
+                        bodyOfWaterName: jobData.bodyOfWaterName,
+                        chemicals: jobData.chemicals,
+                        customerId: jobData.customerId,
+                        customerName: jobData.customerName,
+                        dateCreated: jobData.dateCreated,
+                        formattedDateCreated: formattedDateCreated,
+                        description: jobData.description,
+                        equipmentId: jobData.equipmentId,
+                        equipmentName: jobData.equipmentName,
+                        jobTemplateId: jobData.jobTemplateId,
+                        laborCost: jobData.laborCost,
+                        operationStatus: jobData.operationStatus,
+                        rate: jobData.rate,
+                        serviceLocationId: jobData.serviceLocationId,
+                        serviceStopIds: jobData.serviceStopIds,
                     }
                     setLaborContractlist(laborContractlist => [...laborContractlist, laborContract]); 
                 });
             } catch(error){
-                console.log('Error')
+                console.log('Job Board Error: ' + error)
             }
-            
         })();
     },[])
     return (
@@ -69,42 +70,62 @@ const Jobs = () => {
                     Create New
                 </Link>
             </div>
-            <div className='w-full bg-[#0e245c] p-4 rounded-md mt-3'>
+            <div className='w-full rounded-md mt-3'>
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between items-center'>
-                    <div className='relative overflow-x-auto'>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
-                                <tr>
-                                <th className='py-3 px-4'>Id</th>
-
-                                    <th className='py-3 px-4'>Customer Name</th>
-                                    <th className='py-3 px-4'>Admin Name</th>
-                                    <th className='py-3 px-4'>Billing Status</th>
-                                    <th className='py-3 px-4'>Operation Status</th>
-                                    <th className='py-3 px-4 sm:hidden'>Labor Cost</th>
-                                    <th className='py-3 px-4 sm:hidden'>Rate</th>
-                                    <th className='py-3 px-4'></th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                            {
-                                laborContractlist?.map(laborContract => (
-                                        <tr key={laborContract.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.internalId}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.customerName}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.adminName}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.billingStatus}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.operationStatus}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.laborCost}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`}>{laborContract.rate}</Link></td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/jobs/detail/${laborContract.id}`}>Details</Link></td>
-                                        </tr>
-                                ))
-                            }
-                            </tbody>
-                        </table>
-                    </div>
+                        <div className='relative overflow-x-auto'>
+                            <table className="min-w-full bg-white border border-gray-200">
+                                <thead>
+                                    <tr>
+                                        <th className='px-4 py-2 border-b'>Id</th>
+                                        <th className='px-4 py-2 border-b'>Date Created</th>
+                                        <th className='px-4 py-2 border-b'>Customer Name</th>
+                                        <th className='px-4 py-2 border-b'>Type</th>
+                                        <th className='px-4 py-2 border-b'>Billing Status</th>
+                                        <th className='px-4 py-2 border-b'>Operation Status</th>
+                                        <th className='px-4 py-2 border-b sm:hidden'>Labor Cost</th>
+                                        <th className='px-4 py-2 border-b sm:hidden'>Rate</th>
+                                        <th className='px-4 py-2 border-b'>Admin Name</th>
+                                        <th className='px-4 py-2 border-b'>Description</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                {
+                                    laborContractlist?.map(laborContract => (
+                                            <tr key={laborContract.id} className="border-b border-slate-700">
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.internalId}</Link></td>
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.formattedDateCreated}</Link></td>
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.customerName}</Link></td>
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.type}</Link></td>
+                                                <td className='px-4 py-2 border-b'>
+                                                    <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                                                    {laborContract.billingStatus == "Draft" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                    {laborContract.billingStatus == "Estimate" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
+                                                    {laborContract.billingStatus == "Accepted" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                    {laborContract.billingStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
+                                                    {laborContract.billingStatus == "Invoiced" && <h1 className="rounded-md blue-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                    {laborContract.billingStatus == "Paid" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                    </Link>
+                                                </td>
+                                                <td className='px-4 py-2 border-b'>
+                                                    <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                                                    {laborContract.operationStatus == "Estimate Pending" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                    {laborContract.operationStatus == "Unscheduled" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                    {laborContract.operationStatus == "Scheduled" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                    {laborContract.operationStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.operationStatus}</h1>}
+                                                    {laborContract.operationStatus == "Finished" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                    </Link>
+                                                </td>
+                                                <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.laborCost}</Link></td>
+                                                <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.rate}</Link></td>
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.adminName}</Link></td>
+                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.description}</Link></td>
+                                            </tr>
+                                    ))
+                                }
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
             </div>

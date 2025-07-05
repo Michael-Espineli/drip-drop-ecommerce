@@ -8,6 +8,15 @@
     background-color: #ededed;;
   }
   @layer utilities {
+    /* Formatting */
+    .login-form {
+      max-width: 500px;
+      margin: auto;
+      background-color: white;
+      padding: 10px;
+      color: #030811;
+    }
+
     /* BackGrounds */
     .red-bg {background-color: #9C0D38;}
     .yellow-bg {background-color: #e0ae36;}

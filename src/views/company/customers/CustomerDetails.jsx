@@ -202,6 +202,7 @@ const CustomerDetails = () => {
             
                 const querySnapshot1 = await getDocs(q1);       
                 setServiceLocationList([])      
+                let workingServiceLocationList = []    
                 querySnapshot1.forEach((doc) => {
                     const serviceLocationData = doc.data()
                     const serviceLocation = {
@@ -214,21 +215,23 @@ const CustomerDetails = () => {
                     }
                     console.log('serviceLocation')
                     console.log(serviceLocation)
+                    workingServiceLocationList.push(serviceLocation)
                     setServiceLocationList(serviceLocationList => [...serviceLocationList, serviceLocation]); 
                 });
 
                 //Check to see if serviceLocation is not empty
-                if (serviceLocationList.length>0) {
-                    setSelectedServiceLocation(serviceLocationList[0])
+                if (workingServiceLocationList.length>0) {
+                    setSelectedServiceLocation(workingServiceLocationList[0])
                 }
 
                 //Check if selectedServiceLocation Exists
-                if (selectedServiceLocation.id!==''){
+                if (workingServiceLocationList.length>0) {
 
                     let q2;
-                    q2 = query(collection(db, 'companies',recentlySelectedCompany,'bodiesOfWater'),where("serviceLocationId",'==',selectedServiceLocation.id));
+                    q2 = query(collection(db, 'companies',recentlySelectedCompany,'bodiesOfWater'),where("serviceLocationId",'==',workingServiceLocationList[0].id));
                 
-                    const querySnapshot2 = await getDocs(q2);       
+                    const querySnapshot2 = await getDocs(q2);   
+                    let workingBodyOfWaterList = []    
                     setBodyOfWaterList([])      
                     querySnapshot2.forEach((doc) => {
                         const bodyOfWaterData = doc.data()
@@ -239,14 +242,18 @@ const CustomerDetails = () => {
                             gallons : bodyOfWaterData.gallons,
                             material : bodyOfWaterData.material,
                             name : bodyOfWaterData.name,
-                            notes : bodyOfWaterData.notes,
+                            notes : bodyOfWaterData.notes ?? "",
                             serviceLocationId : bodyOfWaterData.serviceLocationId,
                             label : bodyOfWaterData.name 
                         }
+                        workingBodyOfWaterList.push(bodyOfWater)
                         console.log('bodyOfWater')
                         console.log(bodyOfWater)
                         setBodyOfWaterList(bodyOfWaterList => [...bodyOfWaterList, bodyOfWater]); 
-                        setSelectedBodyOfWater(bodyOfWaterList[0])
+
+                        if (workingBodyOfWaterList.length>0) {
+                            setSelectedBodyOfWater(workingBodyOfWaterList[0])
+                        }
                     });
                 }
                 
@@ -329,9 +336,22 @@ const CustomerDetails = () => {
         })();
     };
     const handleBodyOfWaterChange = (selectedOption2) => {
-        setSelectedBodyOfWater(selectedOption2)
-
         (async () => {
+
+            if (selectedOption2.id!==''){
+                console.log(selectedOption2)
+                setSelectedBodyOfWater({
+                    id : selectedOption2.id,
+                    customerId : selectedOption2.customerId,
+                    depth : selectedOption2.depth,
+                    gallons : selectedOption2.gallons,
+                    material : selectedOption2.material,
+                    name : selectedOption2.name,
+                    notes : selectedOption2.notes??"",
+                    serviceLocationId : selectedOption2.serviceLocationId,
+                    label : selectedOption2.name 
+                })
+            }
         })();
     };
     return (
@@ -500,7 +520,7 @@ const CustomerDetails = () => {
                     <div className='w-full lg:pr-3'> 
                         <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#cfcfcf]'>
                             <div className='flex justify-between items-center'>
-                                <h1 className='font-bold text-[#000000]'>Service Locations - {serviceLocationList.length}</h1>
+                                <h1 className='font-bold'>Service Locations - {serviceLocationList.length}</h1>
                           
                                 <button className='bg-[#CDC07B] py-1 px-2 rounded-md text-[#000000]'>Add New</button>
                             </div>
@@ -569,7 +589,7 @@ const CustomerDetails = () => {
                             <ul className='py-2'>
                                 {
                                     bodyOfWaterList?.map((n,i) =>(
-                                        <li className='text-[#000000]' key={i}>
+                                        <li className='' key={i}>
                                             <p>{n.label}</p>
                                         </li>
                                     ))

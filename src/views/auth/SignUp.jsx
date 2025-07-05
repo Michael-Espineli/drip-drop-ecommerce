@@ -29,16 +29,20 @@ const SignUp = () => {
         // CDC07B - Pool Yellow
         // 9C0D38 - Pool Red
         // 2B600F - Pool Green
-        <div className='px-2 md:px-7 py-5 bg-[#0e245c] text-[#ffffff]'>
-            <div className='w-full h-full '>
-                <Link to='/'>
-                    <h2 className='w-[300px] px-[20px] font-bold text-4xl line-clamp-1'>
-                        Drip Drop
-                    </h2>
-                </Link>
+        <div>
+            <div className='px-2 md:px-7 py-5 blue-bg white-fg'>
+                <div className='w-full h-full '>
+                    <Link to='/'>
+                        <h2 className='w-[300px] px-[20px] font-bold text-4xl line-clamp-1'>
+                            Drip Drop
+                        </h2>
+                    </Link>
+                </div>
+            </div>
+            <div className='login-form pt-10 black-fg'>
                 <div className=''>
                     <div className='w-full'>
-                        <div className='p-2  font-bold'>
+                        <div className='p-2 font-bold'>
                             <h1>Company Sign Up Page</h1>
                         </div>            
                         <form>
@@ -49,14 +53,14 @@ const SignUp = () => {
                                 <div className='p-2'>
                                     <input onChange={(e) => {setPassword(e.target.value)}} className='w-full p-2 rounded-md' type="text"placeholder='Password'></input>
                                 </div>
-                                <div className='p-2  text-[#cfcfcf]  font-bold'>
+                                <div className='p-2 blue-bg white-fg rounded-md'>
                                     <button onClick={(e) => handleSignUp(e)} >Sign up</button>
                                 </div>
                             </div>
                         </form>
                     </div>
                 </div>
-                <Link to='/signIn' className={` text-[#cfcfcf] px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:text-[#de3c6d] transition-all w-full mb-1 underline`}>
+                <Link to='/signIn' className={`  px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover: transition-all w-full mb-1 underline`}>
                     <span>
                         Already have an Account? Sign In Here
                     </span>

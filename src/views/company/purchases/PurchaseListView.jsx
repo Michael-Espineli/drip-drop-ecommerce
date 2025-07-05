@@ -5,74 +5,73 @@ import { db } from "../../../utils/config";
 import { Link } from 'react-router-dom'; 
 import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 import PurchasesCardView from './PurchasesCardView';
+import { CompanyUser } from '../../../utils/models/CompanyUser';
 
 const PurchaseListView = () => {
  // This component is a conversion of a SwiftUI View.
 
   // SwiftUI State variables will be managed using React's useState hook.
-  const [showEditView, setShowEditView] = useState(false);
-  const [showDetailsView, setShowDetailsView] = useState(false);
-  const [selected, setSelected] = useState(null); // Equivalent to PurchasedItem.ID?
-  const [purchasedItems, setPurchasedItems] = useState([]);
+const [showEditView, setShowEditView] = useState(false);
+const [showDetailsView, setShowDetailsView] = useState(false);
+const [selected, setSelected] = useState(null); // Equivalent to PurchasedItem.ID?
+const [purchasedItems, setPurchasedItems] = useState([]);
   // Note: sortOrder [KeyPathComparator(\PurchasedItem.invoiceNum, order: .reverse)] needs a React equivalent,
-  const [selectedFilters, setSelectedFilters] = useState([]);
-  const [showFilterModal, setShowFilterModal] = useState(false);
+const [selectedFilters, setSelectedFilters] = useState(['isBillable','isNotInvoiced']);
+const [showFilterModal, setShowFilterModal] = useState(false);
   // possibly managing the sort order logic within the component or a hook.
-  const [sortOrder, setSortOrder] = useState([{ key: 'invoiceNum', order: 'desc' }]);
-  const [serviceStopDetail, setServiceStopDetail] = useState(null); // Equivalent to PurchasedItem?
+const [sortOrder, setSortOrder] = useState([{ key: 'invoiceNum', order: 'desc' }]);
+const [serviceStopDetail, setServiceStopDetail] = useState(null); // Equivalent to PurchasedItem?
  // Note: workOrderTemplate:JobTemplate needs a React equivalent for JobTemplate
- const [workOrderTemplate, setWorkOrderTemplate] = useState({ id: '', name: 'sum', type: 'all' });
+const [workOrderTemplate, setWorkOrderTemplate] = useState({ id: '', name: 'sum', type: 'all' });
  // Initialize dates to the beginning and end of the current month
- const now = new Date();
- const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
- const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const [startViewingDate, setStartViewingDate] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)); // 30 days ago
-  const [endViewingDate, setEndViewingDate] = useState(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000)); // 1 day from now
-  const [selection, setSelection] = useState(null); // Equivalent to PurchasedItem.ID?
-  const [purchaseFilterOption, setPurchaseFilterOption] = useState('billableAndNotInvoiced'); // Placeholder enum
-  const [purchaseSortOption, setPurchaseSortOption] = useState('purchaseDateFirst'); // Placeholder enum
-  const [techIds, setTechIds] = useState([]);
-  const [showSummary, setShowSummary] = useState(false);
+const now = new Date();
+const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+const [startViewingDate, setStartViewingDate] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)); // 30 days ago
+const [endViewingDate, setEndViewingDate] = useState(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000)); // 1 day from now
+const [selection, setSelection] = useState(null); // Equivalent to PurchasedItem.ID?
+const [purchaseFilterOption, setPurchaseFilterOption] = useState('billableAndNotInvoiced'); // Placeholder enum
+const [purchaseSortOption, setPurchaseSortOption] = useState('purchaseDateFirst'); // Placeholder enum
+const [techIds, setTechIds] = useState([]);
+const [showSummary, setShowSummary] = useState(false);
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [companyUsers, setCompanyUsers] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [filteredItems, setFilteredItems] = useState([]);
- const [error, setError] = useState(null);
+const [companyUsers, setCompanyUsers] = useState([]);
+const [loading, setLoading] = useState(true);
+const [filteredItems, setFilteredItems] = useState([]);
+const [error, setError] = useState(null);
  // State for pagination
- const [currentPage, setCurrentPage] = useState(1);
- const [lastDocument, setLastDocument] = useState(null);
- const [hasMore, setHasMore] = useState(true);
+const [currentPage, setCurrentPage] = useState(1);
+const [lastDocument, setLastDocument] = useState(null);
+const [hasMore, setHasMore] = useState(true);
+const [searchTerm, setSearchTerm] = useState('');
 
  // Get companyId from context (assuming Context is correctly imported and provided)
   // Get companyId from context (assuming Context is correctly imported and provided)
-  const { recentlySelectedCompany } = useContext(Context); // Make sure Context is imported
+const { recentlySelectedCompany } = useContext(Context); // Make sure Context is imported
 
   // Define Data Models (JavaScript equivalents)
  // Moved to src/utils/models/CompanyUser.js
 
   // Effect to fetch company users
  useEffect(() => {
- const fetchCompanyUsers = async () => {
- if (!recentlySelectedCompany) return;
-
-        setLoading(true);
-        setError(null);
-
- try {
-          const usersRef = collection(db, `companies/${recentlySelectedCompany}/companyUsers`);
- // Assuming you want active users based on the Swift code example
-          const q = query(usersRef, where("status", "==", "Active"));
-          const querySnapshot = await getDocs(q);
-          const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
- setCompanyUsers(usersData);
- setTechIds(usersData.map(user => user.userId));
- } catch (err) {
-          console.error("Error fetching company users:", err);
- setError("Failed to load company users.");
- } finally {
-          setLoading(false);
- }
+  const fetchCompanyUsers = async () => {
+  if (!recentlySelectedCompany) return;
+          setLoading(true);
+          setError(null);
+  try {
+    const usersRef = collection(db, `companies/${recentlySelectedCompany}/companyUsers`);
+    // Assuming you want active users based on the Swift code example
+    const q = query(usersRef, where("status", "==", "Active"));
+    const querySnapshot = await getDocs(q);
+    const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    setCompanyUsers(usersData);
+    setTechIds(usersData.map(user => user.userId));
+  } catch (err) {
+    console.error("Error fetching company users:", err);
+    setError("Failed to load company users.");
+  } finally {
+    setLoading(false);
+  }
  };
 
     fetchCompanyUsers();
@@ -93,39 +92,37 @@ const PurchaseListView = () => {
  useEffect(() => {
   const fetchPurchasedItems = async () => {
   if (!recentlySelectedCompany || techIds.length === 0 || !startViewingDate || !endViewingDate) {
-            setPurchasedItems([]); // Clear items if dependencies are not met
-  return;
+    setPurchasedItems([]); // Clear items if dependencies are not met
+    return;
   }
-
   setLoading(true);
   setError(null);
-
   try {
     const itemsRef = collection(db, `companies/${recentlySelectedCompany}/purchasedItems`);
       // Construct query based on Swift code logic
     let q = query(
       itemsRef,
       where("date", ">=", startViewingDate), // Using Date objects directly
- // Add filters based on selectedFilters
- ...selectedFilters.map(filter => {
- switch (filter) {
- case 'isInvoiced':
- return where("invoiced", "==", true);
- case 'isNotInvoiced':
- return where("invoiced", "==", false);
- case 'isBillable':
- return where("billable", "==", true);
- case 'isNotBillable':
- return where("billable", "==", false);
- default:
- return null; // Should not happen with current options
- }
- }).filter(filter => filter !== null), // Filter out any null returns
+      // Add filters based on selectedFilters
+      ...selectedFilters.map(filter => {
+        switch (filter) {
+          case 'isInvoiced':
+          return where("invoiced", "==", true);
+          case 'isNotInvoiced':
+          return where("invoiced", "==", false);
+          case 'isBillable':
+          return where("billable", "==", true);
+          case 'isNotBillable':
+          return where("billable", "==", false);
+          default:
+          return null; // Should not happen with current options
+        }
+      }).filter(filter => filter !== null), // Filter out any null returns
 
       where("date", "<=", endViewingDate), // Using Date objects directly
       where("techId", "in", techIds),
       // Ordering by price, descending (priceHigh = true) - need to manage this state
- orderBy("price", "desc"),
+      orderBy("date", "desc"),
       // Limit to 25 items for pagination
       limit(25)
     );
@@ -156,10 +153,8 @@ const PurchaseListView = () => {
     if (!recentlySelectedCompany || techIds.length === 0 || !startViewingDate || !endViewingDate || !lastDocument) {
       return;
     }
-
     setLoading(true);
     setError(null);
-
     try {
       const itemsRef = collection(db, `companies/${recentlySelectedCompany}/purchasedItems`);
       let q = query(
@@ -256,7 +251,6 @@ const PurchaseListView = () => {
           />
         </div>
       </div>
-
       <div className="purchase-list-section mt-4">
         {loading && <p>Loading...</p>}
         {error && <p className="text-red-500">{error}</p>}
@@ -274,71 +268,94 @@ const PurchaseListView = () => {
                   <th className="px-4 py-2 border-b">Total</th>
                   <th className="px-4 py-2 border-b">Technician</th>
                   <th className="px-4 py-2 border-b">Customer Name</th>
-                  <th className="px-4 py-2 border-b">Job ID</th>
+                  <th className="px-4 py-2 border-b">Job Id</th>
+                  <th className="px-4 py-2 border-b">Notes</th>
+                  <th className="px-4 py-2 border-b"></th>
                 </tr>
               </thead>
               <tbody>
-                {filteredItems.map(item => (
+                {filteredItems.map(item => (  
                   <tr key={item.id}>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.name}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.invoiceNum || 'N/A'}
-                  </Link>
-                  </td> {/* Handle cases where invoiceNum might be null/undefined */}
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {shortDate(item.date)}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
- <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
- {item.sku}
- </Link>
- </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.name}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.invoiceNum || 'N/A'}
+                      </Link>
+                    </td> {/* Handle cases where invoiceNum might be null/undefined */}
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {shortDate(item.date)}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.sku}
+                      </Link>
+                    </td>
 
- <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {`$${(item.price / 100).toFixed(2)}`}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.quantityString}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {`$${(item.total / 100).toFixed(2)}`}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.techName}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.customerName}
-                  </Link>
-                  </td>
-                  <td className="px-4 py-2 border-b">
-                  <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                  {item.jobId}
-                  </Link>
-                  </td>
-                </tr>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {`$${(item.price / 100).toFixed(2)}`}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.quantityString}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {`$${(item.total / 100).toFixed(2)}`}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.techName}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.customerName}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/jobs/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {
+                        (item.jobId != "") && <h1>Job</h1>
+                      }
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/purchasedItems/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {item.notes}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2 border-b">
+                      <Link to={`/company/jobs/detail/${item.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                      {
+                        item.billable && <>
+                        {
+                          item.invoiced ? <h1  className="rounded-md green-bg px-2 items-center white-fg">
+                            Invoiced
+                            </h1> :  <h1  className="rounded-md red-bg px-2 items-center white-fg">
+                            Needs invoice
+                            </h1> 
+                        }
+                        </>
+                      }
+                      </Link>
+                    </td>
+                  </tr>
                 ))}
               </tbody>
             </table>
           )}
         </div>
       </div>
-
       {/* Load More Button */}
       <div className="flex justify-center mt-4">
         <button onClick={fetchMorePurchasedItems} className="py-2 px-4 bg-[#2B600F] text-white rounded-md hover:bg-[#3a7f1a] disabled:opacity-50" disabled={loading}>
@@ -381,9 +398,7 @@ const PurchaseListView = () => {
                       className="border p-1 rounded"
                     />
                   </div>
-
                 </div>
-
                 <div className="flex flex-col items-start space-y-2">
                   {/* Filter options */}
                   <label className="inline-flex items-center">
