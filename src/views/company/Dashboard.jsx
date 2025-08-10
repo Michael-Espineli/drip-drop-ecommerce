@@ -18,8 +18,10 @@ const Dashboard = () => {
     const [ customerCount, setCustomerCount] = useState(0);
     
     const [ techCount, setTechCount] = useState(0);
+    const [ jobCount, setJobCount] = useState(0);
+    const [ totalSales, setTotalSales] = useState(32232.78);
 
-    const state = {
+   const state = {
         series : [
             {
                 name : "Orders",
@@ -78,7 +80,7 @@ const Dashboard = () => {
                 }
             ]
         }
-    }
+    } 
 
 
     useEffect(() => {
@@ -89,7 +91,7 @@ const Dashboard = () => {
             try{
 
                 //alerts
-                let q = query(collection(db, 'companies',recentlySelectedCompany,'alerts'));
+                let q = query(collection(db, 'companies',recentlySelectedCompany,'alerts'), limit(4));
                 const querySnapshot = await getDocs(q);       
                 let count = 1   
                 setAlertList([])      
@@ -111,11 +113,16 @@ const Dashboard = () => {
                 setCustomerCount(snapshot1.data().count)
              
                 //Get Users
-
                 let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
                 const snapshot2 = await getCountFromServer(userQuery);
                 console.log('count: ', snapshot2.data().count);
                 setTechCount(snapshot2.data().count)
+             
+                //Get Job Count
+                let jobQuery = query(collection(db, "companies",recentlySelectedCompany,'jobs'),where('billingStatus','not-in',['Paid','Invoiced']));//.where('workerType','==','Employee')
+                const jobSnapShot = await getCountFromServer(jobQuery);
+                console.log('count: ', jobSnapShot.data().count);
+                setJobCount(jobSnapShot.data().count)
          
                 
 
@@ -125,8 +132,6 @@ const Dashboard = () => {
 
         })();
     },[])
-
-    
     
     async function sendServiceReportOnFinish(e) {
         e.preventDefault()
@@ -162,70 +167,73 @@ const Dashboard = () => {
         <div className='px-2 md:px-7 py-5'>
             {/* Top Header */}
             <div className='w-full grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-7'>
+                <Link to='/company/sales'>
+                    <div className='flex justify-between items-center p-5 bg-[#cc7c7c] rounded-md gap-3'>
+                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
+                            <h2 className='text-3xl font-bold'>${totalSales}</h2>
+                            <span className='text-md font-medium'>Total Sales</span>
+                        </div>
+                        <div className='w-[40px] h-[47px] rounded-full bg-[#fa0305] flex justify-center items-center text-xl'>
+                            <MdCurrencyExchange className='text-[#fae8e8]'/>
+                        </div>
+                    </div>
 
-                <div className='flex justify-between items-center p-5 bg-[#cc7c7c] rounded-md gap-3'>
-                    <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                        <h2 className='text-3xl font-bold'>$32,232.78</h2>
-                        <span className='text-md font-medium'>Total Sales</span>
-                    </div>
-                    <div className='w-[40px] h-[47px] rounded-full bg-[#fa0305] flex justify-center items-center text-xl'>
-                        <MdCurrencyExchange className='text-[#fae8e8]'/>
-                    </div>
-                </div>
-
-                <div className='flex justify-between items-center p-5 bg-[#282c28] rounded-md gap-3'>
-                    <div className='flex flex-col justify-start items-start text-[#ededed]'>
-                        <h2 className='text-3xl font-bold'>{customerCount}</h2>
-                        <span className='text-md font-medium'>Active Customers</span>
-                    </div>
-                    <div className='w-[40px] h-[47px] rounded-full bg-[#030811] flex justify-center items-center text-xl'>
-                    <FaUsers className='text-[#fae8e8]'/>
-                    </div>
-                </div>
-
-                <div className='flex justify-between items-center p-5 bg-[#e9feea] rounded-md gap-3'>
-                    <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                        <h2 className='text-3xl font-bold'>{techCount}</h2>
-                        <span className='text-md font-medium'>Technicians</span>
-                    </div>
-                    <div className='w-[40px] h-[47px] rounded-full bg-[#038000] flex justify-center items-center text-xl'>
+                </Link>
+                <Link to='/company/customers'>
+                    <div className='flex justify-between items-center p-5 bg-[#282c28] rounded-md gap-3'>
+                        <div className='flex flex-col justify-start items-start text-[#ededed]'>
+                            <h2 className='text-3xl font-bold'>{customerCount}</h2>
+                            <span className='text-md font-medium'>Active Customers</span>
+                        </div>
+                        <div className='w-[40px] h-[47px] rounded-full bg-[#030811] flex justify-center items-center text-xl'>
                         <FaUsers className='text-[#fae8e8]'/>
+                        </div>
                     </div>
-                </div>
+                </Link>
+                <Link to='/company/companyUsers'>
 
-                <div className='flex justify-between items-center p-5 bg-[#ecebff] rounded-md gap-3'>
-                    <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                        <h2 className='text-3xl font-bold'>54</h2>
-                        <span className='text-md font-medium'>Work Orders</span>
+                    <div className='flex justify-between items-center p-5 bg-[#e9feea] rounded-md gap-3'>
+                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
+                            <h2 className='text-3xl font-bold'>{techCount}</h2>
+                            <span className='text-md font-medium'>Technicians</span>
+                        </div>
+                        <div className='w-[40px] h-[47px] rounded-full bg-[#038000] flex justify-center items-center text-xl'>
+                            <FaUsers className='text-[#fae8e8]'/>
+                        </div>
                     </div>
-                    <div className='w-[40px] h-[47px] rounded-full bg-[#0200f8] flex justify-center items-center text-xl'>
-                        <FaShoppingCart className='text-[#fae8e8]'/>
+                </Link>
+                <Link to='/company/jobs'>
+                    <div className='flex justify-between items-center p-5 bg-[#ecebff] rounded-md gap-3'>
+                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
+                            <h2 className='text-3xl font-bold'>{jobCount}</h2>
+                            <span className='text-md font-medium'>Work Orders</span>
+                        </div>
+                        <div className='w-[40px] h-[47px] rounded-full bg-[#0200f8] flex justify-center items-center text-xl'>
+                            <FaShoppingCart className='text-[#fae8e8]'/>
+                        </div>
                     </div>
-                </div>
+                </Link>
 
             </div>
                 {/* Alerts Section Of Body */}
-
                 <div className='w-full p-4 light-blue-grey-bg rounded-md mt-6'>
                     <div className='flex justify-between items-center text-[#ffffff] pb-3 font-bold'>
                         <h2>Alerts</h2>
                         <button onClick={(e) => sendServiceReportOnFinish(e)} >Tester Function</button>
-
                         <Link to='/company/alerts' className='font-semibold text-sm text-[#d0d2d6]'>View All</Link>
                     </div>
-
                     <p>Display Most Important and Recent Alerts</p>
                     {
                         alertList?.map( alert => (
                             <div className='flex w-full'>
-
                             <button>
-
                                 <div className='rounded-md bg-[#1D2E76] py-1 px-2 mt-2 text-[#ededed]'>
                                     <div className='flex justify-between'>
+                                    <Link to='/company/alerts' className='font-semibold text-sm text-[#d0d2d6]'>
                                         <p>
                                             {alert.name}
                                         </p>
+                                    </Link>
                                     </div>
                                 </div>
                             </button>

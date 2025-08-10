@@ -76,7 +76,7 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
 
     fetchCompanyUsers();
  // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [recentlySelectedCompany]); // Refetch when recentlySelectedCompany changes
+ }, [recentlySelectedCompany]);
 
   // Effect to filter purchased items based on search term
   useEffect(() => {
@@ -88,7 +88,7 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
     }
   }, [purchasedItems, searchTerm]); // Re-filter when purchasedItems or searchTerm changes
 
-  // Effect to fetch purchased items
+  // Effect to fetch purchased items based on filters, dates, and selected company/techs
  useEffect(() => {
   const fetchPurchasedItems = async () => {
   if (!recentlySelectedCompany || techIds.length === 0 || !startViewingDate || !endViewingDate) {
@@ -131,8 +131,8 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
       const itemsData = querySnapshot.docs.map(doc => PurchasedItem.fromFirestore(doc));
 
       // Set the last document for pagination
- if (querySnapshot.docs.length > 0) {
- setLastDocument(querySnapshot.docs[querySnapshot.docs.length - 1]);
+    if (querySnapshot.docs.length > 0) {
+      setLastDocument(querySnapshot.docs[querySnapshot.docs.length - 1]);
       }
       setHasMore(querySnapshot.docs.length === 25); // Check if there might be more items
       setPurchasedItems(itemsData);
@@ -146,7 +146,7 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
 
     fetchPurchasedItems();
  // eslint-disable-next-line react-hooks/exhaustive-deps
- }, [recentlySelectedCompany, techIds, startViewingDate, endViewingDate]);
+ }, [recentlySelectedCompany, techIds, startViewingDate, endViewingDate, selectedFilters]);
 
   // Function to fetch more purchased items (pagination)
   const fetchMorePurchasedItems = async () => {
@@ -229,25 +229,25 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
  };
 
   return (
-    <div className="purchase-list-view-container">
+    <div className="purchase-list-view-container px-2 md:px-7 py-5">
       {/*
         This div represents the ZStack in SwiftUI.
         It will contain the list and icons sections.
         The background color (Color.listColor) would be applied via CSS to this container or a parent.
- */}
+      */}
       <div className="purchase-header">
         {/* Placeholder for icons */}
-        <div className="flex justify-between items-center px-4">
+        <div className="flex justify-between items-center">
           <Link to="/company/purchasedItems/createNew" className="py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Add New Purchase</Link>
         <button onClick={() => setShowFilterModal(true)} className="py-1 px-4 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Filter Options</button>
         </div>
-          <div className="search-bar-container mt-2 px-4">
+        <div className="search-bar-container">
           <input
           type="text"
-                    placeholder="Search..."
+          placeholder="Search..."
           value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="text-field w-full p-2 border rounded"
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="text-field w-full p-2 border rounded"
           />
         </div>
       </div>

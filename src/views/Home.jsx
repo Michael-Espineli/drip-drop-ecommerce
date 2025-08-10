@@ -14,8 +14,8 @@ export default function Home() {
                             What's so good about us?
                         </p>
                     </div>
-                    <p>
-                        Lorem ipsum dolor sit amet, consectetur adipiscing elit. Donec a justo non tortor luctus dignissim. Curabitur ultrices risus et leo ornare bibendum. Mauris ligula odio, suscipit id orci non, imperdiet cursus tortor. Vivamus ut laoreet nunc. Pellentesque vehicula viverra mattis. Suspendisse commodo leo libero, in tempus magna luctus vel. Mauris sed rutrum velit. Vivamus lacinia posuere lacus, sit amet scelerisque nisi imperdiet vel. Nunc gravida, ante et ultrices rhoncus, orci eros porta odio, ut sodales justo urna sed elit. Praesent cursus velit diam, eu pharetra urna rhoncus sed. Donec cursus lorem ut purus hendrerit, non egestas arcu auctor. Cras eu elit quis justo convallis ultrices. Duis non finibus tortor. Donec et tincidunt ipsum. Aenean ut mi neque.
+                    <p>.     Drip Drop is a pool application company focused on bringing pool software up to date
+                    
                     </p>
                     <p>
                         Aenean vehicula sapien a augue porttitor hendrerit. Suspendisse vitae ligula sodales, dignissim erat vel, elementum enim. Vestibulum vitae lectus porttitor, placerat turpis id, dapibus ipsum. Curabitur in sapien ut sem vehicula hendrerit rutrum ac nunc. Sed mollis auctor turpis varius imperdiet. Nulla lacus ex, consectetur ut lacus quis, lobortis lobortis velit. Mauris eu laoreet mauris. Nam dapibus, elit bibendum dignissim placerat, libero urna consequat sem, at imperdiet neque mauris ac augue. Quisque massa nisi, ullamcorper eget felis vitae, egestas varius sapien. Morbi vehicula maximus leo id interdum. Fusce in eros eget velit malesuada blandit sed at magna. Ut rhoncus ipsum urna, a ullamcorper justo volutpat at. Suspendisse posuere nulla at nulla tristique, id interdum enim vulputate. Suspendisse vel sem non erat feugiat convallis. Suspendisse congue tortor sit amet enim lobortis rutrum.
@@ -36,7 +36,7 @@ export default function Home() {
                 <div className='px-[200px]'>
                     <div className="pb-10">
                         <p className="text-lg font-bold">
-                            What's so good about us?
+                            Who are we?
                         </p>
                     </div>
                     <p>

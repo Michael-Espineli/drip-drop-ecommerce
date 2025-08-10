@@ -240,13 +240,7 @@ const CreateNewJob = () => {
             
         })();
     };
-    const handleTaskGroupChange = (option) => {
 
-        (async () => {
-            setSelectedTaskGroup(option)
-            //Get Tasks From Task Group
-        })();
-    };
     const handleBodyOfWaterListChange = (option) => {
 
         (async () => {
@@ -255,6 +249,13 @@ const CreateNewJob = () => {
         })();
     };
 
+    const handleTaskGroupChange = (option) => {
+
+        (async () => {
+            setSelectedTaskGroup(option)
+            //Get Tasks From Task Group
+        })();
+    };
     const handleEquipmentListChange = (option) => {
 
         (async () => {

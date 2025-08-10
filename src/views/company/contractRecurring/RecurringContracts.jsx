@@ -6,7 +6,7 @@ import { Link } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 const functions = getFunctions();
 
-function Contracts () { 
+function RecurringContracts () { 
     const {stripeConnectedAccountId, user} = useContext(Context);
     const [ contractList, setContractList] = useState([]);
     const [contracts, setContracts] = useState([]);
@@ -170,7 +170,7 @@ function Contracts () {
             <div className='py-2'>
                 <div className='flex justify-end items-center'>
                     <Link 
-                    to='/company/contract/createNew/NA'
+                    to='/company/contracts/createNew/NA'
                     className='bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'>Send New Contract</Link>
                 </div>
             </div>
@@ -212,7 +212,7 @@ function Contracts () {
                                     <td>
                                         <Link 
                                         className='bg-[#454b39] rounded-md py-1 px-2'
-                                        to={`/company/contract/detail/${contract.id}`}>Detail</Link>
+                                        to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
                                     </td>
                                 </tr>
                             
@@ -240,7 +240,7 @@ function Contracts () {
                                     <td>
                                         <Link 
                                         className='bg-[#454b39] rounded-md py-1 px-2'
-                                        to={`/company/contract/detail/${contract.id}`}>Detail</Link>
+                                        to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
                                     </td>
                                 </tr>
                             
@@ -284,4 +284,4 @@ function Contracts () {
     );
 };
 
-export default Contracts;
+export default RecurringContracts;

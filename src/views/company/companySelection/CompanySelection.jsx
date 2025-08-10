@@ -1,7 +1,9 @@
 
-import React from "react";
+import React, {useState, useEffect, useContext} from 'react';
+import { Context } from "../../../context/AuthContext";
+import { useNavigate } from 'react-router-dom';
 
-const WorkInProgress = () => {
+const CompanySelection = () => {
 
     return (
         <div className='flex justify-center px-2 md:px-7 py-5'>
@@ -18,4 +20,4 @@ const WorkInProgress = () => {
     );
 }
 
-export default WorkInProgress;
+export default CompanySelection;

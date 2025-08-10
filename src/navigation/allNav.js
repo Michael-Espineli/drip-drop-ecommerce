@@ -89,7 +89,18 @@ export const allNav = [
         path : '/company/customers',
         category:'Physical Locations'
 
-    },
+    }
+    ,
+    {
+        id : 21,
+        title : 'Customers',
+        icon : <FaUsers/>,
+        role : 'Company',
+        path : '/company/customers',
+        category:'Operations'
+
+    }
+    ,
     {
         id : 22,
         title : 'Service Locations',
@@ -207,13 +218,32 @@ export const allNav = [
         role : 'Company',
         path : '/company/stripe-profile',
         category:'Stripe'
-    },
+    }
+    ,
+    {
+        id : 64,
+        title : 'Sales',
+        icon : <IoDocumentTextOutline />,
+        role : 'Company',
+        path : '/company/sales',
+        category:'Monies'
+    }
+    ,
     {
         id : 66,
         title : 'Contracts',
         icon : <IoDocumentTextOutline />,
         role : 'Company',
         path : '/company/contracts',
+        category:'Monies'
+    }
+    ,
+    {
+        id : 67,
+        title : 'Recurring Contracts',
+        icon : <IoDocumentTextOutline />,
+        role : 'Company',
+        path : '/company/recurringContracts',
         category:'Monies'
     }
     ,

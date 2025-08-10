@@ -3,16 +3,20 @@ import { lazy } from "react";
 const Home = lazy(()=> import("../../views/Home"))
 const ProfilePage = lazy(()=> import("../../views/company/ProfilePage"))
 const Dashboard = lazy(()=> import("../../views/company/Dashboard"))
+const CompanySelection = lazy(()=> import("../../views/company/companySelection/CompanySelection"))
 
 const Jobs = lazy(()=> import("../../views/company/jobs/Jobs"))
 const CreateNewJob = lazy(()=> import("../../views/company/jobs/CreateNewJob"))
 const JobDetailView = lazy(()=> import("../../views/company/jobs/JobDetailView"))
 const JobHistoryView = lazy(()=> import("../../views/company/jobs/JobHistoryView"))
 
-
 const ServiceStops = lazy(()=> import("../../views/company/serviceStops/ServiceStops"))
 const CreateNewServiceStop = lazy(()=> import("../../views/company/serviceStops/CreateNewServiceStop"))
 const ServiceStopDetails = lazy(()=> import("../../views/company/serviceStops/ServiceStopDetails"))
+
+const RepairRequests = lazy(()=> import("../../views/company/repairRequests/RepairRequests"))
+const CreateNewRepairRequest = lazy(()=> import("../../views/company/repairRequests/CreateNewRepairRequest"))
+const RepairRequestDetailView = lazy(()=> import("../../views/company/repairRequests/RepairRequestDetailView"))
 
 const PublicPage = lazy(()=> import("../../views/company/PublicPage"))
 const Settings = lazy(()=> import("../../views/company/Settings/Settings"))
@@ -40,6 +44,10 @@ const Alerts = lazy(()=> import("../../views/company/Alerts"))
 const Contracts = lazy(()=> import("../../views/company/contract/Contracts"))
 const CreateNew = lazy(()=> import("../../views/company/contract/CreateNew"))
 const ContractDetailView = lazy(()=> import("../../views/company/contract/ContractDetailView"))
+
+const RecurringContracts = lazy(()=> import("../../views/company/contractRecurring/RecurringContracts"))
+const CreateNewRecurringContract = lazy(()=> import("../../views/company/contractRecurring/CreateNewRecurringContract"))
+const RecurringContractDetailView = lazy(()=> import("../../views/company/contractRecurring/RecurringContractDetailView"))
 
 const PurchaseListView = lazy(()=> import("../../views/company/purchases/PurchaseListView"))
 const CreateNewPurchase = lazy(()=> import("../../views/company/purchases/CreateNewPurchase"))
@@ -86,9 +94,19 @@ const Venders = lazy(()=> import("../../views/company/venders/Venders"))
 const CreateNewVender = lazy(()=> import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(()=> import("../../views/company/reports/Reports"))
+const Sales = lazy(()=> import("../../views/company/sales/Sales"))
+
+const ChemicalHistory = lazy(()=> import("../../views/company/history/ChemicalHistory"))
+const ServiceHistory = lazy(()=> import("../../views/company/history/ServiceHistory"))
+
 
 export const sellerRoutes = [
-    
+    {
+        path:'/company/selector',
+        element: <CompanySelection/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    },
     //Basic Pages
     {
         path:'/company/dashboard',
@@ -179,7 +197,23 @@ export const sellerRoutes = [
     
     {
         path:'/company/repairRequests',
-        element: <WorkInProgress/>,
+        element: <RepairRequests/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    
+    {
+        path:'/company/repairRequest/detail/:repairRequestId',
+        element: <RepairRequestDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    
+    {
+        path:'/company/repairRequest/createNew/:customerId',
+        element: <CreateNewRepairRequest/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
@@ -276,8 +310,37 @@ export const sellerRoutes = [
     }
     ,
     {
-        path:'/company/contracts/contract/:contractId',
+        path:'/company/contract/detail/:contractId',
         element: <ContractDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/contract/createNew/:customerId',
+        element: <CreateNew/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    //Recurring Contracts
+    {
+        path:'/company/recurringContracts',
+        element: <RecurringContracts/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/recurringContract/detail/:contractId',
+        element: <RecurringContractDetailView/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/recurringContract/createNew/:customerId',
+        element: <CreateNewRecurringContract/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
@@ -435,6 +498,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path:'/company/recurringLaborContracts/createNew',
+        element: <CreateNewLaborContract/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
         path:'/company/workLogs',
         element: <WorkLogs/>,
         ability :['Admin','Seller'],
@@ -444,13 +514,6 @@ export const sellerRoutes = [
     {
         path:'/company/workLogs/:workLogId',
         element: <WorkLogDetails/>,
-        ability :['Admin','Seller'],
-        role:'Company'
-    }
-    ,
-    {
-        path:'/company/contracts/createNew/:customerId',
-        element: <CreateNew/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
@@ -472,13 +535,6 @@ export const sellerRoutes = [
     {
         path:'/company/bodiesOfWater/createNew/:customerId/:serviceLocationId',
         element: <CreateNewBodyOfWater/>,
-        ability :['Admin','Seller'],
-        role:'Company'
-    }
-    ,
-    {
-        path:'/company/recurringLaborContracts/createNew',
-        element: <CreateNewLaborContract/>,
         ability :['Admin','Seller'],
         role:'Company'
     }
@@ -528,6 +584,28 @@ export const sellerRoutes = [
     {
         path:'/company/reports',
         element: <Reports/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/sales',
+        element: <Sales/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    {
+        path:'/company/chemicalHistory/:customerId/:serviceLocationId/:bodyOfWaterId',
+        element: <ChemicalHistory/>,
+        ability :['Admin','Seller'],
+        role:'Company'
+    }
+    ,
+    
+    {
+        path:'/company/serviceHistory/:customerId/:serviceLocationId/:bodyOfWaterId',
+        element: <ServiceHistory/>,
         ability :['Admin','Seller'],
         role:'Company'
     }

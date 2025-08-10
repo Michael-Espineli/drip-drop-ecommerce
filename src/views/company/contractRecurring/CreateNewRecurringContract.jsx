@@ -13,7 +13,7 @@ import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 
 const functions = getFunctions();
 
-const CreateNew = () => {
+const CreateNewRecurringContract = () => {
     const {customerId} = useParams();
     const {stripeConnectedAccountId, user, recentlySelectedCompany, recentlySelectedCompanyName} = useContext(Context);
 
@@ -292,17 +292,17 @@ const CreateNew = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='py-2'>
                 <div>
-                <div className='flex'>
+                    <div className='flex'>
                         <Link 
                         className='bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6] justify-start items-center gap-3 flex'
-                        to='/company/contracts'>
+                        to='/company/recurringContracts'>
                                 <FaChevronLeft />
                                 <p>
                                  Contract List
                                 </p>                    
                         </Link>
                     </div>   
-                    <p>Create New Service Contract</p>
+                    <p>Create New Recurring Service Contract</p>
                 </div>
                 <form>
                     
@@ -438,4 +438,4 @@ const CreateNew = () => {
     );
 };
 
-export default CreateNew;
+export default CreateNewRecurringContract;

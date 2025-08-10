@@ -141,7 +141,8 @@ const PurchasesList = () => {
         
         try{
             let q;
-            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", dateOption), where("date", "<=", endDate), orderBy("date"));
+            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+             where("date", ">=", dateOption), where("date", "<=", endDate), orderBy("date"));
             const querySnapshot = await getDocs(q);
             let count = 1 
             setPurchaseList([])  
@@ -415,72 +416,127 @@ const PurchasesList = () => {
                     if ((option.find(item => item.id === 1) && option.find(item => item.id === 2) && option.find(item => item.id === 3) && option.find(item => item.id === 4))||(option.find(item => item.id === 1) && option.find(item => item.id === 2))||(option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // none 
                         console.log('none')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+                         where("date", ">=", startDate),
+                          where("date", "<=", endDate),
+                          orderBy("date"));
             
                     } else if ( (option.find(item => item.id === 1) && option.find(item => item.id === 2) && option.find(item => item.id === 3))){
                         // invoiced true 
                         console.log('invoiced true 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , true),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+                         where("date", ">=", startDate),
+                          where('invoiced', '==' , true),
+                         where("date", "<=", endDate), 
+                         orderBy("date"));
     
                     } else if ((option.find(item => item.id === 1)&& option.find(item => item.id === 2) && option.find(item => item.id === 4))){
                         // invoiced false 
                         console.log('invoiced false 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , false),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+                         where("date", ">=", startDate), 
+                         where('invoiced', '==' , false),
+                         where("date", "<=", endDate), 
+                         orderBy("date"));
                 
                     } else if ((option.find(item => item.id === 1)&& option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // billable true 
                         console.log('billable true 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+                         where("date", ">=", startDate), 
+                         where('billable', '==' , true),
+                         where("date", "<=", endDate), 
+                         orderBy("date"));
                     
                     } else if  (( option.find(item => item.id === 2) && option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // billable false 
                         console.log('billable false 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'),
+                         where("date", ">=", startDate), 
+                         where('billable', '==' , false),
+                         where("date", "<=", endDate), 
+                         orderBy("date"));
          
                     } else if (option.find(item => item.id === 1) && option.find(item => item.id === 3)){
                         // billable true and invoiced true
                         console.log('billable true and invoiced true')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true), where('invoiced', '==' , true), where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true), 
+                        where('invoiced', '==' , true), 
+                        where("date", "<=", endDate), 
+                        orderBy("date"));
                 
                     } else if (option.find(item => item.id === 1) && option.find(item => item.id === 4)){
                         // billable true and invoiced false
                         console.log('billable true and invoiced false')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true), where('invoiced', '==' , false), where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true), 
+                        where('invoiced', '==' , false), 
+                        where("date", "<=", endDate), 
+                        orderBy("date"));
     
                     } else if  (option.find(item => item.id === 2) && option.find(item => item.id === 3)){
                         // billable false and invoiced true
                         console.log('billable false and invoiced true')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),  where('invoiced', '==' , true), where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),  
+                        where('invoiced', '==' , true), 
+                        where("date", "<=", endDate), 
+                        orderBy("date"));
     
                     } else if  (option.find(item => item.id === 2)  && option.find(item => item.id === 4)){
                         // billable false and invoiced false
                         console.log('billable false and invoiced false')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),  where('invoiced', '==' , false),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),  
+                        where('invoiced', '==' , false),
+                        where("date", "<=", endDate), orderBy("date"));
                     
                     } else if ((option.find(item => item.id === 1))){
                         // billable true 
                         console.log('billable true 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true),
+                        where("date", "<=", endDate), 
+                        orderBy("date"));
                     
                     } else if  ((option.find(item => item.id === 2))){
                         // billable false 
                         console.log('billable false 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),
+                        where("date", "<=", endDate), orderBy("date"));
          
-                    } else if (option.find(item => item.id === 3)){
+                    } else if (option.find(item => 
+                        item.id === 3)){
                         // invoiced true 
                         console.log('invoiced true 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , true),where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), where('invoiced', '==' , true),
+                        where("date", "<=", endDate), orderBy("date"));
     
                     } else if (option.find(item => item.id === 4)){
                         // invoiced false 
                         console.log(' invoiced false 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , false),where("date", "<="), orderBy("date"));
+                        q = query(collection(db, 'companies',
+                            recentlySelectedCompany,'purchasedItems'), 
+                            where("date", ">=", startDate), 
+                            where('invoiced', '==' , false),
+                            where("date", "<="), orderBy("date"));
                     
                     } else {
                         //none
                         console.log('none')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where("date", "<=", endDate), orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where("date", "<=", endDate), 
+                        orderBy("date"));
                     }
 
                 } else {
@@ -488,72 +544,143 @@ const PurchasesList = () => {
                     if ((option.find(item => item.id === 1) && option.find(item => item.id === 2) && option.find(item => item.id === 3) && option.find(item => item.id === 4))||(option.find(item => item.id === 1) && option.find(item => item.id === 2))||(option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // none 
                         console.log('none')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
             
                     } else if ( (option.find(item => item.id === 1) && option.find(item => item.id === 2) && option.find(item => item.id === 3))){
                         // invoiced true 
                         console.log('invoiced true 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , true),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('invoiced', '==' , true),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
     
                     } else if ((option.find(item => item.id === 1)&& option.find(item => item.id === 2) && option.find(item => item.id === 4))){
                         // invoiced false 
                         console.log(' invoiced false 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , false),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('invoiced', '==' , false),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                 
                     } else if ((option.find(item => item.id === 1)&& option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // billable true 
                         console.log('billable true 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',
+                            recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                     
                     } else if (( option.find(item => item.id === 2) && option.find(item => item.id === 3) && option.find(item => item.id === 4))){
                         // billable false 
                         console.log('billable false 1')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
          
                     } else if (option.find(item => item.id === 1) && option.find(item => item.id === 3)){
                         // billable true and invoiced true
                         console.log('billable true and invoiced true')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true), where('invoiced', '==' , true), where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true), 
+                        where('invoiced', '==' , true), 
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                 
                     } else if (option.find(item => item.id === 1) && option.find(item => item.id === 4)){
                         // billable true and invoiced false
                         console.log('billable true and invoiced false')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true), where('invoiced', '==' , false), where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true), 
+                        where('invoiced', '==' , false), 
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
     
                     } else if  (option.find(item => item.id === 2) && option.find(item => item.id === 3)){
                         // billable false and invoiced true
                         console.log('billable false and invoiced true')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),  where('invoiced', '==' , true), where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),  
+                        where('invoiced', '==' , true), 
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , orderBy("date"));
     
                     } else if  (option.find(item => item.id === 2)  && option.find(item => item.id === 4)){
                         // billable false and invoiced false
                         console.log('billable false and invoiced false')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),  where('invoiced', '==' , false),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),  
+                        where('invoiced', '==' , false),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                     
                     } else if ((option.find(item => item.id === 1))){
                         // billable true 
                         console.log('billable true 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , true),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , true),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                     
                     } else if  ((option.find(item => item.id === 2))){
                         // billable false 
                         console.log('billable false 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('billable', '==' , false),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('billable', '==' , false),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , orderBy("date"));
          
                     } else if (option.find(item => item.id === 3)){
                         // invoiced true 
                         console.log('invoiced true 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , true),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('invoiced', '==' , true),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
     
                     } else if (option.find(item => item.id === 4)){
                         // invoiced false 
                         console.log(' invoiced false 2')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where('invoiced', '==' , false),where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where('invoiced', '==' , false),
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                     
                     } else {
                         //none
                         console.log('none')
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", startDate), where("date", "<=", endDate), where('techId','in',idList) , orderBy("date"));
+                        q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), 
+                        where("date", ">=", startDate), 
+                        where("date", "<=", endDate), 
+                        where('techId','in',idList) , 
+                        orderBy("date"));
                     }
 
                 }

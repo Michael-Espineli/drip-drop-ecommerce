@@ -8,6 +8,7 @@ import { format } from 'date-fns'; // Or any other date formatting library
 const Jobs = () => {
     const [laborContractlist, setLaborContractlist] = useState([]);
     const {name,recentlySelectedCompany} = useContext(Context);
+    const [searchTerm, setSearchTerm] = useState('');
 
     useEffect(() => {
         (async () => {                
@@ -72,60 +73,68 @@ const Jobs = () => {
             </div>
             <div className='w-full rounded-md mt-3'>
                 <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between items-center'>
-                        <div className='relative overflow-x-auto'>
-                            <table className="min-w-full bg-white border border-gray-200">
-                                <thead>
-                                    <tr>
-                                        <th className='px-4 py-2 border-b'>Id</th>
-                                        <th className='px-4 py-2 border-b'>Date Created</th>
-                                        <th className='px-4 py-2 border-b'>Customer Name</th>
-                                        <th className='px-4 py-2 border-b'>Type</th>
-                                        <th className='px-4 py-2 border-b'>Billing Status</th>
-                                        <th className='px-4 py-2 border-b'>Operation Status</th>
-                                        <th className='px-4 py-2 border-b sm:hidden'>Labor Cost</th>
-                                        <th className='px-4 py-2 border-b sm:hidden'>Rate</th>
-                                        <th className='px-4 py-2 border-b'>Admin Name</th>
-                                        <th className='px-4 py-2 border-b'>Description</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                {
-                                    laborContractlist?.map(laborContract => (
-                                            <tr key={laborContract.id} className="border-b border-slate-700">
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.internalId}</Link></td>
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.formattedDateCreated}</Link></td>
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.customerName}</Link></td>
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.type}</Link></td>
-                                                <td className='px-4 py-2 border-b'>
-                                                    <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                                                    {laborContract.billingStatus == "Draft" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                    {laborContract.billingStatus == "Estimate" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
-                                                    {laborContract.billingStatus == "Accepted" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                    {laborContract.billingStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
-                                                    {laborContract.billingStatus == "Invoiced" && <h1 className="rounded-md blue-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                    {laborContract.billingStatus == "Paid" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                    </Link>
-                                                </td>
-                                                <td className='px-4 py-2 border-b'>
-                                                    <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                                                    {laborContract.operationStatus == "Estimate Pending" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                    {laborContract.operationStatus == "Unscheduled" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                    {laborContract.operationStatus == "Scheduled" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                    {laborContract.operationStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.operationStatus}</h1>}
-                                                    {laborContract.operationStatus == "Finished" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                    </Link>
-                                                </td>
-                                                <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.laborCost}</Link></td>
-                                                <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.rate}</Link></td>
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.adminName}</Link></td>
-                                                <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.description}</Link></td>
-                                            </tr>
-                                    ))
-                                }
-                                </tbody>
-                            </table>
-                        </div>
+                    <div className='flex w-full justify-between items-center py-2'>
+                        <input 
+                            // onChange={(e) => {searchHandler(e)}}
+                            value={searchTerm}
+                            className="text-field w-full p-2 border rounded"
+                            type="text" 
+                            name='search' 
+                            placeholder="Search..."
+                        />
+                    </div>
+                    <div className='relative overflow-x-auto'>
+                        <table className="min-w-full bg-white border border-gray-200">
+                            <thead>
+                                <tr>
+                                    <th className='px-4 py-2 border-b'>Id</th>
+                                    <th className='px-4 py-2 border-b'>Date Created</th>
+                                    <th className='px-4 py-2 border-b'>Customer Name</th>
+                                    <th className='px-4 py-2 border-b'>Type</th>
+                                    <th className='px-4 py-2 border-b'>Billing Status</th>
+                                    <th className='px-4 py-2 border-b'>Operation Status</th>
+                                    <th className='px-4 py-2 border-b sm:hidden'>Labor Cost</th>
+                                    <th className='px-4 py-2 border-b sm:hidden'>Rate</th>
+                                    <th className='px-4 py-2 border-b'>Admin Name</th>
+                                    <th className='px-4 py-2 border-b'>Description</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                            {
+                                laborContractlist?.map(laborContract => (
+                                        <tr key={laborContract.id} className="border-b border-slate-700">
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.internalId}</Link></td>
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.formattedDateCreated}</Link></td>
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.customerName}</Link></td>
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.type}</Link></td>
+                                            <td className='px-4 py-2 border-b'>
+                                                <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                                                {laborContract.billingStatus == "Draft" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                {laborContract.billingStatus == "Estimate" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
+                                                {laborContract.billingStatus == "Accepted" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                {laborContract.billingStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
+                                                {laborContract.billingStatus == "Invoiced" && <h1 className="rounded-md blue-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                {laborContract.billingStatus == "Paid" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
+                                                </Link>
+                                            </td>
+                                            <td className='px-4 py-2 border-b'>
+                                                <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
+                                                {laborContract.operationStatus == "Estimate Pending" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                {laborContract.operationStatus == "Unscheduled" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                {laborContract.operationStatus == "Scheduled" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                {laborContract.operationStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.operationStatus}</h1>}
+                                                {laborContract.operationStatus == "Finished" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
+                                                </Link>
+                                            </td>
+                                            <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.laborCost}</Link></td>
+                                            <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.rate}</Link></td>
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.adminName}</Link></td>
+                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.description}</Link></td>
+                                        </tr>
+                                ))
+                            }
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>

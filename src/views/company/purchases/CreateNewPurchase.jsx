@@ -18,7 +18,8 @@ const CreateNewPurchase = () => {
 
     // Purchase Fields
     const [showSidebar, setShowSidebar] = useState();
-    
+    const [isLoading, setIsLoading] = useState(false);
+
     const [refrence, setRefrence] = useState();
     const [quantity, setQuantity] = useState();
     const [purchaseDate, setPurchaseDate] = useState(new Date());
@@ -41,181 +42,181 @@ const CreateNewPurchase = () => {
 
     // Add new Data Base Items
     
-        const [billable, setBillable] = useState(false);
-    
-        const [rate, setRate] = useState('0');
-    
-        const [rateUSD, setRateUSD] = useState('0');
-    
-        const [billingRate, setBillingRate] = useState('0');
-    
-        const [billingRateUSD, setBillingRateUSD] = useState('0');
-    
-        const [sku, setSku] = useState('');
-    
-        const [uom, setUom] = useState('');
-    
-        const [category, setCategory] = useState('');
-            
-        const [subcategory, setSubcategory] = useState('');
-    
-        const [color, setColor] = useState('');
-    
-        const [description, setDescription] = useState('');
-    
-        const [itemName, setItemName] = useState('');
-    
-        const [size, setSize] = useState('');
-    
-        const [vender, setVender] = useState('');
-    
-        const [venderName, setVenderName] = useState('');
-    
-        const [venderId, setVenderId] = useState('');
+    const [billable, setBillable] = useState(false);
 
-        const [uomList, setUomList] = useState([
-            {
-                id:1,
-                label:'Gallon'
-            }
-            ,
-            {
-                id:2,
-                label:'Pounds'
-            }
-            ,
-            {
-                id:3,
-                label:'Oz'
-            }
-            ,
-            {
-                id:4,
-                label:'Feet'
-            }
-            ,
-            {
-                id:5,
-                label:'Square Feet'
-            }
-            ,
-            {
-                id:6,
-                label:'Liter'
-            }
-            ,
-            {
-                id:7,
-                label:'Inch'
-            }
-            ,
-            {
-                id:8,
-                label:'Quart'
-            }
-            ,
-            {
-                id:9,
-                label:'Tab'
-            }
-            ,
-            {
-                id:10,
-                label:'Unit'
-            }
-            ,
-        ]);
+    const [rate, setRate] = useState('0');
 
-        const [categoryList, setCategoryList] = useState([
-            {
-                id:1,
-                label:'PVC'
-            }
-            ,
-            {
-                id:2,
-                label:'Galvanized'
-            }
-            ,
-            {
-                id:3,
-                label:'Chemicals'
-            }
-            ,
-            {
-                id:4,
-                label:'Useables'
-            }
-            ,
-            {
-                id:5,
-                label:'Equipment'
-            }
-            ,
-            {
-                id:6,
-                label:'Parts'
-            }
-            ,
-            {
-                id:7,
-                label:'Electrical'
-            }
-            ,
-            {
-                id:8,
-                label:'Tools'
-            }
-            ,
-            {
-                id:9,
-                label:'Misc'
-            }
-        ]);
+    const [rateUSD, setRateUSD] = useState('0');
 
-        const [subcategoryList, setSubcategoryList] = useState([
-            {
-                id:1,
-                label:'Please Update'
-            }
-        ]);
+    const [billingRate, setBillingRate] = useState('0');
+
+    const [billingRateUSD, setBillingRateUSD] = useState('0');
+
+    const [sku, setSku] = useState('');
+
+    const [uom, setUom] = useState('');
+
+    const [category, setCategory] = useState('');
         
-        const handleUOMChange = (selectedOption2) => {
+    const [subcategory, setSubcategory] = useState('');
 
-            (async () => {
-                setUom(selectedOption2)
-            })();
-        };
+    const [color, setColor] = useState('');
 
-        const handleCategoryChange = (selectedOption2) => {
+    const [description, setDescription] = useState('');
 
-            (async () => {
-                setCategory(selectedOption2)
-            })();
-        };
+    const [itemName, setItemName] = useState('');
 
-        const handleSubcategoryChange = (selectedOption2) => {
+    const [size, setSize] = useState('');
 
-            (async () => {
-                setSubcategory(selectedOption2)
-            })();
-        };
+    const [vender, setVender] = useState('');
 
-        const handleVenderChange = (selectedOption2) => {
+    const [venderName, setVenderName] = useState('');
 
-            (async () => {
-                setVenderName(selectedOption2.label)
-                setVenderId(selectedOption2.id)
-                setVender(selectedOption2)
-            })();
-        };
+    const [venderId, setVenderId] = useState('');
 
-        function formatCurrency(number, locale = 'en-US', currency = 'USD') {
-            return new Intl.NumberFormat(locale, {
-                style: 'currency',
-                currency: currency
-            }).format(number);
+    const [uomList, setUomList] = useState([
+        {
+            id:1,
+            label:'Gallon'
         }
+        ,
+        {
+            id:2,
+            label:'Pounds'
+        }
+        ,
+        {
+            id:3,
+            label:'Oz'
+        }
+        ,
+        {
+            id:4,
+            label:'Feet'
+        }
+        ,
+        {
+            id:5,
+            label:'Square Feet'
+        }
+        ,
+        {
+            id:6,
+            label:'Liter'
+        }
+        ,
+        {
+            id:7,
+            label:'Inch'
+        }
+        ,
+        {
+            id:8,
+            label:'Quart'
+        }
+        ,
+        {
+            id:9,
+            label:'Tab'
+        }
+        ,
+        {
+            id:10,
+            label:'Unit'
+        }
+        ,
+    ]);
+
+    const [categoryList, setCategoryList] = useState([
+        {
+            id:1,
+            label:'PVC'
+        }
+        ,
+        {
+            id:2,
+            label:'Galvanized'
+        }
+        ,
+        {
+            id:3,
+            label:'Chemicals'
+        }
+        ,
+        {
+            id:4,
+            label:'Useables'
+        }
+        ,
+        {
+            id:5,
+            label:'Equipment'
+        }
+        ,
+        {
+            id:6,
+            label:'Parts'
+        }
+        ,
+        {
+            id:7,
+            label:'Electrical'
+        }
+        ,
+        {
+            id:8,
+            label:'Tools'
+        }
+        ,
+        {
+            id:9,
+            label:'Misc'
+        }
+    ]);
+
+    const [subcategoryList, setSubcategoryList] = useState([
+        {
+            id:1,
+            label:'Please Update'
+        }
+    ]);
+    
+    const handleUOMChange = (selectedOption2) => {
+
+        (async () => {
+            setUom(selectedOption2)
+        })();
+    };
+
+    const handleCategoryChange = (selectedOption2) => {
+
+        (async () => {
+            setCategory(selectedOption2)
+        })();
+    };
+
+    const handleSubcategoryChange = (selectedOption2) => {
+
+        (async () => {
+            setSubcategory(selectedOption2)
+        })();
+    };
+
+    const handleVenderChange = (selectedOption2) => {
+
+        (async () => {
+            setVenderName(selectedOption2.label)
+            setVenderId(selectedOption2.id)
+            setVender(selectedOption2)
+        })();
+    };
+
+    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
+        return new Intl.NumberFormat(locale, {
+            style: 'currency',
+            currency: currency
+        }).format(number);
+    }
 
     useEffect(() => {
         (async () => {
@@ -385,70 +386,149 @@ const CreateNewPurchase = () => {
 
     async function submitReceipt(e) {
         e.preventDefault()
-        let receiptId = 'com_rec_' + uuidv4()
+        if (!isLoading) {
+            setIsLoading(true)
+            console.log('submitReceipt')
+            let receiptId = 'com_rec_' + uuidv4()
 
-        let cost = 0
-        let purchaseItemIds = []
-        for (let i = 0; i < purchaseItemlist.length; i++) {
-            let item = purchaseItemlist[i]
-            
-            console.log('Added Item ' + item)
+            let cost = 0
+            let purchaseItemIds = []
+            for (let i = 0; i < purchaseItemlist.length; i++) {
+                let item = purchaseItemlist[i]
+                
+                console.log('Added Item ' + item)
 
-            cost = cost + parseFloat(item.totalCost)
-            let price = Math.floor(parseFloat(item.rate*100))
-            let priceBillable = Math.floor(parseFloat(item.billable*100))
+                cost = cost + parseFloat(item.totalCost)
+                let price = Math.floor(parseFloat(item.rate*100))
+                let priceBillable = Math.floor(parseFloat(item.billable*100))
 
-            purchaseItemIds.push(item.id)
-            let purchaseItem = {
-                id : item.id,
-                receiptId : receiptId,
-                invoiceNum : refrence,
-                venderId : selectedVender.id,
-                venderName : selectedVender.name,
-                techId : selectedUser.userId,
-                techName : selectedUser.userName,
-                itemId: item.itemId,
-                name: item.name,
-                price: price,
-                quantityString: item.quantityString,
-                date : purchaseDate,
-                billable: item.billable,
-                invoiced: false,
-                returned: false,
-                customerId : "",
-                customerName : "",
-                sku : item.sku,
-                notes : notes,
-                jobId : "",
-                billingRate: priceBillable,
+                purchaseItemIds.push(item.id)
+                let purchaseItem = {
+                    id : item.id,
+                    receiptId : receiptId,
+                    invoiceNum : refrence,
+                    venderId : selectedVender.id,
+                    venderName : selectedVender.name,
+                    techId : selectedUser.userId,
+                    techName : selectedUser.userName,
+                    itemId: item.itemId,
+                    name: item.name,
+                    price: price,
+                    quantityString: item.quantityString,
+                    date : purchaseDate,
+                    billable: item.billable,
+                    invoiced: false,
+                    returned: false,
+                    customerId : "",
+                    customerName : "",
+                    sku : item.sku,
+                    notes : notes,
+                    jobId : "",
+                    billingRate: priceBillable,
+                }
+                console.log(purchaseItem)
+                await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
             }
-            console.log(purchaseItem)
-            await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
-        }
-        console.log(cost*100)
-        cost = Math.floor(parseFloat(cost*100))
-        let costAfterTax = Math.floor(parseFloat(cost*1.085))
+            console.log(cost*100)
+            cost = Math.floor(parseFloat(cost*100))
+            let costAfterTax = Math.floor(parseFloat(cost*1.085))
 
-        console.log('Added Receipt ' + receiptId)
-        let receipt = {
-            id : receiptId,
-            invoiceNum : refrence,
-            date : purchaseDate,
-            storeId : selectedVender.id,
-            storeName : selectedVender.name,
-            tech : selectedUser.userName,
-            techId : selectedUser.userId,
-            purchasedItemIds : purchaseItemIds,
-            numberOfItems : purchaseItemIds.length,
-            cost : cost,
-            costAfterTax : costAfterTax,
-            pdfUrlList : [],
+            console.log('Added Receipt ' + receiptId)
+            let receipt = {
+                id : receiptId,
+                invoiceNum : refrence,
+                date : purchaseDate,
+                storeId : selectedVender.id,
+                storeName : selectedVender.name,
+                tech : selectedUser.userName,
+                techId : selectedUser.userId,
+                purchasedItemIds : purchaseItemIds,
+                numberOfItems : purchaseItemIds.length,
+                cost : cost,
+                costAfterTax : costAfterTax,
+                pdfUrlList : [],
+            }
+            console.log(receipt)
+            await setDoc(doc(db,"companies",recentlySelectedCompany,"receipts", receiptId),receipt );
+            setIsLoading(false)
+            navigate('/company/receipts/detail/' + receiptId)
+                
         }
-        console.log(receipt)
-        await setDoc(doc(db,"companies",recentlySelectedCompany,"receipts", receiptId),receipt );
-        navigate('/company/receipts/detail/' + receiptId)
     }
 
+    async function submitReceiptAndAddAnother(e) {
+        e.preventDefault()
+        if (!isLoading) {
+            setIsLoading(true)
+            console.log('submitReceiptAndAddAnother')
+            let receiptId = 'com_rec_' + uuidv4()
+
+            let cost = 0
+            let purchaseItemIds = []
+            for (let i = 0; i < purchaseItemlist.length; i++) {
+                let item = purchaseItemlist[i]
+                
+                console.log('Added Item ' + item)
+
+                cost = cost + parseFloat(item.totalCost)
+                let price = Math.floor(parseFloat(item.rate*100))
+                let priceBillable = Math.floor(parseFloat(item.billable*100))
+
+                purchaseItemIds.push(item.id)
+                let purchaseItem = {
+                    id : item.id,
+                    receiptId : receiptId,
+                    invoiceNum : refrence,
+                    venderId : selectedVender.id,
+                    venderName : selectedVender.name,
+                    techId : selectedUser.userId,
+                    techName : selectedUser.userName,
+                    itemId: item.itemId,
+                    name: item.name,
+                    price: price,
+                    quantityString: item.quantityString,
+                    date : purchaseDate,
+                    billable: item.billable,
+                    invoiced: false,
+                    returned: false,
+                    customerId : "",
+                    customerName : "",
+                    sku : item.sku,
+                    notes : notes,
+                    jobId : "",
+                    billingRate: priceBillable,
+                }
+                console.log(purchaseItem)
+                await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
+            }
+            console.log(cost*100)
+            cost = Math.floor(parseFloat(cost*100))
+            let costAfterTax = Math.floor(parseFloat(cost*1.085))
+
+            console.log('Added Receipt ' + receiptId)
+            let receipt = {
+                id : receiptId,
+                invoiceNum : refrence,
+                date : purchaseDate,
+                storeId : selectedVender.id,
+                storeName : selectedVender.name,
+                tech : selectedUser.userName,
+                techId : selectedUser.userId,
+                purchasedItemIds : purchaseItemIds,
+                numberOfItems : purchaseItemIds.length,
+                cost : cost,
+                costAfterTax : costAfterTax,
+                pdfUrlList : [],
+            }
+            console.log(receipt)
+            await setDoc(doc(db,"companies",recentlySelectedCompany,"receipts", receiptId),receipt );
+            setPurchaseItemList([])
+            setRefrence("")
+            setNotes("")
+            setIsLoading(false)
+
+        }
+    }
 
     //Add new Database Item
     
@@ -826,6 +906,12 @@ const CreateNewPurchase = () => {
                                                     className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
                                                 >Submit</button>
                                             </div>
+                                            <div className='w-full'>
+                                                <button
+                                                    onClick={(e) => submitReceiptAndAddAnother(e)} 
+                                                    className='w-full py-1 px-2 rounded-md yellow-bg text-[#ffffff] mt-2'
+                                                >Submit And Add Another</button>
+                                            </div>
                                         </div>
                                     </form>
                                 </div>
@@ -834,6 +920,15 @@ const CreateNewPurchase = () => {
                     </div>
                 </div>
             </div>
+            {
+                isLoading && (
+                    
+                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">
+                    <div className="top-20 lg:top-100 relative p-10">
+                        <p>Loading</p>
+                    </div>
+                </div>
+                )}
                 {/* Basic Filter Modal Structure */}
             {showSidebar && (
             <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">

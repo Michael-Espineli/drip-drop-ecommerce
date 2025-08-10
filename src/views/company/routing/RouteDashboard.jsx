@@ -382,9 +382,9 @@ const RouteDashboard = () => {
                             <tbody>
                             {
                                 serviceStopList?.map(serviceStop => (
-                                    <tr key={serviceStop.id}>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.customerName}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.streetAddress}</Link></td>
+                                    <tr key={serviceStop.id} onClick={() => navigate(`/company/serviceStops/detail/${serviceStop.id}`)} className="cursor-pointer hover:bg-slate-700">
+ <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.customerName}</Link></td>
+ <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.streetAddress}</Link></td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.tech}</Link></td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.type}</Link></td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.status}</Link></td>

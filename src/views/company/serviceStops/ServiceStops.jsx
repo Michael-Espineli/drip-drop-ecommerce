@@ -12,10 +12,17 @@ const ServiceStops = () => {
     useEffect(() => {
         (async () => {                
                 try{
+  
+                    // setServiceStopList([])    
 
-                    let q = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops')); //,limit(10)
+                    // let q = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), orderBy('serviceDate'),limit(10)); //,limit(10)
+                    // const querySnapshot = await getDocs(q);     
+                    // const customerData = querySnapshot.docs.map(doc => ServiceStop.fromFirestore(doc));
+
+                    // setServiceStopList(customerData);
+
+                    let q = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), orderBy('serviceDate'),limit(10)); //,limit(10)
                     const querySnapshot = await getDocs(q);       
-                    setServiceStopList([])      
                     querySnapshot.forEach((doc) => {
 
                         const serviceStopData = doc.data()
@@ -28,7 +35,8 @@ const ServiceStops = () => {
                             customerName:serviceStopData.customerName,
                             streetAddress: serviceStopData.address.streetAddress,
                             jobId:serviceStopData.jobId,
-                            date:formattedDate
+                            date:formattedDate,
+                            status: serviceStopData.status, // Added status to the object
                         }
                         setServiceStopList(serviceStopList => [...serviceStopList, serviceStop]); 
                     });
@@ -41,38 +49,54 @@ const ServiceStops = () => {
     },[])
     return (
         <div className='px-2 md:px-7 py-5'>
-            <div className='w-full bg-[#1D2E76] p-4 rounded-md mt-3'>
+            <div className='w-full p-4 rounded-md mt-3'>
                 <div className='left-0 w-full justify-between'>
                     <div className='flex justify-between items-center'>
                         <div className='relative overflow-x-auto'>
-                            <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                                <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                    <tr>
-                                        <th className='py-3 px-4'>Date</th>
-                                        <th className='py-3 px-4'>Tech</th>
-                                        <th className='py-3 px-4'>Customer Name</th>
-                                        <th className='py-3 px-4'>Street Address</th>
-                                        <th className='py-3 px-4'>Job Id</th>
-                                        <th className='py-3 px-4'>Status</th>
-                                        <th className='py-3 px-4'></th>
+                            <table className="min-w-full white-bg border border-gray-200 black-fg">
+                                <thead className='text-sm border-b border-slate-700'>
+                                    <tr className='border-b border-slate-700'>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Date
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Tech
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Customer Name
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Street Address
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Job Id
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Status
+                                        </th>
+                                        <th scope='col' className='px-4 py-3'>
+                                            Action
+                                        </th>
 
                                     </tr>
                                 </thead>
                                 <tbody>
                                 {
                                     serviceStopList?.map(serviceStop => (
-                                            <tr key={serviceStop.id}>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.date}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.tech}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.customerName}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.streetAddress}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.jobId}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{serviceStop.status}</td>
-                                                <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>Details</Link></td>
-                                            </tr>
-                                        
+                                        <tr key={serviceStop.id} className='border-b border-slate-700'>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.date}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.tech}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.customerName}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.streetAddress}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.jobId}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.status}</Link></td>
+                                            <td className='px-4 py-3 font-medium whitespace-nowrap'>
+                                                <Link to={`/company/serviceStops/detail/${serviceStop.id}`}>Details</Link>
+                                            </td>
+                                        </tr>
                                     ))
                                 }
+
                                 </tbody>
                             </table>
                         </div>

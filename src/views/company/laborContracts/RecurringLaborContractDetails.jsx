@@ -27,7 +27,7 @@ const RecurringLaborContractDetails = () => {
     useEffect(() => {
         (async () => {
             try{
-                const docRef = doc(db, "companies",recentlySelectedCompany,'laborContracts',laborContractId);
+                const docRef = doc(db, "recurringLaborContracts",laborContractId);
                 const docSnap = await getDoc(docRef);
                 if (docSnap.exists()) {
                     console.log("Document data:", docSnap.data());
@@ -62,7 +62,6 @@ const RecurringLaborContractDetails = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='w-full bg-[#747e79] p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
-                    <h2>Please Forgive the Work In Progress</h2>
                     <p>{laborContractId}</p>
                     <p>{laborContract.atWill}</p>
                     {/* <p>{laborContract.dateSent}</p> */}
@@ -77,7 +76,7 @@ const RecurringLaborContractDetails = () => {
                     <p>{laborContract.senderName}</p>
                     {/* <p>{laborContract.startDate}</p> */}
                     <p>{laborContract.status}</p>
-                    <p>{laborContract.terms}</p>
+                    <p>terms</p>
                 </div>
             </div>
         </div>

@@ -18,7 +18,7 @@ const CreateNewRecurringServiceStop = () => {
 
     const functions = getFunctions();
     
-    const {customerId} = useParams();
+    const { customerId } = useParams();
     
     const navigate = useNavigate()
     
@@ -209,6 +209,14 @@ const CreateNewRecurringServiceStop = () => {
                 if (newArr.length > 0 ){
                     let cus = newArr[0]
                     setCustomer(cus)
+                    let q1 = query(collection(db, 'companies',recentlySelectedCompany,'serviceLocations'), where('customerId','==',customerId));   
+                    const querySnapshot1 = await getDocs(q1);     
+                    const serviceLocationData = querySnapshot1.docs.map(doc => ServiceLocation.fromFirestore(doc));
+
+                    setServiceLocationList(serviceLocationData);
+                    if (serviceLocationData.length!==0) {
+                        setServiceLocation(serviceLocationList[0])
+                    }
                 }
             }
             
@@ -545,7 +553,7 @@ const CreateNewRecurringServiceStop = () => {
             <form>
                 <div className='py-2'>
                     <div className='w-full bg-[#0e245c] rounded-md text-[#cfcfcf] p-4'> 
-                        <div className='py-2 w-full'>
+                        <div className='py-2 w-full text-[#000000]'>
                             <Select
                                 value={customer}
                                 options={customerList}
@@ -564,7 +572,7 @@ const CreateNewRecurringServiceStop = () => {
                             />
                         </div>
 
-                        <div className='py-2 w-full'>
+                        <div className='py-2 w-full text-[#000000]'>
                             <Select
                                 value={serviceLocation}
                                 options={serviceLocationList}
@@ -583,7 +591,7 @@ const CreateNewRecurringServiceStop = () => {
                             />
                         </div>
 
-                        <div className='py-2 w-full'>
+                        <div className='py-2 w-full text-[#000000]'>
                             <Select
                                 value={tech}
                                 options={techList}

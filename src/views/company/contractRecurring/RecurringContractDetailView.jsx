@@ -4,7 +4,7 @@ import { query, collection, getDocs, doc, updateDoc, getDoc, startAfter, where, 
 import { db } from "../../../utils/config";
 import { format } from 'date-fns'; // Or any other date formatting library
 
-const ContractDetailView = () => {
+const RecurringContractDetailView = () => {
     const {contractId} = useParams();
     
     const [contract,setContract] = useState({
@@ -148,4 +148,4 @@ const ContractDetailView = () => {
     );
 };
 
-export default ContractDetailView;
+export default RecurringContractDetailView;
