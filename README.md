@@ -1,6 +1,12 @@
-# Getting Started with Create React App
+# Getting Started with Drip Drop
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## for production run 
+
+# firebase use production
+
+## for Development run 
+
+# firebase use development
 
 ## Available Scripts
 

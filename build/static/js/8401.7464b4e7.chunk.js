@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkdrip_drop_ecommerce=self.webpackChunkdrip_drop_ecommerce||[]).push([[8401],{78401(e,r,a){a.r(r),a.d(r,{default:()=>i});a(65043);var c=a(96799),s=a(99396),d=a(70579);const i=()=>{const{company:e,loading:r,error:a}=(0,s.A)();return r?(0,d.jsx)("div",{className:"dark-theme",children:"Loading company profile..."}):a?(0,d.jsx)("div",{className:"dark-theme",children:a}):(0,d.jsx)("div",{className:"dark-theme",children:(0,d.jsx)(c.A,{viewType:"self",companyData:e})})}}}]);
+//# sourceMappingURL=8401.7464b4e7.chunk.js.map

@@ -1,4 +1,4 @@
-import React, { useState,useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import {Link, useParams } from 'react-router-dom';
 import { query, doc, setDoc, collection, getDocs, orderBy } from "firebase/firestore";
 import { db } from "../../../utils/config";
@@ -13,6 +13,8 @@ import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 
 const CreateNewPurchase = () => {
     const {name,recentlySelectedCompany} = useContext(Context);
+    const fileInputRef = useRef(null);
+    const [fileRef, setFileRef] = useState('');
 
     const navigate = useNavigate()
 
@@ -698,6 +700,20 @@ const CreateNewPurchase = () => {
             console.log(error)
         }
     }
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (file) {
+          console.log('Selected file:', file);
+          // Here you would trigger the PDF processing logic
+          console.log('Selected fileName:', file.name);
+
+          setFileRef(file.name)
+        }
+      };
+
+    const handleUploadClick = () => {
+        fileInputRef.current.click();
+    };
 
     return (
 
@@ -717,80 +733,169 @@ const CreateNewPurchase = () => {
             <div className='px-2 md:px-7 py-5'>
                 <div className='lg:flex'>
                     <div className='w-full'>
-                        <div className='w-full'>
-                            <div className='py-2 flex justify-between'>
-                                <Link 
-                                className='py-1 px-2 bg-[#0e245c] rounded-md py-1 px-2 text-[#d0d2d6]'
-                                to={`/company/purchasedItems`}>
-                                    Back
-                                </Link>
-                                <div className="">
-                                    <button
-                                    className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
-                                    onClick={(e) => submitReceipt(e)} 
-                                    >Submit</button>
+                        <div className='py-2 flex justify-between'>
+                            <Link 
+                            className='py-1 px-2 bg-[#0e245c] rounded-md py-1 px-2 text-[#d0d2d6]'
+                            to={`/company/purchasedItems`}>
+                                Back
+                            </Link>
+                            <button onClick={handleUploadClick} className="py-1 px-4 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Upload Receipt</button>
+                            <h1>{fileRef}</h1>
+                            <input
+                            type="file"
+                            ref={fileInputRef}
+                            onChange={handleFileChange}
+                            style={{ display: 'none' }}
+                            accept="application/pdf"
+                            />
+                            <div className="">
+                                <button
+                                className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
+                                onClick={(e) => submitReceipt(e)} 
+                                >Submit</button>
 
-                                </div>
                             </div>
-                            <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                                <div className='left-0 w-full justify-between'>
-                                    <h2 className="font-bold">Create New Receipt</h2>
-                                    <form className='gap-2'>
-                                        <div className='flex justify-between w-full items-center gap-2 text-[#000000]'>
-                                            <h2 className="text-[#ffffff]">Purchase Date</h2>
-                                            <div>
-                                                <DatePicker 
-                                                    showIcon
-                                                    selected={purchaseDate} 
-                                                    onChange={(purchaseDate) => handlePurchaseDateChange(purchaseDate)}
-                                                    icon={
-                                                    <svg
-                                                        xmlns="http://www.w3.org/2000/svg"
-                                                        width="1em"
-                                                        height="1em"
-                                                        viewBox="0 0 48 48"
-                                                    >
-                                                        <mask id="ipSApplication0">
-                                                        <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
-                                                            <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
-                                                            <path
-                                                            fill="#fff"
-                                                            d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
-                                                            ></path>
-                                                        </g>
-                                                        </mask>
+                        </div>
+                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
+                            <div className='left-0 w-full justify-between'>
+                                <h2 className="font-bold">Create New Receipt</h2>
+                                <form className='gap-2'>
+                                    <div className='flex justify-between w-full items-center gap-2 text-[#000000]'>
+                                        <h2 className="text-[#ffffff]">Purchase Date</h2>
+                                        <div>
+                                            <DatePicker 
+                                                showIcon
+                                                selected={purchaseDate} 
+                                                onChange={(purchaseDate) => handlePurchaseDateChange(purchaseDate)}
+                                                icon={
+                                                <svg
+                                                    xmlns="http://www.w3.org/2000/svg"
+                                                    width="1em"
+                                                    height="1em"
+                                                    viewBox="0 0 48 48"
+                                                >
+                                                    <mask id="ipSApplication0">
+                                                    <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
+                                                        <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
                                                         <path
-                                                        fill="currentColor"
-                                                        d="M0 0h48v48H0z"
-                                                        mask="url(#ipSApplication0)"
+                                                        fill="#fff"
+                                                        d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
                                                         ></path>
-                                                    </svg>
-                                                    }
-                                                />
-                                            </div>
+                                                    </g>
+                                                    </mask>
+                                                    <path
+                                                    fill="currentColor"
+                                                    d="M0 0h48v48H0z"
+                                                    mask="url(#ipSApplication0)"
+                                                    ></path>
+                                                </svg>
+                                                }
+                                            />
                                         </div>
-                                        <div className='flex justify-between w-full items-center gap-2'>
-                                                <h2>Refrence</h2>
-                                                <input 
-                                                className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                                onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
-                                                
+                                    </div>
+                                    <div className='flex justify-between w-full items-center gap-2'>
+                                            <h2>Refrence</h2>
+                                            <input 
+                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
+                                            onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
+                                            
+                                    </div>
+                                    <div className='flex justify-between w-full items-center gap-2'>
+                                            <h2>Notes</h2>
+                                            <input 
+                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
+                                            onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
+                                    </div>
+                                    <div className='flex justify-between w-full items-center gap-2'>
+                                        <div className='w-full'>
+                                            <h1>Store</h1>
+                                            <Select
+                                                value={selectedVender}
+                                                options={venderList}
+                                                onChange={handleSelectedVenderChange}
+                                                isSearchable
+                                                placeholder="Select a Vender"
+                                                theme={(theme) => ({
+                                                ...theme,
+                                                borderRadius: 0,
+                                                colors: {
+                                                    ...theme.colors,
+                                                    primary25: 'green',
+                                                    primary: 'gray',
+                                                },
+                                                })}
+                                            />
                                         </div>
-                                        <div className='flex justify-between w-full items-center gap-2'>
-                                                <h2>Notes</h2>
-                                                <input 
-                                                className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                                onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
+                                        <div className='w-full'>
+                                            <h1>Tech</h1>
+                                            <Select
+                                                value={selectedUser}
+                                                options={companyUserList}
+                                                onChange={handleSelectedUserChange}
+                                                isSearchable
+                                                placeholder="Select a Task Type"
+                                                theme={(theme) => ({
+                                                ...theme,
+                                            borderRadius: 0,
+                                                colors: {
+                                                    ...theme.colors,
+                                                    primary25: 'green',
+                                                    primary: 'gray',
+                                                },
+                                                })}
+                                            />
                                         </div>
-                                        <div className='flex justify-between w-full items-center gap-2'>
-                                            <div className='w-full'>
-                                                <h1>Store</h1>
+                                    </div>
+                                    <hr className='mt-2'/>
+                                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
+                                        <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+                                            <tr>
+                                                <th className='py-3 px-4'>Sku</th>
+                                                <th className='py-3 px-4'>Name</th>
+                                                <th className='py-3 px-4'>Description</th>
+                                                <th className='py-3 px-4'>Cost</th>
+                                                <th className='py-3 px-4'>Quantity</th>
+                                                <th className='py-3 px-4'>Total Cost</th>
+                                                <th className='py-3 px-4'></th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                        {
+                                            purchaseItemlist?.map( item => (
+                                                <tr key={item.id}>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.sku}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.description}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.rate}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.totalCost}</td>
+                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                                        <button
+                                                        onClick={(e) => removeItem(e,item.id)} 
+                                                        className='w-full py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff] mt-2'
+                                                        >Remove</button>
+                                                    </td>
+                                                </tr>
+                                            ))
+                                        }
+                                        </tbody>
+                                    </table>
+                                    {/* <button
+                                    className='w-full py-1 px-2 rounded-md bg-[#1D2E76] text-[#ffffff] mt-2'
+                                    >Add First Line Item</button> */}
+                                    <div className='flex justify-between items-center py-1'>
+                                        <button
+                                        onClick={(e) => revealSideBar(e)}
+                                        className='py-1 px-2 red-fg'
+                                        >Create Item</button>
+                                        <div className='w-full px-1'>
+                                            <div className='w-full px-1'>
                                                 <Select
-                                                    value={selectedVender}
-                                                    options={venderList}
-                                                    onChange={handleSelectedVenderChange}
+                                                    value={selectedGenericItem}
+                                                    options={genericItemList}
+                                                    onChange={handleSelectedGenericItemChange}
                                                     isSearchable
-                                                    placeholder="Select a Vender"
+                                                    placeholder="Select a Generic Item"
                                                     theme={(theme) => ({
                                                     ...theme,
                                                     borderRadius: 0,
@@ -802,119 +907,35 @@ const CreateNewPurchase = () => {
                                                     })}
                                                 />
                                             </div>
-                                            <div className='w-full'>
-                                                <h1>Tech</h1>
-                                                <Select
-                                                    value={selectedUser}
-                                                    options={companyUserList}
-                                                    onChange={handleSelectedUserChange}
-                                                    isSearchable
-                                                    placeholder="Select a Task Type"
-                                                    theme={(theme) => ({
-                                                    ...theme,
-                                                borderRadius: 0,
-                                                    colors: {
-                                                        ...theme.colors,
-                                                        primary25: 'green',
-                                                        primary: 'gray',
-                                                    },
-                                                    })}
-                                                />
-                                            </div>
                                         </div>
-                                        <hr className='mt-2'/>
-                                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                                <tr>
-                                                    <th className='py-3 px-4'>Sku</th>
-                                                    <th className='py-3 px-4'>Name</th>
-                                                    <th className='py-3 px-4'>Description</th>
-                                                    <th className='py-3 px-4'>Cost</th>
-                                                    <th className='py-3 px-4'>Quantity</th>
-                                                    <th className='py-3 px-4'>Total Cost</th>
-                                                    <th className='py-3 px-4'></th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                            {
-                                                purchaseItemlist?.map( item => (
-                                                    <tr key={item.id}>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.sku}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.description}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.rate}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.totalCost}</td>
-                                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                            <button
-                                                            onClick={(e) => removeItem(e,item.id)} 
-                                                            className='w-full py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff] mt-2'
-                                                            >Remove</button>
-                                                        </td>
-                                                    </tr>
-                                                ))
-                                            }
-                                            </tbody>
-                                        </table>
-                                        {/* <button
-                                        className='w-full py-1 px-2 rounded-md bg-[#1D2E76] text-[#ffffff] mt-2'
-                                        >Add First Line Item</button> */}
-                                        <div className='flex justify-between items-center py-1'>
-
-
+                                        <div className="px-2 w-1/4">
+                                            <input 
+                                            className='w-full py-1 px-2 rounded-md text-[#000000]'
+                                            onChange={(e) => {setQuantity(e.target.value)}} type="text" placeholder='Quantity' value={quantity}>
+                                            </input>
+                                        </div>
+                                        <div className="px-2">
                                             <button
-                                            onClick={(e) => revealSideBar(e)}
-                                            className='py-1 px-2 red-fg'
-                                            >Create Item</button>
-                                            <div className='w-full px-1'>
-                                                <div className='w-full px-1'>
-                                                    <Select
-                                                        value={selectedGenericItem}
-                                                        options={genericItemList}
-                                                        onChange={handleSelectedGenericItemChange}
-                                                        isSearchable
-                                                        placeholder="Select a Generic Item"
-                                                        theme={(theme) => ({
-                                                        ...theme,
-                                                        borderRadius: 0,
-                                                        colors: {
-                                                            ...theme.colors,
-                                                            primary25: 'green',
-                                                            primary: 'gray',
-                                                        },
-                                                        })}
-                                                    />
-                                                </div>
-                                            </div>
-                                            <div className="px-2 w-1/4">
-                                                <input 
-                                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                                onChange={(e) => {setQuantity(e.target.value)}} type="text" placeholder='Quantity' value={quantity}>
-                                                </input>
-                                            </div>
-                                            <div className="px-2">
-                                                <button
-                                                onClick={(e) => addNewItem(e)}
-                                                className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
-                                                >Add</button>
-                                            </div>
+                                            onClick={(e) => addNewItem(e)}
+                                            className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
+                                            >Add</button>
                                         </div>
-                                        <div className='flex justify-between w-full items-center gap-2'>
-                                            <div className='w-full'>
-                                                <button
-                                                    onClick={(e) => submitReceipt(e)} 
-                                                    className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
-                                                >Submit</button>
-                                            </div>
-                                            <div className='w-full'>
-                                                <button
-                                                    onClick={(e) => submitReceiptAndAddAnother(e)} 
-                                                    className='w-full py-1 px-2 rounded-md yellow-bg text-[#ffffff] mt-2'
-                                                >Submit And Add Another</button>
-                                            </div>
+                                    </div>
+                                    <div className='flex justify-between w-full items-center gap-2'>
+                                        <div className='w-full'>
+                                            <button
+                                                onClick={(e) => submitReceipt(e)} 
+                                                className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
+                                            >Submit</button>
                                         </div>
-                                    </form>
-                                </div>
+                                        <div className='w-full'>
+                                            <button
+                                                onClick={(e) => submitReceiptAndAddAnother(e)} 
+                                                className='w-full py-1 px-2 rounded-md yellow-bg text-[#ffffff] mt-2'
+                                            >Submit And Add Another</button>
+                                        </div>
+                                    </div>
+                                </form>
                             </div>
                         </div>
                     </div>

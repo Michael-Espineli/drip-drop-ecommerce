@@ -1,288 +1,404 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams,Navigate } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, deleteDoc, updateDoc, Timestamp } from "firebase/firestore";
+import React, { useState, useEffect, useContext } from "react";
+import { Link, useParams } from "react-router-dom";
+import {
+  doc,
+  getDoc,
+  deleteDoc,
+} from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { format } from 'date-fns'; // Or any other date formatting library
-import { useNavigate } from 'react-router-dom';
+import { format } from "date-fns";
+import { useNavigate } from "react-router-dom";
 
 const DataBaseItemDetailView = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
+  const { name, recentlySelectedCompany } = useContext(Context);
 
-    const navigate = useNavigate()
+  const navigate = useNavigate();
+  const { id } = useParams();
 
-    const {id} = useParams();
+  const [purchase, setPurchase] = useState({});
+  const [edit, setEdit] = useState(false);
 
-    const [purchase, setPurchase] = useState({
-    });
+  const [rate, setRate] = useState("");
+  const [uom, setUom] = useState("");
+  const [category, setCategory] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [color, setColor] = useState("");
+  const [description, setDescription] = useState("");
+  const [itemName, setItemName] = useState("");
+  const [size, setSize] = useState("");
+  const [billingRate, setBillingRate] = useState("");
+  const [sku, setSku] = useState("");
 
-    const [edit, setEdit] = useState(false);
+  useEffect(() => {
+    (async () => {
+      try {
+        const docRef = doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const itemData = docSnap.data();
+          const dateUpdated = itemData.dateUpdated.toDate();
+          const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
 
-    const [rate, setRate] = useState('');
+          let rateDouble = itemData.rate / 100;
+          let formattedRateUSD = formatCurrency(rateDouble);
 
-    const [uom, setUom] = useState('');
+          let billingRateDouble = itemData.billingRate / 100;
+          let formattedBillingRateUSD = formatCurrency(billingRateDouble);
 
-    const [category, setCategory] = useState('');
-    
-    const [subcategory, setSubcategory] = useState('');
-
-    const [color, setColor] = useState('');
-
-    const [description, setDescription] = useState('');
-
-    const [itemName, setItemName] = useState('');
-
-    const [size, setSize] = useState('');
-
-    const [billingRate, setBillingRate] = useState('');
-    
-    const [sku, setSku] = useState('');
-
-    useEffect(() => { 
-        (async () => {
-            try{
-                const docRef = doc(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase',id);
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    const itemData = docSnap.data()
-                    const dateUpdated = itemData.dateUpdated.toDate();
-                    const formattedDate1 = format(dateUpdated, 'MM / d / yyyy'); 
-                    
-                    let rateDouble = itemData.rate/100
-                    let formattedRateUSD = formatCurrency(rateDouble);
-                    
-                    let billingRateDouble = itemData.billingRate/100
-                    let formattedBillingRateUSD = formatCurrency(billingRateDouble);
-                
-                    setPurchase((purchase) => ({
-                        ...purchase,
-                        UOM : itemData.UOM,
-                        billable : itemData.billable,
-                        category : itemData.category,
-                        color : itemData.color,
-                        dateUpdated : formattedDate1,
-                        description : itemData.description,
-                        id : itemData.id,
-                        name : itemData.name,
-                        rateFormatted : formattedRateUSD,
-                        rate : itemData.rate/100,
-                        size : itemData.size,
-                        sku : itemData.sku,
-                        storeName : itemData.storeName,
-                        subCategory : itemData.subCategory,
-                        timesPurchased : itemData.timesPurchased,
-                        venderId : itemData.venderId,
-                        label: itemData.name + ' ' + itemData.rate + ' ' + itemData.sku,
-                        billingRate : formattedBillingRateUSD
-                    }));
-                } else {
-                console.log("No such document!");
-                }
-            } catch(error){
-                console.log('Error')
-            }
-        })();
-    },[])
-
-    
-    async function editItem(e) {
-        e.preventDefault()
-        try{
-            setEdit(true);
-            setRate(purchase.rate)
-            setUom(purchase.UOM)
-            setCategory(purchase.category)
-            setColor(purchase.color)
-            setDescription(purchase.description)
-            setItemName(purchase.name)
-            setSize(purchase.size)
-            setBillingRate(purchase.billingRate)
-
-        } catch(error){
-            console.log(error)
-
+          setPurchase((purchase) => ({
+            ...purchase,
+            UOM: itemData.UOM,
+            billable: itemData.billable,
+            category: itemData.category,
+            color: itemData.color,
+            dateUpdated: formattedDate1,
+            description: itemData.description,
+            id: itemData.id,
+            name: itemData.name,
+            rateFormatted: formattedRateUSD,
+            rate: itemData.rate / 100,
+            size: itemData.size,
+            sku: itemData.sku,
+            storeName: itemData.storeName,
+            subCategory: itemData.subCategory,
+            timesPurchased: itemData.timesPurchased,
+            venderId: itemData.venderId,
+            label: itemData.name + " " + itemData.rate + " " + itemData.sku,
+            billingRate: formattedBillingRateUSD,
+          }));
+        } else {
+          console.log("No such document!");
         }
+      } catch (error) {
+        console.log("Error");
+      }
+    })();
+  }, []);
+
+  async function editItem(e) {
+    e.preventDefault();
+    try {
+      setEdit(true);
+      setRate(purchase.rate);
+      setUom(purchase.UOM);
+      setCategory(purchase.category);
+      setColor(purchase.color);
+      setDescription(purchase.description);
+      setItemName(purchase.name);
+      setSize(purchase.size);
+      setBillingRate(purchase.billingRate);
+    } catch (error) {
+      console.log(error);
     }
+  }
 
-    async function deleteItem(e) {
-        e.preventDefault()
-        try{
-            await deleteDoc(doc(db, "companies",recentlySelectedCompany, "settings",'dataBase','dataBase',id));
-
-            navigate('/company/items')
-        } catch(error){
-            console.log(error)
-        }
+  async function deleteItem(e) {
+    e.preventDefault();
+    try {
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id));
+      navigate("/company/items");
+    } catch (error) {
+      console.log(error);
     }
+  }
 
-    async function cancelEdit(e) {
-        e.preventDefault()
-        try{
-            setEdit(false);
-        } catch(error){
-            console.log(error)
-        }
+  async function cancelEdit(e) {
+    e.preventDefault();
+    try {
+      setEdit(false);
+    } catch (error) {
+      console.log(error);
     }
+  }
 
-    async function saveEdit(e) {
-        e.preventDefault()
-        try{
-            setEdit(false);
-            //Update Rate
-
-        } catch(error){
-            console.log(error)
-        }
+  async function saveEdit(e) {
+    e.preventDefault();
+    try {
+      setEdit(false);
+      //Update Rate
+    } catch (error) {
+      console.log(error);
     }
+  }
 
-    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
-        return new Intl.NumberFormat(locale, {
-            style: 'currency',
-            currency: currency
-        }).format(number);
-    }
-    return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 = gray
-        <div className='px-2 md:px-7 py-5'>
-            <div className='px-2 py-2 flex justify-between'>
-                
-                {
-                    edit ? <button
-                    onClick={(e) =>{deleteItem(e)}}
-                    className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff]'>
-                        Delete
-                    </button> :<Link 
-                    className='py-1 px-2 bg-[#0e245c] rounded-md text-[#ffffff]'
-                    to={`/company/items`}
-                    >Go Back</Link>
-                }
-                {
-                    edit ? <button
-                    onClick={(e) =>{cancelEdit(e)}}
-                    className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff]'>
-                        Cancel
-                    </button> :<button
-                    onClick={(e) =>{editItem(e)}}
-                    className='py-1 px-2 bg-[#0e245c] rounded-md text-[#ffffff]'>
-                        Edit
-                    </button>
-                }
-                
-                
-            </div>
-            <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between py-1'>
-                        <p className='font-bold text-lg'>Item Detail View</p>
-                    </div>
-                    {
-                        edit ? <div>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center">Item Name</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setItemName(e.target.value)}} type="text" placeholder='QuantitemNameity' value={itemName}>
-                                    </input>
-                                </div>
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center">Rate</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setRate(e.target.value)}} type="text" placeholder='Quantity' value={rate}>
-                                    </input>
-                                </div>
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center">billing Rate</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setBillingRate(e.target.value)}} type="text" placeholder='billingRate' value={billingRate}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1">
-                                    <p className="px-2 items-center">SKU</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setSku(e.target.value)}} type="text" placeholder='sku' value={sku}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1">
-                                    <p className="px-2 items-center">UOM</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setUom(e.target.value)}} type="text" placeholder='uom' value={uom}>
-                                    </input>
-                                </div>
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center">category</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setCategory(e.target.value)}} type="text" placeholder='category' value={category}>
-                                    </input>
-                                </div>
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center">Subcategory</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setSubcategory(e.target.value)}} type="text" placeholder='Subcategory PICKER' value={subcategory}>
-                                    </input>
-                                </div> 
-                                <div className="flex  py-1">
-                                    <p className="px-2 items-center">color</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setColor(e.target.value)}} type="text" placeholder='color' value={color}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center">size</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setSize(e.target.value)}} type="text" placeholder='size' value={size}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center">description</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='description' value={description}>
-                                    </input>
-                                </div>
-                                <button
-                                    onClick={(e) =>{saveEdit(e)}}
-                                    className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                        Save
-                                </button>
-                
-                            </div>
-                             : <div>
-                                <p>name -  {purchase.name}</p>
-                                <p>Rate -  {purchase.rateFormatted}</p>
-                                <p>Billing Rate -  {purchase.billingRate}</p>
-                                <p>UOM -  {purchase.UOM}</p>
-                                <p>category -  {purchase.category}</p>
-                                <p>color -  {purchase.color}</p>
-                                <p>dateUpdated -  {purchase.dateUpdated}</p>
-                                <p>description -  {purchase.description}</p>
-                                <p>size -  {purchase.size}</p>
-                                <p>sku -  {purchase.sku}</p>
-                                <p>storeName -  {purchase.storeName}</p>
-                                <p>Times Purchased -  {purchase.timesPurchased}</p>
-                             </div>
+  function formatCurrency(number, locale = "en-US", currency = "USD") {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: currency,
+    }).format(number);
+  }
 
-                    }
-                </div>
-            </div>
+  return (
+    <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
+      <div className="mx-auto max-w-4xl space-y-6">
+        {/* Top Bar */}
+        <div className="flex items-center justify-between">
+          {!edit ? (
+            <Link
+              className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+              to={`/company/items`}
+            >
+              ← Go Back
+            </Link>
+          ) : (
+            <button
+              onClick={(e) => {
+                deleteItem(e);
+              }}
+              className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 transition"
+            >
+              Delete
+            </button>
+          )}
+
+          {edit ? (
+            <button
+              onClick={(e) => {
+                cancelEdit(e);
+              }}
+              className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+            >
+              Cancel
+            </button>
+          ) : (
+            <button
+              onClick={(e) => {
+                editItem(e);
+              }}
+              className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+            >
+              Edit
+            </button>
+          )}
         </div>
-    );
-}
-    export default DataBaseItemDetailView;
+
+        {/* Main Card */}
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="px-6 py-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between">
+            <div>
+              <div className="text-sm font-semibold text-slate-700">Item Detail View</div>
+              <div className="text-xs text-slate-500 mt-1">
+                {edit ? "Edit fields and save changes." : "Review details for this catalog item."}
+              </div>
+            </div>
+
+            {!edit && (
+              <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                Updated {purchase.dateUpdated || "--"}
+              </span>
+            )}
+          </div>
+
+          {edit ? (
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">Item Name</label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  onChange={(e) => {
+                    setItemName(e.target.value);
+                  }}
+                  type="text"
+                  placeholder="Item Name"
+                  value={itemName}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Rate</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setRate(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="Rate"
+                    value={rate}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Billing Rate</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setBillingRate(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="Billing Rate"
+                    value={billingRate}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">SKU</label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  onChange={(e) => {
+                    setSku(e.target.value);
+                  }}
+                  type="text"
+                  placeholder="sku"
+                  value={sku}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">UOM</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setUom(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="uom"
+                    value={uom}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Category</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="category"
+                    value={category}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">Subcategory</label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  onChange={(e) => {
+                    setSubcategory(e.target.value);
+                  }}
+                  type="text"
+                  placeholder="Subcategory PICKER"
+                  value={subcategory}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Color</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setColor(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="color"
+                    value={color}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Size</label>
+                  <input
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                    onChange={(e) => {
+                      setSize(e.target.value);
+                    }}
+                    type="text"
+                    placeholder="size"
+                    value={size}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">Description</label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  onChange={(e) => {
+                    setDescription(e.target.value);
+                  }}
+                  type="text"
+                  placeholder="description"
+                  value={description}
+                />
+              </div>
+
+              <button
+                onClick={(e) => {
+                  saveEdit(e);
+                }}
+                className="w-full inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+              >
+                Save
+              </button>
+            </div>
+          ) : (
+            <div className="p-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.name || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">SKU</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.sku || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rate</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.rateFormatted || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Rate</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.billingRate || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">UOM</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.UOM || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.category || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.color || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Size</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.size || "--"}</div>
+                </div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Description</div>
+                <div className="mt-1 text-sm text-slate-700">{purchase.description || "--"}</div>
+              </div>
+
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Other</div>
+                <div className="mt-2 text-sm text-slate-700 space-y-1">
+                  <div>Store Name - {purchase.storeName || "--"}</div>
+                  <div>Times Purchased - {purchase.timesPurchased ?? "--"}</div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default DataBaseItemDetailView;

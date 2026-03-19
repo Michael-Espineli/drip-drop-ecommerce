@@ -1,278 +1,133 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc, updateDoc, Timestamp } from "firebase/firestore";
+
+import React, { useState, useEffect, useContext } from "react";
+import { Link, useParams } from 'react-router-dom';
+import { doc, getDoc, collection, getDocs, query } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import { ServiceStop } from "../../../utils/models/ServiceStop";
+import { format } from 'date-fns';
 
 const ServiceStopDetails = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
-    const {serviceStopId} = useParams();
+    const { recentlySelectedCompany } = useContext(Context);
+    const { serviceStopId } = useParams();
+    const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
 
-    const [serviceStop, setServiceStop] = useState({
-        id : '',
-        address : {
-            streetAddress : '',
-            state : '',
-            city : '',
-            zip : '',
-            latitude : '',
-            longitude : '',
-        },
-        companyId : '',
-        companyName : '',
-        contractedCompanyId : '',
-        customerId : '',
-        dateCreated : '',
-        description : '',
-        duration : '',
-        status : false, //Finished	Not Finished	Skipped
-        billingStatus: '', //Invoiced	Paid	Not Invoiced
-        serviceStopId : '',//Maybe Remove
-        includeDosages : '',
-        includeReadings : '',
-        jobId : '',
-        otherCompany : false,
-        rate : '',
-        recurringServiceStopId : '',
-        serviceDate : '',
-        serviceLocationId : '',
-        tech : '',
-        techId : '',
-        type : '', //Maybe Remove
-        typeId : '', //Maybe Remove
-        typeImage : '' //Maybe Remove
-    });
     useEffect(() => {
-        (async () => {
-            try{
-                let jobId;
-                const docRef = doc(db, "companies",recentlySelectedCompany,'serviceStops',serviceStopId);
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    console.log("Document data:", docSnap.data());
-                    const data = docSnap.data()
-                    const address = docSnap.data().address
+        const fetchServiceStopDetails = async () => {
+            if (recentlySelectedCompany && serviceStopId) {
+                try {
+                    const docRef = doc(db, "companies", recentlySelectedCompany, 'serviceStops', serviceStopId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const stopData = ServiceStop.fromFirestore(docSnap);
+                        setServiceStop(stopData);
 
-                    setServiceStop((serviceStop) => ({
-                        ...serviceStop,
-                        id : data.id,
-                        address : {
-                            streetAddress : address.streetAddress,
-                            state : address.state,
-                            city : address.city,
-                            zip : address.zip,
-                            latitude : address.latitude,
-                            longitude : address.longitude,
-                        },
-                        companyId : data.companyId,
-                        companyName : data.companyName,
-                        contractedCompanyId : data.contractedCompanyId,
-                        customerId : data.customerId,
-                        dateCreated : data.dateCreated,
-                        description : data.description,
-                        duration : data.duration,
-                        status : data.status, //Finished	Not Finished	Skipped
-                        billingStatus : data.billingStatus, //Invoiced	Paid	Not Invoiced
-                        includeDosages : data.includeDosages,
-                        includeReadings : data.includeReadings,
-                        jobId : data.jobId,
-                        otherCompany : data.otherCompany,
-                        rate : data.rate,
-                        recurringServiceStopId : data.recurringServiceStopId,
-                        serviceDate : data.serviceDate,
-                        serviceLocationId : data.serviceLocationId,
-                        tech : data.tech,
-                        techId : data.techId,
-                        type : data.type, //Maybe Remove
-                        typeId : data.typeId, //Maybe Remove
-                        typeImage : data.typeImage,//Maybe Remove
-                    }));
-                    jobId = data.jobId
-                } else {
-                console.log("No such document!");
+                        // Fetch associated tasks
+                        const taskQuery = query(collection(db, "companies", recentlySelectedCompany, 'serviceStops', serviceStopId, 'tasks'));
+                        const taskQuerySnapshot = await getDocs(taskQuery);
+                        const tasks = taskQuerySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        setTaskList(tasks);
+                    } else {
+                        console.log("No such document!");
+                    }
+                } catch (error) {
+                    console.error('Error fetching service stop details: ', error);
                 }
-                if (serviceStopId!=='NA'){
-                    //Get Task Info By Job ID
-                    let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'serviceStops',serviceStopId,'tasks'));
-                    const taskQuerySnapshot = await getDocs(taskQuery);       
-                    setTaskList([])      
-                    taskQuerySnapshot.forEach((doc) => {
-                        const taskData = doc.data()
-                        const task = {
-                            id : taskData.id,
-                            name : taskData.name,
-                            type : taskData.type,
-                            workerType : taskData.workerType,
-                            workerId : taskData.workerId,
-                            workerName : taskData.workerName,
-                            status : taskData.status,
-                            customerApproval : taskData.customerApproval,
-                            laborContractId : taskData.laborContractId,
-                            contractedRate : taskData.contractedRate,
-                            estimatedTime : taskData.estimatedTime,
-                            actualTime : taskData.actualTime,
-                            equipmentId : taskData.equipmentId,
-                            serviceLocationId : taskData.serviceLocationId,
-                            bodyOfWaterId : taskData.bodyOfWaterId
-                        }
-                        
-                        setTaskList(taskList => [...taskList, task]); 
-
-                    });
-                }
-            } catch(error){
-                console.log('Error')
             }
-        })();
-    },[])
+        };
+        fetchServiceStopDetails();
+    }, [recentlySelectedCompany, serviceStopId]);
+
+    const getStatusClass = (status) => {
+        switch (status) {
+            case 'Finished': return 'bg-green-100 text-green-800';
+            case 'Not Finished': return 'bg-yellow-100 text-yellow-800';
+            case 'Skipped': return 'bg-red-100 text-red-800';
+            default: return 'bg-gray-100 text-gray-800';
+        }
+    };
+    
+    if (!serviceStop) {
+        return <div className="flex justify-center items-center h-screen"><p className="text-lg">Loading service stop details...</p></div>;
+    }
+
     return (
-                // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 = gray
-        <div className='px-2 md:px-7 py-5'>
-            <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between py-1'>
-                        <p className='font-bold text-lg'>Service Stop Detail View</p>
-                        {
-                            (serviceStop.status=='Finished')&&
-                                <p className='py-1 px-2 bg-[#2B600F] rounded-md'>{serviceStop.status}</p>
-                        }
-                        {
-                            (serviceStop.status=='Not Finished')&&
-                                <p className='py-1 px-2 bg-[#CDC07B] rounded-md'>{serviceStop.status}</p>
-                        }
-                        {
-                            (serviceStop.status=='Skipped')&&
-                                <p className='py-1 px-2 bg-[#9C0D38] rounded-md'>{serviceStop.status}</p>
-                        }
-                    </div>
-                    <p>{serviceStop.billingStatus}</p>
-                    <hr/>
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-screen-xl mx-auto">
+                <div className="flex justify-between items-center mb-6">
                     <div>
-                        <p>Job Details</p>
-                        <Link to={`/company/jobs/detail/${serviceStop.jobId}`}>
-                            <p className="py-1 px-2 bg-[#1D2E76] text-[#919191] rounded-md">{serviceStop.jobId}</p> 
-                        </Link>
+
+                        <Link 
+                        to={`/company/serviceStops`}
+                        className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                        >&larr; Back to Service Stops</Link>
+                        <h2 className="text-3xl font-bold text-gray-800">Service Stop Details</h2>
+                        <p className="text-sm text-gray-500">#{serviceStop.internalId}</p>
                     </div>
-                    
-                    <p>rate -  {serviceStop.rate}</p>
-                    <p>recurringServiceStopId -  {serviceStop.recurringServiceStopId}</p>
-                    {/* <p>serviceDate  - {serviceStop.serviceDate}</p> */}
-                    <p>tech  - {serviceStop.tech}</p>
-                    <p>techId  - {serviceStop.techId}</p>
-                    <p className='font-bold'>Address</p>
-
-                    <p>{serviceStop.address.streetAddress}</p>
-                    <div className='flex justify-between'>
-                        <p>{serviceStop.address.state}</p>
-                        <p>{serviceStop.address.city}</p>
-                        <p>{serviceStop.address.zip}</p>
-                    </div>
-                    <p>serviceLocationId -  {serviceStop.serviceLocationId}</p>
-
-                    <p className='font-bold'>Site Contact Info</p>
-                    <p>companyName -  {serviceStop.companyName}</p>
-                    <p>customerId  - {serviceStop.customerId}</p>
-                    {
-                        (!serviceStop.otherCompany)&&<div>
-                            <p className='font-bold' >Company Info</p>
-                            <p>companyId  - {serviceStop.companyId}</p>
-                            <p>companyName  - {serviceStop.companyName}</p>
-                        </div>
-                    }
-                    {
-                        (serviceStop.otherCompany)&&<div>
-                            <p className='font-bold' >Other Company Info</p>
-                            <p>contractedCompanyId -  {serviceStop.contractedCompanyId}</p>
-
-                        </div>
-                    }
-                    
-                    {/* <p>dateCreated  - {serviceStop.dateCreated}</p> */}
-                    
-                    
-                    
-                    
                 </div>
-            </div>
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <p>Tasks</p>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
-                            <tr>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Type</th>
-                                <th className='py-3 px-4'>Status</th>
-                                <th className='py-3 px-4'>Customer Approval</th>
-                                <th className='py-3 px-4'>estimatedTime</th>
-                                <th className='py-3 px-4'></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {
-                            taskList?.map(task => (
-                            <tr key={task.id}>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                    {
-                                        (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                            Assign
-                                        </button>
-                                    }
-                                    {
-                                    (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                        {task.status}
-                                        </p>
-                                    }
-                                </td>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                </td>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                    <p>{task.estimatedTime}</p>
-                                </td>
-                                <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                    <button>
-                                        Edit
-                                    </button>
-                                </td>
-                            </tr>
-                            ))
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                <p>description  - {serviceStop.description}</p>
-                <p>duration -  {serviceStop.duration}</p>
-                {
-                    (serviceStop.includeReadings)&&<div>
-                        <p className='font-bold' >Readings</p>
-                        <hr/>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    {/* Left Column */}
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-white shadow-lg rounded-xl p-6">
+                            <div className="flex justify-between items-start">
+                                <h3 className="text-xl font-bold text-gray-800">Stop Information</h3>
+                                <span className={`px-3 py-1 text-sm font-bold leading-none rounded-full ${getStatusClass(serviceStop.operationStatus)}`}>
+                                    {serviceStop.operationStatus}
+                                </span>
+                                
+                            </div>
+                            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
+                                <p><strong>Customer:</strong> {serviceStop.customerName}</p>
+                                <p><strong>Technician:</strong> {serviceStop.tech}</p>
+                                <Link 
+                                to={`/company/recurringServiceStop/details/${serviceStop.recurringServiceStopId}`}
+                                className="text-slate-600 hover:text-slate-900"
+                                ><p><strong>Recurring Service Stop:</strong> </p></Link>
+                                <p><strong>Date:</strong> {serviceStop.serviceDate ? format(serviceStop.serviceDate, 'PP') : 'N/A'}</p>
+                                <p><strong>Address:</strong> {`${serviceStop.address.streetAddress}, ${serviceStop.address.city}, ${serviceStop.address.state}`}</p>
+                                <p><strong>Job ID:</strong> <Link to={`/company/jobs/detail/${serviceStop.jobId}`} className="text-blue-600 hover:underline">{serviceStop.jobId}</Link></p>
+                                <p><strong>Billing Status:</strong> {serviceStop.billingStatus}</p>
+                                <p><strong>Duration:</strong> {serviceStop.duration} minutes</p>
+                                <p><strong>Description:</strong> {serviceStop.description || 'None'}</p>
+                            </div>
+                        </div>
+                        
+                        {serviceStop.includeReadings && <div className="bg-white shadow-lg rounded-xl p-6"><h3 className="text-xl font-bold">Chemical Readings</h3> {/* Readings component or data would go here */}</div>}
+                        {serviceStop.includeDosages && <div className="bg-white shadow-lg rounded-xl p-6"><h3 className="text-xl font-bold">Chemical Dosages</h3> {/* Dosages component or data would go here */}</div>}
+
+                        {serviceStop.photoUrls.length > 0 && (
+                            <div className="bg-white shadow-lg rounded-xl p-6">
+                                <h3 className="text-xl font-bold mb-4">Photos</h3>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    {serviceStop.photoUrls.map((photo, index) => (
+                                        <img key={index} src={photo.url} alt={`Service stop photo ${index + 1}`} className="rounded-lg w-full h-auto object-cover"/>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
-                }
-                {
-                    (serviceStop.includeDosages)&&<div>
-                        <p className='font-bold' >Dosages</p>
-                        <hr/>
+
+                    {/* Right Column */}
+                    <div className="space-y-6">
+                        <div className="bg-white shadow-lg rounded-xl p-6">
+                            <h3 className="text-xl font-bold text-gray-800 mb-4">Tasks</h3>
+                            <div className="divide-y divide-gray-200">
+                                {taskList.length > 0 ? taskList.map(task => (
+                                    <div key={task.id} className="py-3">
+                                        <p className="font-semibold">{task.name}</p>
+                                        <p className="text-sm text-gray-600">Status: {task.status}</p>
+                                        {task.estimatedTime && <p className="text-sm text-gray-600">Est. Time: {task.estimatedTime} mins</p>}
+                                    </div>
+                                )) : <p>No tasks for this service stop.</p>}
+                            </div>
+                        </div>
                     </div>
-                }
                 </div>
             </div>
         </div>
     );
 }
-    export default ServiceStopDetails;
+
+export default ServiceStopDetails;

@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkdrip_drop_ecommerce=self.webpackChunkdrip_drop_ecommerce||[]).push([[9624],{19624(e,d,s){s.r(d),s.d(d,{default:()=>r});s(65043);var c=s(70579);const r=()=>(0,c.jsx)("div",{className:"px-2 md:px-7 py-5",children:(0,c.jsx)("div",{children:(0,c.jsx)("div",{className:"w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]",children:(0,c.jsx)("h1",{children:"Settings"})})})})}}]);
+//# sourceMappingURL=9624.1a040afa.chunk.js.map

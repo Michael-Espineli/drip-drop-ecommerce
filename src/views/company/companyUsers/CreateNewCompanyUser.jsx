@@ -1,284 +1,226 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams,Navigate } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc, updateDoc, Timestamp } from "firebase/firestore";
+
+import React, { useState, useEffect, useContext } from "react";
+import { useNavigate } from 'react-router-dom';
+import { query, collection, getDocs, where, setDoc, doc, updateDoc, arrayUnion } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { format } from 'date-fns'; // Or any other date formatting library
-import {v4 as uuidv4} from 'uuid';
-import { useNavigate } from 'react-router-dom';
-
+import { v4 as uuidv4 } from 'uuid';
 import Select from 'react-select';
+import toast from 'react-hot-toast';
+
+const Input = (props) => <input {...props} className={`bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${props.className}`} />;
+const SelectInput = (props) => <Select {...props} styles={{ control: (base) => ({ ...base, background: '#F9FAFB', border: '2px solid #E5E7EB', borderRadius: '0.5rem', padding: '0.25rem' }) }} />;
+
+const TabButton = ({ active, onClick, children }) => (
+    <button 
+        type="button"
+        onClick={onClick}
+        className={`py-2 px-4 text-sm font-medium rounded-t-lg transition-colors border-b-2 
+            ${active 
+                ? 'border-blue-600 text-blue-600' 
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`
+        }
+    >
+        {children}
+    </button>
+);
 
 const CreateNewCompanyUser = () => {
+    const { name: companyName, recentlySelectedCompany } = useContext(Context);
+    const navigate = useNavigate();
 
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const [activeTab, setActiveTab] = useState('new'); // 'new' or 'existing'
 
-    const navigate = useNavigate()
-
+    // Form state
     const [firstName, setFirstName] = useState('');
-
     const [lastName, setLastName] = useState('');
-
     const [email, setEmail] = useState('');
-
-    const [roleList, setRoleList] = useState([]);
-
-    const [role, setRole] = useState();
-
-    const [statusList, setStatusList] = useState([
-        {
-            id : 1,
-            label : 'Active'  
-        }
-        ,
-        {
-            id : 2,
-            label : 'Pending'  
-        }
-        ,
-        {
-            id : 3,
-            label : 'Past'  
-        }
-    ]);
+    const [role, setRole] = useState(null);
     
-    const [isEmployee, setIsEmployee] = useState(false);
-
-    const [status, setStatus] = useState();
-
-    const handleRoleChange = (selectedOption2) => {
-
-        (async () => {
-            setRole(selectedOption2)
-        })();
-    };
-
-    const handleStatusChange = (selectedOption2) => {
-
-        (async () => {
-            setStatus(selectedOption2)
-        })();
-    };
+    const [roleList, setRoleList] = useState([]);
+    const [isLoading, setIsLoading] = useState(false);
+    const [areRolesLoading, setAreRolesLoading] = useState(true);
 
     useEffect(() => {
-        (async () => {
-            try{
-    
-                //Roles
-                let qv;
-                qv = query(collection(db, 'companies',recentlySelectedCompany,'roles'));
-                const querySnapshotRole = await getDocs(qv);
-                let count = 1 
-                setRoleList([])  
-                querySnapshotRole.forEach((doc) => {
-                    const roleData = doc.data()
-                    const role = {
-                        id: roleData.id,
-                        name: roleData.name,
-                        description: roleData.description,
-                        color: roleData.color,
-                        permissionIdList: roleData.permissionIdList,
-                        listOfUserIdsToManage: roleData.listOfUserIdsToManage,
-                        label:roleData.name
-                    }
-                    count = count + 1
-                    setRoleList(roleList => [...roleList, role]); 
-                });
-
-            } catch(error){
-                console.log('Error')
+        if (!recentlySelectedCompany) return;
+        const fetchRoles = async () => {
+            setAreRolesLoading(true);
+            try {
+                const rolesQuery = query(collection(db, 'companies', recentlySelectedCompany, 'roles'));
+                const querySnapshot = await getDocs(rolesQuery);
+                const roles = querySnapshot.docs.map(doc => ({ ...doc.data(), value: doc.id, label: doc.data().name }));
+                setRoleList(roles);
+            } catch (error) {
+                console.error("Error fetching roles: ", error);
+                toast.error("Could not load company roles.");
+            } finally {
+                setAreRolesLoading(false);
             }
-        })();
-    },[])
-    
-    async function billableTrue(e) {
-        setIsEmployee(true)
-    }
-    
-    async function billableFalse(e) {
-        setIsEmployee(false)
-    }
+        };
+        fetchRoles();
+    }, [recentlySelectedCompany]);
 
-    async function createNewItem(e) {
-        e.preventDefault()
-        try{
-            //Create New Item
-            let id = 'com_sett_db_' + uuidv4()
-    
-            let userId = 'com_sett_db_' + uuidv4()
+    const handleSubmit = async (e) => {
+        e.preventDefault();
+        if (activeTab === 'new') {
+            handleInviteNewUser();
+        } else {
+            handleAddExistingUser();
+        }
+    };
 
-            console.log('Added Receipt ' + id)
+    const handleInviteNewUser = async () => {
+        if (!firstName || !lastName || !email || !role) {
+            toast.error("Please fill out all fields to invite a new user.");
+            return;
+        }
+
+        setIsLoading(true);
+        const toastId = toast.loading('Sending invite...');
+
+        try {
+            const usersRef = collection(db, "users");
+            const q = query(usersRef, where("email", "==", email));
+            const userQuerySnapshot = await getDocs(q);
             
-            let userName = firstName + ' ' + lastName
-            
-            let inviteId = 'invi_' + uuidv4()
-            if (isEmployee){
-
-                let item = {
-                    id : id,
-                    userName : userName,
-                    userId : userId,
-                    dateCreated : new Date(),
-                    status : status.label,
-                    workerType : 'Employee',
-                    linkedCompanyId : "size",
-                    linkedCompanyname : "sku"
-                }
-                // Invite User 
-                let invite = {
-                    companyId:recentlySelectedCompany,
-                    companyName: 'Company Name',
-                    email:email,
-                    firstName:firstName,
-                    lastName:lastName,
-                    id:inviteId,
-                    roleId : role.id,
-                    roleName : role.label,
-                    status:'Pending'
-                }
-                console.log(invite)
-                await setDoc(doc(db,"invites", inviteId), invite);
-                // User Sets up Account when Signing Up
-                
-            } else {
-
-                let item = {
-                    id : id,
-                    userName : userName,
-                    userId : userId,
-                    roleId : role.id,
-                    roleName : role.label,
-                    dateCreated : new Date(),
-                    status : status.label,
-                    workerType : 'Independent Contractor',
-                    linkedCompanyId : "size",
-                    linkedCompanyname : "sku"
-                }
+            if (!userQuerySnapshot.empty) {
+                toast.error('A user with this email already exists. Please use the "Add Existing User" tab.', { id: toastId });
+                return;
             }
+
+            const inviteId = 'invi_' + uuidv4();
+            const inviteData = {
+                id: inviteId, userId: null, firstName, lastName, email, companyName, 
+                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label, 
+                status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
+            };
+
+            await setDoc(doc(db, "invites", inviteId), inviteData);
             
-        } catch(error){
-            console.log(error)
+            toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
+            navigate('/company/companyUsers');
+
+        } catch (error) {
+            console.error("Error sending invite: ", error);
+            toast.error(`Error: ${error.message}`, { id: toastId });
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    const handleAddExistingUser = async () => {
+        if (!email || !role) {
+            toast.error("Please provide an email and select a role.");
+            return;
+        }
+        
+        setIsLoading(true);
+        const toastId = toast.loading('Adding user to company...');
+
+        try {
+            const usersRef = collection(db, "users");
+            const q = query(usersRef, where("email", "==", email));
+            const userQuerySnapshot = await getDocs(q);
+
+            if (userQuerySnapshot.empty) {
+                toast.error('No user found with this email. Please invite them as a new user.', { id: toastId });
+                return;
+            }
+
+            const userDoc = userQuerySnapshot.docs[0];
+            const userData = userDoc.data();
+            const companyUserRef = doc(db, 'companies', recentlySelectedCompany, 'companyUsers', userDoc.id);
+            
+            const userName = (userData.firstName && userData.lastName) 
+                ? `${userData.firstName} ${userData.lastName}` 
+                : userData.email;
+
+            await setDoc(companyUserRef, {
+                userId: userDoc.id,
+                userName: userName,
+                email: userData.email,
+                roleId: role.id,
+                roleName: role.label,
+                status: 'Active',
+                workerType: 'Employee',
+            }, { merge: true });
+
+            await updateDoc(userDoc.ref, {
+                companies: arrayUnion(recentlySelectedCompany)
+            });
+
+            toast.success('User successfully added to your company!', { id: toastId });
+            navigate('/company/companyUsers');
+
+        } catch(error) {
+            console.error("Error adding existing user: ", error);
+            toast.error(`Error: ${error.message}`, { id: toastId });
+        } finally {
+            setIsLoading(false);
         }
     }
 
-    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
-        return new Intl.NumberFormat(locale, {
-            style: 'currency',
-            currency: currency
-        }).format(number);
-    }
     return (
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-4xl mx-auto">
+                <header className="mb-6">
+                     <h1 className="text-3xl font-bold text-gray-800">Manage User Access</h1>
+                    <p className="text-gray-600 mt-1">Add a new or existing user to your company.</p>
+                </header>
 
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 - gray
-
-        <div className='px-2 md:px-7 py-5'>
-            <div className='px-2 py-2 flex justify-between'>
-                <Link 
-                className='py-1 px-2 bg-[#0e245c] rounded-md text-[#ffffff]'
-                to={`/company/companyUsers`}
-                >Go Back</Link>
-            </div>
-            <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between py-1'>
-                        <p className='font-bold text-lg'>Create New Company User</p>
+                <div className="border-b border-gray-200 mb-6">
+                    <div className="flex -mb-px">
+                        <TabButton active={activeTab === 'new'} onClick={() => setActiveTab('new')}>Invite New User</TabButton>
+                        <TabButton active={activeTab === 'existing'} onClick={() => setActiveTab('existing')}>Add Existing User</TabButton>
                     </div>
-                    <div>
-                        {
-                            isEmployee ? <div className="py-1">
-                                <button
-                                onClick={(e) =>{billableFalse(e)}}
-                                className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                    Is Employee
-                                </button>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center line-clamp-1 w-[150px]">First Name</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setFirstName(e.target.value)}} type="text" placeholder='First Name' value={firstName}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center line-clamp-1 w-[150px]">Last Name</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setLastName(e.target.value)}} type="text" placeholder='Last Name' value={lastName}>
-                                    </input>
-                                </div>
-                                <div className="flex py-1 ">
-                                    <p className="px-2 items-center line-clamp-1 w-[150px]">Email</p>
-                                    <input 
-                                    className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                    onChange={(e) => {setEmail(e.target.value)}} type="text" placeholder='Email' value={email}>
-                                    </input>
-                                </div>
-                            </div> : <div className="flex  py-1">
-                                <button
-                                onClick={(e) =>{billableTrue(e)}}
-                                className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff] w-full'>
-                                    Is Contractor
-                                </button>
-                            </div>
-                        }
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2">Role</p>
-                                <Select
-                                    value={role}
-                                    options={roleList}
-                                    onChange={handleRoleChange}
-                                    isSearchable
-                                    placeholder="Select a Role"
-                                    theme={(theme) => ({
-                                    ...theme,
-                                    borderRadius: 0,
-                                    colors: {
-                                        ...theme.colors,
-                                        primary25: 'green',
-                                        primary: 'gray',
-                                    },
-                                    })}
-                                />
-                        </div>
-                        <div className="flex py-1 justify-between items-center">
-                            <p className="px-2">Status</p>
-                                <Select
-                                    value={status}
-                                    options={statusList}
-                                    onChange={handleStatusChange}
-                                    isSearchable
-                                    placeholder="Select a Status"
-                                    theme={(theme) => ({
-                                    ...theme,
-                                    borderRadius: 0,
-                                    colors: {
-                                        ...theme.colors,
-                                        primary25: 'green',
-                                        primary: 'gray',
-                                    },
-                                    })}
-                                />
-                        </div>
-                        <button
-                            onClick={(e) =>{createNewItem(e)}}
-                            className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                Create New
-                        </button>
-        
-                    </div>   
-
                 </div>
+
+                <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg border border-gray-200 space-y-6">
+                    {activeTab === 'new' && (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                             <div className="md:col-span-2">
+                                <p className="text-sm text-gray-600">An invitation will be sent to the user to create an account and join your company.</p>
+                            </div>
+                            <div>
+                                <label className="block mb-2 text-sm font-medium text-gray-700">First Name</label>
+                                <Input value={firstName} onChange={(e) => setFirstName(e.target.value)} placeholder="John" required />
+                            </div>
+                            <div>
+                                <label className="block mb-2 text-sm font-medium text-gray-700">Last Name</label>
+                                <Input value={lastName} onChange={(e) => setLastName(e.target.value)} placeholder="Doe" required />
+                            </div>
+                        </div>
+                    )}
+                    
+                    {activeTab === 'existing' && (
+                         <div className="md:col-span-2">
+                            <p className="text-sm text-gray-600">If the user already has an account, add them directly to your company here.</p>
+                        </div>
+                    )}
+                    
+                    <div className="space-y-6">
+                        <div className="md:col-span-2">
+                            <label className="block mb-2 text-sm font-medium text-gray-700">Email Address</label>
+                            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="john.doe@example.com" required />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block mb-2 text-sm font-medium text-gray-700">Assign Role</label>
+                            <SelectInput value={role} options={roleList} onChange={setRole} placeholder="Select a role..." isLoading={areRolesLoading} required />
+                        </div>
+                    </div>
+
+                    <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200 mt-6">
+                        <button type="button" onClick={() => navigate('/company/companyUsers')} className='py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition'>
+                            Cancel
+                        </button>
+                        <button type="submit" disabled={isLoading || areRolesLoading} className='py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-blue-300 transition'>
+                            {isLoading ? 'Processing...' : (activeTab === 'new' ? 'Send Invite' : 'Add User')}
+                        </button>
+                    </div>
+                </form>
             </div>
         </div>
     );
 }
+
 export default CreateNewCompanyUser;

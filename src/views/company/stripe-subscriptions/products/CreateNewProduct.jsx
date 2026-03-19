@@ -47,16 +47,16 @@ const CreateNewProduct = () => {
         })
         .then((result) => result.data.product)            
         .then((product) => {
-                console.log(product)
-                console.log(product.id)
-                // Handle the result from the function
-            navigate('/company/stripe-subscriptions/products')
+            console.log(product)
+            console.log(product.id)
+            // Handle the result from the function
+        navigate('/company/stripe-subscriptions/products')
 
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
+        })
+        .catch((error) => {
+            // Handle any errors
+            console.error(error);
+        });
         // signInWithEmailAndPassword(auth,email,password)
         // .then((user) => {
         //     navigate('/company/dashboard')

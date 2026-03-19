@@ -11,8 +11,7 @@ const ChatCard = (props) => {
         (async () => {
             setParticipantList([])
             for (let i = 0; i < participants.length; i++) {
-                if (participants[i].userId === currentUserId) {
-                } else {
+                if (participants[i].userId !== currentUserId) {
                     setParticipantList(participantList => [...participantList, participants[i].userName]); 
                 }
             }
@@ -21,11 +20,12 @@ const ChatCard = (props) => {
     return (
         <div className='w-full bg-[#ededed] px-2 py-1 rounded-md text-[#030811]'>
             <div className='flex justify-start items-center'>
-                <img className='w-[28px] h-[28px] rounded-full bg-white' src='https://firebasestorage.googleapis.com/v0/b/the-pool-app-3e652.appspot.com/o/duck128.jpg?alt=media&token=549d29cd-0565-4fa4-a682-3e0816cd2fdb' alt="profile" />
+                <img className='w-[28px] h-[28px] rounded-full bg-white' src={participantList[0].userImage} alt="profile" />
                 <div>
                     {
-                        participantList.map( people => (
-                            <h1 className='text-[#030811]'>{people}</h1>
+                        participantList.map( person => (
+                            
+                            <h1 className='text-[#030811]'>{person}</h1>
                         ))
                     }
                 </div>

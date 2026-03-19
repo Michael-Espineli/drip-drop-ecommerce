@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useRef } from 'react';
 import { collection, query, where, orderBy, getDocs, limit, startAfter } from 'firebase/firestore';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
@@ -44,6 +44,7 @@ const [currentPage, setCurrentPage] = useState(1);
 const [lastDocument, setLastDocument] = useState(null);
 const [hasMore, setHasMore] = useState(true);
 const [searchTerm, setSearchTerm] = useState('');
+const fileInputRef = useRef(null);
 
  // Get companyId from context (assuming Context is correctly imported and provided)
   // Get companyId from context (assuming Context is correctly imported and provided)
@@ -228,6 +229,18 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
     return `${month}/${day}/${year}`;
  };
 
+ const handleFileChange = (event) => {
+  const file = event.target.files[0];
+  if (file) {
+    console.log('Selected file:', file);
+    // Here you would trigger the PDF processing logic
+  }
+};
+
+const handleUploadClick = () => {
+  fileInputRef.current.click();
+};
+
   return (
     <div className="purchase-list-view-container px-2 md:px-7 py-5">
       {/*
@@ -240,6 +253,14 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
         <div className="flex justify-between items-center">
           <Link to="/company/purchasedItems/createNew" className="py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Add New Purchase</Link>
         <button onClick={() => setShowFilterModal(true)} className="py-1 px-4 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Filter Options</button>
+        <button onClick={handleUploadClick} className="py-1 px-4 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Upload Receipt</button>
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileChange}
+          style={{ display: 'none' }}
+          accept="application/pdf"
+        />
         </div>
         <div className="search-bar-container">
           <input
@@ -350,7 +371,7 @@ const { recentlySelectedCompany } = useContext(Context); // Make sure Context is
                       </Link>
                     </td>
                   </tr>
-                ))}
+                ))}`
               </tbody>
             </table>
           )}

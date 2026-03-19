@@ -1,336 +1,134 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import { db } from "../../../utils/config";
-import { Context } from "../../../context/AuthContext";
-import { query, collection, getDocs, limit, orderBy, getDoc, doc, where } from "firebase/firestore";
-import DatePicker from "react-datepicker";
-import 'react-datepicker/dist/react-datepicker.css'
-import { format } from 'date-fns/format'; 
+
+import React, { useState, useEffect, useContext } from 'react';
+import { collection, query, where, getDocs, orderBy } from 'firebase/firestore';
+import { db } from '../../../utils/config';
+import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
+import { format, subDays, startOfMonth, endOfMonth, startOfYear, endOfYear } from 'date-fns';
+
+const ReportControlCard = ({ reportType, setReportType, dateRange, setDateRange, onGenerate }) => (
+    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+        <h3 className="text-xl font-bold text-gray-800 mb-4">Generate Report</h3>
+        <div className="space-y-4">
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Report Type</label>
+                <select value={reportType} onChange={(e) => setReportType(e.target.value)} className="w-full p-2 bg-gray-100 border-2 border-gray-200 rounded-lg">
+                    <option value="pnl">Profit & Loss</option>
+                    <option value="expense_category">Expense by Category</option>
+                </select>
+            </div>
+            <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Date Range</label>
+                <div className="grid grid-cols-2 gap-2">
+                    <input type="date" value={dateRange.start} onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))} className="p-2 bg-gray-100 border-2 border-gray-200 rounded-lg"/>
+                    <input type="date" value={dateRange.end} onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))} className="p-2 bg-gray-100 border-2 border-gray-200 rounded-lg"/>
+                </div>
+            </div>
+            <button onClick={onGenerate} className="w-full py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition">Generate</button>
+        </div>
+    </div>
+);
+
+const ReportView = ({ data, reportType, isLoading }) => {
+    if (isLoading) return <div className="text-center p-10">Generating report...</div>;
+    if (!data) return <div className="text-center p-10 text-gray-500">Select a report type and date range to begin.</div>;
+
+    // Simple P&L example
+    if (reportType === 'pnl') {
+        const totalRevenue = data.revenue.reduce((acc, item) => acc + item.total, 0);
+        const totalExpense = data.expenses.reduce((acc, item) => acc + item.total, 0);
+        const net = totalRevenue - totalExpense;
+
+        return (
+            <div className="bg-white p-6 rounded-2xl shadow-lg border">
+                <h2 className="text-2xl font-bold text-gray-800 mb-4">Profit & Loss Summary</h2>
+                <div className="grid grid-cols-3 gap-4 text-center">
+                    <div className="p-4 bg-green-100 rounded-lg"><p className="text-lg font-semibold text-green-800">Total Revenue</p><p className="text-2xl font-bold">${totalRevenue.toFixed(2)}</p></div>
+                    <div className="p-4 bg-red-100 rounded-lg"><p className="text-lg font-semibold text-red-800">Total Expenses</p><p className="text-2xl font-bold">${totalExpense.toFixed(2)}</p></div>
+                    <div className="p-4 bg-blue-100 rounded-lg"><p className="text-lg font-semibold text-blue-800">Net Profit</p><p className="text-2xl font-bold">${net.toFixed(2)}</p></div>
+                </div>
+            </div>
+        );
+    }
+    
+    // Add more report type views here
+    return <div className="text-center p-10 text-gray-500">Report view for the selected type is not yet implemented.</div>;
+};
+
 
 const Reports = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
-
-    const [role,setRole] = useState({
-        color : '',
-        description : '',
-        id : '',
-        listOfUserIdsToManage : '',
-        name : '',
-        permissionIdList : ''
+    const { recentlySelectedCompany } = useContext(Context);
+    const [reportType, setReportType] = useState('pnl');
+    const [dateRange, setDateRange] = useState({ 
+        start: format(startOfMonth(new Date()), 'yyyy-MM-dd'), 
+        end: format(endOfMonth(new Date()), 'yyyy-MM-dd')
     });
-    
-    const [selectedReport,setSelectedReport] = useState('')
-    
-    const [categorieList, setCategorieList] = useState([]);
-    
-    const [technicianList, setTechnicianList] = useState([]);
-    
-    const [total,setTotal] = useState('')
+    const [reportData, setReportData] = useState(null);
+    const [isLoading, setIsLoading] = useState(false);
 
-    const [formattedStartDate,setFormattedStartDate] = useState('')
-
-    const [formattedEndDate,setFormattedEndDate] = useState('')
-
-    const [startDate, setStartDate] = useState(new Date());
-
-    const [endDate, setEndDate] = useState(new Date());
-    
-    async function handleStartDateChange(dateOption) {
-        setStartDate(dateOption)
-        console.log(dateOption)
-        const formattedDate = dateOption.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-        }); 
-        console.log(formattedDate)
-        setFormattedStartDate(formattedDate)
-    }
-    
-    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
-        return new Intl.NumberFormat(locale, {
-            style: 'currency',
-            currency: currency
-        }).format(number);
-    }   
-
-    async function handleEndDateChange(dateOption) {
-        setEndDate(dateOption)
-        console.log(dateOption)
-        const formattedDate = dateOption.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-        }); 
-        console.log(formattedDate)
-        setFormattedEndDate(formattedDate)
-    }
-    
-    useEffect(() => {
-        (async () => {
-            try{
-                const docRef = doc(db, "companies",recentlySelectedCompany,'roles',"roleId");
-                const docSnap = await getDoc(docRef);
-                if (docSnap.exists()) {
-                    console.log("Document data:", docSnap.data());
-                    setRole((role) => ({
-                        ...role,
-                        color: docSnap.data().color,
-                        description: docSnap.data().description,
-                        id: docSnap.data().id,
-                        listOfUserIdsToManage: docSnap.data().listOfUserIdsToManage,
-                        name : docSnap.data().name,
-                        permissionIdList : docSnap.data().permissionIdList
-                    }));
-
-                  } else {
-                    console.log("No such document!");
-                  }
-            } catch(error){
-                console.log('Error')
-            }
-        })();
-    },[])
-
-    async function getCategoryReport(e) {
-        e.preventDefault()
-
-        setSelectedReport('Category')
-        toast.loading('Loading...')
-        //Get All purchases in time Range
-        let categorySummary = []
-        let categories = []
-        let purchases = []
-        let total = 0 
-        //
-
-        try{
-            let q;
-            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", new Date(startDate)), where("date", "<=", new Date(endDate)), orderBy("date"));
-            const querySnapshot = await getDocs(q);
-            let count = 1 
-            setCategorieList([])  
-            querySnapshot.forEach((doc) => {
-                const purchaseData = doc.data()
-                const dateCreated = purchaseData.date.toDate();
-                const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
-                const purchase = {
-                    id:purchaseData.id,
-                    name:purchaseData.name,
-                    invoiceNum:purchaseData.invoiceNum,
-                    price:formatCurrency(purchaseData.price/100),
-                    quantityString: purchaseData.quantityString,
-                    techName:purchaseData.techName,
-                    venderName:purchaseData.venderName,
-                    date:formattedDate1,
-                    receiptId:purchaseData.receiptId,
-                    total:(purchaseData.price/100)*parseFloat(purchaseData.quantityString),
-                    billable:purchaseData.billable,
-                    invoiced:purchaseData.invoiced,
-                    customerName:purchaseData.customerName,
-                    category:purchaseData.category,
-                }
-                count = count + 1
-
-                purchases.push(purchase)
-                
-                if (!categories.includes(purchase.category)){
-                    console.log('does not include ',purchase.category)
-                    categories.push(purchase.category)
-                } else {
-                    console.log('includes ',purchase.category)
-                }
-            });
-
-            for (let i = 0; i < categories.length; i++) {
-                let category = categories[i]
-                console.log('category ',category)
-                const filteredArray = purchases.filter(item => item.category == category);
-                let categorySum = 0 
-                for (let i = 0; i < filteredArray.length; i++) {
-                    let purchase = filteredArray[i]
-                    categorySum = categorySum + purchase.total
-                }
-                console.log(filteredArray)
-                categorySummary.push({
-                        category:category,
-                        total:formatCurrency(categorySum)
-                    })
-                    total = total + categorySum
-            }
-            setCategorieList(categorySummary)
-            setTotal(formatCurrency(total))
-            toast.dismiss()
-            toast.success('Successful')
-        } catch(error){
-            toast.dismiss()
-            toast.error('Error')
-            console.log('Error')
-            console.log(error)
+    const handleGenerateReport = async () => {
+        if (!recentlySelectedCompany || !reportType) {
+            toast.error("Please select a company and report type.");
+            return;
         }
-    }
 
-    async function getTechReport(e) {
-        e.preventDefault()
-        setSelectedReport('Technician')
-        toast.loading('Loading...')
-        //Get All purchases in time Range
-        let categorySummary = []
-        let categories = []
-        let purchases = []
-        let total = 0 
-        //
+        setIsLoading(true);
+        const toastId = toast.loading('Generating report data...');
 
-        try{
-            let q;
-            q = query(collection(db, 'companies',recentlySelectedCompany,'purchasedItems'), where("date", ">=", new Date(startDate)), where("date", "<=", new Date(endDate)), orderBy("date"));
-            const querySnapshot = await getDocs(q);
-            let count = 1 
-            setCategorieList([])  
-            querySnapshot.forEach((doc) => {
-                const purchaseData = doc.data()
-                const dateCreated = purchaseData.date.toDate();
-                const formattedDate1 = format(dateCreated, 'MM / d / yyyy'); 
-                const purchase = {
-                    id:purchaseData.id,
-                    name:purchaseData.name,
-                    invoiceNum:purchaseData.invoiceNum,
-                    price:formatCurrency(purchaseData.price/100),
-                    quantityString: purchaseData.quantityString,
-                    techName:purchaseData.techName,
-                    venderName:purchaseData.venderName,
-                    date:formattedDate1,
-                    receiptId:purchaseData.receiptId,
-                    total:(purchaseData.price/100)*parseFloat(purchaseData.quantityString),
-                    billable:purchaseData.billable,
-                    invoiced:purchaseData.invoiced,
-                    customerName:purchaseData.customerName,
-                    category:purchaseData.category,
-                }
-                count = count + 1
-
-                purchases.push(purchase)
+        try {
+            const startDate = new Date(dateRange.start);
+            const endDate = new Date(dateRange.end);
+            
+            // Example for P&L: Fetch revenue (e.g., from invoices) and expenses
+            if (reportType === 'pnl') {
+                const revenueRef = collection(db, 'companies', recentlySelectedCompany, 'invoices');
+                const expenseRef = collection(db, 'companies', recentlySelectedCompany, 'purchasedItems');
                 
-                if (!categories.includes(purchase.category)){
-                    console.log('does not include ',purchase.category)
-                    categories.push(purchase.category)
-                } else {
-                    console.log('includes ',purchase.category)
-                }
-            });
+                const revenueQuery = query(revenueRef, where("date", ">=", startDate), where("date", "<=", endDate));
+                const expenseQuery = query(expenseRef, where("date", ">=", startDate), where("date", "<=", endDate));
 
-            for (let i = 0; i < categories.length; i++) {
-                let category = categories[i]
-                console.log('category ',category)
-                const filteredArray = purchases.filter(item => item.category == category);
-                let categorySum = 0 
-                for (let i = 0; i < filteredArray.length; i++) {
-                    let purchase = filteredArray[i]
-                    categorySum = categorySum + purchase.total
-                }
-                categorySummary.push({
-                        category:category,
-                        total:formatCurrency(categorySum)
-                    })
-                    total = total + categorySum
+                const [revenueSnap, expenseSnap] = await Promise.all([getDocs(revenueQuery), getDocs(expenseQuery)]);
+
+                const revenue = revenueSnap.docs.map(doc => doc.data());
+                const expenses = expenseSnap.docs.map(doc => doc.data());
+
+                setReportData({ revenue, expenses });
             }
-            setCategorieList(categorySummary)
-            setTotal(formatCurrency(total))
-            toast.dismiss()
-            toast.success('Successful')
-        } catch(error){
-            toast.dismiss()
-            toast.error('Error')
-            console.log('Error')
-            console.log(error)
+
+            toast.success('Report generated!', { id: toastId });
+        } catch (error) {
+            console.error("Error generating report: ", error);
+            toast.error(`Report generation failed: ${error.message}`, { id: toastId });
+        } finally {
+            setIsLoading(false);
         }
-    }
+    };
 
     return (
-        <div className='px-2 md:px-7 py-5'>
-            <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                <div className='left-0 w-full justify-between'>
-                    <h2>Please Forgive the Work In Progress</h2>
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-7xl mx-auto">
+                <header className="mb-8">
+                    <h1 className="text-3xl font-bold text-gray-800">Financial Reports</h1>
+                    <p className="text-gray-600 mt-1">Analyze your company’s performance over time.</p>
+                </header>
 
-                         <div className='text-[#000000]'>
-                            <div>
-                                <h2 className='text-[#ffffff]'>Start Date</h2>
-                                <div>
-                                    <DatePicker 
-                                        selected={startDate} 
-                                        onChange={(startDate) => handleStartDateChange(startDate)}
-                                        selectsStart
-                                        startDate={startDate}
-                                        endDate={endDate}
-                                    />
-                                </div>
-                            </div>
-                            <div>
-                                <h2 className='text-[#ffffff]'>End Date</h2>
-                                <div>
-                                    <DatePicker 
-                                        selected={endDate} 
-                                        onChange={(endDate) => handleEndDateChange(endDate)}
-                                        selectsEnd
-                                        startDate={startDate}
-                                        endDate={endDate}
-                                        minDate={startDate}
-                                    />
-                                </div>
-                            </div>
-                        </div>
-                        <div className="flex justify-between w-full">
-                            <button 
-                            onClick={(e) => getCategoryReport(e)} 
-                            className='py-1 px-2 rounded-md bg-[#CDC07B]'>
-                                Get Category Reports
-                            </button>
-                            <button 
-                            onClick={(e) => getTechReport(e)} 
-                            className='py-1 px-2 rounded-md bg-[#CDC07B]'>
-                                Get Tech Reports
-                            </button>
-
-                        </div>
-                    <p>{selectedReport}</p>
-                    {
-                        selectedReport=='Category' ? <div>
-
-                            <p>Total {total}</p>
-                            <div>
-                                {
-                                    categorieList?.map(purchase => (
-                                        <div key={purchase.id}>
-                                            <p>{purchase.category} - {purchase.total}</p>
-                                        </div>
-                                    ))
-                                }
-                            </div>
-                        </div> : <div>
-
-                        </div>
-                    }
-                    {
-                        selectedReport=='Technician' ? <div>
-
-                            <p>Total {total}</p>
-                            <div>
-                                {
-                                    technicianList?.map(tech => (
-                                        <div key={tech.id}>
-                                            <p>{tech.category} - {tech.total}</p>
-                                        </div>
-                                    ))
-                                }
-                            </div>
-                        </div> : <div>
-
-                        </div>
-                    }
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-1">
+                        <ReportControlCard 
+                            reportType={reportType} 
+                            setReportType={setReportType}
+                            dateRange={dateRange}
+                            setDateRange={setDateRange}
+                            onGenerate={handleGenerateReport}
+                        />
+                    </div>
+                    <div className="lg:col-span-2">
+                       <ReportView data={reportData} reportType={reportType} isLoading={isLoading} />
+                    </div>
                 </div>
             </div>
         </div>
     );
-}
-    export default Reports;
+};
+
+export default Reports;

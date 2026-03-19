@@ -1,1865 +1,1624 @@
-import React, { useState, useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, deleteDoc, doc, getDoc, updateDoc , setDoc } from "firebase/firestore";
+import React, { useEffect, useMemo, useState, useContext } from "react";
+import { Link, useParams, useNavigate } from "react-router-dom";
+import {
+  doc,
+  getDoc,
+  updateDoc,
+  deleteDoc,
+  collection,
+  getDocs,
+  query,
+  where,
+  orderBy,
+  setDoc,
+  onSnapshot,
+  serverTimestamp,
+} from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import Select from 'react-select';
-import {v4 as uuidv4} from 'uuid';
-import { format } from 'date-fns'; // Or any other date formatting library
-import { useNavigate } from 'react-router-dom';
-import toast from 'react-hot-toast';
-import JobOperationStatusCard from "../../components/JobOperationStatusCard";
-import JobBillingStatusCard from "../../components/JobBillingStatusCard";
+import { format } from "date-fns";
+import Select from "react-select";
+import { v4 as uuidv4 } from "uuid";
+import toast from "react-hot-toast";
+
+/**
+ * JobDetailView
+ * - Description is always editable (not tied to Edit mode)
+ * - Adds Comments panel on the right (subcollection: workOrders/{jobId}/comments)
+ * - Comments support filter: All / Open / Resolved
+ *   - comment schema: { id, userId, userName, date, comment, resolved }
+ */
 
 const JobDetailView = () => {
-    const {jobId} = useParams();
+  const { jobId } = useParams();
+  const navigate = useNavigate();
 
-    const {name,recentlySelectedCompany} = useContext(Context);
+  // Auth / company context
+  const authCtx = useContext(Context);
+  const { recentlySelectedCompany, dataBaseUser } = authCtx;
 
-    const [edit,setEdit] = useState(false);
+  // Try to infer user from context shape
+  const currentUser =
+    authCtx?.currentUser || authCtx?.user || authCtx?.currentuser || authCtx || {};
 
-    const [newShoppingList,setNewShoppingList] = useState(false);
+  const getUserId = () => currentUser?.uid || currentUser?.id || "";
+  const getUserName = () =>
+    currentUser?.displayName || currentUser?.userName || currentUser?.name || "Unknown";
 
-    const [newTask,setNewTask] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-    const navigate = useNavigate()
+  const [edit, setEdit] = useState(false);
 
-    const [job,setJob] = useState({
-        adminId : '',
-        adminName : '',
-        billingStatus : '',
-        bodyOfWaterId : '',
-        bodyOfWaterName : '',
-        chemicals : '',
-        customerId : '',
-        description : '',
-        electricalParts : '',
-        equipmentId : '',
-        equipmentName : '',
-        id : '',
-        installationParts : '',
-        jobTemplateId : '',
-        laborCost : '',
-        miscParts : '',
-        operationStatus : '',
-        pvcParts : '',
-        rate : '',
-        serviceLocationId : '',
-        serviceStopIds : '',
-        type : ''
-    });
+  const [job, setJob] = useState({
+    adminId: "",
+    adminName: "",
+    billingStatus: "",
+    bodyOfWaterId: "",
+    bodyOfWaterName: "",
+    chemicals: "",
+    customerId: "",
+    customerName: "",
+    description: "",
+    electricalParts: "",
+    equipmentId: "",
+    equipmentName: "",
+    id: "",
+    internalId: "",
+    installationParts: "",
+    jobTemplateId: "",
+    laborCost: "",
+    miscParts: "",
+    operationStatus: "",
+    pvcParts: "",
+    rate: 0,
+    serviceLocationId: "",
+    serviceStopIds: [],
+    type: "",
+    dateCreated: null,
+  });
 
-    const [customer,setCustomer] = useState({
-         id:'',
-        firstName : '',
-        lastName : '',
-        phoneNumber : '',
-        email : '',
-        billingStreetAddress : '',
-        billingCity : '',
-        billingState : '',
-        billingZip : '',
-        billingNotes : '',
-        displayAsCompany : '',
-        company : '',
-        verified : false,
-        hireDate : '',
-        active : true,
-        notes : '',
-    });
-    
-    const [serviceLocation,setServiceLocation] = useState({
-        bodiesOfWaterId : '',
-        gateCode : '',
-        nickName : '',
-        streetAddress : '',
-        city : '',
-        state : '',
-        zip : '',
-        billingNotes:  '',
-        active : '',
-        id : '',
-    });
+  const [customer, setCustomer] = useState({
+    id: "",
+    firstName: "",
+    lastName: "",
+    phoneNumber: "",
+    email: "",
+    billingStreetAddress: "",
+    billingCity: "",
+    billingState: "",
+    billingZip: "",
+    billingNotes: "",
+    active: true,
+    verified: false,
+  });
 
-    const [selectedBodyOfWater,setSelectedBodyOfWater] = useState({
-        bodiesOfWaterId : '',
-        gateCode : '',
-        nickName : '',
-        streetAddress : '',
-        city : '',
-        state : '',
-        zip : '',
-        billingNotes:  '',
-        active : '',
-        id : '',
-    });
+  const [serviceLocation, setServiceLocation] = useState({
+    bodiesOfWaterId: [],
+    gateCode: "",
+    nickName: "",
+    streetAddress: "",
+    city: "",
+    state: "",
+    zip: "",
+    active: true,
+    id: "",
+  });
 
-    const [selectedEquipment,setSelectedEquipment] = useState({
-        bodiesOfWaterId : '',
-        gateCode : '',
-        nickName : '',
-        streetAddress : '',
-        city : '',
-        state : '',
-        zip : '',
-        billingNotes:  '',
-        active : '',
-        id : '',
-    });
+  // Edit pickers
+  const [adminList, setAdminList] = useState([]);
+  const [selectedAdmin, setSelectedAdmin] = useState(null);
 
-    const [selectedGenericItem,setSelectedGenericItem] = useState({
-        UOM : "",
-        billable : "",
-        category : "",
-        color : "",
-        dateUpdated : "",
-        description : "",
-        id : "",
-        name : "",
-        rate : "",
-        size : "",
-        sku : "",
-        storeName :  "",
-        subCategory :  "",
-        timesPurchased :  "",
-        venderId :  "",
-        label:  "",
-    });
+  const billingStatusOptions = useMemo(
+    () => ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid"].map((s) => ({ value: s, label: s })),
+    []
+  );
 
-    const [selectedTaskType,setSelectedTaskType] = useState({
-        id : '',
-        name : '',
-    });
+  const operationStatusOptions = useMemo(
+    () =>
+      ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress", "Finished"].map((s) => ({
+        value: s,
+        label: s,
+      })),
+    []
+  );
 
-    const [billingStatusList,setBillingStatusList] = useState([
-        {
-            id : 'Draft',
-            name : 'Draft',
-            label : 'Draft',
+  const [selectedBillingStatus, setSelectedBillingStatus] = useState({ value: "Draft", label: "Draft" });
+  const [selectedOperationStatus, setSelectedOperationStatus] = useState({
+    value: "Estimate Pending",
+    label: "Estimate Pending",
+  });
+
+  // Tabs to mimic iOS segmented nav
+  const tabs = ["Info", "Tasks", "Shopping", "Schedule"];
+  const [activeTab, setActiveTab] = useState("Info");
+
+  // Tasks
+  const [taskTypeList, setTaskTypeList] = useState([]);
+  const [taskList, setTaskList] = useState([]);
+  const [newTask, setNewTask] = useState(false);
+  const [selectedTaskType, setSelectedTaskType] = useState(null);
+  const [taskDescription, setTaskDescription] = useState("");
+  const [taskLaborCost, setTaskLaborCost] = useState("");
+  const [estimatedTime, setEstimatedTime] = useState("");
+
+  // Shopping list
+  const [shoppingList, setShoppingList] = useState([]);
+  const [newShoppingList, setNewShoppingList] = useState(false);
+
+  const shoppingListTypes = useMemo(
+    () => [
+      { value: "Custom", label: "Custom" },
+      { value: "Generic", label: "Generic" },
+    ],
+    []
+  );
+  const [newShoppingItemType, setNewShoppingItemType] = useState(null);
+  const [genericItemList, setGenericItemList] = useState([]);
+  const [selectedGenericItem, setSelectedGenericItem] = useState(null);
+
+  const [itemId, setItemId] = useState("");
+  const [itemQuantity, setItemQuantity] = useState("");
+  const [itemCost, setItemCost] = useState("");
+  const [itemPrice, setItemPrice] = useState("");
+  const [itemName, setItemName] = useState("");
+
+  // PNL
+  const [materialCost, setMaterialCost] = useState("0.00"); // USD string
+  const [laborCost, setLaborCost] = useState("0.00"); // USD string
+  const [totalCost, setTotalCost] = useState("0.00"); // USD string
+  const [estimatedDuration, setEstimatedDuration] = useState("0.00"); // hours string
+  const [estimatedProfit, setEstimatedProfit] = useState("$0.00");
+  const [estimatedProfitPercentage, setEstimatedProfitPercentage] = useState("0.00");
+
+  const [estimatedRate, setEstimatedRate] = useState("0.00"); // input dollars
+  const [offeredRate, setOfferedRate] = useState(0); // cents
+
+  // --- Description (always editable) ---
+  const [descriptionDraft, setDescriptionDraft] = useState("");
+  const [savingDescription, setSavingDescription] = useState(false);
+
+  // --- Comments (right panel) ---
+  const [comments, setComments] = useState([]);
+  const [commentsLoading, setCommentsLoading] = useState(true);
+  const [newComment, setNewComment] = useState("");
+  const [addingComment, setAddingComment] = useState(false);
+  const [commentFilter, setCommentFilter] = useState("All"); // All | Open | Resolved
+
+  const filteredComments = useMemo(() => {
+    if (commentFilter === "Open") return (comments || []).filter((c) => !c.resolved);
+    if (commentFilter === "Resolved") return (comments || []).filter((c) => !!c.resolved);
+    return comments || [];
+  }, [comments, commentFilter]);
+
+  // --- helpers ---
+  const formatCurrency = (number, locale = "en-US", currency = "USD") =>
+    new Intl.NumberFormat(locale, { style: "currency", currency }).format(number);
+
+  const getStatusClass = (status) => {
+    switch (status) {
+      case "Draft":
+      case "Estimate Pending":
+      case "Unscheduled":
+        return "bg-red-100 text-red-800";
+      case "Estimate":
+      case "In Progress":
+        return "bg-yellow-100 text-yellow-800";
+      case "Accepted":
+      case "Scheduled":
+      case "Finished":
+      case "Paid":
+        return "bg-green-100 text-green-800";
+      case "Invoiced":
+        return "bg-blue-100 text-blue-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
+
+  const selectTheme = (theme) => ({
+    ...theme,
+    borderRadius: 12,
+    colors: {
+      ...theme.colors,
+      primary25: "#EFF6FF", // blue-50
+      primary: "#2563EB", // blue-600
+      neutral0: "#FFFFFF",
+      neutral20: "#D1D5DB", // gray-300
+      neutral30: "#9CA3AF", // gray-400
+    },
+  });
+
+  const selectStyles = {
+    control: (base, state) => ({
+      ...base,
+      minHeight: 44,
+      borderRadius: 12,
+      borderColor: state.isFocused ? "#2563EB" : "#D1D5DB",
+      boxShadow: state.isFocused ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
+      "&:hover": { borderColor: state.isFocused ? "#2563EB" : "#9CA3AF" },
+    }),
+    menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
+  };
+
+  // --- initial load ---
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId) return;
+
+    (async () => {
+      try {
+        setLoading(true);
+
+        // Job
+        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+        const jobSnap = await getDoc(jobRef);
+        if (!jobSnap.exists()) throw new Error("Job not found");
+
+        const j = jobSnap.data();
+
+        const dateCreated = j.dateCreated?.toDate?.() ?? null;
+
+        setJob((prev) => ({
+          ...prev,
+          ...j,
+          dateCreated,
+          serviceStopIds: Array.isArray(j.serviceStopIds) ? j.serviceStopIds : j.serviceStopIds ? [j.serviceStopIds] : [],
+        }));
+
+        setDescriptionDraft(j.description || "");
+
+        setOfferedRate(Number(j.rate || 0));
+        setEstimatedRate(((Number(j.rate || 0) / 100) || 0).toFixed(2));
+
+        setSelectedOperationStatus({ value: j.operationStatus, label: j.operationStatus });
+        setSelectedBillingStatus({ value: j.billingStatus, label: j.billingStatus });
+
+        // Customer
+        const customerRef = doc(db, "companies", recentlySelectedCompany, "customers", j.customerId);
+        const customerSnap = await getDoc(customerRef);
+        if (customerSnap.exists()) {
+          const c = customerSnap.data();
+          setCustomer((prev) => ({
+            ...prev,
+            id: c.id,
+            firstName: c.firstName,
+            lastName: c.lastName,
+            phoneNumber: c.phoneNumber,
+            email: c.email,
+            billingStreetAddress: c.billingAddress?.streetAddress || "",
+            billingCity: c.billingAddress?.city || "",
+            billingState: c.billingAddress?.state || "",
+            billingZip: c.billingAddress?.zip || "",
+            billingNotes: c.billingNotes || "",
+            active: c.active,
+            verified: c.verified,
+          }));
         }
-        ,
-        {
-            id : 'Estimate',
-            name : 'Estimate',
-            label : 'Estimate',
+
+        // Service location
+        const locRef = doc(db, "companies", recentlySelectedCompany, "serviceLocations", j.serviceLocationId);
+        const locSnap = await getDoc(locRef);
+        if (locSnap.exists()) {
+          const l = locSnap.data();
+          setServiceLocation((prev) => ({
+            ...prev,
+            id: l.id,
+            bodiesOfWaterId: l.bodiesOfWaterId || [],
+            gateCode: l.gateCode || "",
+            nickName: l.nickName || "",
+            streetAddress: l.address?.streetAddress || "",
+            city: l.address?.city || "",
+            state: l.address?.state || "",
+            zip: l.address?.zip || "",
+            active: l.active,
+          }));
         }
-        ,
-        {
-            id : 'Accepted',
-            name : 'Accepted',
-            label : 'Accepted',
-        }
-        ,
-        {
-            id : 'In Progress',
-            name : 'In Progress',
-            label : 'In Progress',
-        }
-        ,
-        {
-            id : 'Invoiced',
-            name : 'Invoiced',
-            label : 'Invoiced',
-        }
-        ,
-        {
-            id : 'Paid',
-            name : 'Paid',
-            label : 'Paid',
-        }
-    ]);
 
-    const [selectedBillingStatus,setSelectedBillingStatus] = useState( {
-        id : 'Draft',
-        name : 'Draft',
-        label : 'Draft',
-    });
+        // Task types
+        const taskTypeQuery = query(collection(db, "universal", "settings", "taskTypes"));
+        const taskTypeSnap = await getDocs(taskTypeQuery);
+        const types = taskTypeSnap.docs.map((d) => {
+          const t = d.data();
+          return { value: t.name, label: t.name, id: t.id };
+        });
+        setTaskTypeList(types);
 
-    const [operationStatusList,setOperationStatusList] = useState([
-        {
-            id : 'Estimate Pending',
-            name : 'Estimate Pending',
-            label : 'Estimate Pending',
-        }
-        ,
-        {
-            id : 'Unscheduled',
-            name : 'Unscheduled',
-            label : 'Unscheduled',
-        }
-        ,
-        {
-            id : 'Scheduled',
-            name : 'Scheduled',
-            label : 'Scheduled',
-        }
-        ,
-        {
-            id : 'In Progress',
-            name : 'In Progress',
-            label : 'In Progress',
-        }
-        ,
-        {
-            id : 'Finished',
-            name : 'Finished',
-            label : 'Finished',
-        }
-    ]);
+        // Tasks
+        const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
+        const tasksSnap = await getDocs(tasksRef);
+        const tasks = tasksSnap.docs.map((d) => d.data());
+        setTaskList(tasks);
 
-    const [selectedOperationStatus,setSelectedOperationStatus] = useState( {
-        id : 'Draft',
-        name : 'Draft',
-        label : 'Draft',
-    });
+        // Shopping items
+        const itemsRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "items");
+        const itemsSnap = await getDocs(itemsRef);
+        const items = itemsSnap.docs.map((d) => d.data());
+        setShoppingList(items);
 
-    const [formattedDateCreated,setFormattedDateCreated] = useState()
+        // PNL calc
+        recomputePNL({
+          rateCents: Number(j.rate || 0),
+          tasks,
+          items,
+        });
+      } catch (e) {
+        console.error(e);
+        toast.error("Failed to load job details");
+      } finally {
+        setLoading(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlySelectedCompany, jobId]);
 
-    const [description, setDescription] = useState();
+  // --- comments subscription ---
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId) return;
 
-    const [taskLaborCost, setTaskLaborCost] = useState();
+    const commentsRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "comments");
+    const commentsQ = query(commentsRef, orderBy("date", "desc"));
 
-    const [estimatedTime, setEstimatedTime] = useState();
+    setCommentsLoading(true);
 
-    const [shoppingListTypes, setShoppingListTypes] = useState([
-        {
-            id : '1',
-            name : 'Custom',
-            label : 'Custom',
-        },
-        {
-            id : '2',
-            name : 'Generic',
-            label : 'Generic',
-        }
-    ]);
+    const unsub = onSnapshot(
+      commentsQ,
+      (snap) => {
+        const list = snap.docs.map((d) => d.data());
+        setComments(list);
+        setCommentsLoading(false);
+      },
+      (err) => {
+        console.error(err);
+        setCommentsLoading(false);
+        toast.error("Failed to load comments");
+      }
+    );
 
-    const [newShoppingItemType, setNewShoppingItemType] = useState({
-        id : '',
-        name : '',
-    });
+    return () => unsub();
+  }, [recentlySelectedCompany, jobId]);
 
-    const [selectedAdmin, setSelectedAdmin] = useState(''); //Object
+  const recomputePNL = ({ rateCents, tasks, items }) => {
+    // Labor
+    let totalLaborCents = 0;
+    let totalMinutes = 0;
+    for (const t of tasks || []) {
+      totalLaborCents += Number(t.contractedRate || 0);
+      totalMinutes += Number(t.estimatedTime || 0);
+    }
 
-    const [bodyOfWaterList, setBodyOfWaterList] = useState([]);
+    // Material
+    let totalMaterialCents = 0;
+    for (const it of items || []) {
+      const qty = Number(it.quantity || 0);
+      const cost = Number(it.cost || 0);
+      totalMaterialCents += cost * qty;
+    }
 
-    const [equipmentList, setEquipmentList] = useState([]);
-    
-    const [taskTypeList, setTaskTypeList] = useState([]);
+    const totalCostCents = totalLaborCents + totalMaterialCents;
+    const profitCents = rateCents - totalCostCents;
+    const profitPct = rateCents > 0 ? profitCents / rateCents : 0;
 
-    const [taskList, setTaskList] = useState([]);
+    setLaborCost((totalLaborCents / 100).toFixed(2));
+    setMaterialCost((totalMaterialCents / 100).toFixed(2));
+    setTotalCost((totalCostCents / 100).toFixed(2));
+    setEstimatedDuration((totalMinutes / 60).toFixed(2));
+    setEstimatedProfit(formatCurrency(profitCents / 100));
+    setEstimatedProfitPercentage((profitPct * 100).toFixed(2));
+  };
 
-    const [shoppingList, setShoppingList] = useState([]);
+  // --- Description save ---
+  const saveDescription = async () => {
+    try {
+      if (!recentlySelectedCompany || !jobId) return;
 
-    const [genericItemList, setGenericItemList] = useState([]);
+      setSavingDescription(true);
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
 
-    const [adminList, setAdminList] = useState([]);
+      await updateDoc(jobRef, { description: descriptionDraft });
 
-    //PNL
-    const [laborCost, setLaborCost] = useState(0.0);
+      setJob((prev) => ({ ...prev, description: descriptionDraft }));
+      toast.success("Description saved");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to save description");
+    } finally {
+      setSavingDescription(false);
+    }
+  };
 
-    const [totalCost, setTotalCost] = useState(0.0);
+  // --- Comments actions ---
+  const addComment = async () => {
+    try {
+      const userId = getUserId();
+      const userName = getUserName();
 
-    const [estimatedDuration, setEstimatedDuration] = useState(0);
+      if (!userId) return toast.error("Missing userId (not signed in?)");
+      if (!newComment.trim()) return toast.error("Write a comment first");
+      if (!recentlySelectedCompany || !jobId) return;
 
-    const [hourlyRate, setHourlyRate] = useState(50.00);
+      setAddingComment(true);
 
-    const [employeeLaborCost, setEmployeeLaborCost] = useState('32.50');
+      const id = "comp_wo_com_" + uuidv4();
+      const commentRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "comments", id);
 
-    const [subcontractorCost, setSubcontractorCost] = useState('50');
+      await setDoc(commentRef, {
+        id,
+        userId,
+        userName:dataBaseUser.firstName + " " + dataBaseUser.lastName,
+        date: serverTimestamp(),
+        comment: newComment.trim(),
+        resolved: false,
+      });
 
-    const [itemId, setItemId] = useState("");
+      setNewComment("");
+      toast.success("Comment added");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add comment");
+    } finally {
+      setAddingComment(false);
+    }
+  };
 
-    const [itemQuantity, setItemQuantity] = useState("");
+  const setCommentResolved = async (commentId, resolved) => {
+    try {
+      if (!recentlySelectedCompany || !jobId) return;
 
-    const [itemCost, setItemCost] = useState("");
+      const commentRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "comments", commentId);
+      await updateDoc(commentRef, { resolved });
 
-    const [itemPrice, setItemPrice] = useState("");
+      toast.success(resolved ? "Marked resolved" : "Re-opened");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update comment");
+    }
+  };
 
-    const [itemName, setItemName] = useState("");
+  // --- editing ---
+  const editJob = async (e) => {
+    e.preventDefault();
+    try {
+      setEdit(true);
 
-    const [estimatedRate, setEstimatedRate] = useState('1200.00');
+      const userQuery = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
+      const userSnap = await getDocs(userQuery);
+      const admins = userSnap.docs.map((d) => {
+        const u = d.data();
+        return {
+          value: u.id,
+          label: `${u.userName}${u.roleName ? ` — ${u.roleName}` : ""}`,
+          id: u.id,
+          name: u.userName,
+        };
+      });
+      setAdminList(admins);
 
-    const [offeredRate, setOfferedRate] = useState('1000'); 
+      const current = admins.find((a) => a.id === job.adminId) || null;
+      setSelectedAdmin(current);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to enter edit mode");
+    }
+  };
 
-    const [materialCost, setMaterialCost] = useState(0);
+  const cancelEditJob = () => {
+    setEdit(false);
+    setSelectedAdmin(null);
+  };
 
-    const [estimatedProfit, setEstimatedProfit] = useState('$ 650.00 - $668.00');
+  const saveEditChanges = async (e) => {
+    e.preventDefault();
+    try {
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
 
-    const [estimatedProfitPercentage, setEstimatedProfitPercentage] = useState('25% - 28%');
-
-    // handleBodyOfWaterListChange
-
-    // handleEquipmentListChange
-    useEffect(() => {
-        (async () => {
-            try{
-                //Get Job Information
-                const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
-                const docSnap = await getDoc(docRef);
-                let customerId;
-                let serviceLocationId;
-                
-                let totalRate = 0
-                if (docSnap.exists()) {
-                    console.log("Document data:", docSnap.data());
-                    setJob((prevJob) => ({
-                        ...prevJob,
-                        adminId: docSnap.data().adminId,
-                        adminName: docSnap.data().adminName,
-                        billingStatus: docSnap.data().billingStatus,
-                        bodyOfWaterId: docSnap.data().bodyOfWaterId,
-                        bodyOfWaterName : docSnap.data().bodyOfWaterName,
-                        chemicals : docSnap.data().chemicals,
-                        customerId : docSnap.data().customerId,
-                        description : docSnap.data().description,
-                        electricalParts : docSnap.data().electricalParts,
-                        equipmentId : docSnap.data().equipmentId,
-                        equipmentName : docSnap.data().equipmentName,
-                        id : docSnap.data().id,
-                        internalId : docSnap.data().internalId,
-                        installationParts : docSnap.data().installationParts,
-                        jobTemplateId : docSnap.data().jobTemplateId,
-                        laborCost : docSnap.data().laborCost,
-                        miscParts : docSnap.data().miscParts,
-                        operationStatus : docSnap.data().operationStatus,
-                        pvcParts : docSnap.data().pvcParts,
-                        rate : docSnap.data().rate,
-                        serviceLocationId : docSnap.data().serviceLocationId,
-                        serviceStopIds : docSnap.data().serviceStopIds,
-                        type : docSnap.data().type,
-
-                    }));
-                    totalRate = docSnap.data().rate
-                    setOfferedRate(docSnap.data().rate)
-                    setSelectedOperationStatus({
-                        id : docSnap.data().operationStatus,
-                        name : docSnap.data().operationStatus,
-                        label : docSnap.data().operationStatus,
-                    })
-                    setSelectedBillingStatus({
-                        id : docSnap.data().billingStatus,
-                        name : docSnap.data().billingStatus,
-                        label : docSnap.data().billingStatus,
-                    })
-                    const dateCreated = docSnap.data().dateCreated.toDate();
-                    const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
-                    setFormattedDateCreated(formattedDateCreated)
-                    customerId = docSnap.data().customerId
-                    serviceLocationId = docSnap.data().serviceLocationId
-                    console.log("ReceivedJob Information")
-
-                } else {
-                  console.log("No such document!");
-                }
-
-                //Get Customer Information
-                const customerDocRef = doc(db, "companies",recentlySelectedCompany,'customers',customerId);
-                const customerDocSnap = await getDoc(customerDocRef);
-                if (customerDocSnap.exists()) {
-                    setCustomer((prevCustomer) => ({
-                        ...prevCustomer,
-                        id: customerDocSnap.data().id,
-                        firstName: customerDocSnap.data().firstName,
-                        lastName: customerDocSnap.data().lastName,
-                        phoneNumber: customerDocSnap.data().phoneNumber,
-                        email: customerDocSnap.data().email,
-                        billingStreetAddress : customerDocSnap.data().billingAddress.streetAddress,
-                        billingCity : customerDocSnap.data().billingAddress.city,
-                        billingState : customerDocSnap.data().billingAddress.state,
-                        billingZip : customerDocSnap.data().billingAddress.zip,
-                        billingNotes : customerDocSnap.data().billingNotes,
-                        active : customerDocSnap.data().active,
-                        verified : customerDocSnap.data().verified,
-                    }));
-                    console.log("Retrived Customer information")
-
-                } else {
-                    console.log("No such document!");
-                }
-
-                //Get Site Information
-                const serviceLocationDocRef = doc(db, "companies",recentlySelectedCompany,'serviceLocations',serviceLocationId);
-                const serviceLocationDocSnap = await getDoc(serviceLocationDocRef);
-                if (serviceLocationDocSnap.exists()) {
-                    setServiceLocation((prevServiceLocation) => ({
-                        ...prevServiceLocation,
-                        bodiesOfWaterId: serviceLocationDocSnap.data().bodiesOfWaterId,
-                        gateCode: serviceLocationDocSnap.data().gateCode,
-                        nickName: serviceLocationDocSnap.data().nickName,
-                        streetAddress : serviceLocationDocSnap.data().address.streetAddress,
-                        city : serviceLocationDocSnap.data().address.city,
-                        state : serviceLocationDocSnap.data().address.state,
-                        zip : serviceLocationDocSnap.data().address.zip,
-                        billingNotes : serviceLocationDocSnap.data().address,
-                        active : serviceLocationDocSnap.data().active,
-                    }));
-                    
-                    console.log("Retrived site information")
-                } else {
-                    console.log("No such document!");
-                }
-                //Get Task Types
-                let taskTypeQuery = query(collection(db, 'universal','settings','taskTypes'));
-                const taskTypeQuerySnapshot = await getDocs(taskTypeQuery);       
-                setTaskTypeList([])      
-                taskTypeQuerySnapshot.forEach((doc) => {
-                    const taskTypeData = doc.data()
-                    const taskType = {
-                        id:taskTypeData.id,
-                        name:taskTypeData.name,
-                        label:taskTypeData.name,
-
-                    }
-                    setTaskTypeList(taskTypeList => [...taskTypeList, taskType]); 
-                });
-                    
-                console.log("Retrived Task Types")
-
-                //Get Task List
-                let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
-                const taskQuerySnapshot = await getDocs(taskQuery);       
-                setTaskList([])      
-                taskQuerySnapshot.forEach((doc) => {
-                    const taskData = doc.data()
-                    const task = {
-                        id : taskData.id,
-                        name : taskData.name,
-                        type : taskData.type,
-                        workerType : taskData.workerType,
-                        workerName : taskData.workerName,
-                        status : taskData.status,
-                        customerApproval : taskData.customerApproval,
-                        laborContractId : taskData.laborContractId,
-                        serviceStopId : taskData.serviceStopId,
-                        contractedRate : taskData.contractedRate,
-                        estimatedTime : taskData.estimatedTime
-                    }
-                    setTaskList(taskList => [...taskList, task]); 
-                });
-                    
-                console.log("Retrived Task List")
-
-                //Get shopping list items
-                let taskQuery2 = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
-                const querySnapshot2 = await getDocs(taskQuery2);       
-                setShoppingList([])      
-                querySnapshot2.forEach((doc) => {
-                    const itemData = doc.data()
-                    const item = {
-                        id : itemData.id,
-                        name : itemData.name,
-                        cost : itemData.cost,
-                        price : itemData.price,
-                        itemId : itemData.itemId,
-                        itemType : itemData.itemType,
-                        quantity : itemData.quantity, //Enum : ????????
-                    }
-                    setShoppingList(shoppingList => [...shoppingList, item]); 
-                });
-                    
-                console.log("Retrived Shopping List")
-
-                //Calculate Labor Cost
-
-                let totalLaborCost = 0 
-                let totalDuration = 0
-
-                for (let i = 0; i < taskList.length; i++) {
-                    let task = taskList[i]
-                    totalLaborCost = totalLaborCost + task.contractedRate
-                    totalDuration = totalDuration + task.estimatedTime
-                    console.log('')
-                    console.log('totalLaborCost' + totalLaborCost)
-                    console.log('totalDuration' + totalDuration)
-                    console.log('')
-                }
-                totalLaborCost = totalLaborCost
-                totalDuration = totalDuration /60
-
-                console.log("Calculated Labor Cost")
-                //Calculate Material Cost
-                console.log( 1 )
-                let totalMaterialCost = 0 
-                let totalMaterialPrice = 0
-    
-                for (let i = 0; i < shoppingList.length; i++) {
-                    let item = shoppingList[i]
-                    let lineItemTotalCost = item.cost * item.quantity
-                    let lineItemTotalPrice = item.price * item.quantity
-                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
-                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
-                }
-                totalMaterialCost = totalMaterialCost
-                totalMaterialPrice = totalMaterialPrice
-    
-
-                console.log("Calculated Material Cost ")
-
-                // Calculate PNL
-                let totalCost = 0 
-                let totalProfit = 0
-                let profitPercentage = 0
-
-                totalCost = totalMaterialCost + totalLaborCost
-                totalProfit = totalRate - totalCost
-
-                profitPercentage = totalProfit/totalRate
-                
-                console.log("totalRate: " + totalRate)
-                console.log("totalCost: " + totalCost)
-                console.log("totalLaborCost: " + totalLaborCost)
-                console.log("totalMaterialCost: " + totalMaterialCost)
-                console.log("totalProfit: " + totalProfit)
-                console.log("profitPercentage: " + profitPercentage)
-
-                console.log( 10 )
-
-                totalDuration = totalDuration.toFixed(2)
-                totalLaborCost = totalLaborCost.toFixed(2)
-                totalCost = totalCost.toFixed(2)
-
-                console.log("Calculated PNL")
-
-                setTotalCost((totalCost/100).toFixed(2))
-                setMaterialCost((totalMaterialCost/100).toFixed(2))
-                setLaborCost((totalLaborCost/100).toFixed(2))
-                setEstimatedDuration(totalDuration)
-                let formattedProfitUSD = formatCurrency(totalProfit/100);
-        
-                setEstimatedProfit(formattedProfitUSD)
-                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
-
-                console.log("Finished Job Detail View Start Up ")
-
-            } catch(error){
-                console.log('Error Location useEffect Job Detail View')
-            }
-        })();
-    },[])
-
-    function formatCurrency(number, locale = 'en-US', currency = 'USD') {
-        return new Intl.NumberFormat(locale, {
-          style: 'currency',
-          currency: currency
-        }).format(number);
+      if (selectedAdmin?.id && (selectedAdmin.id !== job.adminId || selectedAdmin.name !== job.adminName || job.rate !== offeredRate)) {
+        await updateDoc(jobRef, {
+          adminId: selectedAdmin.id,
+          adminName: selectedAdmin.name,
+          rate:offeredRate
+        });
+        toast.success("Saved");
+      } else {
+        toast.success("No changes");
       }
 
-    async function recalculatePNL(e) {
-        e.preventDefault()
-        setOfferedRate(estimatedRate)
-        // Calculate PNL
-        let totalRate = offeredRate
-        let totalProfit = 0
-        let profitPercentage = 0
+      const jobSnap = await getDoc(jobRef);
+      if (jobSnap.exists()) {
+        const j = jobSnap.data();
+        setJob((prev) => ({ ...prev, adminId: j.adminId, adminName: j.adminName }));
+      }
 
-        totalProfit = totalRate - totalCost
-        profitPercentage = totalProfit/totalRate
-
-        let formattedProfitUSD = formatCurrency(totalProfit);
-
-        setEstimatedProfit(formattedProfitUSD)
-        setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
+      setEdit(false);
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to save changes");
     }
-    async function editJob(e) {
-        e.preventDefault()
-        try{
-            setEdit(true);
-            
-            //Get Company Users
-            let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
-            const userQuerySnapshot = await getDocs(userQuery);       
-            setAdminList([])      
-            userQuerySnapshot.forEach((doc) => {
-                const taskData = doc.data()
-                const user = {
-                    id : taskData.id,
-                    name : taskData.userName,
-                    dateCreated : taskData.dateCreated,
-                    linkedCompanyId : taskData.linkedCompanyId,
-                    linkedCompanyName : taskData.linkedCompanyName,
-                    roleId : taskData.roleId,
-                    roleName : taskData.roleName,
-                    status : taskData.status,
-                    userId : taskData.userId,
-                    userName : taskData.userName,
-                    workerType : taskData.workerType,
-                    label : taskData.userName + ' - ' + taskData.roleName
-                }
-                setAdminList(adminList => [...adminList, user]); 
-            });
-        } catch(error){
-            console.log('Error')
-        }
+  };
+
+  const deleteJob = async (e) => {
+    e.preventDefault();
+    try {
+      const ok = window.confirm("Delete this job? This cannot be undone.");
+      if (!ok) return;
+
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId));
+      toast.success("Deleted");
+      navigate("/company/jobs");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete job");
     }
-    const cancelEditJob = (event) => {
-        setEdit(false);
+  };
+
+  const handleSelectedOperationStatus = async (opt) => {
+    try {
+      setSelectedOperationStatus(opt);
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+      await updateDoc(jobRef, { operationStatus: opt.value });
+      setJob((prev) => ({ ...prev, operationStatus: opt.value }));
+      toast.success("Updated operation status");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update operation status");
     }
-    async function saveEditChanges(e) {
-        e.preventDefault()
-        setEdit(false);
-        try{
-            // await deleteDoc(doc(db, "companies",recentlySelectedCompany,'workOrders',jobId));
-            //Update Firestore
-            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
-            console.log('save Edit Changes')
-            console.log(selectedAdmin)
+  };
 
-            await updateDoc(docRef, {
-                adminName: selectedAdmin.name,
-                adminId: selectedAdmin.id,
-
-            });
-            console.log('Successfully Update Doc')
-
-            //Get Updated Job Information
-            const docSnap = await getDoc(docRef);
-            let customerId;
-            let serviceLocationId;
-            if (docSnap.exists()) {
-                console.log("Document data:", docSnap.data());
-                setJob((prevJob) => ({
-                    ...prevJob,
-                    adminId: docSnap.data().adminId,
-                    adminName: docSnap.data().adminName,
-                    billingStatus: docSnap.data().billingStatus,
-                    bodyOfWaterId: docSnap.data().bodyOfWaterId,
-                    bodyOfWaterName : docSnap.data().bodyOfWaterName,
-                    chemicals : docSnap.data().chemicals,
-                    customerId : docSnap.data().customerId,
-                    description : docSnap.data().description,
-                    electricalParts : docSnap.data().electricalParts,
-                    equipmentId : docSnap.data().equipmentId,
-                    equipmentName : docSnap.data().equipmentName,
-                    id : docSnap.data().id,
-                    installationParts : docSnap.data().installationParts,
-                    jobTemplateId : docSnap.data().jobTemplateId,
-                    laborCost : docSnap.data().laborCost,
-                    miscParts : docSnap.data().miscParts,
-                    operationStatus : docSnap.data().operationStatus,
-                    pvcParts : docSnap.data().pvcParts,
-                    rate : docSnap.data().rate,
-                    serviceLocationId : docSnap.data().serviceLocationId,
-                    serviceStopIds : docSnap.data().serviceStopIds,
-                    type : docSnap.data().type,
-
-                }));
-                const dateCreated = docSnap.data().dateCreated.toDate();
-                const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
-                setFormattedDateCreated(formattedDateCreated)
-                customerId = docSnap.data().customerId
-                serviceLocationId = docSnap.data().serviceLocationId
-                console.log("Successfully Received Job Information")
-
-            } else {
-                console.log("No such document!");
-            }
-        } catch(error){
-            console.log('Error')
-        }
+  const handleSelectedBillingStatus = async (opt) => {
+    try {
+      setSelectedBillingStatus(opt);
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+      await updateDoc(jobRef, { billingStatus: opt.value });
+      setJob((prev) => ({ ...prev, billingStatus: opt.value }));
+      toast.success("Updated billing status");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to update billing status");
     }
-    async function deleteJob(e) {
-        e.preventDefault()
-        try{
-            await deleteDoc(doc(db, "companies",recentlySelectedCompany,'workOrders',jobId));
-            navigate('/company/jobs')
-            } catch(error){
-                console.log('Error')
-            }
+  };
+
+  // --- tasks ---
+  const showNewTaskItem = () => setNewTask(true);
+
+  const clearNewTask = (e) => {
+    e.preventDefault();
+    setSelectedTaskType(null);
+    setTaskDescription("");
+    setTaskLaborCost("");
+    setEstimatedTime("");
+    setNewTask(false);
+  };
+
+  const handleAddTask = async (e) => {
+    e.preventDefault();
+    try {
+      if (!selectedTaskType?.value) return toast.error("Pick a task type");
+      if (!taskDescription) return toast.error("Add a description");
+      if (!taskLaborCost) return toast.error("Add labor cost");
+      if (!estimatedTime) return toast.error("Add estimated time (minutes)");
+
+      const id = "comp_wo_tas_" + uuidv4();
+      const costCents = Math.round(parseFloat(taskLaborCost) * 100);
+      const estMin = parseFloat(estimatedTime);
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), {
+        id,
+        name: taskDescription,
+        type: selectedTaskType.value,
+        workerType: "",
+        workerId: "",
+        workerName: "",
+        status: "Unassigned",
+        customerApproval: false,
+        contractedRate: costCents,
+        laborContractId: "",
+        estimatedTime: estMin,
+        actualTime: "",
+        equipmentId: "",
+        serviceLocationId: "",
+        bodyOfWaterId: "",
+        serviceStopId: "",
+      });
+
+      const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
+      const tasksSnap = await getDocs(tasksRef);
+      const tasks = tasksSnap.docs.map((d) => d.data());
+      setTaskList(tasks);
+
+      recomputePNL({ rateCents: offeredRate, tasks, items: shoppingList });
+
+      toast.success("Added task");
+      clearNewTask({ preventDefault: () => {} });
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add task");
     }
+  };
 
-    const handleBodyOfWaterListChange = (selectedOption2) => {
+  const deleteTaskItem = async (e, id) => {
+    e.preventDefault();
+    try {
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id));
 
-        (async () => {
-            setBodyOfWaterList(selectedOption2)
-            
-        })();
-    };
+      const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
+      const tasksSnap = await getDocs(tasksRef);
+      const tasks = tasksSnap.docs.map((d) => d.data());
+      setTaskList(tasks);
 
-    const handleEquipmentListChange = (selectedOption2) => {
+      recomputePNL({ rateCents: offeredRate, tasks, items: shoppingList });
 
-        (async () => {
-            setEquipmentList(selectedOption2)
-            
-        })();
-    };
-
-    const handleSelectedOperationStatus = (selectedOption2) => {
-
-        (async () => {
-            setSelectedOperationStatus(selectedOption2)
-            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
-            console.log('Save Edit Changes')
-            console.log(selectedOption2)
-
-            await updateDoc(docRef, {
-                operationStatus: selectedOption2.name,
-
-            });
-            toast.success("Updated Operation Status")
-            console.log('Successfully Update Doc')
-            //Get Updated Job Information
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                console.log("Document data:", docSnap.data());
-                setJob((prevJob) => ({
-                    ...prevJob,
-                    billingStatus: docSnap.data().billingStatus,
-                    operationStatus : docSnap.data().operationStatus,
-                }));
-
-            } else {
-                console.log("No such document!");
-            }
-            
-        })();
-    };
-
-    const handleSelectedBillingStatus = (selectedOption2) => {
-
-        (async () => {
-            setSelectedBillingStatus(selectedOption2)
-            const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
-            console.log('Save Edit Changes')
-            console.log(selectedOption2)
-
-            await updateDoc(docRef, {
-                billingStatus: selectedOption2.name,
-
-            });
-            toast.success("Updated Billing Status")
-            console.log('Successfully Update Doc')
-            //Get Updated Job Information
-            const docSnap = await getDoc(docRef);
-            if (docSnap.exists()) {
-                console.log("Document data:", docSnap.data());
-                setJob((prevJob) => ({
-                    ...prevJob,
-                    billingStatus: docSnap.data().billingStatus,
-                    operationStatus : docSnap.data().operationStatus,
-                }));
-
-            } else {
-                console.log("No such document!");
-            }
-        })();
-    };
-
-    // Task Functions
-    const handleSelectedTaskTypeChange = (selectedOption2) => {
-
-        (async () => {
-            setSelectedTaskType(selectedOption2)
-            
-        })();
-    };
-
-    async function showNewTaskItem(e) {
-        setNewTask(true)
+      toast.success("Deleted task");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete task");
     }
+  };
 
-    async function clearNewTask(e) {
-        e.preventDefault()
-        setSelectedTaskType({})
-        setDescription('')
-        setTaskLaborCost('')
-        setNewTask(false)
+  // --- shopping ---
+  const showNewShoppingListItem = () => setNewShoppingList(true);
+  const clearNewShoppingListItem = (e) => {
+    e.preventDefault();
+    setNewShoppingList(false);
+    setNewShoppingItemType(null);
+    setSelectedGenericItem(null);
+    setItemName("");
+    setItemQuantity("");
+    setItemPrice("");
+    setItemCost("");
+    setItemId("");
+  };
 
+  const handleSelectedShoppingItemTypeChange = async (opt) => {
+    setNewShoppingItemType(opt);
+
+    if (opt?.value === "Generic") {
+      try {
+        const genericQ = query(collection(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase"));
+        const genericSnap = await getDocs(genericQ);
+        const list = genericSnap.docs.map((d) => {
+          const it = d.data();
+          return {
+            value: it.id,
+            label: `${it.name} — ${(Number(it.rate || 0) / 100).toFixed(2)}`,
+            id: it.id,
+            name: it.name,
+            rate: it.rate,
+          };
+        });
+        setGenericItemList(list);
+      } catch (err) {
+        console.error(err);
+        toast.error("Failed to load generic items");
+      }
     }
+  };
 
-    async function handleAddTask(e) {
-        e.preventDefault()
-        try{
-            // Create New Task
-            console.log('Create New Task')
-            let id = 'comp_wo_tas_' + uuidv4();
+  const handleSelectedGenericItemChange = (opt) => {
+    setSelectedGenericItem(opt);
+    setItemId(opt?.id || "");
+    const dollars = (Number(opt?.rate || 0) / 100).toFixed(2);
+    setItemCost(dollars);
+    setItemPrice(dollars);
+    setItemName(opt?.name || "");
+  };
 
-            //Guard Statments Based on Task
-            //Switch Statment Based ON TaskType            
-            let laborCostInt = parseFloat(taskLaborCost);
-            laborCostInt = laborCostInt*100
-            let estimatedTimeMin = parseFloat(estimatedTime);
+  const handleAddShoppingListItem = async (e) => {
+    e.preventDefault();
+    try {
+      if (!newShoppingItemType?.value) return toast.error("Pick item type");
+      if (!itemQuantity) return toast.error("Add quantity");
 
-            await setDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'tasks',id), {
-                id : id,
-                name : description,
-                type : selectedTaskType.name,
-                workerType : '',
-                workerId : '',
-                workerName : '',
-                status : 'Unassigned',
-                customerApproval : false,
-                contractedRate : laborCostInt,
-                laborContractId : '',
-                estimatedTime : estimatedTimeMin,
-                actualTime : '',
-                equipmentId : '',
-                serviceLocationId : '',
-                bodyOfWaterId : '',
-                serviceStopId : ''
-              });
-              console.log('Added New Task')
+      const id = "comp_wo_ite_" + uuidv4();
 
-            //Get Task
-            let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
-            const querySnapshot = await getDocs(taskQuery);       
-            setTaskList([])      
-            querySnapshot.forEach((doc) => {
-                const taskData = doc.data()
-                const task = {
-                    id : taskData.id,
-                    name : taskData.name,
-                    type : taskData.type, //Enum : workOrderTaskType
-                    workerType : taskData.workerType,
-                    workerId : taskData.workerId,
-                    workerName : taskData.workerName,
-                    status : taskData.status, //Enum : laborContractTaskStatus
-                    customerApproval : taskData.customerApproval,
-                    laborContractId : taskData.laborContractId,
-                    contractedRate : taskData.contractedRate,
-                    estimatedTime : taskData.estimatedTime,
-                    actualTime : '',
-                    equipmentId : '',
-                    serviceLocationId : '',
-                    bodyOfWaterId : '',
-                    serviceStopId : taskData.serviceStopId
-                }
-                setTaskList(taskList => [...taskList, task]); 
-            });
-            console.log('Received New Tasks')
+      const qty = parseInt(itemQuantity, 10);
+      if (!qty || qty <= 0) return toast.error("Quantity must be > 0");
 
-            setSelectedTaskType({})
-            setDescription('')
-            setTaskLaborCost('')
-            setEstimatedTime('')
+      let costCents = 0;
+      let priceCents = 0;
+      let name = itemName;
+      let itemType = newShoppingItemType.value;
 
-            //Calculate Labor Cost
+      if (itemType === "Custom") {
+        if (!itemName) return toast.error("Add a description");
+        if (!itemCost) return toast.error("Add item cost");
+        if (!itemPrice) return toast.error("Add item price");
+        costCents = Math.round(parseFloat(itemCost) * 100);
+        priceCents = Math.round(parseFloat(itemPrice) * 100);
+      } else {
+        if (!selectedGenericItem?.id) return toast.error("Pick a generic item");
+        costCents = Number(selectedGenericItem.rate || 0);
+        priceCents = Number(selectedGenericItem.rate || 0);
+        name = selectedGenericItem.name;
+      }
 
-            let totalLaborCost = 0 
-            let totalDuration = 0
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "items", id), {
+        id,
+        name,
+        cost: costCents,
+        price: priceCents,
+        itemId: itemId || "",
+        itemType,
+        quantity: qty,
+        status: "Not Purchased",
+      });
 
-            for (let i = 0; i < taskList.length; i++) {
-                let task = taskList[i]
-                totalLaborCost = totalLaborCost + task.contractedRate
-                totalDuration = totalDuration + task.estimatedTime
+      const itemsRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "items");
+      const itemsSnap = await getDocs(itemsRef);
+      const items = itemsSnap.docs.map((d) => d.data());
+      setShoppingList(items);
 
-            }
-            totalLaborCost = totalLaborCost / 100 
-            totalDuration = totalDuration /60
+      recomputePNL({ rateCents: offeredRate, tasks: taskList, items });
 
-            // Calculate PNL
-            let totalCost = 0 
-            let totalRate = offeredRate
-            let totalProfit = 0
-            let profitPercentage = 0
-
-            totalCost = materialCost + totalLaborCost
-            totalProfit = totalRate - totalCost
-            profitPercentage = totalProfit/totalRate
-            console.log( 5 )
-
-            profitPercentage = profitPercentage.toFixed(2)
-            console.log( 10 )
-
-            totalDuration = totalDuration.toFixed(2)
-            console.log( 15 )
-
-            totalLaborCost = totalLaborCost.toFixed(2)
-            console.log( 20 )
-
-            totalCost = totalCost.toFixed(2)
-            console.log( 25 )
-
-            setTotalCost(totalCost)
-            setLaborCost(totalLaborCost)
-            console.log( 30 )
-
-            setEstimatedDuration(totalDuration)
-            let formattedProfitUSD = formatCurrency(totalProfit);
-            console.log( 40 )
-
-            setEstimatedProfit(formattedProfitUSD)
-            setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
-
-        } catch(error){
-            console.log('Error')
-        }
+      toast.success("Added item");
+      clearNewShoppingListItem({ preventDefault: () => {} });
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add item");
     }
+  };
 
-    async function deleteTaskItem(e,id) {
-        e.preventDefault()
-        try{
-            //Delete Task
-            await deleteDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'tasks',id));
-            toast.success('Successfully Deleted Task') 
+  const deleteShoppingListItem = async (e, id) => {
+    e.preventDefault();
+    try {
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "items", id));
 
-             //Get New Tasks
-             let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
-             const querySnapshot = await getDocs(taskQuery);       
-             setTaskList([])      
-             querySnapshot.forEach((doc) => {
-                 const taskData = doc.data()
-                 const task = {
-                     id : taskData.id,
-                     name : taskData.name,
-                     type : taskData.type, //Enum : workOrderTaskType
-                     workerType : taskData.workerType,
-                     workerId : taskData.workerId,
-                     workerName : taskData.workerName,
-                     status : taskData.status, //Enum : laborContractTaskStatus
-                     customerApproval : taskData.customerApproval,
-                     laborContractId : taskData.laborContractId,
-                     contractedRate : taskData.contractedRate,
-                     estimatedTime : taskData.estimatedTime,
-                     actualTime : '',
-                     equipmentId : '',
-                     serviceLocationId : '',
-                     bodyOfWaterId : '',
-                     serviceStopId : taskData.serviceStopId
-                 }
-                 setTaskList(taskList => [...taskList, task]); 
-             });
-             console.log('Received New Tasks')
- 
-             setSelectedTaskType({})
-             setDescription('')
-             setTaskLaborCost('')
-             setEstimatedTime('')
- 
-             //Calculate Labor Cost
- 
-             let totalLaborCost = 0 
-             let totalDuration = 0
- 
-             for (let i = 0; i < taskList.length; i++) {
-                 let task = taskList[i]
-                 totalLaborCost = totalLaborCost + task.contractedRate
-                 totalDuration = totalDuration + task.estimatedTime
- 
-             }
-             totalLaborCost = totalLaborCost / 100 
-             totalDuration = totalDuration /60
- 
-             // Calculate PNL
-             let totalCost = 0 
-             let totalRate = offeredRate
-             let totalProfit = 0
-             let profitPercentage = 0
- 
-             totalCost = materialCost + totalLaborCost
-             totalProfit = totalRate - totalCost
-             profitPercentage = totalProfit/totalRate
-             console.log( 5 )
- 
-             profitPercentage = profitPercentage.toFixed(2)
-             console.log( 10 )
- 
-             totalDuration = totalDuration.toFixed(2)
-             console.log( 15 )
- 
-             totalLaborCost = totalLaborCost.toFixed(2)
-             console.log( 20 )
- 
-             totalCost = totalCost.toFixed(2)
-             console.log( 25 )
- 
-             setTotalCost(totalCost)
-             setLaborCost(totalLaborCost)
-             console.log( 30 )
- 
-             setEstimatedDuration(totalDuration)
-             let formattedProfitUSD = formatCurrency(totalProfit);
-             console.log( 40 )
- 
-             setEstimatedProfit(formattedProfitUSD)
-             setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
-          } catch(error){
-              console.log('Error')
-          }
+      const itemsRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "items");
+      const itemsSnap = await getDocs(itemsRef);
+      const items = itemsSnap.docs.map((d) => d.data());
+      setShoppingList(items);
+
+      recomputePNL({ rateCents: offeredRate, tasks: taskList, items });
+
+      toast.success("Deleted item");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to delete item");
     }
+  };
 
-    // Shopping List functions
-    
-    const handleSelectedGenericItemChange = (selectedOption2) => {
+  // --- pnl ---
+  const recalculatePNL = async (e) => {
+    e.preventDefault();
+    const rateCents = Math.round(parseFloat(estimatedRate || "0") * 100);
+    setOfferedRate(rateCents);
 
-        (async () => {
-            setSelectedGenericItem(selectedOption2)
-            setItemId(selectedOption2.id)
-            setItemCost(selectedOption2.rate)
-            setItemPrice(selectedOption2.rate)
-            setItemName(selectedOption2.name)
-        })();
-    };
+    const totalCostCents = Math.round(parseFloat(totalCost || "0") * 100);
+    const profitCents = rateCents - totalCostCents;
+    const profitPct = rateCents > 0 ? profitCents / rateCents : 0;
 
-    const handleSelectedShoppingItemTypeChange = (selectedOption2) => {
+    setEstimatedProfit(formatCurrency(profitCents / 100));
+    setEstimatedProfitPercentage((profitPct * 100).toFixed(2));
+  };
 
-        (async () => {
+  const openInMaps = () => {
+    const address = `${serviceLocation.streetAddress} ${serviceLocation.city} ${serviceLocation.state} ${serviceLocation.zip}`.trim();
+    const urlAddress = encodeURIComponent(address);
+    const url = `https://www.google.com/maps/place/${urlAddress}`;
+    window.open(url, "_blank");
+  };
 
-            setNewShoppingItemType(selectedOption2)
-            //Get Generic Data Base Items
-            // /companies/B06BD6B7-B23E-43BE-A637-7A824C48D0B7/settings/dataBase
-            let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'));
-            const genericItemQuerySnapshot = await getDocs(genericItemQuery);       
-            setGenericItemList([])
-            genericItemQuerySnapshot.forEach((doc) => {
-                const itemData = doc.data()
-                const genericItem = {
-                    UOM : itemData.id,
-                    billable : itemData.billable,
-                    category : itemData.category,
-                    color : itemData.color,
-                    dateUpdated : itemData.dateUpdated,
-                    description : itemData.description,
-                    id : itemData.id,
-                    name : itemData.name,
-                    rate : itemData.rate,
-                    size : itemData.size,
-                    sku : itemData.sku,
-                    storeName : itemData.storeName,
-                    subCategory : itemData.subCategory,
-                    timesPurchased : itemData.timesPurchased,
-                    venderId : itemData.venderId,
-                    label: itemData.name + ' ' + itemData.rate
-                }
-                setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
-            });
-        })();
-    };
+  const formattedDateCreated = job.dateCreated ? format(job.dateCreated, "MMMM d, yyyy") : "N/A";
 
-    async function showNewShoppingListItem(e) {
-        setNewShoppingList(true)
-    }
-
-    async function clearNewShoppingListItem(e) {
-        e.preventDefault()
-        setNewShoppingList(false)
-    }
-
-    async function handleAddShoppingListItem(e) {
-        e.preventDefault()
-        try{
-            // CreateShoppingItem
-            let id = 'comp_wo_ite_' + uuidv4();
-
-            //Guard Statments Based on Item
-            //Switch Statment Based ON Item Type
-            let cost = parseFloat(itemCost);
-
-            let price = parseFloat(itemPrice);
-
-            let quantity = parseInt(itemQuantity);
-            cost = cost*100
-
-            price = price*100
-            await setDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'items',id), {
-                id : id,
-                name : itemName,
-                cost : cost,
-                price : price,
-                itemId : itemId,
-                itemType : newShoppingItemType.name,
-                quantity : quantity,
-                status : 'Not Purchased'
-              });
-
-            //Get new shopping list items
-
-            let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
-            const querySnapshot = await getDocs(taskQuery);       
-            setShoppingList([])      
-            querySnapshot.forEach((doc) => {
-                const itemData = doc.data()
-                const item = {
-                    id : itemData.id,
-                    name : itemData.name,
-                    cost : itemData.cost,
-                    price : itemData.price,
-                    itemId : itemData.itemId,
-                    itemType : itemData.itemType, //Enum : ????????
-                    quantity : itemData.quantity,
-                }
-                setShoppingList(shoppingList => [...shoppingList, item]); 
-            });
-            //Clear Fields
-            setNewShoppingList(false)
-            setItemName('')
-            setItemQuantity('')
-            setItemPrice('')
-            setItemCost('')
-
-                //Calculate Material Cost
-                console.log( 1 )
-                let totalMaterialCost = 0 
-                let totalMaterialPrice = 0
-    
-                for (let i = 0; i < shoppingList.length; i++) {
-                    let item = shoppingList[i]
-                    let lineItemTotalCost = item.cost * item.quantity
-                    let lineItemTotalPrice = item.price * item.quantity
-                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
-                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
-                }
-                totalMaterialCost = totalMaterialCost / 100 
-                totalMaterialPrice = totalMaterialPrice /100
-    
-
-                // Calculate PNL
-                let totalCost = 0 
-                let totalRate = offeredRate
-                let totalProfit = 0
-                let profitPercentage = 0
-
-                totalCost = totalMaterialCost + laborCost
-                totalProfit = totalRate - totalCost
-                profitPercentage = totalProfit/totalRate
-                console.log( 5 )
-
-                profitPercentage = profitPercentage.toFixed(2)
-                totalMaterialCost = totalMaterialCost.toFixed(2)
-                totalMaterialPrice = totalMaterialPrice.toFixed(2)
-                console.log( 10 )
-
-                totalCost = totalCost.toFixed(2)
-                console.log( 15 )
-
-                setTotalCost(totalCost)
-                setMaterialCost(totalMaterialCost)
-                let formattedProfitUSD = formatCurrency(totalProfit);
-        
-                setEstimatedProfit(formattedProfitUSD)
-                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
-          } catch(error){
-              console.log('Error')
-          }
-    }
-
-    async function deleteShoppingListItem(e,id) {
-        e.preventDefault()
-        try{
-            //Delete Task
-            await deleteDoc(doc(db, "companies",recentlySelectedCompany, "workOrders",jobId,'items',id));
-
-            toast.success('Successfully Deleted Item') 
-
-
-            //Get new shopping list items
-
-            let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'items'));
-            const querySnapshot = await getDocs(taskQuery);       
-            setShoppingList([])      
-            querySnapshot.forEach((doc) => {
-                const itemData = doc.data()
-                const item = {
-                    id : itemData.id,
-                    name : itemData.name,
-                    cost : itemData.cost,
-                    price : itemData.price,
-                    itemId : itemData.itemId,
-                    itemType : itemData.itemType, //Enum : ????????
-                    quantity : itemData.quantity,
-                }
-                setShoppingList(shoppingList => [...shoppingList, item]); 
-            });
-            //Clear Fields
-            setNewShoppingList(false)
-            setItemName('')
-            setItemQuantity('')
-            setItemPrice('')
-            setItemCost('')
-
-                //Calculate Material Cost
-                console.log( 1 )
-                let totalMaterialCost = 0 
-                let totalMaterialPrice = 0
-    
-                for (let i = 0; i < shoppingList.length; i++) {
-                    let item = shoppingList[i]
-                    let lineItemTotalCost = item.cost * item.quantity
-                    let lineItemTotalPrice = item.price * item.quantity
-                    totalMaterialCost = totalMaterialCost + lineItemTotalCost
-                    totalMaterialPrice = totalMaterialPrice + lineItemTotalPrice
-                }
-                totalMaterialCost = totalMaterialCost / 100 
-                totalMaterialPrice = totalMaterialPrice /100
-    
-
-                // Calculate PNL
-                let totalCost = 0 
-                let totalRate = offeredRate
-                let totalProfit = 0
-                let profitPercentage = 0
-
-                totalCost = totalMaterialCost + laborCost
-                totalProfit = totalRate - totalCost
-                profitPercentage = totalProfit/totalRate
-                console.log( 5 )
-
-                profitPercentage = profitPercentage.toFixed(2)
-                totalMaterialCost = totalMaterialCost.toFixed(2)
-                totalMaterialPrice = totalMaterialPrice.toFixed(2)
-                console.log( 10 )
-
-                totalCost = totalCost.toFixed(2)
-                console.log( 15 )
-
-                setTotalCost(totalCost)
-                setMaterialCost(totalMaterialCost)
-                let formattedProfitUSD = formatCurrency(totalProfit);
-        
-                setEstimatedProfit(formattedProfitUSD)
-                setEstimatedProfitPercentage((profitPercentage*100).toFixed(2))
-          } catch(error){
-              console.log('Error')
-          }
-    }
-
-    const handleAdminChange = (option) => {
-
-        (async () => {
-            setSelectedAdmin(option)
-            
-        })();
-    };
-
+  if (loading) {
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 = gray
-        <div className='px-2 md:px-7 py-5'>
-            <Link 
-            className=' font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#1D2E76] cursor-pointer rounded mt-3'
-            to={`/company/jobs`}>Back</Link>
-            {
-                edit ? <div className=' flex justify-between py-1'>
-                            <div className='py-1'>
-                                <div className='w-full flex justify-between py-1'>
-                                    <button onClick={(e) =>{saveEditChanges(e)}} className='bg-[#2B600F] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Save</h1></button>
-                                </div>
-                            </div> 
-                        <div className='py-1'>
-                            <div className='w-full flex justify-between py-1'>
-                                <button onClick={(e) =>{cancelEditJob(e)}} className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Cancel</h1></button>
-                            </div>
-                            <div className='w-full flex justify-between py-1'>
-                                <button 
-                                // onClick={(e) =>{deleteCustomer(e)}} 
-                                onClick={(e) => deleteJob(e)}
-                                className='bg-[#9C0D38] cursor-pointer rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Delete</h1></button>
-                            </div>
-                        </div> 
-                    </div>: <div className='w-full flex justify-between'>
-                        <h1></h1>
-                        <button onClick={(e) =>{editJob(e)}} className='bg-[#1D2E76] cursor-pointer font-normal ml-2 rounded'><h1 className='font-bold text-[#ffffff] px-4 py-1 text-base'>Edit</h1></button>
-                    </div>
-            }
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <p className='font-bold'>Job Detail View :{job.internalId}</p>
-                    <hr/>
-                    
-                    <p>Date Created : {formattedDateCreated}</p>
-
-                    {/* Admin */}
-                    {
-                        (edit===true)&&<div>
-                            <Select
-                            value={selectedAdmin}
-                            options={adminList}
-                            onChange={handleAdminChange}
-                            isSearchable
-                            placeholder="Select An Admin"
-                            theme={(theme) => ({
-                            ...theme,
-                            borderRadius: 0,
-                            colors: {
-                                ...theme.colors,
-                                primary25: 'green',
-                                primary: 'gray',
-                            },
-                            })}
-                        />
-                        </div>
-                    }
-                    {
-                        (edit===false)&&<div>
-                            <p>Admin : {job.adminName}</p>
-                        </div>
-                    }
-                    <p>Customer : {customer.firstName} {customer.lastName}</p>
-                    <div className='flex w-full justify-start items-center py-2'>
-                        <p>Billing Status :  </p>
-                        <div className='px-2'>
-                            <JobBillingStatusCard
-                            status = {job.billingStatus}
-                            />
-                        </div>
-                        {
-                        (edit===true)&&
-                        <div className="flex px-2 justify-between">
-                            <div className="px-2">
-                            <Select
-                                value={selectedBillingStatus}
-                                options={billingStatusList}
-                                onChange={handleSelectedBillingStatus}
-                                isSearchable
-                                placeholder="Select a Status"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                            </div>
-                        </div>
-                        }
-                    </div>
-                    <div className='flex w-full justify-start items-center py-2'>
-                        <p>Operational Status :  </p>
-                        <div className='px-2'>
-                            <JobOperationStatusCard
-                            status = {job.operationStatus}
-                            />
-                        </div>
-                        {
-                        (edit===true)&&<div className="flex px-2 justify-between">
-                            <div className="px-2">
-                            <Select
-                                value={selectedOperationStatus}
-                                options={operationStatusList}
-                                onChange={handleSelectedOperationStatus}
-                                isSearchable
-                                placeholder="Select a Status"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                            </div>
-                        </div>
-                        }
-                        
-                        
-                    </div>
-                </div>
-                <div className='left-0 w-full justify-between'>
-                    <p className='font-bold'>Site Information</p>
-                    <hr/>
-                    <div>
-                    <button                 
-                    onClick={async () => {
-                        const address = serviceLocation.streetAddress + ' ' + serviceLocation.city + ' ' + serviceLocation.state + ' ' + serviceLocation.zip
-                        const urlAddress = address.replace(" ", "+")
-                        const url = 'https://www.google.com/maps/place/' + urlAddress
-    
-                        if (url) {
-                            window.location.href = url;
-                        }
-                    }}>{serviceLocation.streetAddress} {serviceLocation.city} {serviceLocation.state} {serviceLocation.zip}</button>
-                    </div>
-                    <p>Gate Code : {serviceLocation.gateCode}</p>
-                    <p>Description : {job.description}</p>
-                </div>
+      <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+        <div className="max-w-screen-xl mx-auto">
+          <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="animate-pulse space-y-4">
+              <div className="h-6 bg-gray-200 rounded w-1/3" />
+              <div className="h-4 bg-gray-200 rounded w-1/2" />
+              <div className="h-4 bg-gray-200 rounded w-2/3" />
+              <div className="h-40 bg-gray-200 rounded" />
             </div>
-
-            {/* Task List */}
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between'>
-                        <p className='font-bold'>Task List</p>
-                        <div>
-                            <div className='py-1'>
-                                <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
-                                    <Link to={`/company/serviceStops/createNew/${jobId}`}>Schedule Service Stop</Link>  
-                                </p>
-                            </div>
-                            <div className='py-1'>
-                                <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
-                                    <Link to={`/company/laborContracts/createNew/${jobId}`}>Create Labor Contract</Link>  
-                                </p>
-                            </div>
-                        </div>
-                        <div>
-                            <p className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>
-                                <Link to={`/company/jobs/history/${jobId}`}>See History</Link>  
-                            </p>
-                        </div>
-                    </div>
-                    <hr/>
-                    <p>Process: Creates New Labor Contract. 
-                        Has List of Tasks. Assigns Task to Labor Contract. 
-                        Offers to Individual Contractor Or Posts on board (private Board or public Board)
-                        please track Phases Unassigned Offered accepted scheduled in Progress finished
-                    </p>
-                    <hr/>
-                    <p>On Task List Change. The Customer Has to Approve the Change Order and the New Cost</p>
-                    <hr/>
-                    <p>Should I prevent Offering or scheduling until I have the customer Approval</p>
-                    <hr/>
-                    <p>Service Stop Ids: {job.serviceStopIds}</p>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
-                            <tr>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Type</th>
-                                <th className='py-3 px-4'>Status</th>
-                                <th className='py-3 px-4 sm:hidden md:hidden'>Worker</th>
-                                <th className='py-3 px-4 sm:hidden md:hidden'>Worker Type</th>
-                                <th className='py-3 px-4 sm:hidden md:hidden'>Customer Approval</th>
-                                <th className='py-3 px-4'>Labor Cost</th>
-                                <th className='py-3 px-4'>Time (Hr)</th>
-                                <th className='py-3 px-4'></th>
-
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            taskList?.map(task => (
-                                <tr key={task.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {
-                                            (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                Unassigned
-                                            </button>
-                                        }
-                                            {
-                                            (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                {task.status}
-                                                </p>
-                                        }
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.workerName}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.workerType}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap sm:hidden md:hidden'>{task.customerApproval}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>${(task.contractedRate/100).toFixed(2)}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(task.estimatedTime/60).toFixed(2)}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                    {
-                                        (task.workerType==='Independent Contractor')&&<div>
-                                            {
-                                                (task.laborContractId!=='')&&<p className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                    <Link to={`/company/laborContracts/details/${task.laborContractId}`}>Details</Link>
-                                                    </p>
-                                            }
-                                            {
-                                                (task.laborContractId==='')&&<p className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                    NA
-                                                </p>
-                                            }
-                                        </div>
-                                    }
-                                    {
-                                        (task.workerType==='Employee')&&<div>
-                                            {
-                                                (task.serviceStopId!=='')&&<p className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                    <Link to={`/company/serviceStops/detail/${task.serviceStopId}`}>Details</Link>
-                                                </p>
-                                            }
-                                            {
-                                                (task.serviceStopId==='')&&<p className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                                    NA
-                                                </p>
-                                            }
-                                        </div>
-                                    }
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <button
-                                         onClick={(e) => deleteTaskItem(e,task.id)} 
-                                        >Delete</button>
-                                    </td>
-
-                                </tr>
-                            ))
-                        }
-                        </tbody>
-                    </table>
-                    {
-                        (newTask==false)&&<button onClick={(e) => showNewTaskItem(e)} 
-                        className='px-2 rounded-md bg-[#1D2E76] text-[#ffffff] font-bold'>
-                            + Add New
-                        </button>
-                    }
-                    {
-                        (newTask==true)&&<div>
-                            <div className='py-2 flex justify-between items-center gap-2'>
-                        <button onClick={(e) => clearNewTask(e)} 
-                        className='px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'>
-                            X
-                        </button>
-                        <input onChange={(e) => {setDescription(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Description' value={description}></input>
-
-                        <div className='w-full'>
-                            <Select
-                                value={selectedTaskType}
-                                options={taskTypeList}
-                                onChange={handleSelectedTaskTypeChange}
-                                isSearchable
-                                placeholder="Select a Task Type"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                        </div>
-                        <input onChange={(e) => {setTaskLaborCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Labor Cost' value={taskLaborCost}></input>
-                        <input onChange={(e) => {setEstimatedTime(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Estimated Time (Min)' value={estimatedTime}></input>
-
-                        <button onClick={(e) => handleAddTask(e)} 
-                        className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
-                        >Add</button>
-                    </div>
-                    <hr/>
-                    <div>
-                        <p className='font-bold'>Details</p>
-                        {
-                            (selectedTaskType.name=='Basic')&&<div>
-                                <p>Basic</p>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Clean')&&<div>
-                                <p>Clean</p>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Empty Water')&&<div>
-                                <p>Empty Water</p>
-                                <p>Select Body Of Water</p>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedBodyOfWater}
-                                        options={bodyOfWaterList}
-                                        onChange={handleBodyOfWaterListChange}
-                                        isSearchable
-                                        placeholder="Select a Body Of Water"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Fill Water')&&<div>
-                                <p>Fill Water</p>
-                                <p>Select Body Of Water</p>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedBodyOfWater}
-                                        options={bodyOfWaterList}
-                                        onChange={handleBodyOfWaterListChange}
-                                        isSearchable
-                                        placeholder="Select a Body Of Water"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Install')&&<div>
-                                <p>Install</p>
-                                <p>Select New Piece of Equipment to Install</p>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedEquipment}
-                                        options={equipmentList}
-                                        onChange={handleEquipmentListChange}
-                                        isSearchable
-                                        placeholder="Select a Task Type"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Remove')&&<div>
-                                <p>Remove</p>
-                                <p>Select Equipment To remove</p>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedEquipment}
-                                        options={equipmentList}
-                                        onChange={handleEquipmentListChange}
-                                        isSearchable
-                                        placeholder="Select a Task Type"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                            </div>
-                        }
-                        {
-                            (selectedTaskType.name=='Replace')&&<div>
-                                <p>Replace</p>
-                                <p>Select Equipment To remove</p>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedEquipment}
-                                        options={equipmentList}
-                                        onChange={handleEquipmentListChange}
-                                        isSearchable
-                                        placeholder="Select a Task Type"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                                <p>Select New Piece of Equipment to Install</p>
-                                
-                            </div>
-                        }
-                    </div>
-                        </div>
-                    }
-                    
-                </div>
-            </div>
-
-            {/* Shopping List */}
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-between'>
-                    <p className='font-bold'>Shopping List</p>
-                    <hr/>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                            <tr>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Cost</th>
-                                <th className='py-3 px-4'>quantity</th>
-
-                                <th className='py-3 px-4'>Price</th>
-                                <th className='py-3 px-4'>Item Id</th>
-                                <th className='py-3 px-4'>Task Id</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            shoppingList?.map(item => (
-                                <tr key={item.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(item.cost/100).toFixed(2)}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
-
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{(item.price/100).toFixed(2)}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.itemId}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.taskId}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <button
-                                         onClick={(e) => deleteShoppingListItem(e,item.id)} 
-                                        >Delete</button>
-                                    </td>
-
-                                </tr>
-                            ))
-                        }
-                        </tbody>
-                    </table>
-
-                    {
-                        (newShoppingList==false)&&<button onClick={(e) => showNewShoppingListItem(e)} 
-                        className='px-2 rounded-md bg-[#1D2E76] text-[#ffffff] font-bold'>
-                            + Add New
-                        </button>
-                    }
-                    
-                    {
-                        (newShoppingList==true)&&<div>{/* className='py-2 flex justify-between items-center gap-2' */}
-                   
-                        <div className='w-full'>
-                            <Select
-                                value={newShoppingItemType}
-                                options={shoppingListTypes}
-                                onChange={handleSelectedShoppingItemTypeChange}
-                                isSearchable
-                                placeholder="Select a Task Type"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'gray',
-                                },
-                                })}
-                            />
-                        </div>
-                        {/* Custom */}
-                        {
-                            (newShoppingItemType.name=='Custom')&&<div>
-                                <div className='py-2 flex justify-between items-center gap-2'>
-                                    <p className='w-full p-2 rounded-md'>Description</p>
-                                    <p className='w-full p-2 rounded-md'>Item Cost</p>
-                                    <p className='w-full p-2 rounded-md'>Item Price</p>
-                                    <p className='w-full p-2 rounded-md'>Item Quantity</p>
-                                </div>
-                                <div className='py-2 flex justify-between items-center gap-2'>
-                                    <input onChange={(e) => {setItemName(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Description' value={itemName}></input>
-                                    <input onChange={(e) => {setItemCost(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Cost' value={itemCost}></input>
-                                    <input onChange={(e) => {setItemPrice(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Price' value={itemPrice}></input>
-                                    <input onChange={(e) => {setItemQuantity(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Quantity' value={itemQuantity}></input>
-                                </div>
-                            </div>
-                        }
-                        {/* Generic Item */}
-                        {
-                            (newShoppingItemType.name=='Generic')&&<div className='py-2 flex justify-between items-center gap-2'>
-                                <div className='w-full'>
-                                    <Select
-                                        value={selectedGenericItem}
-                                        options={genericItemList}
-                                        onChange={handleSelectedGenericItemChange}
-                                        isSearchable
-                                        placeholder="Select an Item"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
-                                </div>
-                                <input onChange={(e) => {setItemQuantity(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Item Quantity' value={itemQuantity}></input>
-                            </div>
-                        }
-                            <div className="">
-                                <button onClick={(e) => handleAddShoppingListItem(e)} 
-                                className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
-                                >Add</button>
-                                        <button
-                                        onClick={(e) => clearNewShoppingListItem(e)} 
-                                className='px-2 rounded-md bg-[#9C0D38] text-[#ffffff]'>
-                                    X
-                                </button>
-                            </div>
-                        <p>have options for adding different kinds of items, (custom) generic</p>
-                    </div>
-                    }
-                    
-
-                </div>
-            </div>
-
-            {/* Third Section Of Body */}
-            <div className='w-full flex flex-wrap mt-2'>
-                <div className='w-full lg:w-5/12'>
-                    <div className='w-full h-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                    <p className='font-bold'>Customer Status</p>
-                    <hr/>
-                    </div>
-                </div>
-                <div className='w-full lg:w-7/12 lg:pl-4 mt-6 lg:mt-0'>
-                    <div className='w-full h-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                    <p className='font-bold'>Monies</p>
-                    <hr/>
-                    <div className='flex justify-between'>
-                        <p>Suggested Rate : $ {(job.rate/100).toFixed(2)}</p>
-                        <button className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'>Use Suggested Rate</button>
-                    </div>
-                    <hr/>
-                    <p>Check to see if the Rate Has Already Been Approved</p>
-                    <p>Maybe I should have a few versions of rate. Accepted Rate. Suggested Rate. Offered Rate</p>
-                    <hr/>
-                    <p>Rate: $ {(job.rate/100).toFixed(2)}</p>
-
-                    </div>
-                </div>
-            </div>
-           {/* -------------- */}
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                <div className='left-0 w-full justify-end'>
-                    <p className='font-bold text-[#d0d2d6]'> Estimated PNL</p>
-                    <div className='flex justify-between'>
-                        <p>Rate - $ {(offeredRate/100).toFixed(2)}</p>
-                        <div className='flex justify-end gap-2'>
-                            <input 
-                            className='py-1 px-2 rounded-md mt-2 bg-[#ededed]'
-                            onChange={(e) => {setEstimatedRate(e.target.value)}} type="text" placeholder='Offered Rate' value={estimatedRate}></input>
-                            <button
-                             onClick={(e) => recalculatePNL(e)} 
-                            className='rounded-md bg-[#CDC07B] text-[#000000] font-bold px-2 py-1 text-base'
-                            >Use Offered Rate</button>
-                        </div>
-                    </div>
-                    <hr className='w-1/2'/>
-                    <p>Material Cost - $ {materialCost}</p>
-                    <hr className='w-1/4'/>
-                    <p>Estimated Duration - {estimatedDuration} hrs</p>
-                    <p>Employee Cost - $ {(estimatedDuration*hourlyRate).toFixed(2)}</p>
-                    <p>Sub Contractor Cost - $ {laborCost}</p>
-                    <hr className='w-1/4'/>
-
-                    <p>Total Labor Cost - {laborCost}</p>
-                    <hr className='w-1/2'/>
-                    <p>Total Cost - {totalCost}</p>
-                    <hr className='w-3/4'/>
-
-                    <p>Profit : {estimatedProfit}  ( {estimatedProfitPercentage}% )</p>
-                </div>
-            </div>
-           {/* -------------- */}
+          </div>
         </div>
+      </div>
     );
-}
-    export default JobDetailView;
+  }
+
+  const commentFilters = ["All", "Open", "Resolved"];
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+      <div className="max-w-screen-xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>
+
+            <Link 
+            to="/company/jobs" 
+            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+            >&larr; Back to Jobs</Link>
+            <h2 className="text-3xl font-bold text-gray-800">Job Details</h2>
+            <p className="text-gray-600 mt-1">
+              <span className="font-semibold text-gray-800">{job.internalId || "Job"}</span>{" "}
+              <span className="text-gray-400">•</span> Created {formattedDateCreated}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            {!edit ? (
+              <button
+                onClick={editJob}
+                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition"
+              >
+                Edit
+              </button>
+            ) : (
+              <>
+                <button
+                  onClick={saveEditChanges}
+                  className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={cancelEditJob}
+                  className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={deleteJob}
+                  className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"                >
+                  Delete
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+
+        {/* Tabs (iOS-style segmented) */}
+        <div className="bg-white shadow-lg rounded-xl p-4">
+          <div className="flex flex-wrap gap-2">
+            {tabs.map((t) => {
+              const active = t === activeTab;
+              return (
+                <button
+                  key={t}
+                  onClick={() => setActiveTab(t)}
+                  className={[
+                    "px-4 py-2 rounded-full text-sm font-semibold transition border",
+                    active
+                      ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                      : "bg-white text-gray-700 border-gray-200 hover:bg-gray-50",
+                  ].join(" ")}
+                >
+                  {t}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* INFO TAB */}
+        {activeTab === "Info" && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Main Info */}
+            <div className="lg:col-span-2 bg-white shadow-lg rounded-xl p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <h3 className="text-xl font-bold text-gray-800">Overview</h3>
+                  <p className="text-gray-600 mt-1">Core job details and statuses</p>
+                </div>
+
+                <div className="flex flex-col items-end gap-2">
+                  <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.billingStatus)}`}>
+                    {job.billingStatus || "—"}
+                  </span>
+                  <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.operationStatus)}`}>
+                    {job.operationStatus || "—"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Link
+                to={`/company/customers/details/${customer.id}`}
+              >
+                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</p>
+                    <p className="mt-1 text-gray-800 font-semibold">
+                      {customer.firstName} {customer.lastName}
+                    </p>
+                  </div>
+              </Link>
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</p>
+                  <p className="mt-1 text-gray-800 font-semibold">{job.type || "—"}</p>
+                </div>
+
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Admin</p>
+                  {!edit ? (
+                    <p className="mt-1 text-gray-800 font-semibold">{job.adminName || "—"}</p>
+                  ) : (
+                    <div className="mt-2">
+                      <Select
+                        value={selectedAdmin}
+                        options={adminList}
+                        onChange={setSelectedAdmin}
+                        isSearchable
+                        placeholder="Select an admin"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Created</p>
+                  <p className="mt-1 text-gray-800 font-semibold">{formattedDateCreated}</p>
+                </div>
+              </div>
+
+              <div className="mt-6 grid grid-cols-1 gap-4">
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Billing Status</p>
+                      <p className="mt-1 text-gray-800 font-semibold">{job.billingStatus || "—"}</p>
+                    </div>
+                    {edit && (
+                      <div className="w-full max-w-sm">
+                        <Select
+                          value={selectedBillingStatus}
+                          options={billingStatusOptions}
+                          onChange={handleSelectedBillingStatus}
+                          isSearchable
+                          placeholder="Select billing status"
+                          theme={selectTheme}
+                          styles={selectStyles}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Operation Status</p>
+                      <p className="mt-1 text-gray-800 font-semibold">{job.operationStatus || "—"}</p>
+                    </div>
+                    {edit && (
+                      <div className="w-full max-w-sm">
+                        <Select
+                          value={selectedOperationStatus}
+                          options={operationStatusOptions}
+                          onChange={handleSelectedOperationStatus}
+                          isSearchable
+                          placeholder="Select operation status"
+                          theme={selectTheme}
+                          styles={selectStyles}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Description (always editable) */}
+                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Description</p>
+
+                    <button
+                      type="button"
+                      onClick={saveDescription}
+                      disabled={savingDescription || descriptionDraft === (job.description || "")}
+                      className={[
+                        "px-3 py-1 rounded-lg text-sm font-semibold transition border",
+                        savingDescription || descriptionDraft === (job.description || "")
+                          ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100",
+                      ].join(" ")}
+                    >
+                      {savingDescription ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+
+                  <textarea
+                    className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    placeholder="Add job description…"
+                    value={descriptionDraft}
+                    onChange={(e) => setDescriptionDraft(e.target.value)}
+                    onBlur={() => {
+                      if (descriptionDraft !== (job.description || "")) saveDescription();
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Right column: Site Info + Comments */}
+            <div className="space-y-6">
+              {/* Site Info */}
+              <div className="bg-white shadow-lg rounded-xl p-6">
+                <h3 className="text-xl font-bold text-gray-800">Site Information</h3>
+                <p className="text-gray-600 mt-1">Service location and access details</p>
+
+                <div className="mt-6 space-y-4">
+                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Address</p>
+                    <button
+                      onClick={openInMaps}
+                      className="mt-1 text-left text-blue-600 hover:text-blue-800 font-semibold"
+                      title="Open in Google Maps"
+                    >
+                      {serviceLocation.streetAddress} {serviceLocation.city} {serviceLocation.state} {serviceLocation.zip}
+                    </button>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Gate Code</p>
+                    <p className="mt-1 text-gray-800 font-semibold">{serviceLocation.gateCode || "—"}</p>
+                  </div>
+
+                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Service Stops</p>
+                    <p className="mt-1 text-gray-700">
+                      {(job.serviceStopIds || []).length ? (job.serviceStopIds || []).join(", ") : "—"}
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <Link
+                      to={`/company/serviceStops/createNew/${jobId}`}
+                      className="w-full py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition text-center"
+                    >
+                      Schedule Service Stop
+                    </Link>
+                    <Link
+                      to={`/company/laborContracts/createNew/${jobId}`}
+                      className="w-full py-2 px-4 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition text-center"
+                    >
+                      Create Labor Contract
+                    </Link>
+                  </div>
+                </div>
+              </div>
+
+              {/* Comments */}
+              <div className="bg-white shadow-lg rounded-xl p-6">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-xl font-bold text-gray-800">Comments</h3>
+                    <p className="text-gray-600 mt-1">Add notes, track follow-ups, mark resolved</p>
+                  </div>
+                </div>
+
+                {/* Filter (All / Open / Resolved) */}
+                <div className="mt-4 bg-gray-50 border border-gray-200 rounded-xl p-2 flex gap-2 flex-wrap">
+                  {commentFilters.map((f) => {
+                    const active = f === commentFilter;
+                    return (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => setCommentFilter(f)}
+                        className={[
+                          "px-4 py-2 rounded-full text-sm font-semibold transition border",
+                          active
+                            ? "bg-blue-600 text-white border-blue-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-200 hover:bg-gray-100",
+                        ].join(" ")}
+                      >
+                        {f}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Add comment */}
+                <div className="mt-4 space-y-3">
+                  <textarea
+                    className="w-full min-h-[90px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    placeholder="Write a comment…"
+                    value={newComment}
+                    onChange={(e) => setNewComment(e.target.value)}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={addComment}
+                      disabled={addingComment || !newComment.trim()}
+                      className={[
+                        "py-2 px-4 font-semibold rounded-lg shadow-md transition",
+                        addingComment || !newComment.trim()
+                          ? "bg-gray-200 text-gray-500 cursor-not-allowed"
+                          : "bg-blue-600 text-white hover:bg-blue-700",
+                      ].join(" ")}
+                    >
+                      {addingComment ? "Adding…" : "Add Comment"}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Previous comments */}
+                <div className="mt-6">
+                  {commentsLoading ? (
+                    <div className="text-gray-500">Loading comments…</div>
+                  ) : !filteredComments?.length ? (
+                    <div className="text-gray-500">No comments in this filter.</div>
+                  ) : (
+                    <div className="space-y-3">
+                      {filteredComments.map((c) => {
+                        const dt = c.date?.toDate?.() || null;
+                        const when = dt ? format(dt, "MMM d, yyyy • h:mm a") : "—";
+
+                        return (
+                          <div key={c.id} className="p-4 rounded-xl border border-gray-200 bg-gray-50">
+                            <div className="flex items-start justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-semibold text-gray-800">
+                                  {c.userName || "Unknown"}{" "}
+                                  <span className="text-gray-400 font-normal">• {when}</span>
+                                </div>
+                                <div className="mt-2 text-gray-700 whitespace-pre-wrap">{c.comment}</div>
+                              </div>
+
+                              <label className="flex items-center gap-2 text-sm font-semibold text-gray-700 select-none">
+                                <input
+                                  type="checkbox"
+                                  className="h-4 w-4"
+                                  checked={!!c.resolved}
+                                  onChange={(e) => setCommentResolved(c.id, e.target.checked)}
+                                />
+                                Resolved
+                              </label>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* TASKS TAB */}
+        {activeTab === "Tasks" && (
+          <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">Tasks</h3>
+                <p className="text-gray-600 mt-1">Track work items, costs, and assignments</p>
+              </div>
+              <div className="flex gap-2">
+                <Link
+                  to={`/company/jobs/history/${jobId}`}
+                  className="py-2 px-4 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition"
+                >
+                  See History
+                </Link>
+                {!newTask && (
+                  <button
+                    onClick={showNewTaskItem}
+                    className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  >
+                    + Add Task
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-6 overflow-x-auto">
+              <table className="min-w-full bg-white">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Name</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Type</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Status</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">
+                      Worker
+                    </th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">
+                      Worker Type
+                    </th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden lg:table-cell">
+                      Customer Approval
+                    </th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Labor</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Time (Hr)</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {taskList?.map((task) => (
+                    <tr key={task.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">{task.name}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">{task.type}</td>
+                      <td className="p-4 whitespace-nowrap">
+                        <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-800">
+                          {task.status || "—"}
+                        </span>
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700 hidden md:table-cell">{task.workerName || "—"}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-700 hidden md:table-cell">{task.workerType || "—"}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-700 hidden lg:table-cell">
+                        {String(task.customerApproval)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-800">
+                        {formatCurrency((Number(task.contractedRate || 0) / 100) || 0)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">
+                        {((Number(task.estimatedTime || 0) / 60) || 0).toFixed(2)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-right">
+                        <button
+                          onClick={(e) => deleteTaskItem(e, task.id)}
+                          className="text-sm font-semibold text-red-600 hover:text-red-800"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!taskList?.length && (
+                    <tr>
+                      <td className="p-6 text-gray-500" colSpan={9}>
+                        No tasks yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* New Task Row */}
+            {newTask && (
+              <div className="mt-6 p-4 rounded-xl border border-gray-200 bg-gray-50">
+                <div className="flex flex-col lg:flex-row gap-3 items-stretch">
+                  <div className="flex items-center justify-between lg:hidden">
+                    <h4 className="font-bold text-gray-800">Add Task</h4>
+                    <button
+                      onClick={clearNewTask}
+                      className="py-2 px-3 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+
+                  <input
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    type="text"
+                    placeholder="Description"
+                    value={taskDescription}
+                    onChange={(e) => setTaskDescription(e.target.value)}
+                  />
+
+                  <div className="w-full">
+                    <Select
+                      value={selectedTaskType}
+                      options={taskTypeList}
+                      onChange={setSelectedTaskType}
+                      isSearchable
+                      placeholder="Select a Task Type"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  </div>
+
+                  <input
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    type="text"
+                    placeholder="Labor Cost (USD)"
+                    value={taskLaborCost}
+                    onChange={(e) => setTaskLaborCost(e.target.value)}
+                  />
+
+                  <input
+                    className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                    type="text"
+                    placeholder="Estimated Time (Min)"
+                    value={estimatedTime}
+                    onChange={(e) => setEstimatedTime(e.target.value)}
+                  />
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={handleAddTask}
+                      className="w-full py-3 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                    >
+                      Add
+                    </button>
+                    <button
+                      onClick={clearNewTask}
+                      className="w-full py-3 px-5 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition hidden lg:block"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-6 flex flex-col sm:flex-row gap-3">
+              <Link
+                to={`/company/serviceStops/createNew/${jobId}`}
+                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition text-center"
+              >
+                Schedule Service Stop
+              </Link>
+              <Link
+                to={`/company/laborContracts/createNew/${jobId}`}
+                className="py-2 px-4 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition text-center"
+              >
+                Create Labor Contract
+              </Link>
+            </div>
+          </div>
+        )}
+
+        {/* SHOPPING TAB */}
+        {activeTab === "Shopping" && (
+          <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <h3 className="text-xl font-bold text-gray-800">Shopping List</h3>
+                <p className="text-gray-600 mt-1">Materials and parts required for the job</p>
+              </div>
+              {!newShoppingList && (
+                <button
+                  onClick={showNewShoppingListItem}
+                  className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                >
+                  + Add Item
+                </button>
+              )}
+            </div>
+
+            <div className="mt-6 overflow-x-auto">
+              <table className="min-w-full bg-white">
+                <thead className="bg-gray-100">
+                  <tr>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Name</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Cost</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Qty</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Price</th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden md:table-cell">
+                      Item Id
+                    </th>
+                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                  {shoppingList?.map((item) => (
+                    <tr key={item.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">{item.name}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">
+                        {formatCurrency((Number(item.cost || 0) / 100) || 0)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">{item.quantity}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">
+                        {formatCurrency((Number(item.price || 0) / 100) || 0)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700 hidden md:table-cell">{item.itemId || "—"}</td>
+                      <td className="p-4 whitespace-nowrap text-right">
+                        <button
+                          onClick={(e) => deleteShoppingListItem(e, item.id)}
+                          className="text-sm font-semibold text-red-600 hover:text-red-800"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                  {!shoppingList?.length && (
+                    <tr>
+                      <td className="p-6 text-gray-500" colSpan={6}>
+                        No items yet.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Add Item */}
+            {newShoppingList && (
+              <div className="mt-6 p-4 rounded-xl border border-gray-200 bg-gray-50 space-y-4">
+                <div className="flex flex-col md:flex-row gap-3 items-stretch">
+                  <div className="w-full md:max-w-sm">
+                    <Select
+                      value={newShoppingItemType}
+                      options={shoppingListTypes}
+                      onChange={handleSelectedShoppingItemTypeChange}
+                      isSearchable
+                      placeholder="Select Item Type"
+                      theme={selectTheme}
+                      styles={selectStyles}
+                    />
+                  </div>
+
+                  <div className="flex-1" />
+
+                  <button
+                    onClick={clearNewShoppingListItem}
+                    className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                  >
+                    Cancel
+                  </button>
+                </div>
+
+                {newShoppingItemType?.value === "Custom" && (
+                  <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
+                    <input
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      type="text"
+                      placeholder="Description"
+                      value={itemName}
+                      onChange={(e) => setItemName(e.target.value)}
+                    />
+                    <input
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      type="text"
+                      placeholder="Item Cost (USD)"
+                      value={itemCost}
+                      onChange={(e) => setItemCost(e.target.value)}
+                    />
+                    <input
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      type="text"
+                      placeholder="Item Price (USD)"
+                      value={itemPrice}
+                      onChange={(e) => setItemPrice(e.target.value)}
+                    />
+                    <input
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      type="text"
+                      placeholder="Quantity"
+                      value={itemQuantity}
+                      onChange={(e) => setItemQuantity(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                {newShoppingItemType?.value === "Generic" && (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    <div className="w-full lg:col-span-2">
+                      <Select
+                        value={selectedGenericItem}
+                        options={genericItemList}
+                        onChange={handleSelectedGenericItemChange}
+                        isSearchable
+                        placeholder="Select a Generic Item"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    </div>
+                    <input
+                      className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                      type="text"
+                      placeholder="Quantity"
+                      value={itemQuantity}
+                      onChange={(e) => setItemQuantity(e.target.value)}
+                    />
+                  </div>
+                )}
+
+                <div className="flex justify-end">
+                  <button
+                    onClick={handleAddShoppingListItem}
+                    className="py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  >
+                    Add Item
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* SCHEDULE TAB (placeholder, styled) */}
+        {activeTab === "Schedule" && (
+          <div className="bg-white shadow-lg rounded-xl p-6">
+            <h3 className="text-xl font-bold text-gray-800">Schedule</h3>
+            <p className="text-gray-600 mt-1">Service stops and labor contracts</p>
+
+            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="p-5 rounded-xl border border-gray-200 bg-gray-50">
+                <h4 className="font-bold text-gray-800">Service Stops</h4>
+                <p className="text-gray-600 mt-1 text-sm">Use the button below to schedule a service stop.</p>
+
+                <div className="mt-4">
+                  <Link
+                    to={`/company/serviceStops/createNew/${jobId}`}
+                    className="inline-flex items-center justify-center py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  >
+                    Schedule Service Stop
+                  </Link>
+                </div>
+
+                <div className="mt-4 text-sm text-gray-600">
+                  <p className="font-semibold text-gray-700">Service Stop Ids</p>
+                  <p className="mt-1">{(job.serviceStopIds || []).length ? job.serviceStopIds.join(", ") : "—"}</p>
+                </div>
+              </div>
+
+              <div className="p-5 rounded-xl border border-gray-200 bg-gray-50">
+                <h4 className="font-bold text-gray-800">Labor Contracts</h4>
+                <p className="text-gray-600 mt-1 text-sm">Create a labor contract for contractors.</p>
+
+                <div className="mt-4">
+                  <Link
+                    to={`/company/laborContracts/createNew/${jobId}`}
+                    className="inline-flex items-center justify-center py-2 px-4 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition"
+                  >
+                    Create Labor Contract
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* PNL Card (always visible, matches aesthetic) */}
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Estimated PNL</h3>
+              <p className="text-gray-600 mt-1">Profit estimate based on tasks + items</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                className="w-40 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                onChange={(e) => setEstimatedRate(e.target.value)}
+                type="text"
+                placeholder="Offered Rate"
+                value={estimatedRate}
+              />
+              <button
+                onClick={recalculatePNL}
+                className="py-3 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+              >
+                Use Offered Rate
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Rate</p>
+              <p className="mt-1 text-gray-800 font-bold text-lg">{formatCurrency((offeredRate || 0) / 100)}</p>
+              <p className="mt-2 text-sm text-gray-600">
+                Suggested Rate:{" "}
+                <span className="font-semibold">{formatCurrency((Number(job.rate || 0) / 100) || 0)}</span>
+              </p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Profit</p>
+              <p className="mt-1 text-gray-800 font-bold text-lg">
+                {estimatedProfit}{" "}
+                <span className="text-sm font-semibold text-gray-600">({estimatedProfitPercentage}%)</span>
+              </p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Material Cost</p>
+              <p className="mt-1 text-gray-800 font-semibold">{formatCurrency(Number(materialCost || 0))}</p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Labor Cost</p>
+              <p className="mt-1 text-gray-800 font-semibold">{formatCurrency(Number(laborCost || 0))}</p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Cost</p>
+              <p className="mt-1 text-gray-800 font-semibold">{formatCurrency(Number(totalCost || 0))}</p>
+            </div>
+
+            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Estimated Duration</p>
+              <p className="mt-1 text-gray-800 font-semibold">{estimatedDuration} hrs</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default JobDetailView;

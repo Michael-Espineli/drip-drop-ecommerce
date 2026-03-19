@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "the-pool-app-3e652"
-  }
+    "development": "the-pool-app-dev",
+    "production": "the-pool-app-3e652"
+  },
+  "targets": {},
+  "etags": {}
 }

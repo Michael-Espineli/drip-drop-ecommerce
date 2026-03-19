@@ -50,8 +50,6 @@ export class Customer {
         } else {
             displayName = data.firstName + ' ' + data.lastName
         }
-        console.log('Customer Data')
-        console.log(data)
         return new Customer({
             id: snapshot.id,
             firstName: data.firstName,

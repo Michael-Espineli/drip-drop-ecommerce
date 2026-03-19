@@ -1,366 +1,160 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { FaShoppingCart, FaUsers } from 'react-icons/fa';
-import { MdCurrencyExchange, MdProductionQuantityLimits } from 'react-icons/md';
-import Chart from 'react-apexcharts';
+import { MdCurrencyExchange, MdConstruction } from 'react-icons/md';
 import { Link } from 'react-router-dom';
-import { query, collection, getDocs, limit, orderBy, startAt, getCountFromServer, where } from "firebase/firestore";
+import { query, collection, getDocs, limit, orderBy, getCountFromServer, where } from "firebase/firestore";
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
-import { getFunctions, httpsCallable } from 'firebase/functions';
-
-const functions = getFunctions();
+import RecentChatsWidget from '../dashboard/components/RecentChatsWidget';
 
 const Dashboard = () => {
-    const {recentlySelectedCompany, user} = useContext(Context);
+    const { recentlySelectedCompany, user } = useContext(Context);
 
-    const [ alertList, setAlertList] = useState([]);
-
-    const [ customerCount, setCustomerCount] = useState(0);
-    
-    const [ techCount, setTechCount] = useState(0);
-    const [ jobCount, setJobCount] = useState(0);
-    const [ totalSales, setTotalSales] = useState(32232.78);
-
-   const state = {
-        series : [
-            {
-                name : "Orders",
-                data : [23,34,45,56,78,34,54,18,84,52,54,51]
-            },
-            {
-                name : "Revenue",
-                data : [23,34,45,56,78,34,54,18,84,52,54,51]
-            },
-            {
-                name : "Sellers",
-                data : [23,34,45,56,78,34,54,18,84,52,54,51]
-            }
-        ], 
-        options : {
-            color : ['#181ee8','#181ee8'],
-            plotOptions : {
-                radius : 30
-            },
-            chart:{
-                background : 'transparent',
-                foreColor : '#d0d2d6'
-            },
-            dataLabels : {
-                enabled : false
-            },
-            strock : {
-                show : true, 
-                curve : ['smooth','straight','stepline'],
-                lineCap : 'butt',
-                width : .5,
-                dashAraray : 0
-            },
-            xaxis : {
-                categories : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-            },
-            legend : {
-                position : 'top'
-            },
-            responsive : [
-                {
-                    breakpoint: 565,
-                    yaxis : {
-                        categories : ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
-                    },
-                    options: {
-                        plotOptions : {
-                            bar : {
-                                horizontal : true
-                            }
-                        },
-                        chart : {
-                            height : "550px"
-                        }
-                    }
-                }
-            ]
-        }
-    } 
-
+    const [customerCount, setCustomerCount] = useState(0);
+    const [techCount, setTechCount] = useState(0);
+    const [jobCount, setJobCount] = useState(0);
+    const [totalSales, setTotalSales] = useState(0);
+    const [workOrders, setWorkOrders] = useState([]);
+    const [leads, setLeads] = useState([]);
 
     useEffect(() => {
-        (async () => {
-            console.log('On Load')
-            //Fire base
-            console.log(recentlySelectedCompany)
-            try{
+        if (recentlySelectedCompany && user) {
+            const getCounts = async () => {
+                const customerCol = query(collection(db, "companies", recentlySelectedCompany, "customers"), where("active", "==", true));
+                const customerSnapshot = await getCountFromServer(customerCol);
+                setCustomerCount(customerSnapshot.data().count);
 
-                //alerts
-                let q = query(collection(db, 'companies',recentlySelectedCompany,'alerts'), limit(4));
-                const querySnapshot = await getDocs(q);       
-                let count = 1   
-                setAlertList([])      
-                querySnapshot.forEach((doc) => {
-                    const contractData = doc.data()
-                    const  contract = {
-                        id:contractData.id,
-                        name:contractData.name,
-                        description:contractData.description,
-                    }
-                    count = count + 1
-                    setAlertList(alertList => [...alertList, contract]); 
-                });
+                const techCol = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"), where("status", "==", "Active"));
+                const techSnapshot = await getCountFromServer(techCol);
+                setTechCount(techSnapshot.data().count);
 
-                //Get Customers
-                let q1 = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), where("active", "==", true));   
-                const snapshot1 = await getCountFromServer(q1);
-                console.log('count: ', snapshot1.data().count);
-                setCustomerCount(snapshot1.data().count)
-             
-                //Get Users
-                let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
-                const snapshot2 = await getCountFromServer(userQuery);
-                console.log('count: ', snapshot2.data().count);
-                setTechCount(snapshot2.data().count)
-             
-                //Get Job Count
-                let jobQuery = query(collection(db, "companies",recentlySelectedCompany,'jobs'),where('billingStatus','not-in',['Paid','Invoiced']));//.where('workerType','==','Employee')
-                const jobSnapShot = await getCountFromServer(jobQuery);
-                console.log('count: ', jobSnapShot.data().count);
-                setJobCount(jobSnapShot.data().count)
-         
-                
+                const jobCol = query(collection(db, "companies", recentlySelectedCompany, "workOrders"), where("operationStatus", "in", ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]));
+                const jobSnapshot = await getCountFromServer(jobCol);
+                setJobCount(jobSnapshot.data().count);
+            };
 
-            } catch (error){
-                console.log(error)
-            }
+            const getWorkOrders = async () => {
+                const jobsCol = collection(db, "companies", recentlySelectedCompany, "workOrders");
+                const q = query(jobsCol, 
+                    where("operationStatus", "in", ["Estimate Pending","Unscheduled", "Scheduled", "In Progress"]),
+                    orderBy("internalId", "desc"),
+                    limit(5));
+                const querySnapshot = await getDocs(q);
+                const orders = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setWorkOrders(orders);
+            };
+            
+            const getLeads = async () => {
+                const leadsCol = collection(db, "homeOwnerServiceRequests");
+                const q = query(leadsCol, 
+                    where("companyId", "==", recentlySelectedCompany),
+                    where("status", "==", "Pending"),
+                    orderBy("createdAt", "desc"),
+                    limit(5));
+                const querySnapshot = await getDocs(q);
+                const leadsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setLeads(leadsData);
+            };
 
-        })();
-    },[])
-    
-    async function sendServiceReportOnFinish(e) {
-        e.preventDefault()
-        console.log('sendServiceReportOnFinish')
+            getCounts();
+            getWorkOrders();
+            getLeads();
+        }
+    }, [recentlySelectedCompany, user]);
 
-        const functionName = httpsCallable(functions, 'sendServiceReportOnFinish');
-        functionName({ 
-            email: 'michaelespineli2000@gmail.com',
-            customerName: 'Brett Murdock',
-        })
-        .then((result) => {
-            console.log(result)
-            // Handle the result from the function
-        
-        })
-        .catch((error) => {
-            // Handle any errors
-            console.error(error);
-        });
-    }
+    const stats = [
+        { id: 1, name: 'Total Sales', stat: `$${totalSales.toFixed(2)}`, icon: MdCurrencyExchange, link: '/company/reports' },
+        { id: 2, name: 'Active Customers', stat: customerCount, icon: FaUsers, link: '/company/customers'  },
+        { id: 3, name: 'Technicians', stat: techCount, icon: FaUsers, link: '/company/companyUsers'  },
+        { id: 4, name: 'Jobs', stat: jobCount, icon: MdConstruction, link: '/company/jobs'  },
+    ]
 
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        <div className='px-2 md:px-7 py-5'>
-            {/* Top Header */}
-            <div className='w-full grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-7'>
-                <Link to='/company/sales'>
-                    <div className='flex justify-between items-center p-5 bg-[#cc7c7c] rounded-md gap-3'>
-                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                            <h2 className='text-3xl font-bold'>${totalSales}</h2>
-                            <span className='text-md font-medium'>Total Sales</span>
-                        </div>
-                        <div className='w-[40px] h-[47px] rounded-full bg-[#fa0305] flex justify-center items-center text-xl'>
-                            <MdCurrencyExchange className='text-[#fae8e8]'/>
-                        </div>
-                    </div>
+        <div className="p-4 md:p-8">
+            <h1 className="text-2xl font-bold mb-4">Company Dashboard</h1>
+            <div>
+                <h3 className="text-base font-semibold leading-6 text-gray-900">Last 30 days</h3>
+                <dl className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                    {stats.map((item) => (
+                        <div key={item.id} className="relative overflow-hidden rounded-lg bg-white px-4 pb-12 pt-5 shadow sm:px-6 sm:pt-6">
+                            <dt>
+                                <div className="absolute rounded-md bg-indigo-500 p-3">
+                                    <item.icon className="h-6 w-6 text-white" aria-hidden="true" />
+                                </div>
+                                <p className="ml-16 truncate text-sm font-medium text-gray-500">{item.name}</p>
+                            </dt>
+                            <div className="ml-16 flex items-baseline pb-6 sm:pb-7">
+                                <p className="text-2xl font-semibold text-gray-900">{item.stat}</p>
+                                <div className="absolute inset-x-0 bottom-0 bg-gray-50 px-4 py-4 sm:px-6">
+                                    <div className="text-sm">
 
-                </Link>
-                <Link to='/company/customers'>
-                    <div className='flex justify-between items-center p-5 bg-[#282c28] rounded-md gap-3'>
-                        <div className='flex flex-col justify-start items-start text-[#ededed]'>
-                            <h2 className='text-3xl font-bold'>{customerCount}</h2>
-                            <span className='text-md font-medium'>Active Customers</span>
-                        </div>
-                        <div className='w-[40px] h-[47px] rounded-full bg-[#030811] flex justify-center items-center text-xl'>
-                        <FaUsers className='text-[#fae8e8]'/>
-                        </div>
-                    </div>
-                </Link>
-                <Link to='/company/companyUsers'>
-
-                    <div className='flex justify-between items-center p-5 bg-[#e9feea] rounded-md gap-3'>
-                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                            <h2 className='text-3xl font-bold'>{techCount}</h2>
-                            <span className='text-md font-medium'>Technicians</span>
-                        </div>
-                        <div className='w-[40px] h-[47px] rounded-full bg-[#038000] flex justify-center items-center text-xl'>
-                            <FaUsers className='text-[#fae8e8]'/>
-                        </div>
-                    </div>
-                </Link>
-                <Link to='/company/jobs'>
-                    <div className='flex justify-between items-center p-5 bg-[#ecebff] rounded-md gap-3'>
-                        <div className='flex flex-col justify-start items-start text-[#5c5a5a]'>
-                            <h2 className='text-3xl font-bold'>{jobCount}</h2>
-                            <span className='text-md font-medium'>Work Orders</span>
-                        </div>
-                        <div className='w-[40px] h-[47px] rounded-full bg-[#0200f8] flex justify-center items-center text-xl'>
-                            <FaShoppingCart className='text-[#fae8e8]'/>
-                        </div>
-                    </div>
-                </Link>
-
-            </div>
-                {/* Alerts Section Of Body */}
-                <div className='w-full p-4 light-blue-grey-bg rounded-md mt-6'>
-                    <div className='flex justify-between items-center text-[#ffffff] pb-3 font-bold'>
-                        <h2>Alerts</h2>
-                        <button onClick={(e) => sendServiceReportOnFinish(e)} >Tester Function</button>
-                        <Link to='/company/alerts' className='font-semibold text-sm text-[#d0d2d6]'>View All</Link>
-                    </div>
-                    <p>Display Most Important and Recent Alerts</p>
-                    {
-                        alertList?.map( alert => (
-                            <div className='flex w-full'>
-                            <button>
-                                <div className='rounded-md bg-[#1D2E76] py-1 px-2 mt-2 text-[#ededed]'>
-                                    <div className='flex justify-between'>
-                                    <Link to='/company/alerts' className='font-semibold text-sm text-[#d0d2d6]'>
-                                        <p>
-                                            {alert.name}
-                                        </p>
-                                    </Link>
+                                        <Link to={item.link} className="font-medium text-indigo-600 hover:text-indigo-500">
+                                            View all<span className="sr-only"> {item.name} stats</span>
+                                        </Link>
                                     </div>
                                 </div>
-                            </button>
                             </div>
-
-                        ))
-                    }
-                </div>
-            {/* Second Section Of Body */}
-            <div className='w-full flex flex-wrap mt-7'>
-                {/* Chart */}
-                <div className='w-full lg:w-7/12 lg:pr-3'>
-                    <div className='w-full light-blue-grey-bg  p-4 rounded-md'>
-                        <Chart options={state.options} series={state.series} type='bar' height={350}/>
-                    </div>
-                </div>
-
-
-                {/* Recent Seller Message */}
-                <div className='w-full lg:w-5/12 lg:pl-4 mt-6 lg:mt-0'>
-                    <div className='w-full light-blue-grey-bg  p-4 rounded-md text-[#d0d2d6]'>
-                        {/* Message Header */}
-                        <div className='flex justify-between items-center'>
-                            <h2 className='font-semibold text-lg text-[#ffffff] bp-3'>Recent Seller Message</h2>
-                            <Link to='/company/messages' className='font-semibold text-sm text-[#d0d2d6]'> See All</Link>
                         </div>
-                        {/* Main Body Of Message Seller */}
-                        <div className='flex flex-col gap-2 pt-6 text-[#d0d2d6]'>
-                            <ol className='relative border-1 border-slate-600 ml-4'>
-                                {/* Item 1 */}
-                                <li className='mb-3 ml-6'>
-                                    {/* Image */}
-                                    <div className='flex absolute -left-5 shadow-lg justify-center items-center w-10 h-10 p-[6px] bg-[#4c7fe2] rounded-full z-10 '>
-                                        <img src="" />
-                                    </div>
-                                    {/* Preview */}
-                                    <div className='p-3 bg-[#1d2238] rounded-lg border border-[#363d5e] shadow-sm'>
-                                        <div className='flex justify-between items-center mb-2'>
-                                            <Link className='text-md font-normal'>Admin</Link>
-                                            <time className='mb-1 text-sm font-normal sm:order-last sm:mb-0'> 2 days ago</time>
-                                        </div>
-                                        <div className='p-2 text-xs font-normal bg-slate-700 rounded-lg border border-slate-800'>
-                                            How Are you?
-                                        </div>
-                                    </div>
-                                </li>
-                                {/* Item 2 */}
-                                <li className='mb-3 ml-6'>
-                                    {/* Image */}
-                                    <div className='flex absolute -left-5 shadow-lg justify-center items-center w-10 h-10 p-[6px] bg-[#4c7fe2] rounded-full z-10 '>
-                                        <img src="" />
-                                    </div>
-                                    {/* Preview */}
-                                    <div className='p-3 bg-[#1d2238] rounded-lg border border-[#363d5e] shadow-sm'>
-                                        <div className='flex justify-between items-center mb-2'>
-                                            <Link className='text-md font-normal'>Admin</Link>
-                                            <time className='mb-1 text-sm font-normal sm:order-last sm:mb-0'> 2 days ago</time>
-                                        </div>
-                                        <div className='p-2 text-xs font-normal bg-slate-700 rounded-lg border border-slate-800'>
-                                            How Are you?
-                                        </div>
-                                    </div>
-                                </li>
-                                {/* Item 3 */}
-                                <li className='mb-3 ml-6'>
-                                    {/* Image */}
-                                    <div className='flex absolute -left-5 shadow-lg justify-center items-center w-10 h-10 p-[6px] bg-[#4c7fe2] rounded-full z-10 '>
-                                        <img src="" />
-                                    </div>
-                                    {/* Preview */}
-                                    <div className='p-3 bg-[#1d2238] rounded-lg border border-[#363d5e] shadow-sm'>
-                                        <div className='flex justify-between items-center mb-2'>
-                                            <Link className='text-md font-normal'>Admin</Link>
-                                            <time className='mb-1 text-sm font-normal sm:order-last sm:mb-0'> 2 days ago</time>
-                                        </div>
-                                        <div className='p-2 text-xs font-normal bg-slate-700 rounded-lg border border-slate-800'>
-                                            How Are you?
-                                        </div>
-                                    </div>
-                                </li>
-                            </ol>
-                        </div>
-                    </div>
-                </div>
+                    ))}
+                </dl>
             </div>
 
-            {/* Recent Orders */}
-            <div className='w-full p-4 light-blue-grey-bg rounded-md mt-6'>
-                <div className='flex justify-between items-center text-[#ffffff] pb-3 font-bold'>
-                    <h2>Recent Orders</h2>
-                    <Link className='font-semibold text-sm text-[#d0d2d6]'>View All</Link>
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
+                 <div className="lg:col-span-1">
+                    <h2 className="text-xl font-bold mb-4">Recent Leads</h2>
+                    <div className="bg-white rounded-lg shadow p-4">
+                        {leads.length > 0 ? (
+                            <ul className="divide-y divide-gray-200">
+                                {leads.map((lead) => (
+                                    <li key={lead.id} className="py-4">
+                                        <Link to={`/company/leads/${lead.id}`} className="flex space-x-3">
+                                            <div className="flex-1 space-y-1">
+                                                <div className="flex items-center justify-between">
+                                                    <h3 className="text-sm font-medium">{lead.serviceName || 'N/A'}</h3>
+                                                    <p className="text-sm text-gray-500">{lead.createdAt?.toDate().toLocaleDateString()}</p>
+                                                </div>
+                                                <p className="text-sm text-gray-500">{lead.homeownerName}</p>
+                                            </div>
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p>No recent leads.</p>
+                        )}
+                    </div>
                 </div>
-                <div className='relative overflow-x-auto'>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
-                            <tr>
-                                <th scope='col' className='py-3 px-4'>Order Id</th>
-                                <th scope='col' className='py-3 px-4'>Price</th>
-                                <th scope='col' className='py-3 px-4'>Payment Status</th>
-                                <th scope='col' className='py-3 px-4'>Order Status</th>
-                                <th scope='col' className='py-3 px-4'>Active</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {
-                                [1,2,3,4,5].map((d,i) => 
-                                <tr key={d}>
-                                    <td scope='row' className='py-3 px-4 font-medium whitespace-nonwrap'>#123456</td>
-                                    <td scope='row' className='py-3 px-4 font-medium whitespace-nonwrap'>$454</td>
-                                    <td scope='row' className='py-3 px-4 font-medium whitespace-nonwrap'>Pending</td>
-                                    <td scope='row' className='py-3 px-4 font-medium whitespace-nonwrap'>Pending</td>
-                                    <td scope='row' className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <Link>View</Link>
-                                    </td>
-                                </tr>
-                                )
-                            }
-                        </tbody>
-
-                    </table>
+                <div className="lg:col-span-1">
+                    <h2 className="text-xl font-bold mb-4">Current Work Orders</h2>
+                    <div className="bg-white rounded-lg shadow p-4">
+                        {workOrders.length > 0 ? (
+                            <ul className="divide-y divide-gray-200">
+                                {workOrders.map((order) => (
+                                    <li key={order.id} className="py-4">
+                                        <Link to={`/company/jobs/detail/${order.id}`} className="flex space-x-3">
+                                            <div className="flex-1 space-y-1">
+                                                <div className="flex items-center justify-between">
+                                                    <h3 className="text-sm font-medium">{order.customerName || 'Unnamed Job'}</h3>
+                                                    <p className="text-sm text-gray-500">{order.dateCreated?.toDate().toLocaleDateString()}</p>
+                                                </div>
+                                                <p className="text-sm text-gray-500">{order.operationStatus}•{order.billingStatus}</p>
+                                            </div>
+                                        </Link>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <p>No current work orders.</p>
+                        )}
+                    </div>
                 </div>
-
-
+                <div className="lg:col-span-1">
+                    <h2 className="text-xl font-bold mb-4">Recent Seller Messages</h2>
+                    <RecentChatsWidget />
+                </div>
             </div>
-
         </div>
-    );
-};
+    )
+}
 
 export default Dashboard;

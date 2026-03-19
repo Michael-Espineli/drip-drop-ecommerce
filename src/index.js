@@ -9,10 +9,13 @@ import { Provider } from 'react-redux';
 import { BrowserRouter } from 'react-router-dom';
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
-root.render(
-  <React.StrictMode>
+root.render(  
+  // <React.StrictMode>
     <AuthContext>
-      <BrowserRouter>
+      <BrowserRouter
+      future={{
+        v7_startTransition: true,
+      }}>
         <Suspense>
           <App />
           <Toaster
@@ -27,7 +30,8 @@ root.render(
         </Suspense>
       </BrowserRouter>
     </AuthContext>
-  </React.StrictMode>
+  // </React.StrictMode>
+
 );
 
 reportWebVitals();

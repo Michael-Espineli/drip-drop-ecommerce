@@ -3,6 +3,14 @@ import publicRoutes from './routes/routes/publicRoutes';
 import { getRoutes } from "./routes";
 import Router from "./routes/Router"
 
+// export default function App() {
+
+//   const allRoutes = [...publicRoutes, ...getRoutes()];
+
+//   return (
+//         <Router allRoutes={allRoutes}/>
+//   );
+// }
 export default function App() {
 
   const [allRoutes,setAllRoutes] = useState([...publicRoutes]);
@@ -15,6 +23,8 @@ export default function App() {
 
   return (
         // <RouterProvider router={allRoutes}/>
-        <Router allRoutes={allRoutes}/>
+        <div className="dark-theme">
+          <Router allRoutes={allRoutes}/>
+        </div>
   );
 }

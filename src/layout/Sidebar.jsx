@@ -1,132 +1,128 @@
 import React, { useEffect, useState, useContext } from 'react';
-import { Link, useLocation, Navigate } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
+import { Context } from '../context/AuthContext';
 import { getNav } from '../navigation/index';
-import { RiLogoutBoxLine } from 'react-icons/ri'
-import { signOut, getAuth } from 'firebase/auth';
-import { Context } from "../context/AuthContext";
+import { ArrowLeftOnRectangleIcon } from '@heroicons/react/24/outline';
+import { getAuth, signOut } from "firebase/auth";
+import { collection, query, where, onSnapshot } from "firebase/firestore";
+import { db } from '../utils/config';
 
-const Sidebar = ({showSidebar,setShowSidebar}) => {
-    const {name, accountType, photoUrl} = useContext(Context);
-
-    const auth = getAuth()
-    const {pathname} = useLocation()
-    const [allNav,setAllNav] = useState([])
-    const role = accountType //'Client'
-    const categories = ['Operations','Routing','Users','Physical Locations','Monies','Stripe','NA'];
-    const [selectedCategory,setSelectedCategory] = useState('Physical Locations')
+const Sidebar = ({ showSidebar, setShowSidebar }) => {
+    const auth = getAuth();
+    const { role, recentlySelectedCompany, user, handleLogout } = useContext(Context);
+    const { pathname } = useLocation();
+    const [navItemsByCategory, setNavItemsByCategory] = useState({});
+    const [counts, setCounts] = useState({ leads: 0, messages: 0 });
 
     useEffect(() => {
-
-        const navs = getNav(role)
-        setAllNav(navs)
-    },[role])
-
-    async function handleSignOut () {
-        try {
-            await signOut(auth)
-        } catch (error) {
-            
+        if (role) {
+            const navs = getNav(role);
+            setNavItemsByCategory(navs);
         }
-    }
+    }, [role]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany || !user) return;
+
+        const leadsQuery = query(
+            collection(db, "homeOwnerServiceRequests"),
+            where("companyId", "==", recentlySelectedCompany),
+            where("status", "==", "Pending")
+        );
+
+        const messagesQuery = query(
+            collection(db, "chats"),
+            where("participantIds", "array-contains", user.uid),
+            where("unreadMessages", "array-contains", user.uid)
+        );
+
+        const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
+            setCounts(prev => ({ ...prev, leads: snapshot.size }));
+        });
+
+        const unsubscribeMessages = onSnapshot(messagesQuery, snapshot => {
+            setCounts(prev => ({ ...prev, messages: snapshot.size }));
+        });
+
+        return () => {
+            unsubscribeLeads();
+            unsubscribeMessages();
+        };
+    }, [recentlySelectedCompany, user]);
+
+    const logout = async () => {
+        try {
+            await signOut(auth);
+            handleLogout(); // Assuming handleLogout clears context/redirects
+        } catch (error) {
+            console.error("Logout failed:", error.message);
+        }
+    };
+
+    const getPath = (itemPath) => {
+        if (!recentlySelectedCompany && itemPath !== '/company/selection') {
+            return '/company/selection';
+        }
+        return itemPath;
+    };
 
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 9a9b9c
         <div>
-            <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 ${!showSidebar ? 'invisible' : 'visible'} w-screen h-screen bg-[#000000] top-0 left-0 z-10`}>
-            </div>
-            <div className={`w-[260px] fixed bg-[#0e245c] z-50 top-0 h-screen shadow-[0_0_15px_0rgb(34_41_47_/_5%)] transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
-                <div className='h-[70px] flex justify-center items-center'>
-                    <Link to='/company/dashboard' className="w-[250px] h-[75px]">
-                        <div className='flex justify-start items-center'>
-                            <img className="h-[50px] w-[50px]" src="/duck512.png" alt="Foreman"></img>
-                            <div>
-                                <h1 className='text-4xl font-serif font-family:Times New Roman text-[#cfcfcf]'>Drip Drop </h1>
-                                <p className='text-xs font-bold font-serif font-family:Times New Roman text-[#cfcfcf] py-1'>The Pool App</p>
-                            </div>
-                        </div>
-                    </Link>
-                </div>
-                <hr className='bg-[#030811]'/>
-                <div className='px-[16px]'>
-                    <ul>
-                        {
-                            categories.map((category,i) =>
-                                <div>
-                                    {
-                                    (category!=='NA')&&
-                                    <div>
-                                        <li key={category}>
-                                            <button 
-                                            className='bg-[#606675] text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'
-                                            onClick={(e)=>(setSelectedCategory(category))}
-                                            >
-                                                <span >{category} ▼</span>
-                                            </button>
-                                        </li>
-                                        {
-                                            (selectedCategory===category)&&
-                                            <div>
-                                                {
-                                                    allNav.map((nn,ii) => <div>
-                                                        {
-                                                        (nn.category===category)&&<li key={nn.id}>
-                                                        <Link to={nn.path} className={`${pathname === nn.path ? 'white-bg shadow-indigo-500/50 text-[#000000] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
-                                                            <span className='px-3'>{nn.icon}</span>
-                                                            <span>{nn.title}</span>
-                                                        </Link>
-                                                    </li>
-                                                        }
-                                                    </div>
-                                                    )
-                                                }
-                                            </div>
-                                        }
+            {/* Overlay for mobile view */}
+            <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-black/50 top-0 left-0 z-10' : 'w-0'}`}></div>
+
+            {/* Sidebar */}
+            <div className={`w-[260px] fixed bg-white z-50 top-0 h-screen shadow-lg transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
+                <div className='flex flex-col h-full'>
+                    {/* Header */}
+                    <div className='h-[95px] flex justify-center items-center border-b border-b-slate-200 shrink-0'>
+                        <Link to='/' className='text-gray-800 font-bold text-3xl'>
+                            Drip Drop
+                        </Link>
+                    </div>
+                    
+                    {/* Navigation */}
+                    <nav className='px-2 pt-5 text-gray-700 flex-grow overflow-y-auto'>
+                        {Object.keys(navItemsByCategory).map(category => (
+                            <div key={category} className="mb-3">
+                                {category !== 'NA' && (
+                                     <h3 className="px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider">{category}</h3>
+                                )}
+                                <ul className='flex flex-col gap-1'>
+                                    {navItemsByCategory[category].map(item => {
+                                        const isActive = pathname.toLowerCase() === item.path.toLowerCase();
+                                        const count = item.title === 'Leads' ? counts.leads : item.title === 'Messages' ? counts.messages : 0;
                                         
-                                    </div>
-                                    
-                                    }
-                                    {/* un Categorized */}
-                                    {
-                                    (category==='NA')&&
-                                    <div>
-                                     
-                                        <hr/>
-                                        {
-                                            allNav.map((n,i) => <div>
-                                                {
-                                                (n.category==='NA')&&<li key={n.id}>
-                                                
-                                                <Link to={n.path} className={`${pathname === n.path ? 'bg-[#606675] shadow-indigo-500/50 text-[#ffffff] duration-500' : 'text-[#cfcfcf] font-bold duration-200'} px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1`}>
-                                                    <span>{n.icon}</span>
-                                                    <span>{n.title}</span>
+                                        return (
+                                            <li key={`${item.path}-${item.title}`}>
+                                                <Link 
+                                                    to={getPath(item.path)}
+                                                    className={`w-full px-3 py-2 rounded-md flex justify-between items-center gap-3 font-medium transition-all ${isActive ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100'}`}>
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`w-6 h-6 ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>{item.icon}</span>
+                                                        <span>{item.title}</span>
+                                                    </div>
+                                                    {count > 0 && (
+                                                        <span className="bg-red-500 text-white text-xs font-semibold mr-2 px-2.5 py-0.5 rounded-full">
+                                                            {count}
+                                                        </span>
+                                                    )}
                                                 </Link>
                                             </li>
-                                                }
-                                            </div>
-                                            )
-                                        }
-                                    </div>
-                                    }
-                                </div>
-                            )
-                        }
-                        <li>
-                            <button onClick={() => {handleSignOut()}} className='text-[#cfcfcf] font-bold duration-200 px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1'>
-                                <span> <RiLogoutBoxLine/> </span>
-                                <span>Logout</span>
-                            </button>
-                        </li>
-                    </ul>
+                                        );
+                                    })}
+                                </ul>
+                            </div>
+                        ))}
+                    </nav>
+
+                    {/* Logout Button */}
+                    <div className="p-4 border-t border-t-slate-200 shrink-0">
+                        <button onClick={logout} className="w-full flex items-center px-4 py-3 text-left text-red-500 hover:bg-red-50 rounded-lg font-medium">
+                            <ArrowLeftOnRectangleIcon className="w-6 h-6 mr-3" />
+                            Logout
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>

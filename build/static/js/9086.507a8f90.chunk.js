@@ -1,0 +1,2 @@
+"use strict";(self.webpackChunkdrip_drop_ecommerce=self.webpackChunkdrip_drop_ecommerce||[]).push([[9086],{79086(e,r,c){c.r(r),c.d(r,{default:()=>a});c(65043);var o=c(73216),d=c(96799),n=c(99396),p=c(70579);const a=()=>{const{companyId:e}=(0,o.g)(),{company:r,loading:c,error:a}=(0,n.A)(e);return c?(0,p.jsx)("div",{children:"Loading company profile..."}):a?(0,p.jsx)("div",{children:a}):(0,p.jsx)(d.A,{viewType:"customer",companyData:r})}}}]);
+//# sourceMappingURL=9086.507a8f90.chunk.js.map

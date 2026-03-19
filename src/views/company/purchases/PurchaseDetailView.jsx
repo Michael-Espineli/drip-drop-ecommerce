@@ -130,9 +130,8 @@ const PurchaseDetailView = () => {
                     const docRef = doc(db, "companies",recentlySelectedCompany,'purchasedItems',purchaseId);
         
                     await updateDoc(docRef, {
-                    customerId: option.id,
-                    customerName: option.name,
-    
+                        customerId: option.id,
+                        customerName: option.name,
                     });
                     setUpdating(false)
                 } catch(error){

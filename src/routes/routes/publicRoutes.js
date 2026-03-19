@@ -1,5 +1,4 @@
 import React, { lazy } from "react";
-import PublicLayout from '../../layout/PublicHeader';
 
 const SignUp = lazy(()=> import("../../views/auth/SignUp"))
 const SignIn = lazy(()=> import("../../views/auth/SignIn"))
@@ -15,20 +14,16 @@ const About = lazy(()=> import("../../views/public/About"))
 const Products = lazy(()=> import("../../views/public/Products"))
 const Homeowners = lazy(()=> import("../../views/public/Homeowners"))
 const Company = lazy(()=> import("../../views/public/Company"))
+const PrivacyPolicy = lazy(()=> import("../../views/public/PrivacyPolicy"))
+const Terms = lazy(()=> import("../../views/public/Terms"))
+const Info = lazy(()=> import("../../views/public/Info"))
+const Contact = lazy(()=> import("../../views/public/Contact"))
+const AdminSignIn = lazy(()=> import("../../views/auth/AdminSignIn"))
+const SuccessfulSubscription = lazy(()=> import("../../views/SuccessfulSubscription"))
+
+const TermsOfService = lazy(()=> import("../../views/public/TermsOfService"))
 
 const publicRoutes = [
-    // {
-    //   path: "/",
-    //   element: <PublicLayout />,
-    //   children: <Home />
-    // }
-    // ,
-    // {
-    //   path: "/about",
-    //   element: <PublicLayout />,
-    //   children: <About />
-    // }
-    // ,
     {
       path: "/",
       element: <Home />,
@@ -80,6 +75,32 @@ const publicRoutes = [
     }
     ,
     {
+      path: "/adminSignIn",
+      element: <AdminSignIn />
+    }
+    ,
+    {
+      path: "/privacyPolicy",
+      element: <PrivacyPolicy />,
+    }
+    ,
+    {
+      path: "/termsOfService",
+      element: <TermsOfService />,
+    }
+    ,
+    
+    {
+      path: "/info",
+      element: <Info />,
+    }
+    ,
+    {
+      path: "/contact",
+      element: <Contact />,
+    }
+    ,
+    {
       path: "/refresh/:connectedAccountId",
       element: <Refresh />,
     }
@@ -97,7 +118,14 @@ const publicRoutes = [
     {
       path: "/success/sessionId/:sessionId",
       element: <Success />,
-    },
+    }
+    ,
+    {
+      path: "/success/subscription/subscriptionId/:subscriptionId",
+      element: <SuccessfulSubscription />,
+    }
+    ,
+    
   ]
 
 export default publicRoutes;

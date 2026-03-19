@@ -167,19 +167,17 @@ function RecurringContracts () {
 
     return (
         <div className='px-2 md:px-7 py-5'>
-            <div className='py-2'>
-                <div className='flex justify-end items-center'>
-                    <Link 
-                    to='/company/contracts/createNew/NA'
-                    className='bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'>Send New Contract</Link>
-                </div>
-            </div>
 
-            <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
+            <h2 className="text-2xl font-bold mb-4">Recurring Contracts</h2>
+                    
+
                 <div className='py-2'>
                     <div className='flex justify-between items-center'>
-                        <h1>Contracts</h1>
-                        <Link className='bg-[#454b39] rounded-md py-1 px-2'>See Past and Rejected Contracts</Link>
+                        <Link 
+                        to='/company/contracts/createNew/NA'
+                        className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
+                        >Send New Contract</Link>
+                        <Link className='red-fg rounded-md py-1 px-2'>See Past and Rejected Contracts</Link>
                     </div>
                 </div>
                 {/* <div className='flex justify-between'>
@@ -193,50 +191,53 @@ function RecurringContracts () {
                     className='bg-[#000000] p-2 rounded-md'
                     >Set Up Customer</button>
                 </div> */}
-                <h1  className='font-bold'>Accepted Contracts</h1>
-                <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                    <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
-                        <tr>
-                            <th className='py-3 px-4'>Company Name</th>
-                            <th className='py-3 px-4'>Amount</th>
-                            <th className='py-3 px-4'>Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    {
-                        contractsAccepted?.map( contract => (
-                                <tr key={contract.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.companyName}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.rate/100}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.status}</td>
-                                    <td>
-                                        <Link 
-                                        className='bg-[#454b39] rounded-md py-1 px-2'
-                                        to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
-                                    </td>
-                                </tr>
-                            
-                        ))
-                    }
-                    </tbody>
-                </table>
+                <h1  className='text-xl font-bold mb-4'>Accepted Contracts</h1>
+                <div className='relative overflow-x-auto'>
+
+                    <table className="min-w-full bg-white border border-gray-200">
+                        <thead>
+                            <tr>
+                                <th className='px-4 py-2 border-b'>Company Name</th>
+                                <th className='px-4 py-2 border-b'>Amount</th>
+                                <th className='px-4 py-2 border-b'>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                        {
+                            contractsAccepted?.map( contract => (
+                                    <tr key={contract.id}>
+                                        <td className='px-4 py-2 border-b'>{contract.companyName}</td>
+                                        <td className='px-4 py-2 border-b'>{contract.rate/100}</td>
+                                        <td className='px-4 py-2 border-b'>{contract.status}</td>
+                                        <td>
+                                            <Link 
+                                            className='bg-[#454b39] rounded-md py-1 px-2'
+                                            to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
+                                        </td>
+                                    </tr>
+                                
+                            ))
+                        }
+                        </tbody>
+                    </table>
+                </div>
                 <hr/>
-                <h1  className='font-bold'>Pending Contracts</h1>
-                <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                    <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
+                <h1  className='text-xl font-bold mb-4'>Pending Contracts</h1>
+                <table className="min-w-full bg-white border border-gray-200">
+                    <thead>
                         <tr>
-                            <th className='py-3 px-4'>Company Name</th>
-                            <th className='py-3 px-4'>Amount</th>
-                            <th className='py-3 px-4'>Status</th>
+                            <th className='px-4 py-2 border-b'>Company Name</th>
+                            <th className='px-4 py-2 border-b'>Amount</th>
+                            <th className='px-4 py-2 border-b'>Status</th>
                         </tr>
                     </thead>
                     <tbody>
                     {
                         contractsPending?.map( contract => (
                                 <tr key={contract.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.companyName}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.rate/100}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{contract.status}</td>
+                                    <td className='px-4 py-2 border-b'>{contract.companyName}</td>
+                                    <td className='px-4 py-2 border-b'>{contract.rate/100}</td>
+                                    <td className='px-4 py-2 border-b'>{contract.status}</td>
                                     <td>
                                         <Link 
                                         className='bg-[#454b39] rounded-md py-1 px-2'
@@ -248,30 +249,29 @@ function RecurringContracts () {
                     }
                     </tbody>
                 </table>
-            </div>
             <div className='py-2'>
 
-                <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
-                                <h1 className='font-bold'>Stripe Subscriptions</h1>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
+                <div className='relative overflow-x-auto'>
+                    <h1 className='text-xl font-bold mb-4'>Stripe Subscriptions</h1>
+                    <table className="min-w-full bg-white border border-gray-200">
+                        <thead>
                             <tr>
-                                <th className='py-3 px-4'>id</th>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Interval</th>
-                                <th className='py-3 px-4'>Amount</th>
+                                <th className='px-4 py-2 border-b'>id</th>
+                                <th className='px-4 py-2 border-b'>Name</th>
+                                <th className='px-4 py-2 border-b'>Interval</th>
+                                <th className='px-4 py-2 border-b'>Amount</th>
                             </tr>
                         </thead>
                         <tbody>
                         {
                             contractList?.map(subscription => (
-                                    <tr key={subscription.id}>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{subscription.id}</td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{subscription.plan.nickName}</td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{subscription.plan.interval}</td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>{subscription.plan.amount/100}</td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'>Edit</td>
-                                    </tr>
+                                <tr key={subscription.id}>
+                                    <td className='px-4 py-2 border-b'>{subscription.id}</td>
+                                    <td className='px-4 py-2 border-b'>{subscription.plan.nickName}</td>
+                                    <td className='px-4 py-2 border-b'>{subscription.plan.interval}</td>
+                                    <td className='px-4 py-2 border-b'>{subscription.plan.amount/100}</td>
+                                    <td className='px-4 py-2 border-b'>Edit</td>
+                                </tr>
                                 
                             ))
                         }

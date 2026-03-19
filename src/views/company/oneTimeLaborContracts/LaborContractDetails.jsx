@@ -1,327 +1,138 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, updateDoc, startAfter, doc, getDoc, where, setDoc,Timestamp, deleteDoc  } from "firebase/firestore";
-import { db } from "../../../utils/config";
-import { Context } from "../../../context/AuthContext";
-import {v4 as uuidv4} from 'uuid';
-import { format } from 'date-fns'; // Or any other date formatting library
-import { useNavigate } from 'react-router-dom';
+
+import React, { useState, useEffect, useContext } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { db } from '../../../utils/config';
+import { Context } from '../../../context/AuthContext';
+import toast from 'react-hot-toast';
+
+const DetailItem = ({ label, value, children }) => (
+    <div className="py-2">
+        <p className="text-sm font-medium text-gray-500">{label}</p>
+        {children || <p className="font-semibold text-gray-800">{value || 'N/A'}</p>}
+    </div>
+);
+
+const DetailCard = ({ title, children }) => (
+    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+        <h3 className="text-xl font-bold text-gray-800 mb-4 pb-3 border-b border-gray-200">{title}</h3>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+            {children}
+        </div>
+    </div>
+);
+
+const ContractStatusBadge = ({ status }) => {
+    const baseClasses = "px-4 py-1.5 text-base font-bold rounded-full text-white tracking-wider";
+    const statusClasses = {
+        'Pending': 'bg-yellow-500',
+        'Active': 'bg-green-500',
+        'Declined': 'bg-red-500',
+        'Completed': 'bg-blue-500',
+        'Terminated': 'bg-gray-600',
+    };
+    return <span className={`${baseClasses} ${statusClasses[status] || 'bg-gray-400'}`}>{status}</span>;
+};
 
 const LaborContractDetails = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
-    const navigate = useNavigate()
+    const navigate = useNavigate();
+    const { recentlySelectedCompany } = useContext(Context);
+    const { id: contractId } = useParams();
 
-    const {laborContractId} = useParams();
-    const [taskList,setTaskList] = useState([])
-    const [formattedDateCreated,setFormattedDateCreated] = useState()
-
-    const [laborContract,setLaborContract] = useState({
-        id : '',
-        dateSent : '',
-        lastDateToAccept : '',
-        dateAccepted : '',
-        notes : '',
-        description : '',
-        receiverAcceptance : '',
-        receiverId : '',
-        receiverName : '',
-        senderAcceptance : '',
-        senderId : '',
-        senderName : '',
-        status : '',
-        terms : '',
-        rateOffered : '',
-        jobId : '',
-        serviceStopId : '',//Maybe Remove
-        postingType : '',
-        boardId : '',
-        workOrderTaskId : ''
-    });
-    
+    const [contract, setContract] = useState(null);
+    const [isLoading, setIsLoading] = useState(true);
+    const [isActionLoading, setIsActionLoading] = useState(false);
 
     useEffect(() => {
-        (async () => {
-            try{
-                //Get Labor Contract Info
-                const docRef = doc(db, "laborContracts",laborContractId);
-                const docSnap = await getDoc(docRef);
-                let customerId;
-                let serviceLocationId;
-
+        if (!contractId) return;
+        const fetchContract = async () => {
+            setIsLoading(true);
+            try {
+                const contractRef = doc(db, 'laborContracts', contractId);
+                const docSnap = await getDoc(contractRef);
                 if (docSnap.exists()) {
-                    console.log("Document data:", docSnap.data());
-                    setLaborContract((prevLaborContract) => ({
-                        ...prevLaborContract,
-                        id : docSnap.data().id,
-                        dateSent : docSnap.data().dateSent,
-                        lastDateToAccept : docSnap.data().lastDateToAccept,
-                        dateAccepted : docSnap.data().dateAccepted,
-                        notes : docSnap.data().notes,
-                        description : docSnap.data().description,
-                        receiverAcceptance : docSnap.data().receiverAcceptance,
-                        receiverId : docSnap.data().receiverId,
-                        receiverName : docSnap.data().receiverName,
-                        senderAcceptance : docSnap.data().senderAcceptance,
-                        senderId : docSnap.data().senderId,
-                        senderName : docSnap.data().senderName,
-                        status : docSnap.data().status,
-                        terms : docSnap.data().terms,
-                        rateOffered : docSnap.data().rateOffered,
-                        senderId : docSnap.data().senderId,
-                        jobId : docSnap.data().jobId,
-                        senderId : docSnap.data().senderId,
-                        serviceStopId : docSnap.data().serviceStopId,
-                        postingType : docSnap.data().postingType,
-                        boardId : docSnap.data().boardId,
-
-                    }));
-                    // const dateCreated = docSnap.data().dateCreated.toDate();
-                    // const formattedDateCreated = format(dateCreated, 'MMMM d, yyyy'); 
-                    // setFormattedDateCreated(formattedDateCreated)
-                    // customerId = docSnap.data().customerId
-                    // serviceLocationId = docSnap.data().serviceLocationId
+                    setContract({ id: docSnap.id, ...docSnap.data() });
                 } else {
-                console.log("No such document!");
+                    toast.error("Contract not found.");
+                    navigate('/company/oneTimeLaborContracts');
                 }
-                //Get Tasks
-                let taskQuery = query(collection(db, "laborContracts",laborContractId,'tasks'));
-                const querySnapshot = await getDocs(taskQuery);       
-                setTaskList([])      
-                querySnapshot.forEach((doc) => {
-                    const taskData = doc.data()
-                    const task = {
-                        id : taskData.id,
-                        name : taskData.name,
-                        type : taskData.type,
-                        workerType : taskData.workerType,
-                        workerId : taskData.workerId,
-                        workerName : taskData.workerName,
-                        status : taskData.status,
-                        customerApproval : taskData.customerApproval,
-                        laborContractId : taskData.laborContractId,
-                        contractedRate : taskData.contractedRate,
-                        estimatedTime : taskData.estimatedTime,
-                        actualTime : taskData.actualTime,
-                        equipmentId : taskData.equipmentId,
-                        serviceLocationId : taskData.serviceLocationId,
-                        bodyOfWaterId : taskData.bodyOfWaterId,
-                        workOrderTaskId : taskData.workOrderTaskId
-                    }
-                    setTaskList(taskList => [...taskList, task]); 
-                });
-
-            
-            } catch(error){
-                console.log('Error')
-
-                console.log(error)
-
+            } catch (error) {
+                toast.error("Failed to load contract details.");
+            } finally {
+                setIsLoading(false);
             }
-        })();
-    },[])
-    async function sendLaborContract(e) {
-        e.preventDefault()
-    }
-    async function deleteLaborContract(e) {
-        e.preventDefault()
-        if (laborContract.status==='Draft'||laborContract.status==='Offered'){
-            //Delete Contract
-            await deleteDoc (doc(db,"laborContracts",laborContractId));
-            console.log('Deleted Labor Contract')
-            //Update Job
+        };
+        fetchContract();
+    }, [contractId, navigate]);
 
-            // await updateDoc(doc(db,'companies',recentlySelectedCompany,"workOrders",laborContract.jobId), {
-            //     status : 'Offered',
-            //     laborContractId : laborContractId
-            // });
-            //Update Job Status
-            await updateDoc(doc(db,'companies',recentlySelectedCompany,"workOrders",laborContract.jobId), {
-                operationStatus : 'Unscheduled',
-            });
-            console.log('Updated Job')
-
-            //Update Job Tasks
-            for (let i = 0; i < taskList.length; i++) {
-                let taskId = 'lc_tas_' + uuidv4();
-                let task = taskList[i]
-                await updateDoc(doc(db,'companies',recentlySelectedCompany,"workOrders",laborContract.jobId,'tasks',task.workOrderTaskId), {
-                    status : 'Unassigned',
-                    laborContractId : ''
-                });
-                console.log('Updated Job Task')
-
+    const handleUpdateStatus = async (newStatus, acceptanceStatus) => {
+        setIsActionLoading(true);
+        const toastId = toast.loading(`Updating status to ${newStatus}...`);
+        try {
+            const contractRef = doc(db, 'laborContracts', contractId);
+            const updateData = {
+                status: newStatus,
+                receiverAcceptance: acceptanceStatus,
+            };
+            if (newStatus === 'Active') {
+                updateData.dateAccepted = new Date();
             }
+            await updateDoc(contractRef, updateData);
+            setContract(prev => ({ ...prev, ...updateData }));
+            toast.success('Contract updated successfully!', { id: toastId });
+        } catch (error) {
+            toast.error(`Update failed: ${error.message}`, { id: toastId });
+        } finally {
+            setIsActionLoading(false);
         }
-        //Maybe have google function update these. 
-        //Update Job
-        navigate('/company/laborContracts')
-    }
-    
+    };
+
+    if (isLoading) return <div className="text-center p-10">Loading contract details...</div>;
+    if (!contract) return null;
+
+    const isReceiver = contract.receiverId === recentlySelectedCompany;
+
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 = gray
-        <div className='px-2 md:px-7 py-5'>
-            <div className='flex justify-between items-center'>
-                <Link 
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-5xl mx-auto">
+                <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-800">{contract.title || 'One-Time Labor Contract'}</h1>
+                        <p className="text-gray-600 mt-1">Details and status of the agreement.</p>
+                    </div>
+                     <button onClick={() => navigate('/company/oneTimeLaborContracts')} className='mt-4 sm:mt-0 py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition'>Back to List</button>
+                </header>
+
+                <div className="bg-white p-6 rounded-2xl shadow-xl mb-8 border">
+                    <div className="flex justify-between items-center">
+                         <h2 className="text-2xl font-bold text-gray-800">Status</h2>
+                        <ContractStatusBadge status={contract.status} />
+                    </div>
+                </div>
                 
-                className='py-1 px-2 bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'
-                to={`/company/laborContracts`}>Back</Link>
-                <p>Edit if not accepted</p>
-                {
-                    (laborContract.status==='Draft')&&<div className='flex justify-between items-center gap-2'>
-                        <button 
-                        onClick={(e) => sendLaborContract(e)} 
-                        className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Edit</button>
-                        <button 
-                        onClick={(e) => sendLaborContract(e)} 
-                        className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Send</button>
-                        <button 
-                        onClick={(e) => deleteLaborContract(e)} 
-                        className='py-1 px-2 bg-[#9C0D38] rounded-md py-1 px-2 text-[#]'
-                        >Delete</button>
+                <div className="space-y-8">
+                    <DetailCard title="Parties Involved">
+                        <DetailItem label="Sender" value={contract.senderName} />
+                        <DetailItem label="Recipient" value={contract.receiverName} />
+                    </DetailCard>
 
-                    </div>
-                }
-                {
-                    (laborContract.status==='Offered')&&<div className='flex justify-between items-center gap-2'>
-                        <button  
-                        onClick={(e) => sendLaborContract(e)} 
-                        className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Edit</button>
-                        <button 
-                        onClick={(e) => sendLaborContract(e)} 
-                        className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Send</button>
-                        <button 
-                        onClick={(e) => deleteLaborContract(e)} 
-                        className='py-1 px-2 bg-[#9C0D38] rounded-md py-1 px-2 text-[#]'
-                        >Delete</button>
-                    </div>
-                }
-                {
-                    (laborContract.status==='Rejected')&&<div className='flex justify-between items-center gap-2'>
-                    
-                    </div>
-                }
-                {
-                    (laborContract.status==='Accepted')&&<div className='flex justify-between items-center gap-2'>
-                    
-                    </div>
-                }
-                {
-                    (laborContract.status==='Completed')&&<div className='flex justify-between items-center gap-2'>
-                    
-                    </div>
-                }
-                {
-                    (laborContract.status==='Unassigned')&&<div className='flex justify-between items-center gap-2'>
-                    
-                    </div>
-                }
-            </div>
-            <p>Red Flag. Might be able to access Labor Contracts that arent yours</p>
-            <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                <div className='left-0 w-full justify-between'>
-                <div className='flex justify-between items-center'>
-                    {
-                        (laborContract.status==='Draft')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Draft</p>
-                    }
-                    {
-                        (laborContract.status==='Offered')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Offered</p>
-                    }
-                    {
-                        (laborContract.status==='Rejected')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Rejected</p>
-                    }
-                    {
-                        (laborContract.status==='Accepted')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Accepted</p>
-                    }
-                    {
-                        (laborContract.status==='Completed')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Completed</p>
-                    }
-                    {
-                        (laborContract.status==='Unassigned')&&<p className='py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#]'>Unassigned</p>
-                    }
-                    </div>
-                    <h2>Labor Contract Detail View {laborContractId}</h2>
-                    <p>id {laborContract.id}</p>
-                    <p>dateSent {laborContract.dateSent}</p>
-                    <p>lastDateToAccept {laborContract.lastDateToAccept}</p>
-                    <p>dateAccepted {laborContract.dateAccepted}</p>
-                    <p>notes {laborContract.notes}</p>
-                    <p>description {laborContract.description}</p>
-                    <p>receiverAcceptance {laborContract.receiverAcceptance}</p>
-                    <p>receiverId {laborContract.receiverId}</p>
-                    <p>receiverName {laborContract.receiverName}</p>
-                    <p>senderAcceptance {laborContract.senderAcceptance}</p>
-                    <p>senderId {laborContract.senderId}</p>
-                    <p>senderName {laborContract.senderName}</p>
-                    <p>status {laborContract.status}</p>
-                    <p>terms {laborContract.terms}</p>
-                    <p>rateOffered {laborContract.rateOffered}</p>
-                    <p>jobId <Link 
-                    className='py-1 px-2 bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6]'
-                    to={`/company/jobs/detail/${laborContract.jobId}`}>{laborContract.jobId}</Link></p>
-                    <p>serviceStopId {laborContract.serviceStopId}</p>
-                    <p>postingType {laborContract.postingType}</p>
-                    <p>boardId {laborContract.boardId}</p>
-                    <p>TaskList {taskList.length}</p>
+                    <DetailCard title="Contract Terms">
+                        <DetailItem label="Rate Offered"><p className="font-bold text-2xl text-green-600">${parseFloat(contract.rateOffered).toFixed(2)}</p></DetailItem>
+                        <DetailItem label="Last Date to Accept" value={contract.lastDateToAccept} />
+                        <DetailItem label="Terms and Conditions" value={contract.terms} />
+                        <DetailItem label="Notes" value={contract.notes} />
+                    </DetailCard>
 
-                    <hr/>
-                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                        <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
-                            <tr>
-                            <th className='py-3 px-4'>id</th>
-                                <th className='py-3 px-4'>Name</th>
-                                <th className='py-3 px-4'>Type</th>
-                                <th className='py-3 px-4'>Status</th>
-                                <th className='py-3 px-4'>Contracted Rate</th>
-
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            taskList?.map(task => (
-                                <tr key={task.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.id}</td>
-
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {
-                                            (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                Assign
-                                            </button>
-                                        }
-                                            {
-                                            (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                {task.status}
-                                                </p>
-                                        }
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.contractedRate}</td>
-                                    
-
-                                </tr>
-                            ))
-                        }
-                        </tbody>
-                    </table>
-                    <form>
-                        <input
-                        placeholder='Place Holder'
-                        ></input>
-                        <button>Submit</button>
-                    </form>
+                    {isReceiver && contract.status === 'Pending' && (
+                        <div className="flex justify-end space-x-4 p-6 bg-white rounded-2xl shadow-xl border">
+                            <button onClick={() => handleUpdateStatus('Declined', 'Declined')} disabled={isActionLoading} className="py-3 px-8 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 disabled:bg-red-300">Decline</button>
+                            <button onClick={() => handleUpdateStatus('Active', 'Accepted')} disabled={isActionLoading} className="py-3 px-8 bg-green-600 text-white font-semibold rounded-lg shadow-md hover:bg-green-700 disabled:bg-green-300">Accept Contract</button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
     );
-}
-    export default LaborContractDetails;
+};
+
+export default LaborContractDetails;

@@ -5,7 +5,6 @@ import { Protected } from './Protected';
 export const getRoutes = () => {
  
 privateRoutes.map( r=> {
-
     r.element = <Protected route={r}>{r.element}</Protected>
 })
     return {

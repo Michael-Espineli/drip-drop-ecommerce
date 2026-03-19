@@ -1,11 +1,27 @@
+
+import { v4 as uuidv4 } from 'uuid';
+
 class DripDropStoredImage {
-  constructor({ id, description, imageURL }) {
-    this.id = id;
-    this.description = description;
-    this.imageURL = imageURL;
+  constructor(data) {
+    if (typeof data === 'string') {
+        this.id = 'img_' + uuidv4();
+        this.description = '';
+        this.imageURL = data;
+    } else {
+        const { id, description, imageURL } = data || {};
+        this.id = id || 'img_' + uuidv4();
+        this.description = description || '';
+        this.imageURL = imageURL || '';
+    }
   }
 
-  // You can add methods here if needed, similar to other models.
+  toFirestore() {
+    return {
+      id: this.id,
+      description: this.description,
+      imageURL: this.imageURL,
+    };
+  }
 
   static fromData(data) {
     return new DripDropStoredImage(data);

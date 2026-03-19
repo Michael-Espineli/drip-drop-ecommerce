@@ -1,403 +1,233 @@
-import React, {useState, useEffect, useContext} from 'react';
-import { Link } from 'react-router-dom';
-import DatePicker from "react-datepicker";
-import "react-datepicker/dist/react-datepicker.css";
 
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc, updateDoc } from "firebase/firestore";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
+import DatePicker from "react-datepicker";
+import { query, collection, getDocs, where, Timestamp, addDoc, doc, updateDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import {v4 as uuidv4} from 'uuid';
-import { format } from 'date-fns'; // Or any other date formatting library
+import { format } from 'date-fns';
+import toast from 'react-hot-toast';
+import { MultiLocationMap } from '../../components/MultiLocationMap';
+import "react-datepicker/dist/react-datepicker.css";
 
 const RouteDashboard = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const navigate = useNavigate();
+    const { recentlySelectedCompany } = useContext(Context);
     
     const [serviceDate, setServiceDate] = useState(new Date());
+    const [isLoading, setIsLoading] = useState(true);
+    const [serviceStops, setServiceStops] = useState([]);
+    const [technicians, setTechnicians] = useState([]);
+    const [activeRoutes, setActiveRoutes] = useState([]);
 
-    const [formattedServiceDate,setFormattedServiceDate] = useState('')
+    const fetchData = useCallback(async (date) => {
+        if (!recentlySelectedCompany) return;
+        setIsLoading(true);
 
-    const [userList, setUserList] = useState([]);
+        try {
+            const startOfDay = new Date(date).setHours(0, 0, 0, 0);
+            const endOfDay = new Date(date).setHours(23, 59, 59, 999);
 
-    const [userSnapshotList, setUserSnapshotList] = useState([]);
+            // Fetch Service Stops for the selected date
+            const stopsQuery = query(
+                collection(db, 'companies', recentlySelectedCompany, 'serviceStops'),
+                where("serviceDate", ">=", new Date(startOfDay)),
+                where("serviceDate", "<=", new Date(endOfDay))
+            );
+            const stopsSnapshot = await getDocs(stopsQuery);
+            const fetchedStops = stopsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setServiceStops(fetchedStops);
 
-    const [serviceStopList, setServiceStopList] = useState([]);
+            // Fetch all company users (technicians)
+            const techQuery = query(collection(db, "companies", recentlySelectedCompany, 'companyUsers'));
+            const techSnapshot = await getDocs(techQuery);
+            const fetchedTechs = techSnapshot.docs.map(doc => ({ ...doc.data(), docId: doc.id }));
+            setTechnicians(fetchedTechs);
 
-    const serviceStops = [
-        {
-            id:1,
-            jobType:'Weekly Cleaning',
-            customerName:'Delyse Espineli',
-            streetAddress:'6160 Broadmoor Drive',
-            status:'In Progress'
+            // Sync active routes for each technician
+            await syncActiveRoutes(fetchedStops, fetchedTechs, date);
+
+        } catch (error) {
+            console.error('Error fetching dashboard data:', error);
+            toast.error("Failed to load dashboard data.");
+        } finally {
+            setIsLoading(false);
         }
-        ,
-        {
-            id:2,
-            jobType:'Weekly Cleaning',
-            customerName:'Delyse Espineli',
-            streetAddress:'6160 Broadmoor Drive',
-            status:'Incomplete'
+    }, [recentlySelectedCompany]);
 
-        }
-        ,
-        {
-            id:3,
-            jobType:'Weekly Cleaning',
-            customerName:'Delyse Espineli',
-            streetAddress:'6160 Broadmoor Drive',
-            status:'Finished'
+    const syncActiveRoutes = async (stops, techs, date) => {
+        const startOfDay = new Date(date).setHours(0, 0, 0, 0);
+        const endOfDay = new Date(date).setHours(23, 59, 59, 999);
 
-        }
-        ,
-        {
-            id:4,
-            jobType:'Weekly Cleaning',
-            customerName:'Delyse Espineli',
-            streetAddress:'6160 Broadmoor Drive',
-            status:'Incomplete'
+        const routesQuery = query(
+            collection(db, 'companies', recentlySelectedCompany, 'activeRoutes'),
+            where("date", ">=", new Date(startOfDay)),
+            where("date", "<=", new Date(endOfDay))
+        );
+        const routesSnapshot = await getDocs(routesQuery);
+        let existingRoutes = routesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-        },
+        for (const tech of techs) {
+            const techStops = stops.filter(stop => stop.techId === tech.userId || stop.tech === tech.userName);
+            if (techStops.length === 0) continue; // Skip techs with no stops
 
-    ]
-    const addDays = (date, days) => {
-        const newDate = new Date(date);
-        newDate.setDate(newDate.getDate() + days);
-        return newDate;
-    };
-    useEffect(() => {
-        (async () => {
-            try{                       
-                //Get Service Stops for Today
-                
-                //Set Up Map For Service Stop
+            const finishedStopsCount = techStops.filter(s => s.status === 'Finished').length;
+            const totalStopsCount = techStops.length;
+            const routeForTech = existingRoutes.find(r => r.techId === tech.userId);
 
-                let startOfDay = new Date()
-        
-                startOfDay.setHours(0);
-                console.log('start of day')
-                console.log(startOfDay)
-        
-                let day = new Date()
-                day.setHours(0);
-                let endOfDay = addDays(day,1)
-                console.log('end of day')
-                console.log(endOfDay)
-        
-                let ssCount = 0 
+            const newStatus = finishedStopsCount === totalStopsCount ? 'Finished' : (finishedStopsCount > 0 ? 'In Progress' : 'Did Not Start');
 
-                let serviceStopQ = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), where("serviceDate", ">", startOfDay), where("serviceDate", "<", endOfDay)); 
-                const serviceStopQuerySnapshot = await getDocs(serviceStopQ);       
-                setServiceStopList([])   
-                let workingSSList = []      
-
-                serviceStopQuerySnapshot.forEach((doc) => {
-                    const serviceStopData = doc.data()
-                    
-                    const date = serviceStopData.serviceDate.toDate();
-                    const formattedDate = format(date, 'MMMM d, yyyy'); 
-
-                    const serviceStop = {
-                        id:serviceStopData.id,
-                        techId:serviceStopData.techId,
-                        tech:serviceStopData.tech,
-                        type:serviceStopData.type,
-                        customerName:serviceStopData.customerName,
-                        serviceDate:formattedDate,
-                        streetAddress: serviceStopData.address.streetAddress,
-                        tech: serviceStopData.tech,
-                        jobId:serviceStopData.jobId
-                    }
-                    ssCount = ssCount + 1
-                    setServiceStopList(serviceStopList => [...serviceStopList, serviceStop]); 
-                    workingSSList.push(serviceStop)
+            if (routeForTech) {
+                // Update existing route
+                const routeRef = doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', routeForTech.id);
+                await updateDoc(routeRef, {
+                    totalStops: totalStopsCount,
+                    finishedStops: finishedStopsCount,
+                    status: newStatus,
+                    serviceStopsIds: techStops.map(s => s.id)
                 });
-                console.log('Received Service Stops: ' + ssCount)
-
-                // Get Company Users For Company
-                let companyUserCount = 0 
-
-                let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
-                const userQuerySnapshot = await getDocs(userQuery);       
-                setUserList([])      
-                userQuerySnapshot.forEach((doc) => {
-                    const taskData = doc.data()
-                    const user = {
-                        id : taskData.id,
-                        name : taskData.name,
-                        dateCreated : taskData.dateCreated,
-                        linkedCompanyId : taskData.linkedCompanyId,
-                        linkedCompanyName : taskData.linkedCompanyName,
-                        roleId : taskData.roleId,
-                        roleName : taskData.roleName,
-                        status : taskData.status,
-                        userId : taskData.userId,
-                        userName : taskData.userName,
-                        workerType : taskData.workerType,
-                        label : taskData.userName
-                    }
-                    companyUserCount = companyUserCount + 1
-                    setUserList(userList => [...userList, user]); 
-                });                    
-                console.log('Received Company Users: ' + companyUserCount)
-
-                console.log('Service Stop List: ' + workingSSList.length)
-
-                //Get Today Info For User   
-                setUserSnapshotList([])
-                for (let i = 0; i < userList.length; i++) {
-
-                    let user = userList[i]
-                    let totalStops = 0 ;
-                    let finishedStops = 0;
-                    let milage;
-                    let duration; // min
-                    let status;
-
-                    //Get Active Route?
-
-                    //Get Service Stops
-                    const stops = workingSSList.filter(item => item.techId === user.userId);
-                    console.log(stops)
-                    
-                    //Compile information
-
-                    //Add to list
-                    if (stops.length > 0) {
-                        totalStops = stops.length
-                        for (let i = 0; i < stops.length; i++) {
-                            let stop = stops[i]
-                            console.log(stop)
-                            //Change from checking if finished is true, to checking the status
-                            if (stop.finished){
-                                finishedStops = finishedStops + 1
-                            } 
-                        }
-                        let userSnapshot = {
-                            id:user.id,
-                            userName:user.userName,
-                            totalStops:totalStops,
-                            finishedStops:finishedStops,
-                            milage:'4',
-                            duration:'5:32',
-                            status:'On Break'
-                        }
-                        setUserSnapshotList(userSnapshotList => [...userSnapshotList, userSnapshot]); 
-                    }
-                }
-            } catch(error){
-                console.log('Error ' + error)
-            }
-        })();
-    },[])
-    async function handleDateChange(dateOption) {
-        setServiceDate(dateOption)
-
-        const formattedDate = dateOption.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-        }); 
-        setFormattedServiceDate(formattedDate)
-        console.log('selected day')
-        console.log(dateOption)
-
-        //Get Updated Service Stop Info 
-
-        let startOfDay = dateOption
-
-        startOfDay.setHours(0);
-        console.log('start of day')
-        console.log(startOfDay)
-
-        let day = dateOption
-        day.setHours(0);
-        let endOfDay = addDays(day,1)
-        console.log('end of day')
-        console.log(endOfDay)
-
-        let serviceStopQ = query(collection(db, 'companies',recentlySelectedCompany,'serviceStops'), where("serviceDate", ">", startOfDay), where("serviceDate", "<", endOfDay)); 
-        const serviceStopQuerySnapshot = await getDocs(serviceStopQ);       
-        setServiceStopList([])
-        let workingSSList = []      
-
-        serviceStopQuerySnapshot.forEach((doc) => {
-            const serviceStopData = doc.data()
-            
-            const date = serviceStopData.serviceDate.toDate();
-            const formattedDate = format(date, 'MMMM d, yyyy'); 
-
-            const serviceStop = {
-                id:serviceStopData.id,
-                techId:serviceStopData.techId,
-                tech:serviceStopData.tech,
-                type:serviceStopData.type,
-                customerName:serviceStopData.customerName,
-                serviceDate:formattedDate,
-                streetAddress: serviceStopData.address.streetAddress,
-                tech: serviceStopData.tech,
-                jobId:serviceStopData.jobId,
-                status:serviceStopData.status,
-                finished:serviceStopData.finished,
-            }
-            setServiceStopList(serviceStopList => [...serviceStopList, serviceStop]); 
-            workingSSList.push(serviceStop)
-        });
-        console.log('Received Service Stops ')
-        endOfDay.setHours(0);
-        console.log('Set day')
-        console.log(endOfDay)
-
-        // Get Company Users For Company
-        let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
-        const userQuerySnapshot = await getDocs(userQuery);       
-        setUserList([])      
-        userQuerySnapshot.forEach((doc) => {
-            const taskData = doc.data()
-            const user = {
-                id : taskData.id,
-                name : taskData.name,
-                dateCreated : taskData.dateCreated,
-                linkedCompanyId : taskData.linkedCompanyId,
-                linkedCompanyName : taskData.linkedCompanyName,
-                roleId : taskData.roleId,
-                roleName : taskData.roleName,
-                status : taskData.status,
-                userId : taskData.userId,
-                userName : taskData.userName,
-                workerType : taskData.workerType,
-                label : taskData.userName
-            }
-            setUserList(userList => [...userList, user]); 
-        });                    
-        console.log('Received Company Users: ' + userList.length)
-
-        console.log('Service Stop List: ' + workingSSList.length)
-
-        //Get Today Info For User   
-        setUserSnapshotList([])
-        for (let i = 0; i < userList.length; i++) {
-
-            let user = userList[i]
-
-            //Get Active Route?
-
-            //Get Service Stops
-            const stops = workingSSList.filter(item => item.techId === user.userId);
-
-            //compile information
-
-            //Add to list
-            if (stops.length != 0 ) {
-                let totalStops;
-                let finishedStops;
-                let milage;
-                let duration; // min
-                let status;
-                for (let i = 0; i < stops.length; i++) {
-                    let stop = stops[i]
-                    console.log(stop)
-                    //Change from checking if finished is true, to checking the status
-                    if (stop.finished){
-                        finishedStops = finishedStops + 1
-                    } else {
-                        finishedStops = finishedStops + 10
-
-                    }
-                }
-                let userSnapshot = {
-                    id:user.id,
-                    userName:user.userName,
-                    totalStops:stops.length,
-                    finishedStops:finishedStops,
-                    milage:'4',
-                    duration:'5:32',
-                    status:'On Break'
-                }
-                setUserSnapshotList(userSnapshotList => [...userSnapshotList, userSnapshot]); 
+            } else {
+                // Create new active route
+                const newRoute = {
+                    name: `${tech.userName}'s Route - ${format(date, 'MM/dd/yyyy')}`,
+                    date: Timestamp.fromDate(new Date(startOfDay)),
+                    techId: tech.userId,
+                    techName: tech.userName,
+                    serviceStopsIds: techStops.map(s => s.id),
+                    totalStops: totalStopsCount,
+                    finishedStops: finishedStopsCount,
+                    status: newStatus,
+                    durationMin: 0,
+                    distanceMiles: 0
+                };
+                await addDoc(collection(db, 'companies', recentlySelectedCompany, 'activeRoutes'), newRoute);
             }
         }
-    }
+        
+        // Re-fetch active routes to display the most current state
+        const finalRoutesSnapshot = await getDocs(routesQuery);
+        setActiveRoutes(finalRoutesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    };
+    
+    useEffect(() => {
+        fetchData(serviceDate);
+    }, [serviceDate, fetchData]);
+
+    const mapLocations = useMemo(() => {
+        return serviceStops.map(stop => {
+            const lat = parseFloat(stop.address?.latitude);
+            const lng = parseFloat(stop.address?.longitude);
+            if (!isNaN(lat) && !isNaN(lng)) {
+                return { ...stop.address, id: stop.id, lat, lng };
+            }
+            return null;
+        }).filter(Boolean);
+    }, [serviceStops]);
+
     return (
-        <div className='px-2 md:px-7 py-5'>
-            <div className='py-2'>
-                <div className='flex justify-between w-full bg-[#0e245c] rounded-md text-[#cfcfcf] p-4'>
-                    <h1 className='text-[#cfcfcf] font-bold'>Route Dashboard</h1>
-                    <div className='text-[#000000]'>
-                        <DatePicker 
-                            selected={serviceDate} 
-                            onChange={(serviceDate) => handleDateChange(serviceDate)}
-                        />
-                    </div>
-                </div>
-            </div> 
-            <div className='py-2'>
-                <div className='w-full flex flex-wrap'>
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-screen-2xl mx-auto">
+                <header className="flex justify-between items-center mb-6">
+                    <h1 className="text-3xl font-bold text-gray-800">Route Dashboard</h1>
+                    <DatePicker 
+                        selected={serviceDate} 
+                        onChange={setServiceDate}
+                        className="bg-white border border-gray-300 rounded-lg p-2 shadow-sm text-gray-700"
+                    />
+                </header>
 
-                    {/* Map */}
-                    <div className='w-full lg:w-8/12 lg:pr-3'>
-                        <div className='w-full bg-[#0e245c] p-4 rounded-md h-full'>
-                            <h1 className='text-[#cfcfcf] font-bold'>Map</h1>
-                            <div className='w-full h-3/4 rounded-md bg-[#ffffff] flex justify-center items-center'>
-                            <h1 className='text-[#000000] font-bold '>Map</h1>
+                {isLoading ? (
+                    <div className="flex justify-center items-center h-64"><p className="text-gray-500">Loading dashboard...</p></div>
+                ) : (
+                    <main className="grid grid-cols-1 xl:grid-cols-3 gap-8">
+                        <section className="xl:col-span-2 bg-white p-6 rounded-2xl shadow-lg">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Daily Overview Map</h2>
+                            <div className="w-full h-96 md:h-[500px] rounded-lg overflow-hidden border border-gray-200">
+                                {mapLocations.length > 0 ? (
+                                    <MultiLocationMap locations={mapLocations} key={serviceDate.toISOString()} />
+                                ) : (
+                                    <div className='flex justify-center items-center h-full bg-gray-100'><p className='text-gray-500'>No map data for this date.</p></div>
+                                )}
                             </div>
-                        </div>
-                    </div>
+                        </section>
 
-                    {/* User Snap Shots */}
-                    <div className='w-full lg:w-4/12 lg:pl-4 mt-6 lg:mt-0'>
-                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#d0d2d6] h-full'>
-                            <h1 className='text-[#cfcfcf] font-bold'>Users</h1>
-                            <hr/>
-                            {
-                                userSnapshotList?.map(user => (
-                                    <div key={user.id}>
-                                        <p className='font-bold'>{user.userName} - {user.status}</p>
-                                        <p>{user.finishedStops} / {user.totalStops}</p>
-                                        <p>{user.milage}</p>
-                                        <p>{user.duration}</p>
-                                        <hr/>
-                                    </div>
-                                ))
-                            }
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div className='py-2'>
-                <div className='w-full bg-[#0e245c] rounded-md text-[#d0d2d6] p-4'>
-                    <h1 className='text-[#cfcfcf] font-bold'>Service Stop Table - {serviceStopList.length}</h1>
-                    <hr/>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                <tr>
-                                    <th className='py-3 px-4'>Customer Name</th>
-                                    <th className='py-3 px-4'>Street Address</th>
-                                    <th className='py-3 px-4'>Tech</th>
-                                    <th className='py-3 px-4'>Job Type</th>
-                                    <th className='py-3 px-4'>Status</th>
-                                    <th className='py-3 px-4'>Service Date</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                            {
-                                serviceStopList?.map(serviceStop => (
-                                    <tr key={serviceStop.id} onClick={() => navigate(`/company/serviceStops/detail/${serviceStop.id}`)} className="cursor-pointer hover:bg-slate-700">
- <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.customerName}</Link></td>
- <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.streetAddress}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.tech}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.type}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.status}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/serviceStops/detail/${serviceStop.id}`}>{serviceStop.serviceDate}</Link></td>
-                                    </tr>
-                                ))
-                            }
-                            </tbody>
-                        </table>
-                </div>
+                        <section className="bg-white p-6 rounded-2xl shadow-lg">
+                            <h2 className="text-xl font-bold text-gray-800 mb-4">Technician Overview</h2>
+                            <div className="space-y-4">
+                                {activeRoutes.length > 0 ? activeRoutes.map(route => (
+                                    <TechRouteCard key={route.id} route={route} />
+                                )) : (
+                                    <p className="text-gray-500 pt-4">No active routes for this date.</p>
+                                )}
+                            </div>
+                        </section>
+
+                        <section className="xl:col-span-3 bg-white p-6 rounded-2xl shadow-lg">
+                            <h2 className='text-xl font-bold text-gray-800 mb-4'>Service Stops ({serviceStops.length})</h2>
+                            <ServiceStopTable stops={serviceStops} navigate={navigate} />
+                        </section>
+                    </main>
+                )}
             </div>
         </div>
     );
 };
+
+// Helper component for displaying technician route info
+const TechRouteCard = ({ route }) => {
+    const getStatusClass = (status) => {
+        switch (status) {
+            case 'Finished': return 'bg-green-100 text-green-800';
+            case 'In Progress': return 'bg-blue-100 text-blue-800';
+            default: return 'bg-yellow-100 text-yellow-800';
+        }
+    };
+
+    return (
+        <div className="border rounded-lg p-4 transition-all hover:shadow-md">
+            <div className="flex justify-between items-center mb-2">
+                <p className="font-bold text-gray-800">{route.techName}</p>
+                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusClass(route.status)}`}>{route.status}</span>
+            </div>
+            <div className="text-sm text-gray-600 space-y-1">
+                <p>Stops: {route.finishedStops} / {route.totalStops}</p>
+                <p>Mileage: {route.distanceMiles ? `${Number(route.distanceMiles).toFixed(1)} mi` : 'N/A'}</p>
+                 <p>Duration: {route.durationMin ? `${Math.floor(route.durationMin / 60)}h ${route.durationMin % 60}m` : 'N/A'}</p>
+            </div>
+        </div>
+    );
+};
+
+// Helper component for displaying the service stop table
+const ServiceStopTable = ({ stops, navigate }) => (
+    <div className="overflow-x-auto">
+        <table className="min-w-full divide-y divide-gray-200">
+            <thead className="bg-gray-50">
+                <tr>
+                    <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Customer</th>
+                    <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Address</th>
+                    <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Technician</th>
+                    <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Status</th>
+                </tr>
+            </thead>
+            <tbody className="bg-white divide-y divide-gray-200">
+                {stops.length > 0 ? stops.map(stop => (
+                    <tr key={stop.id} onClick={() => navigate(`/company/serviceStops/detail/${stop.id}`)} className="cursor-pointer hover:bg-gray-50">
+                        <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>{stop.customerName}</td>
+                        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-600'>{stop.address?.streetAddress || 'No Address'}</td>
+                        <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-600'>{stop.tech || 'Unassigned'}</td>
+                        <td className='px-6 py-4 whitespace-nowrap'>
+                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${stop.status === 'Finished' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
+                                {stop.status || 'Pending'}
+                            </span>
+                        </td>
+                    </tr>
+                )) : (
+                    <tr><td colSpan="4" className="text-center py-10 text-gray-500">No service stops for the selected date.</td></tr>
+                )}
+            </tbody>
+        </table>
+    </div>
+);
 
 export default RouteDashboard;

@@ -261,7 +261,7 @@ const CreateNewRecurringContract = () => {
                     rateIntervalAmount:rateIntervalAmount,
                     serviceLocationIds: serviceLocationIdList,
                     startDate:currentTime,
-                    status: "Pending",
+                    status: "pending",
                     terms: terms,
                     // priceId: defaultPrice.id, 
                     // productId:selectedProduct.id,

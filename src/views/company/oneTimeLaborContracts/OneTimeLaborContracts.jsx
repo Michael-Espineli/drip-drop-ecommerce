@@ -1,154 +1,116 @@
-import React, { useState, useEffect, useContext } from "react";
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
-import { db } from "../../../utils/config";
-import {Link } from 'react-router-dom';
-import { Context } from "../../../context/AuthContext";
+
+import React, { useState, useEffect, useContext } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { collection, query, where, getDocs, or } from 'firebase/firestore';
+import { db } from '../../../utils/config';
+import { Context } from '../../../context/AuthContext';
+import toast from 'react-hot-toast';
+
+const ContractStatusBadge = ({ status }) => {
+    const baseClasses = "px-3 py-1 text-sm font-semibold rounded-full text-white";
+    const statusClasses = {
+        'Pending': 'bg-yellow-500',
+        'Active': 'bg-green-500',
+        'Declined': 'bg-red-500',
+        'Completed': 'bg-blue-500',
+        'Terminated': 'bg-gray-600',
+    };
+    return <span className={`${baseClasses} ${statusClasses[status] || 'bg-gray-400'}`}>{status}</span>;
+};
+
+const ContractCard = ({ contract, onClick }) => (
+    <div 
+        onClick={onClick}
+        className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200 hover:shadow-2xl hover:border-blue-500 transition-all duration-300 cursor-pointer"
+    >
+        <div className="flex justify-between items-start">
+            <h3 className="text-xl font-bold text-gray-800 truncate">{contract.title || 'One-Time Labor Contract'}</h3>
+            <ContractStatusBadge status={contract.status} />
+        </div>
+        <div className="mt-4 pt-4 border-t border-gray-200 text-sm text-gray-600 space-y-2">
+            <p><span className="font-semibold">From:</span> {contract.senderName}</p>
+            <p><span className="font-semibold">To:</span> {contract.receiverName}</p>
+            <p><span className="font-bold text-lg text-green-600">Rate:</span> ${contract.rateOffered}</p>
+        </div>
+    </div>
+);
 
 const OneTimeLaborContracts = () => {
-    const [laborContractlist, setLaborContractlist] = useState([]);
-    const [receivedLaborContractlist, setReceivedLaborContractlist] = useState([]);
-
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const navigate = useNavigate();
+    const { recentlySelectedCompany } = useContext(Context);
+    const [contracts, setContracts] = useState([]);
+    const [isLoading, setIsLoading] = useState(true);
 
     useEffect(() => {
-        (async () => {                
-                try{
-                    let q = query(collection(db, 'laborContracts'),where('senderId','==',recentlySelectedCompany));
-                    const querySnapshot = await getDocs(q);       
-                    setLaborContractlist([])      
-                    querySnapshot.forEach((doc) => {
-                        const laborContractData = doc.data()
-                        const laborContract = {
-                            id : laborContractData.id,
-                            dateSent : laborContractData.dateSent,
-                            lastDateToAccept : laborContractData.lastDateToAccept,
-                            dateAccepted : laborContractData.dateAccepted,
-                            notes : laborContractData.notes,
-                            description : laborContractData.description,
-                            receiverAcceptance : laborContractData.receiverAcceptance,
-                            receiverId : laborContractData.receiverId,
-                            receiverName : laborContractData.receiverName,
-                            senderAcceptance : laborContractData.senderAcceptance,
-                            senderId : laborContractData.senderId,
-                            senderName : laborContractData.senderName,
-                            status : laborContractData.status,
-                            terms : laborContractData.terms,
-                            rateOffered : laborContractData.rateOffered,
-                            jobId : laborContractData.jobId,
-                            serviceStopId : laborContractData.serviceStopId,//Maybe Remove
-                            postingType : laborContractData.postingType,
-                            boardId : laborContractData.boardId,
+        if (!recentlySelectedCompany) {
+            setIsLoading(false);
+            return;
+        }
 
-                        }
-                        setLaborContractlist(laborContractlist => [...laborContractlist, laborContract]); 
-                    });
-                    let receivedQuery = query(collection(db, 'laborContracts'),where('receiverId','==',recentlySelectedCompany));
-                    const receivedQuerySnapshot = await getDocs(receivedQuery);       
-                    setReceivedLaborContractlist([])      
-                    receivedQuerySnapshot.forEach((doc) => {
-                        const laborContractData = doc.data()
-                        const laborContract = {
-                            id : laborContractData.id,
-                            dateSent : laborContractData.dateSent,
-                            lastDateToAccept : laborContractData.lastDateToAccept,
-                            dateAccepted : laborContractData.dateAccepted,
-                            notes : laborContractData.notes,
-                            description : laborContractData.description,
-                            receiverAcceptance : laborContractData.receiverAcceptance,
-                            receiverId : laborContractData.receiverId,
-                            receiverName : laborContractData.receiverName,
-                            senderAcceptance : laborContractData.senderAcceptance,
-                            senderId : laborContractData.senderId,
-                            senderName : laborContractData.senderName,
-                            status : laborContractData.status,
-                            terms : laborContractData.terms,
-                            rateOffered : laborContractData.rateOffered,
-                            jobId : laborContractData.jobId,
-                            serviceStopId : laborContractData.serviceStopId,//Maybe Remove
-                            postingType : laborContractData.postingType,
-                            boardId : laborContractData.boardId,
+        const fetchContracts = async () => {
+            setIsLoading(true);
+            try {
+                // Efficiently query both sent and received contracts in one go
+                const contractsRef = collection(db, 'laborContracts'); // Corrected collection name
+                const q = query(contractsRef, 
+                    or(
+                        where('senderId', '==', recentlySelectedCompany),
+                        where('receiverId', '==', recentlySelectedCompany)
+                    )
+                );
+                const querySnapshot = await getDocs(q);
+                const contractsList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                setContracts(contractsList);
+            } catch (error) {
+                console.error("Error fetching one-time labor contracts: ", error);
+                toast.error("Could not load one-time contracts.");
+            } finally {
+                setIsLoading(false);
+            }
+        };
 
-                        }
-                        setReceivedLaborContractlist(receivedLaborContractlist => [...receivedLaborContractlist, laborContract]); 
-                    });
-                } catch(error){
-                    console.log('Error')
-                }
-            
-        })();
-    },[])
+        fetchContracts();
+    }, [recentlySelectedCompany]);
+
     return (
-        <div className='px-2 md:px-7 py-5'>
-            <Link 
-            className='py-1 px-2 bg-[#1D2E76] rounded-md'
-            to={`/company/laborContracts/createNew/NA`}>Create New</Link>
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-3'>
-                <p>Sent</p>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between items-center'>
-                    <div className='relative overflow-x-auto'>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                <tr>
-                                    <th className='py-3 px-4'>Receiver Name</th>
-                                    <th className='py-3 px-4'>Receiver Acceptance</th>
-                                    <th className='py-3 px-4'>Status</th>
-                                    <th className='py-3 px-4'>Rate Offered</th>
-                                    <th className='py-3 px-4'></th>
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-7xl mx-auto">
+                <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-800">One-Time Labor Contracts</h1>
+                        <p className="text-gray-600 mt-1">Manage your single-event labor agreements.</p>
+                    </div>
+                    <button
+                        onClick={() => navigate('/company/laborContracts/createNew/NA')} // Path might need adjustment
+                        className='mt-4 sm:mt-0 py-2 px-6 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-all'
+                    >
+                        Create New
+                    </button>
+                </header>
 
-                                </tr>
-                            </thead>
-                            <tbody>
-                            {
-                                laborContractlist?.map(laborContract => (
-                                        <tr key={laborContract.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.receiverName}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.receiverAcceptance}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.status}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.rateOffered}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/laborContracts/details/${laborContract.id}`}>Details</Link></td>
-                                        </tr>
-                                ))
-                            }
-                            </tbody>
-                        </table>
+                {isLoading ? (
+                    <div className="text-center py-10"><p className="text-gray-500">Loading contracts...</p></div>
+                ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        {contracts.length > 0 ? (
+                            contracts.map(contract => (
+                                <ContractCard 
+                                    key={contract.id} 
+                                    contract={contract} 
+                                    onClick={() => navigate(`/company/laborContracts/details/${contract.id}`)} // Path might need adjustment
+                                />
+                            ))
+                        ) : (
+                            <div className="col-span-full text-center py-16 bg-white rounded-2xl shadow-lg border">
+                                <h3 className="text-2xl font-semibold text-gray-700">No One-Time Contracts Found</h3>
+                                <p className="text-gray-500 mt-3">Click "Create New" to start a new labor agreement.</p>
+                            </div>
+                        )}
                     </div>
-                    </div>
-                </div>
-            </div>
-            <div className='w-full bg-[#747e79] p-4 rounded-md mt-3'>
-                <p>Received</p>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex justify-between items-center'>
-                    <div className='relative overflow-x-auto'>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
-                                <tr>
-                                    <th className='py-3 px-4'>Sender Name</th>
-                                    <th className='py-3 px-4'>Status</th>
-                                    <th className='py-3 px-4'>Rate Offered</th>
-                                    <th className='py-3 px-4'></th>
-
-                                </tr>
-                            </thead>
-                            <tbody>
-                            {
-                                receivedLaborContractlist ?.map(laborContract => (
-                                        <tr key={laborContract.id}>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.receiverName}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.status}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'>{laborContract.rateOffered}</td>
-                                            <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/laborContracts/details/${laborContract.id}`}>Details</Link></td>
-                                        </tr>
-                                ))
-                            }
-                            </tbody>
-                        </table>
-                    </div>
-                    </div>
-                </div>
+                )}
             </div>
         </div>
     );
-}
-    export default OneTimeLaborContracts;
+};
+
+export default OneTimeLaborContracts;

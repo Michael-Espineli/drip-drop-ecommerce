@@ -78,15 +78,14 @@ const Venders = () => {
         // 2B600F - Pool Green
 
         <div className='px-2 md:px-7 py-5'>
-            <button></button>
+            <h2 className="text-2xl font-bold mb-4">Venders</h2>
             <Link 
-            className='py-1 px-2 bg-[#1D2E76] rounded-md'
+            className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
             to={`/company/venders/createNew`}>Create New Vender</Link>
-            <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='relative overflow-x-auto'>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6] uppercase border-b border-slate-700'>
+            <div className='w-full rounded-md mt-3'>
+            <div className='relative overflow-x-auto'>
+                        <table className="min-w-full bg-white border border-gray-200">
+                            <thead>
                                 <tr>
                                     <th className='py-3 px-4'>Name</th>
                                     <th className='py-3 px-4'>price</th>
@@ -111,8 +110,6 @@ const Venders = () => {
                         </table>
                     </div>
                 </div>
-                <hr/>
-            </div>
         </div>
     );
 };

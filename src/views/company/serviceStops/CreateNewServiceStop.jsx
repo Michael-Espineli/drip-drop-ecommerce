@@ -1,591 +1,239 @@
-import React, { useState,useEffect, useContext } from "react";
-import {Link, useParams } from 'react-router-dom';
-import {  query, collection, getDocs, limit, orderBy, startAt, startAfter, doc, getDoc, where, setDoc, updateDoc, Timestamp } from "firebase/firestore";
+
+import React, { useState, useEffect, useContext } from "react";
+import { useParams, useNavigate } from 'react-router-dom';
+import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
-import { IoMdCheckboxOutline } from "react-icons/io";
-import { MdCheckBoxOutlineBlank } from "react-icons/md";
-import {v4 as uuidv4} from 'uuid';
-import { useNavigate } from 'react-router-dom';
+import { v4 as uuidv4 } from 'uuid';
 import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
-import { format } from 'date-fns'; // Or any other date formatting library
-
 
 const CreateNewServiceStop = () => {
-    const navigate = useNavigate()
+    const navigate = useNavigate();
+    const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+    const { jobId } = useParams();
 
-    const {name,recentlySelectedCompany,recentlySelectedCompanyName} = useContext(Context);
-    const {jobId} = useParams();
-    const [job,setJob] = useState({
-        adminId : '',
-        adminName : '',
-        billingStatus : '',
-        bodyOfWaterId : '',
-        bodyOfWaterName : '',
-        chemicals : '',
-        customerId : '',
-        customerName : '',
-        description : '',
-        electricalParts : '',
-        equipmentId : '',
-        equipmentName : '',
-        id : '',
-        internalId : '',
-        installationParts : '',
-        jobTemplateId : '',
-        laborCost : '',
-        miscParts : '',
-        operationStatus : '',
-        pvcParts : '',
-        rate : '',
-        serviceLocationId : '',
-        serviceStopIds : '',
-        type : ''
-    });
-    const [serviceLocation,setServiceLocation] = useState({
-        id :  '', 
-        streetAddress : '',
-        state :  '', 
-        city :  '', 
-        zip :  '', 
-        latitude : '', 
-        longitude :  '', 
-        bodiesOfWaterId :  '', 
-        chemicalCost :  '', 
-        customerId :  '', 
-        customerName : '', 
-        gateCode :  '', 
-        laborCost : '', //Maybe Remove
-        laborType : '', //Maybe Remove
-        mainContactEmail : '',
-        mainContactId : '',
-        mainContactName : '',
-        mainContactNotes : '',
-        mainContactPhoneNumber : '',
-        nickName : '',
-        preText : '',
-        rate : '', //Maybe Remove
-        rateType : '', //Maybe Remove
-        verified : ''
-    })
-    const [selectedUser,setSelectedUser] = useState({})
+    const [activeTab, setActiveTab] = useState('site-info');
+    const [job, setJob] = useState(null);
+    const [serviceLocation, setServiceLocation] = useState(null);
     const [userList, setUserList] = useState([]);
-    const [selectedTaskList, setSelectedTaskList] = useState([]);
-    const [taskList, setTaskList] = useState([]);
+    const [selectedUser, setSelectedUser] = useState(null);
     const [serviceDate, setServiceDate] = useState(new Date());
-    const [description,setDescription] = useState('')
-    const [estimatedDuration,setEstimatedDuration] = useState(0)
-
-    const [formattedServiceDate,setFormattedServiceDate] = useState('')
-    
+    const [description, setDescription] = useState('');
+    const [taskList, setTaskList] = useState([]);
+    const [selectedTasks, setSelectedTasks] = useState([]);
+    const [estimatedDuration, setEstimatedDuration] = useState(0);
 
     useEffect(() => {
-        (async () => {
-            try{
-                    if (jobId!=='NA') {
+        const fetchData = async () => {
+            if (jobId && recentlySelectedCompany) {
+                // Fetch Job Details
+                const jobRef = doc(db, "companies", recentlySelectedCompany, 'workOrders', jobId);
+                const jobSnap = await getDoc(jobRef);
+                if (jobSnap.exists()) {
+                    const jobData = jobSnap.data();
+                    setJob(jobData);
+                    setDescription(jobData.description);
 
-                        let serviceLocationId;
-                        //Get Job Info
-                        const docRef = doc(db, "companies",recentlySelectedCompany,'workOrders',jobId);
-                        const docSnap = await getDoc(docRef);
-                        if (docSnap.exists()) {
-                            console.log("Document data:", docSnap.data());
-                            setJob((prevJob) => ({
-                                ...prevJob,
-                                adminId: docSnap.data().adminId,
-                                adminName: docSnap.data().adminName,
-                                billingStatus: docSnap.data().billingStatus,
-                                bodyOfWaterId: docSnap.data().bodyOfWaterId,
-                                bodyOfWaterName : docSnap.data().bodyOfWaterName,
-                                chemicals : docSnap.data().chemicals,
-                                customerId : docSnap.data().customerId,
-                                customerName : docSnap.data().customerName,
-                                description : docSnap.data().description,
-                                electricalParts : docSnap.data().electricalParts,
-                                equipmentId : docSnap.data().equipmentId,
-                                equipmentName : docSnap.data().equipmentName,
-                                id : docSnap.data().id,
-                                internalId : docSnap.data().internalId,
-                                installationParts : docSnap.data().installationParts,
-                                jobTemplateId : docSnap.data().jobTemplateId,
-                                laborCost : docSnap.data().laborCost,
-                                miscParts : docSnap.data().miscParts,
-                                operationStatus : docSnap.data().operationStatus,
-                                pvcParts : docSnap.data().pvcParts,
-                                rate : docSnap.data().rate,
-                                serviceLocationId : docSnap.data().serviceLocationId,
-                                serviceStopIds : docSnap.data().serviceStopIds,
-                                type : docSnap.data().type,
+                    // Fetch Service Location
+                    const locRef = doc(db, "companies", recentlySelectedCompany, 'serviceLocations', jobData.serviceLocationId);
+                    const locSnap = await getDoc(locRef);
+                    if (locSnap.exists()) setServiceLocation(locSnap.data());
 
-                            }));
-                            setDescription(docSnap.data().description)
-                            serviceLocationId = docSnap.data().serviceLocationId
-                        } else {
-                        console.log("No such document!");
-                        }
-                        
-                        //Get Task Info By Job ID
-                        let taskQuery = query(collection(db, "companies",recentlySelectedCompany,'workOrders',jobId,'tasks'));
-                        const taskQuerySnapshot = await getDocs(taskQuery);       
-                        setTaskList([])      
-                        taskQuerySnapshot.forEach((doc) => {
-                            const taskData = doc.data()
-                            const task = {
-                                id : taskData.id,
-                                name : taskData.name,
-                                type : taskData.type,
-                                workerType : taskData.workerType,
-                                workerId : taskData.workerId,
-                                workerName : taskData.workerName,
-                                status : taskData.status,
-                                customerApproval : taskData.customerApproval,
-                                laborContractId : taskData.laborContractId,
-                                contractedRate : taskData.contractedRate,
-                                estimatedTime : taskData.estimatedTime,
-                                actualTime : taskData.actualTime,
-                                equipmentId : taskData.equipmentId,
-                                serviceLocationId : taskData.serviceLocationId,
-                                bodyOfWaterId : taskData.bodyOfWaterId
-                            }
-                            
-                            setTaskList(taskList => [...taskList, task]); 
+                    // Fetch Tasks
+                    const tasksQuery = query(collection(db, "companies", recentlySelectedCompany, 'workOrders', jobId, 'tasks'));
+                    const tasksSnapshot = await getDocs(tasksQuery);
+                    setTaskList(tasksSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id })));
+                } else {
+                    console.log("No such job document!");
+                }
 
-                        });
-
-                        //Get Service Location Info
-                        if (serviceLocationId!=='') {
-                            const serviceLocationRef = doc(db, "companies",recentlySelectedCompany,'serviceLocations',serviceLocationId);
-                            const serviceLocationDocSnap = await getDoc(serviceLocationRef);
-                            if (serviceLocationDocSnap.exists()) {
-                                console.log("Document data:", serviceLocationDocSnap.data());
-                                const serviceLocationData = serviceLocationDocSnap.data()
-                                setServiceLocation((prevServiceLocation) => ({
-                                    ...prevServiceLocation,
-                                    id : serviceLocationData.id,
-                                    streetAddress : serviceLocationData.address.streetAddress,
-                                    state : serviceLocationData.address.state,
-                                    city : serviceLocationData.address.city,
-                                    zip : serviceLocationData.address.zip,
-                                    latitude : serviceLocationData.address.latitude,
-                                    longitude : serviceLocationData.address.longitude,
-                                    bodiesOfWaterId : serviceLocationData.bodiesOfWaterId,
-                                    chemicalCost : serviceLocationData.chemicalCost,
-                                    customerId : serviceLocationData.customerId,
-                                    customerName : serviceLocationData.customerName,
-                                    gateCode : serviceLocationData.gateCode,
-                                    laborCost : serviceLocationData.laborCost, //Maybe Remove
-                                    laborType : serviceLocationData.laborType, //Maybe Remove
-                                    mainContactEmail : serviceLocationData.mainContact.email,
-                                    mainContactId : serviceLocationData.mainContact.id,
-                                    mainContactName : serviceLocationData.mainContact.name,
-                                    mainContactNotes : serviceLocationData.mainContact.notes,
-                                    mainContactPhoneNumber : serviceLocationData.mainContact.phoneNumber,
-                                    nickName : serviceLocationData.nickName,
-                                    preText : serviceLocationData.preText,
-                                    rate : serviceLocationData.rate, //Maybe Remove
-                                    rateType : serviceLocationData.rateType, //Maybe Remove
-                                    verified : serviceLocationData.verified,
-                                }));
-                            } else {
-                            console.log("No such document!");
-                            }
-                        }
-                        //Get Company Users
-                        let userQuery = query(collection(db, "companies",recentlySelectedCompany,'companyUsers'));//.where('workerType','==','Employee')
-                        const userQuerySnapshot = await getDocs(userQuery);       
-                        setUserList([])      
-                        userQuerySnapshot.forEach((doc) => {
-                            const taskData = doc.data()
-                            const user = {
-                                id : taskData.id,
-                                name : taskData.name,
-                                dateCreated : taskData.dateCreated,
-                                linkedCompanyId : taskData.linkedCompanyId,
-                                linkedCompanyName : taskData.linkedCompanyName,
-                                roleId : taskData.roleId,
-                                roleName : taskData.roleName,
-                                status : taskData.status,
-                                userId : taskData.userId,
-                                userName : taskData.userName,
-                                workerType : taskData.workerType,
-                                label : taskData.userName + ' - ' + taskData.roleName
-                            }
-                            setUserList(userList => [...userList, user]); 
-                        });
-                    } else {
-                        console.log('Get Service Stop Info When no JobID')
-                    }
-                
-            } catch(error){
-                console.log('Error')
+                // Fetch Users
+                const usersQuery = query(collection(db, "companies", recentlySelectedCompany, 'companyUsers'));
+                const usersSnapshot = await getDocs(usersQuery);
+                setUserList(usersSnapshot.docs.map(doc => ({ ...doc.data(), value: doc.id, label: doc.data().userName })));
             }
-        })();
-    },[])
-    
-    async function createNewServiceStop(e) {
-        e.preventDefault()
-        let serviceStopId = 'comp_ss_' + uuidv4();
-        let internalId = ''
-        //Guard Statments
-        //If not tasks are selected do not allow completion
-        //if Draft Do not Update Job/Do not Notify Receiver / Please do on google function
+        };
+        fetchData();
+    }, [jobId, recentlySelectedCompany]);
 
-        //Check if service Location Has been gotten
+    useEffect(() => {
+        const duration = selectedTasks.reduce((acc, task) => acc + (task.estimatedTime || 0), 0);
+        setEstimatedDuration(duration);
+    }, [selectedTasks]);
 
-        //Upload Contract
-        if (selectedTaskList.length!==0){
-
-            const currentTimeStamp = Timestamp.now();
-            const serviceTimeStamp = Timestamp.fromDate(serviceDate);
-
-            await setDoc(doc(db,"companies",recentlySelectedCompany,'serviceStops',serviceStopId), {
-                id : serviceStopId,
-                address : {
-                    streetAddress : serviceLocation.streetAddress,
-                    state : serviceLocation.state,
-                    city : serviceLocation.city,
-                    zip : serviceLocation.zip,
-                    latitude : serviceLocation.latitude,
-                    longitude : serviceLocation.longitude,
-                },
-                companyId : recentlySelectedCompany,
-                companyName : recentlySelectedCompanyName, // Get Company Name
-                contractedCompanyId : '',
-                customerId : job.customerId,
-                customerName : job.customerName,
-                dateCreated : currentTimeStamp,
-                description : description,
-                estimatedDuration : estimatedDuration,
-                actualDuration : 0,
-                status : 'Not Finished', //Finished	Not Finished	Skipped
-                billingStatus: 'Not Invoiced', //Invoiced	Paid	Not Invoiced
-                serviceStopId : '',//Maybe Remove
-                includeDosages : true,
-                includeReadings : true,
-                jobId : jobId,
-                otherCompany : false,
-                rate : '', //Maybe Remove
-                recurringServiceStopId : '',
-                serviceDate : serviceDate,
-                serviceLocationId : serviceLocation.id,
-                tech : selectedUser.userName,
-                techId : selectedUser.userId,
-                type : '', //Maybe Remove
-                typeId : '', //Maybe Remove
-                typeImage : '', //Maybe Remove
-                internalId:'SS'
-            });
-            // //Upload Tasks
-            for (let i = 0; i < selectedTaskList.length; i++) {
-                let taskId = 'comp_ss_tas_' + uuidv4();
-                let task = selectedTaskList[i]
-                console.log('Create Task' + taskId)
-                //Create Service Stop Task List 
-                await setDoc(doc(db,"companies",recentlySelectedCompany,'serviceStops',serviceStopId,'tasks',taskId), {
-                    id : taskId,
-                    name : task.name,
-                    type : task.type, //Enum : workOrderTaskType
-                    workerType : 'Employee',
-                    workerId : selectedUser.userId,
-                    workerName : selectedUser.userName,
-                    status : 'Scheduled', //Enum : laborContractTaskStatus
-                    customerApproval : task.customerApproval,
-                    laborContractId : '',
-                    serviceStopId : serviceStopId,
-                    contractedRate : task.contractedRate,
-                    estimatedTime : task.estimatedTime,
-                    actualTime : task.actualTime,
-                    equipmentId : task.equipmentId,
-                    serviceLocationId : task.serviceLocationId,
-                    bodyOfWaterId : task.bodyOfWaterId,
-                    workOrderTaskId : task.id
-
-                });
-                //Update Job Tasks
-                await updateDoc(doc(db,'companies',recentlySelectedCompany,"workOrders",jobId,'tasks',task.id), {
-                    status : 'Scheduled',
-                    workerType : 'Employee',
-                    workerId : selectedUser.userId,
-                    workerName : selectedUser.userName,
-                    serviceStopId : serviceStopId,
-                });
-            }
-
-            //Maybe have google function update these. 
-            //Update Job
-            navigate(`/company/jobs/detail/${jobId}`)
-        } else {
-            console.log('No Selected Tasks')
-        }
-    }
-    async function selectAllTasks(e) {
-        e.preventDefault()
-        //Check to make sure it is not already on Selected List
-        //Check to make sure it has not already been assigned
-        //Add To list
-        setSelectedTaskList(taskList)
-        setEstimatedDuration(0)
-        let durationCounter = 0
-        for (let i = 0; i < taskList.length; i++) {
-            let task = taskList[i]
-            durationCounter = durationCounter + task.estimatedTime
-            setEstimatedDuration(durationCounter)
-        }
-    }
-    async function deselectAllTasks(e) {
-        e.preventDefault()
-        setSelectedTaskList([])
-        setEstimatedDuration(0)
-
-    }
-    async function removeTask(e,taskId) {
-        e.preventDefault()
-        console.log('Remove')
-        //Check to make sure it has not already been assigned
-        //Remove From list
-        console.log(taskId)
-
-        const newArr = selectedTaskList.filter(obj => obj.id !== taskId); // Keep all objects except the one with id 2
-        console.log(newArr)
-        // setSelectedTaskList([])
-        setSelectedTaskList(newArr)
-
-
-        //Updates Time
-        const taskRemoving = taskList.find(item => item.id === taskId);
-        setEstimatedDuration(0)
-        let durationCounter = estimatedDuration
-        durationCounter = durationCounter - taskRemoving.estimatedTime
-        setEstimatedDuration(durationCounter)
-        
-    }
-    async function selectTask(e,taskId) {
-        e.preventDefault()
-        console.log('Select')
-
-        console.log(taskId)
-        //Check to make sure it is not already on Selected List
-        const foundObj = taskList.find(item => item.id === taskId);
-        console.log(foundObj)
-        //Check to make sure it has not already been assigned
-        //Add To list
-        setSelectedTaskList(selectedTaskList => [...selectedTaskList, foundObj]); 
-
-        //Updates Time
-        setEstimatedDuration(0)
-        let durationCounter = estimatedDuration
-        console.log(foundObj)
-        durationCounter = durationCounter + foundObj.estimatedTime
-        setEstimatedDuration(durationCounter)
-    }
-    const handleUserChange = (selectedOption2) => {
-
-        (async () => {
-            setSelectedUser(selectedOption2)
-            
-        })();
+    const toggleTaskSelection = (task) => {
+        setSelectedTasks(prev => 
+            prev.find(t => t.id === task.id) 
+            ? prev.filter(t => t.id !== task.id) 
+            : [...prev, task]
+        );
     };
-    const handleDateChange = (dateOption) => {
-        setServiceDate(dateOption)
-        const formattedDate = dateOption.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-        }); 
-        setFormattedServiceDate(formattedDate)
-        
-    }
+
+    const createServiceStop = async () => {
+        if (!selectedUser || selectedTasks.length === 0) {
+            alert("Please select a technician and at least one task.");
+            return;
+        }
+
+        const serviceStopId = 'comp_ss_' + uuidv4();
+        const serviceStopRef = doc(db, "companies", recentlySelectedCompany, 'serviceStops', serviceStopId);
+
+        const newServiceStop = {
+            id: serviceStopId,
+            address: serviceLocation.address,
+            companyId: recentlySelectedCompany,
+            companyName: recentlySelectedCompanyName,
+            customerId: job.customerId,
+            customerName: job.customerName,
+            dateCreated: Timestamp.now(),
+            serviceDate: Timestamp.fromDate(serviceDate),
+            description,
+            estimatedDuration,
+            status: 'Scheduled',
+            billingStatus: 'Not Invoiced',
+            jobId,
+            serviceLocationId: serviceLocation.id,
+            tech: selectedUser.userName,
+            techId: selectedUser.userId,
+            internalId: 'SS-' + Date.now().toString().slice(-6), // Example internal ID
+        };
+
+        await setDoc(serviceStopRef, newServiceStop);
+
+        for (const task of selectedTasks) {
+            const taskId = 'comp_ss_tas_' + uuidv4();
+            const taskRef = doc(db, "companies", recentlySelectedCompany, 'serviceStops', serviceStopId, 'tasks', taskId);
+            await setDoc(taskRef, { 
+                ...task, 
+                id: taskId, 
+                workerId: selectedUser.userId, 
+                workerName: selectedUser.userName,
+                status: 'Scheduled',
+                serviceStopId: serviceStopId,
+                workOrderTaskId: task.id,
+            });
+
+            const workOrderTaskRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId, 'tasks', task.id);
+            await updateDoc(workOrderTaskRef, { status: 'Scheduled', workerId: selectedUser.userId, workerName: selectedUser.userName, serviceStopId: serviceStopId });
+        }
+
+        navigate(`/company/jobs/detail/${jobId}`);
+    };
+    
+    const renderTabContent = () => {
+        switch (activeTab) {
+            case 'site-info': return <SiteInfoTab job={job} location={serviceLocation} description={description} setDescription={setDescription} />;
+            case 'assign-tech': return <AssignTechTab users={userList} selectedUser={selectedUser} setSelectedUser={setSelectedUser} date={serviceDate} setDate={setServiceDate} />;
+            case 'select-tasks': return <TasksTab tasks={taskList} selectedTasks={selectedTasks} toggleTask={toggleTaskSelection} estimatedDuration={estimatedDuration} />;
+            case 'review': return <ReviewTab job={job} location={serviceLocation} tech={selectedUser?.userName} date={serviceDate} tasks={selectedTasks} duration={estimatedDuration} />; 
+            default: return null;
+        }
+    };
+
     return (
-        <div className='px-2 md:px-7 py-5'>
-            <form>
-                <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                    <div className='flex left-0 w-full justify-between'>
-                        <p className='font-bold'>Create New Service Stop</p>
-                    </div>
-                    <p>{job.internalId} - {job.customerName}</p>
-                    <hr/>
-                    <p className=' font-bold'>Site Info</p>
-                    <p>{serviceLocation.customerName}</p>
-                    <p>{serviceLocation.streetAddress}</p>
-                    <div className='flex justify-between'>
-                        <p>{serviceLocation.state}</p>
-                        <p>{serviceLocation.city}</p>
-                        <p>{serviceLocation.zip}</p>
-                    </div>
-                    <p>Gate Code: {serviceLocation.gateCode}</p>
-                    <div className='flex justify-start'>
-                        Pretext : 
-                        {
-                            (serviceLocation.preText)&&<p> True</p>
-                        }
-                        {
-                            (!serviceLocation.preText)&&<p> False</p>
-                        }
-                        
-                    </div>
-                    <p>{serviceLocation.gateCode}</p>
-                    <p>{serviceLocation.gateCode}</p>
-
-                    <hr/>
-                    <p className=' font-bold'>Site Contact Info</p>
-                    <p>{serviceLocation.mainContactName}</p>
-                    <p>{serviceLocation.mainContactPhoneNumber}</p>
-                    <p>{serviceLocation.mainContactEmail}</p>
-
+        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+            <div className="max-w-screen-xl mx-auto bg-white shadow-lg rounded-xl p-6">
+                <h2 className="text-3xl font-bold text-gray-800 mb-6">Create New Service Stop</h2>
+                <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
+                <div className="py-6">{renderTabContent()}</div>
+                <div className="flex justify-between items-center pt-4 border-t">
+                    <button onClick={() => navigate(`/company/jobs/detail/${jobId}`)} className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button onClick={createServiceStop} className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition" disabled={!selectedUser || selectedTasks.length === 0}>Schedule Service Stop</button>
                 </div>
-                <div className='w-full bg-[#747e79] p-4 rounded-md mt-2'>
-                    <div className='flex left-0 w-full justify-between'>
-                        <p className='font-bold'>Job Info</p>
-                    </div>
-                    <hr/>
-                    <p>Description: {job.description}</p>
-                    <input 
-                    className='w-full py-1 px-2 rounded-md mt-2'
-                    onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Description' value={description}></input>
-                    <p>Estimated Duration : {estimatedDuration}</p>
-                </div>
-                <div className='w-full flex justify-between py-2 gap-2'>
-                    <div className='w-full lg:w-5/12 '>
-                        <div className=' w-full h-full bg-[#747e79] p-4 rounded-md'>
-                            <p>Users</p>
-                            <hr/>
-                            <div className='py-2 w-full'>
-
-                            <Select
-                                value={selectedUser}
-                                options={userList}
-                                onChange={handleUserChange}
-                                isSearchable
-                                placeholder="Select a User"
-                                theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'black',
-                                },
-                                })}
-                            />
-                            </div>
-                            <p>Date</p>
-                            <div className='w-full justify-center items-center'>
-                                <DatePicker 
-                                selected={serviceDate} 
-                                // onChange={(e) => {setEmail(e.target.value)}}
-                                onChange={(serviceDate) => handleDateChange(serviceDate)}
-                                // onChange={(date) => setDate(date)} 
-                                />
-                            </div>
-                        </div>
-                    </div>
-                    <div className='w-full lg:w-7/12'>
-                        <div className='w-full h-full bg-[#747e79] p-4 rounded-md'>
-
-                                <p>{selectedUser.userName} - {formattedServiceDate}</p>
-                                <hr/>
-                                <p>Get Route From This Day so you can see how much work They have to do / how much work they have done</p>
-                        </div>
-                    </div>
-                </div>
-                <div className='py-2'>
-                    <div className='w-full bg-[#747e79] p-4 rounded-md'>
-                        <div className='flex jw-full justify-between'>
-                            <p>Task List</p>
-                            <button>Select Task Group</button>
-                        </div>
-                        <p>Select Specific Tasks to Connect to Labor Contract. Add A button that selects all unassigned Tasks</p>
-                        <p>Need to Update Task Status updates through the Labor Contract Work Flow</p>
-                        <p></p>
-                        <hr/>
-                        <div className='flex justify-between'>
-                            <button 
-                            onClick={(e) => selectAllTasks(e)} 
-                            className='py-1 px-2 rounded-md bg-[#CDC07B]'>
-                                Select All 
-                            </button>
-                            <button 
-                            onClick={(e) => deselectAllTasks(e)} 
-                            className='py-1 px-2 rounded-md bg-[#CDC07B]'>
-                                Deselect - {selectedTaskList.length} 
-                            </button>
-                        </div>
-                        <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                            <thead className='text-sm text-[#d0d2d6]  border-b border-slate-700'>
-                                <tr>
-                                    <th className='py-3 px-4'></th>
-                                    <th className='py-3 px-4'>Name</th>
-                                    <th className='py-3 px-4'>Type</th>
-                                    <th className='py-3 px-4'>Status</th>
-                                    <th className='py-3 px-4'>Customer Approval</th>
-                                    <th className='py-3 px-4'>estimatedTime</th>
-                                    <th className='py-3 px-4'></th>
-
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {
-                                taskList?.map(task => (
-                                <tr key={task.id}>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {       
-                                            (selectedTaskList.find(item => item.id === task.id))&&<button
-                                            onClick={(e) => removeTask(e,task.id)}
-                                            >
-                                                <IoMdCheckboxOutline />
-                                            </button>
-                                        }
-                                        {       
-                                            (!selectedTaskList.find(item => item.id === task.id))&&<button
-                                            onClick={(e) => selectTask(e,task.id)} 
-                                            >
-                                                <MdCheckBoxOutlineBlank />
-                                            </button>
-                                        }
-                                    </td>
-
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.name}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{task.type}</td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        {
-                                            (task.status==='Unassigned')&&<button className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                Assign
-                                            </button>
-                                        }
-                                            {
-                                            (task.status!=='Unassigned')&&<p className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'>
-                                                {task.status}
-                                                </p>
-                                        }
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <p>{task.estimatedTime}</p>
-                                    </td>
-                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                        <button>
-                                            Edit
-                                        </button>
-                                    </td>
-                                </tr>
-                                ))
-                                }
-                            </tbody>
-                        </table>
-                    </div>
-                    <div>
-                        <button
-                        className='w-full py-1 px-2 rounded-md bg-[#2B600F] mt-2 text-[#ffffff]'
-                        onClick={(e) => createNewServiceStop(e)} 
-                        >Schedule</button>
-                    </div>
-                </div>
-            </form>
+            </div>
         </div>
     );
-}
-    export default CreateNewServiceStop;
+};
+
+const TabNavigation = ({ activeTab, setActiveTab }) => (
+    <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+            {[
+                { id: 'site-info', name: 'Site & Job Info' },
+                { id: 'assign-tech', name: 'Assign Tech & Date' },
+                { id: 'select-tasks', name: 'Select Tasks' },
+                { id: 'review', name: 'Review & Schedule' },
+            ].map(tab => (
+                <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === tab.id ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}>
+                    {tab.name}
+                </button>
+            ))}
+        </nav>
+    </div>
+);
+
+const SiteInfoTab = ({ job, location, description, setDescription }) => (
+    <div className="space-y-4">
+        <InfoCard title="Job Details" data={job ? { ID: job.internalId, Customer: job.customerName, Type: job.type } : {}} />
+        <InfoCard title="Service Location" data={location ? { Name: location.nickName, Address: `${location.address.streetAddress}, ${location.address.city}` } : {}} />
+        <div>
+            <label className="block text-sm font-medium text-gray-700">Description Override</label>
+            <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 w-full p-2 border border-gray-300 rounded-lg" rows="3" />
+        </div>
+    </div>
+);
+
+const InfoCard = ({ title, data }) => (
+    <div className="p-4 border rounded-lg">
+        <h4 className="font-bold text-lg mb-2">{title}</h4>
+        {Object.entries(data).map(([key, value]) => <p key={key}><strong>{key}:</strong> {value}</p>)}
+    </div>
+);
+
+const AssignTechTab = ({ users, selectedUser, setSelectedUser, date, setDate }) => (
+    <div className="grid md:grid-cols-2 gap-6">
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Assign Technician</label>
+            <Select options={users} value={selectedUser} onChange={setSelectedUser} placeholder="Select a technician..." styles={{ control: (p) => ({...p, padding: '0.3rem'})}}/>
+        </div>
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Service Date</label>
+            <DatePicker selected={date} onChange={setDate} className="w-full p-2 border border-gray-300 rounded-lg" />
+        </div>
+    </div>
+);
+
+const TasksTab = ({ tasks, selectedTasks, toggleTask, estimatedDuration }) => (
+    <div>
+        <div className="flex justify-between items-center mb-4">
+            <h3 className="text-xl font-semibold">Select Tasks for this Stop</h3>
+            <p className="text-gray-600">Total Estimated Duration: <strong>{estimatedDuration} mins</strong></p>
+        </div>
+        <div className="border rounded-lg overflow-hidden">
+            <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50"><tr><th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th><th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Est. Time</th></tr></thead>
+                <tbody>
+                    {tasks.map(task => (
+                        <tr key={task.id} onClick={() => toggleTask(task)} className={`cursor-pointer ${selectedTasks.find(t => t.id === task.id) ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
+                            <td className="p-3 font-medium">{task.name}</td>
+                            <td className="p-3">{task.estimatedTime} mins</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    </div>
+);
+
+const ReviewTab = ({ job, location, tech, date, tasks, duration }) => (
+    <div className="space-y-4">
+        <h3 className="text-xl font-semibold">Review & Confirm</h3>
+        <div className="p-4 border rounded-lg space-y-2">
+            <p><strong>Job:</strong> {job?.internalId} for {job?.customerName}</p>
+            <p><strong>Location:</strong> {location?.nickName} at {location?.address.streetAddress}</p>
+            <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>
+            <p><strong>Service Date:</strong> {date.toLocaleDateString()}</p>
+            <p><strong>Total Duration:</strong> {duration} minutes</p>
+            <div>
+                <h4 className="font-bold mt-2">Selected Tasks:</h4>
+                <ul className="list-disc list-inside pl-4">
+                    {tasks.map(t => <li key={t.id}>{t.name}</li>)}
+                </ul>
+            </div>
+        </div>
+    </div>
+);
+
+export default CreateNewServiceStop;

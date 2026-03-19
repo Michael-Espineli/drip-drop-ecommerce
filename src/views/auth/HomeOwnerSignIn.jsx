@@ -1,84 +1,123 @@
-import React, {useState} from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-// import { auth } from '../../utils/config';
-import { getAuth } from "firebase/auth";
-import { useNavigate } from 'react-router-dom';
-import { Link, useLocation, Navigate } from 'react-router-dom';
-import toast, { Toaster } from 'react-hot-toast';
+import React, { useState, useEffect, useContext } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import toast from 'react-hot-toast';
+import { Context } from "../../context/AuthContext";
 
-const HomeOwnerSignIn = () => {
-    const [email, setEmail] = useState();
-    const [password, setPassword] = useState();
-    const auth = getAuth()
-    const navigate = useNavigate()
-    async function handleSignUp(e) {
-        e.preventDefault()
+export default function HomeOwnerSignIn() {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+    const auth = getAuth();
 
-        //Guard Statements
-        if (email=="" && password == "") {
-            toast.error('Please Fill Out Form')
-        }else if (email=="") {
-            toast.error('Email Field Blank')
-        } else if (password =="") {
-            toast.error('Password Field Blank')
-        } else {
-            signInWithEmailAndPassword(auth,email,password)
-            .then((user) => {
-                navigate('/company/dashboard')
-            })
-            .catch((error) => {
-                switch (error) {
-                    case "FirebaseError: Firebase: Error (auth/invalid-credential).":
-                        toast.error('Failed to login: Invalid Credentials')
-                    default:
-                        toast.error('Failed to login: Invalid Credentials') 
-                }
-               
-                console.log(error)
-            })
+    const navigate = useNavigate();
+    const { user } = useContext(Context);
+    useEffect(() => {
+        if (!user) return;
+        if (user.accountType === 'Company') {
+            navigate('/company/dashboard');
+        } else if (user.accountType === 'Client') {
+            navigate('/client/dashboard');
         }
-    }
+
+    }, [user]);
+
+    const handleSignIn = async (e) => {
+        e.preventDefault();
+
+        if (!email || !password) {
+            toast.error('Please fill out both email and password.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            toast.success('Signed in successfully!');
+            navigate('/client/dashboard');
+        } catch (error) {
+            console.error("Firebase Sign-In Error:", error);
+            switch (error.code) {
+                case 'auth/user-not-found':
+                case 'auth/wrong-password':
+                case 'auth/invalid-credential':
+                    toast.error('Invalid email or password.');
+                    break;
+                case 'auth/invalid-email':
+                    toast.error('Please enter a valid email address.');
+                    break;
+                default:
+                    toast.error('An unexpected error occurred. Please try again.');
+                    break;
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        <div className='px-2 md:px-7 py-5 bg-[#0e245c] text-[#ffffff] font-bold'>
-            <div className='w-full h-full '>
-                <Link to='/' className={`px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:pl-4 transition-all w-full mb-1 font-bold`}>
-                    Home
+        <div className="bg-gray-50 min-h-screen">
+            <header className="py-6 px-4 sm:px-6 lg:px-8">
+                <Link to="/" className="text-2xl font-bold text-blue-600 hover:text-blue-700">
+                    Drip Drop
                 </Link>
-                <div className='p-2'>
-                    <h1>Home Owner Sign In Page</h1>
-                </div>
-                <form>
-                    <div className='left-0 w-full justify-between gap-3 text-[#000000]'>
-                        <div className='p-2'>
-                            <input onChange={(e) => {setEmail(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Email'></input>
+            </header>
+
+            <main className="flex items-center justify-center py-12 sm:px-6 lg:px-8">
+                <div className="max-w-md w-full space-y-8">
+                    <div className="bg-white p-8 rounded-2xl shadow-lg">
+                        <div className="text-center mb-8">
+                            <h1 className="text-3xl font-bold text-gray-900">Homeowner Sign In</h1>
+                            <p className="mt-2 text-sm text-gray-600">
+                                Access your homeowner portal.
+                            </p>
                         </div>
-                        <div className='p-2'>
-                            <input onChange={(e) => {setPassword(e.target.value)}} className='w-full p-2 rounded-md' type="password" placeholder='Password'></input>
-                        </div>
-                        <div className='p-2  text-[#cfcfcf]'>
-                            <button onClick={(e) => handleSignUp(e)} >Sign In</button>
-                        </div>
+
+                        <form onSubmit={handleSignIn} className="space-y-6">
+                            <input
+                                type="email"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                placeholder="Email address"
+                                required
+                                className="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm"
+                            />
+                            <input
+                                type="password"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                placeholder="Password"
+                                required
+                                className="w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm"
+                            />
+
+                            <div className="text-sm text-right">
+                                <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
+                                    Forgot your password?
+                                </a>
+                            </div>
+
+                            <button
+                                type="submit"
+                                disabled={loading}
+                                className="w-full py-3 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium disabled:opacity-50"
+                            >
+                                {loading ? 'Signing In...' : 'Sign In'}
+                            </button>
+                        </form>
+
+                        <p className="mt-6 text-center text-sm">
+                            Don't have an account? <Link to="/homeOwnerSignUp" className="font-medium text-blue-600">Sign up</Link>
+                        </p>
                     </div>
-                </form>
-                <Link to='/homeOwnerSignUp' className={` text-[#cfcfcf] px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover:text-[#de3c6d] transition-all w-full mb-1 underline`}>
-                    <span>
-                        Don't have an account? Sign up here.
-                    </span>
-                </Link>
-            </div>
+
+                    <div className="text-center text-sm text-gray-600">
+                        <p>
+                            Are you a pool company? <Link to="/signIn" className="font-medium text-blue-600">Sign in here</Link>
+                        </p>
+                    </div>
+                </div>
+            </main>
         </div>
     );
-};
-
-
-export default HomeOwnerSignIn;
+}

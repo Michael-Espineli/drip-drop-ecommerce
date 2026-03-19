@@ -1,77 +1,114 @@
-import React, { useEffect, useState } from 'react';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '../../../utils/config'; // Adjust the import path as needed
-import {RepairRequest} from '../../../utils/models/RepairRequest'; // Adjust the import path as needed
+
+import React, { useEffect, useState, useContext } from 'react';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../../../utils/config';
+import { RepairRequest } from '../../../utils/models/RepairRequest';
+import { Context } from "../../../context/AuthContext";
+import { Link,useNavigate } from 'react-router-dom';
+import { format } from 'date-fns';
 
 const RepairRequests = () => {
-  const [repairRequests, setRepairRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+    const { recentlySelectedCompany } = useContext(Context);
+    const [customerRequests, setCustomerRequests] = useState([]);
+    const [internalRequests, setInternalRequests] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [activeTab, setActiveTab] = useState('internal');
 
-  useEffect(() => {
-    const fetchRepairRequests = async () => {
-      try {
-        setLoading(true);
-        const querySnapshot = await getDocs(collection(db, 'repairRequests')); // Replace 'repairRequests' with your collection name
-        const requestsData = querySnapshot.docs.map(doc => {
-          const data = doc.data();
-          return RepairRequest.fromFirebase(data);
-        });
-        setRepairRequests(requestsData);
-        setLoading(false);
-      } catch (err) {
-        console.error("Error fetching repair requests:", err);
-        setError("Failed to fetch repair requests.");
-        setLoading(false);
-      }
-    };
+    const navigate = useNavigate();
+    useEffect(() => {
+        const fetchRepairRequests = async () => {
+            if (recentlySelectedCompany) {
+                setLoading(true);
+                try {
+                    const companyUsersQuery = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
+                    const companyUsersSnapshot = await getDocs(companyUsersQuery);
+                    const companyUserIds = companyUsersSnapshot.docs.map(doc => doc.data().userId);
+                    
+                    const requestsQuery = query(collection(db, 'companies', recentlySelectedCompany, 'repairRequests'));
+                    const requestsSnapshot = await getDocs(requestsQuery);
+                    
+                    const allRequests = requestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
 
-    fetchRepairRequests();
-  }, []);
+                    setInternalRequests(allRequests);
 
-  if (loading) {
-    return <p>Loading repair requests...</p>;
-  }
+                    
+                    const customerRequestsQuery = query(collection(db, 'homeOwnerRepairRequests'),where("companyId","==",recentlySelectedCompany));
+                    const customerRequestsSnapshot = await getDocs(customerRequestsQuery);
+                    
+                    const customerRequests = customerRequestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
 
-  if (error) {
-    return <p className="text-red-500">{error}</p>;
-  }
+                    setCustomerRequests(customerRequests);
 
-  return (
-    <div className="container mx-auto p-4">
-      <h2 className="text-2xl font-bold mb-4">Repair Requests</h2>
-      {repairRequests.length === 0 ? (
-        <p>No repair requests found.</p>
-      ) : (
-        <table className="min-w-full bg-white border border-gray-200">
-          <thead>
-            <tr>
-              <th className="py-2 px-4 border-b">ID</th>
-              <th className="py-2 px-4 border-b">Customer Name</th>
-              <th className="py-2 px-4 border-b">Requester Name</th>
-              <th className="py-2 px-4 border-b">Date</th>
-              <th className="py-2 px-4 border-b">Status</th>
-              <th className="py-2 px-4 border-b">Description</th>
-              {/* Add other table headers for RepairRequest properties */}
-            </tr>
-          </thead>
-          <tbody>
-            {repairRequests.map(request => (
-              <tr key={request.id} className="hover:bg-gray-100">
-                <td className="py-2 px-4 border-b">{request.id}</td>
-                <td className="py-2 px-4 border-b">{request.customerName}</td>
-                <td className="py-2 px-4 border-b">{request.requesterName}</td>
-                <td className="py-2 px-4 border-b">{request.date ? new Date(request.date.seconds * 1000).toLocaleDateString() : 'N/A'}</td>
-                <td className="py-2 px-4 border-b">{request.status}</td>
-                <td className="py-2 px-4 border-b">{request.description}</td>
-                {/* Add other table cells for RepairRequest properties */}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
-  );
+
+                } catch (error) {
+                    console.error("Error fetching repair requests:", error);
+                } finally {
+                    setLoading(false);
+                }
+            }
+        };
+
+        fetchRepairRequests();
+    }, [recentlySelectedCompany]);
+
+    const renderList = (requests) => (
+        <div className="overflow-x-auto">
+            <table className="min-w-full bg-white">
+                <thead className="bg-gray-100">
+                    <tr>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase">Date</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase">Customer</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase">Requester</th>
+                        <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase">Status</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                    {requests.map(req => (
+                        <tr key={req.id} className="hover:bg-gray-50"
+                        onClick={() => navigate(`/company/repair-requests/detail/${req.id}`)}
+                        >
+                            <td className="p-4 whitespace-nowrap text-gray-700">{req.date ? format(req.date, 'PP') : 'N/A'}</td>
+                            <td className="p-4 whitespace-nowrap text-gray-800 font-medium">{req.customerName}</td>
+                            <td className="p-4 whitespace-nowrap text-gray-700">{req.requesterName}</td>
+                            <td className="p-4 whitespace-nowrap"><span className={`px-3 py-1 text-xs font-bold rounded-full ${req.status === 'completed' ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>{req.status}</span></td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+
+    return (
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+            <div className="max-w-screen-xl mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-3xl font-bold text-gray-800">Repair Requests</h2>
+                    <Link to={'/company/repair-requests/create'} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>
+                        Create New
+                    </Link>
+                </div>
+
+                <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div className="border-b border-gray-200">
+                        <nav className="-mb-px flex space-x-8">
+                            <button onClick={() => setActiveTab('internal')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'internal' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300'}`}>
+                                Internal Requests
+                            </button>
+                            <button onClick={() => setActiveTab('customer')} className={`whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm ${activeTab === 'customer' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:border-gray-300'}`}>
+                                Customer Requests
+                            </button>
+                        </nav>
+                    </div>
+                    
+                    {loading ? <p className="text-center p-8">Loading...</p> : 
+                        <div className="pt-4">
+                            {activeTab === 'customer' ? renderList(customerRequests) : renderList(internalRequests)}
+                        </div>
+                    }
+                </div>
+            </div>
+        </div>
+    );
 };
 
 export default RepairRequests;

@@ -1,145 +1,222 @@
+
 import React, { useState, useEffect, useContext } from "react";
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
+import { query, collection, getDocs, orderBy, where } from "firebase/firestore";
 import { db } from "../../../utils/config";
-import {Link } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
-import { format } from 'date-fns'; // Or any other date formatting library
+import { Job } from "../../../utils/models/Job";
+import { format } from 'date-fns';
+import { useNavigate } from 'react-router-dom';
 
 const Jobs = () => {
-    const [laborContractlist, setLaborContractlist] = useState([]);
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const [jobs, setJobs] = useState([]);
+    const { recentlySelectedCompany } = useContext(Context);
     const [searchTerm, setSearchTerm] = useState('');
+    const [showFilterModal, setShowFilterModal] = useState(false);
+    const navigate = useNavigate();
+
+    // Filter and Sort States
+    const [operationStatusFilter, setOperationStatusFilter] = useState(["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]);
+    const [billingStatusFilter, setBillingStatusFilter] = useState(["Draft", "Estimate", "Accepted", "In Progress"]);
+    const [sortBy, setSortBy] = useState('dateCreated-desc');
+
+    const operationStatusOptions = ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress", "Finished"];
+    const billingStatusOptions = ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid"];
 
     useEffect(() => {
-        (async () => {                
-            try{
-                console.log("Recently Selected Company: " + recentlySelectedCompany)
-                let q = query(collection(db, 'companies',recentlySelectedCompany,'workOrders'));
-                const querySnapshot = await getDocs(q);       
-                setLaborContractlist([])
-                querySnapshot.forEach((doc) => {
-                    const jobData = doc.data()
+        const fetchJobs = async () => {
+            if (!recentlySelectedCompany) return;
+            
+            try {
+                let q = collection(db, 'companies', recentlySelectedCompany, 'workOrders');
+                let queries = [];
 
-                    const dateCreated = jobData.dateCreated.toDate();
-                    const formattedDateCreated = format(dateCreated, 'MM / d / yyyy'); 
-                    const laborContract = {
-                        id:jobData.id,
-                        internalId : jobData.internalId,
-                        type: jobData.type,
-                        adminId: jobData.adminId,
-                        adminName: jobData.adminName,
-                        billingStatus: jobData.billingStatus,
-                        bodyOfWaterName: jobData.bodyOfWaterName,
-                        chemicals: jobData.chemicals,
-                        customerId: jobData.customerId,
-                        customerName: jobData.customerName,
-                        dateCreated: jobData.dateCreated,
-                        formattedDateCreated: formattedDateCreated,
-                        description: jobData.description,
-                        equipmentId: jobData.equipmentId,
-                        equipmentName: jobData.equipmentName,
-                        jobTemplateId: jobData.jobTemplateId,
-                        laborCost: jobData.laborCost,
-                        operationStatus: jobData.operationStatus,
-                        rate: jobData.rate,
-                        serviceLocationId: jobData.serviceLocationId,
-                        serviceStopIds: jobData.serviceStopIds,
-                    }
-                    setLaborContractlist(laborContractlist => [...laborContractlist, laborContract]); 
-                });
-            } catch(error){
-                console.log('Job Board Error: ' + error)
+                if (operationStatusFilter.length > 0) {
+                    queries.push(where('operationStatus', 'in', operationStatusFilter));
+                }
+                if (billingStatusFilter.length > 0) {
+                    queries.push(where('billingStatus', 'in', billingStatusFilter));
+                }
+
+                const [sortField, sortDirection] = sortBy.split('-');
+                queries.push(orderBy(sortField, sortDirection));
+
+                q = query(q, ...queries);
+
+                const querySnapshot = await getDocs(q);
+                const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+                
+                const filteredJobs = jobsList.filter(job =>
+                    job.customerName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    job.internalId.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                    job.description.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+
+                setJobs(filteredJobs);
+            } catch (error) {
+                console.error("Error fetching jobs: ", error);
             }
-        })();
-    },[])
-    return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        <div className='px-2 md:px-7 py-5'>
-            <div className='py-2'>
-                <Link 
-                className='py-1 px-2 bg-[#CDC07B] rounded-md text-[#000000]'
-                to={`/company/jobs/createNew`}>
-                    Create New
-                </Link>
-            </div>
-            <div className='w-full rounded-md mt-3'>
-                <div className='left-0 w-full justify-between'>
-                    <div className='flex w-full justify-between items-center py-2'>
-                        <input 
-                            // onChange={(e) => {searchHandler(e)}}
-                            value={searchTerm}
-                            className="text-field w-full p-2 border rounded"
-                            type="text" 
-                            name='search' 
-                            placeholder="Search..."
-                        />
+        };
+
+        fetchJobs();
+    }, [recentlySelectedCompany, searchTerm, operationStatusFilter, billingStatusFilter, sortBy]);
+
+    const handleApplyFilters = (newOperationFilters, newBillingFilters) => {
+        setOperationStatusFilter(newOperationFilters);
+        setBillingStatusFilter(newBillingFilters);
+        setShowFilterModal(false);
+    };
+    
+    const getStatusClass = (status) => {
+        switch (status) {
+            case "Draft":
+            case "Estimate Pending":
+            case "Unscheduled":
+              return "bg-red-100 text-red-800";
+            case "Estimate":
+            case "In Progress":
+              return "bg-yellow-100 text-yellow-800";
+            case "Accepted":
+            case "Scheduled":
+            case "Finished":
+            case "Paid":
+              return "bg-green-100 text-green-800";
+            case "Invoiced":
+              return "bg-blue-100 text-blue-800";
+            default:
+              return "bg-gray-100 text-gray-800";
+        }
+    };
+
+    const FilterModal = ({ onClose, applyFilters }) => {
+        const [tempOperationFilters, setTempOperationFilters] = useState(operationStatusFilter);
+        const [tempBillingFilters, setTempBillingFilters] = useState(billingStatusFilter);
+    
+        const handleOperationChange = (status) => {
+            setTempOperationFilters(prev => 
+                prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
+            );
+        };
+    
+        const handleBillingChange = (status) => {
+            setTempBillingFilters(prev => 
+                prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
+            );
+        };
+
+        return (
+            <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
+                <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-lg">
+                    <h3 className="text-2xl font-bold mb-6 text-gray-800">Filter & Sort</h3>
+                    <div className="space-y-6">
+                        <div>
+                            <label className="block mb-2 font-semibold text-gray-700">Sort by Date</label>
+                            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} className="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500">
+                                <option value="dateCreated-desc">Newest First</option>
+                                <option value="dateCreated-asc">Oldest First</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label className="block mb-3 font-semibold text-gray-700">Operational Status</label>
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                                {operationStatusOptions.map(status => (
+                                    <label key={status} className="flex items-center space-x-3 cursor-pointer">
+                                        <input type="checkbox" checked={tempOperationFilters.includes(status)} onChange={() => handleOperationChange(status)} className="form-checkbox h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                                        <span className="text-gray-700">{status}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
+                        <div>
+                            <label className="block mb-3 font-semibold text-gray-700">Billing Status</label>
+                            <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+                                {billingStatusOptions.map(status => (
+                                    <label key={status} className="flex items-center space-x-3 cursor-pointer">
+                                        <input type="checkbox" checked={tempBillingFilters.includes(status)} onChange={() => handleBillingChange(status)} className="form-checkbox h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                                        <span className="text-gray-700">{status}</span>
+                                    </label>
+                                ))}
+                            </div>
+                        </div>
                     </div>
-                    <div className='relative overflow-x-auto'>
-                        <table className="min-w-full bg-white border border-gray-200">
-                            <thead>
+                    <div className="flex justify-end space-x-4 mt-8">
+                        <button onClick={onClose} className="py-2 px-6 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                        <button onClick={() => applyFilters(tempOperationFilters, tempBillingFilters)} className="py-2 px-6 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition">Apply</button>
+                    </div>
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'> 
+            <div className="max-w-screen-xl mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-3xl font-bold text-gray-800">Jobs</h2>
+                    <Link to={'/company/jobs/createNew'} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 transition'>
+                        Create New Job
+                    </Link>
+                </div>
+
+                <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div className='flex flex-col sm:flex-row justify-between items-center mb-4 gap-4'>
+                        <input
+                            value={searchTerm}
+                            onChange={(e) => setSearchTerm(e.target.value)}
+                            className="w-full sm:w-2/5 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                            type="text"
+                            placeholder="Search by customer, ID, or description..."
+                        />
+                        <button onClick={() => setShowFilterModal(true)} className="w-full sm:w-auto py-3 px-5 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition">
+                            Filter & Sort
+                        </button>
+                    </div>
+
+                    <div className='overflow-x-auto'>
+                        <table className="min-w-full bg-white">
+                            <thead className="bg-gray-100">
                                 <tr>
-                                    <th className='px-4 py-2 border-b'>Id</th>
-                                    <th className='px-4 py-2 border-b'>Date Created</th>
-                                    <th className='px-4 py-2 border-b'>Customer Name</th>
-                                    <th className='px-4 py-2 border-b'>Type</th>
-                                    <th className='px-4 py-2 border-b'>Billing Status</th>
-                                    <th className='px-4 py-2 border-b'>Operation Status</th>
-                                    <th className='px-4 py-2 border-b sm:hidden'>Labor Cost</th>
-                                    <th className='px-4 py-2 border-b sm:hidden'>Rate</th>
-                                    <th className='px-4 py-2 border-b'>Admin Name</th>
-                                    <th className='px-4 py-2 border-b'>Description</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Id</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Date Created</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Customer</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Type</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Billing Status</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Operation Status</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell'>Rate</th>
+                                    <th className='p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider'>Description</th>
                                 </tr>
                             </thead>
-                            <tbody>
-                            {
-                                laborContractlist?.map(laborContract => (
-                                        <tr key={laborContract.id} className="border-b border-slate-700">
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.internalId}</Link></td>
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.formattedDateCreated}</Link></td>
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.customerName}</Link></td>
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.type}</Link></td>
-                                            <td className='px-4 py-2 border-b'>
-                                                <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                                                {laborContract.billingStatus == "Draft" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                {laborContract.billingStatus == "Estimate" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
-                                                {laborContract.billingStatus == "Accepted" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                {laborContract.billingStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.billingStatus}</h1>}
-                                                {laborContract.billingStatus == "Invoiced" && <h1 className="rounded-md blue-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                {laborContract.billingStatus == "Paid" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.billingStatus}</h1>}
-                                                </Link>
-                                            </td>
-                                            <td className='px-4 py-2 border-b'>
-                                                <Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>
-                                                {laborContract.operationStatus == "Estimate Pending" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                {laborContract.operationStatus == "Unscheduled" && <h1 className="rounded-md red-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                {laborContract.operationStatus == "Scheduled" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                {laborContract.operationStatus == "In Progress" && <h1 className="rounded-md yellow-bg px-2 items-center black-fg">{laborContract.operationStatus}</h1>}
-                                                {laborContract.operationStatus == "Finished" && <h1 className="rounded-md green-bg px-2 items-center white-fg">{laborContract.operationStatus}</h1>}
-                                                </Link>
-                                            </td>
-                                            <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.laborCost}</Link></td>
-                                            <td className='px-4 py-2 border-b sm:hidden'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.rate}</Link></td>
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.adminName}</Link></td>
-                                            <td className='px-4 py-2 border-b'><Link to={`/company/jobs/detail/${laborContract.id}`} style={{ display: 'block', width: '100%', height: '100%' }}>{laborContract.description}</Link></td>
-                                        </tr>
-                                ))
-                            }
+                            <tbody className="divide-y divide-gray-200">
+                                {jobs.map(job => (
+                                    <tr key={job.id} className="hover:bg-gray-50 transition-colors"
+                                    onClick={() => navigate(`/company/jobs/detail/${job.id}`)} >
+                                        <td className='p-4 whitespace-nowrap'>{job.internalId}</td>
+                                        <td className='p-4 whitespace-nowrap text-gray-700'>{job.dateCreated ? format(job.dateCreated, 'MM/dd/yyyy') : 'N/A'}</td>
+                                        <td className='p-4 whitespace-nowrap text-gray-800 font-medium'>{job.customerName}</td>
+                                        <td className='p-4 whitespace-nowrap text-gray-700'>{job.type}</td>
+                                        <td className='p-4 whitespace-nowrap'>
+                                            <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.billingStatus)}`}>
+                                                {job.billingStatus}
+                                            </span>
+                                        </td>
+                                        <td className='p-4 whitespace-nowrap'>
+                                            <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.operationStatus)}`}>
+                                                {job.operationStatus}
+                                            </span>
+                                        </td>
+                                        <td className='p-4 whitespace-nowrap text-gray-800 hidden sm:table-cell'>${Number(job.rate/100 || 0).toFixed(2)}</td>
+                                        <td className='p-4 whitespace-nowrap max-w-xs truncate text-gray-700' title={job.description}>{job.description}</td>
+                                    </tr>
+                                ))}
                             </tbody>
                         </table>
                     </div>
                 </div>
             </div>
+
+            {showFilterModal && <FilterModal onClose={() => setShowFilterModal(false)} applyFilters={handleApplyFilters} />}
         </div>
     );
 }
-export default Jobs;
 
+export default Jobs;

@@ -43,42 +43,6 @@ export class RecurringLaborContract {
         this.contractLengthInMonths = contractLengthInMonths;
     }
 
-    // Example of a method similar to those in ServiceLocation (adjust as needed)
-    async save() {
-        try {
-            const docRef = db.collection('recurringLaborContracts').doc(this.id);
-            await docRef.set(this.toFirestore());
-            console.log("RecurringLaborContract saved successfully with ID: ", this.id);
-        } catch (error) {
-            console.error("Error saving RecurringLaborContract: ", error);
-            throw error;
-        }
-    }
-
-    // Example of a method similar to those in ServiceLocation (adjust as needed)
-    async delete() {
-        try {
-            const docRef = db.collection('recurringLaborContracts').doc(this.id);
-            await docRef.delete();
-            console.log("RecurringLaborContract deleted successfully with ID: ", this.id);
-        } catch (error) {
-            console.error("Error deleting RecurringLaborContract: ", error);
-            throw error;
-        }
-    }
-
-    // Example of a method similar to those in ServiceLocation (adjust as needed)
-    async update(dataToUpdate) {
-        try {
-            const docRef = db.collection('recurringLaborContracts').doc(this.id);
-            await docRef.update(dataToUpdate);
-            console.log("RecurringLaborContract updated successfully with ID: ", this.id);
-        } catch (error) {
-            console.error("Error updating RecurringLaborContract: ", error);
-            throw error;
-        }
-    }
-
 
     toFirestore() {
         return {

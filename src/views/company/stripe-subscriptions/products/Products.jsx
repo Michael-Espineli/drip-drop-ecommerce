@@ -2,9 +2,9 @@ import React, { useState, useContext, useEffect } from 'react';
 import { getAuth } from "firebase/auth";
 import { useNavigate } from 'react-router-dom';
 import { getFirestore,  doc, updateDoc  } from "firebase/firestore";
-import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Context } from "../../../../context/AuthContext";
 import { Link } from 'react-router-dom';
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
 const functions = getFunctions();
 

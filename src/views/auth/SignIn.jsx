@@ -1,91 +1,161 @@
-import React, {useState} from 'react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-// import { auth } from '../../utils/config';
-import { getAuth } from "firebase/auth";
-import { useNavigate } from 'react-router-dom';
-import { Link, useLocation, Navigate } from 'react-router-dom';
-import toast, { Toaster } from 'react-hot-toast';
+import React, { useState, useEffect, useContext } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import toast from 'react-hot-toast';
+import { Context } from "../../context/AuthContext";
 
-const SignIn = () => {
-    const [email, setEmail] = useState();
-    const [password, setPassword] = useState();
-    const auth = getAuth()
-    const navigate = useNavigate()
-    async function handleSignUp(e) {
-        e.preventDefault()
+export default function SignIn() {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
+    const auth = getAuth();
+    const navigate = useNavigate();
+    const location = useLocation();
 
-        //Guard Statements
-        if (email=="" && password == "") {
-            toast.error('Please Fill Out Form')
-        }else if (email=="") {
-            toast.error('Email Field Blank')
-        } else if (password =="") {
-            toast.error('Password Field Blank')
-        } else {
-            signInWithEmailAndPassword(auth,email,password)
-            .then((user) => {
-                navigate('/company/dashboard')
-            })
-            .catch((error) => {
-                switch (error) {
-                    case "FirebaseError: Firebase: Error (auth/invalid-credential).":
-                        toast.error('Failed to login: Invalid Credentials')
-                    default:
-                        toast.error('Failed to login: Invalid Credentials') 
-                }
-               
-                console.log(error)
-            })
+    const { user } = useContext(Context);
+    useEffect(() => {
+        if (!user) return;
+        if (user.accountType === 'Company') {
+            navigate('/company/dashboard');
+        } else if (user.accountType === 'Client') {
+            navigate('/client/dashboard');
         }
-    }
+
+    }, [user]);
+    const handleSignIn = async (e) => {
+        e.preventDefault();
+
+        if (!email || !password) {
+            toast.error('Please fill out both email and password.');
+            return;
+        }
+
+        setLoading(true);
+        try {
+            await signInWithEmailAndPassword(auth, email, password);
+            toast.success('Signed in successfully!');
+            const queryParams = new URLSearchParams(location.search);
+            const redirectPath = queryParams.get('redirect') || '/company/dashboard'; // Default to home page
+
+            navigate(redirectPath);
+        } catch (error) {
+            console.error("Firebase Sign-In Error:", error);
+            switch (error.code) {
+                case 'auth/user-not-found':
+                case 'auth/wrong-password':
+                case 'auth/invalid-credential':
+                    toast.error('Invalid email or password.');
+                    break;
+                case 'auth/invalid-email':
+                    toast.error('Please enter a valid email address.');
+                    break;
+                default:
+                    toast.error('An unexpected error occurred. Please try again.');
+                    break;
+            }
+        } finally {
+            setLoading(false);
+        }
+    };
+
     return (
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white
-        // 1D2E76 - Pool Blue
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        <div>
-            <div className='px-2 md:px-7 py-5 blue-bg text-[#ffffff] font-bold'>
-                <div className='w-full'>
-                    <Link to='/'>
-                        <h2 className='w-[300px] px-[20px] font-bold text-4xl line-clamp-1'>
-                            Drip Drop
-                        </h2>
-                    </Link>
-                </div>
-            </div>
-            <div className='login-form pt-10'>
-                <div className='p-2 font - bold'>
-                    <h1>Company Sign In Page</h1>
-                </div>
-                <form>
-                    <div className='left-0 w-full justify-between gap-3 text-[#000000]'>
-                        <div className='p-2'>
-                            <input onChange={(e) => {setEmail(e.target.value)}} className='w-full p-2 rounded-md' type="text" placeholder='Email'></input>
+        <div className="bg-gray-50 min-h-screen">
+            {/* Minimal Header */}
+            <header className="py-6 px-4 sm:px-6 lg:px-8">
+                <Link to="/" className="text-2xl font-bold text-blue-600 hover:text-blue-700">
+                    Drip Drop
+                </Link>
+            </header>
+
+            {/* Sign-in Card */}
+            <main className="flex items-center justify-center py-12 sm:px-6 lg:px-8">
+                <div className="max-w-md w-full space-y-8">
+                    <div className="bg-white p-8 rounded-2xl shadow-lg">
+                        <div className="text-center mb-8">
+                            <h1 className="text-3xl font-bold text-gray-900">Company Sign In</h1>
+                            <p className="mt-2 text-sm text-gray-600">
+                                Access your company dashboard.
+                            </p>
                         </div>
-                        <div className='p-2'>
-                            <input onChange={(e) => {setPassword(e.target.value)}} className='w-full p-2 rounded-md' type="password" placeholder='Password'></input>
-                        </div>
-                        <div className='p-2 blue-bg rounded-md white-fg'>
-                            <button onClick={(e) => handleSignUp(e)} >Sign In</button>
+
+                        <form onSubmit={handleSignIn} className="space-y-6">
+                            <div>
+                                <label htmlFor="email" className="block text-sm font-medium text-gray-700 sr-only">
+                                    Email address
+                                </label>
+                                <input
+                                    id="email"
+                                    name="email"
+                                    type="email"
+                                    autoComplete="email"
+                                    required
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    className="appearance-none relative block w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                    placeholder="Email address"
+                                />
+                            </div>
+
+                            <div>
+                                <label htmlFor="password" className="block text-sm font-medium text-gray-700 sr-only">
+                                    Password
+                                </label>
+                                <input
+                                    id="password"
+                                    name="password"
+                                    type="password"
+                                    autoComplete="current-password"
+                                    required
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    className="appearance-none relative block w-full px-3 py-3 border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                                    placeholder="Password"
+                                />
+                            </div>
+
+                            <div className="text-sm text-right">
+                                <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
+                                    Forgot your password?
+                                </a>
+                            </div>
+
+                            <div>
+                                <button
+                                    type="submit"
+                                    disabled={loading}
+                                    className="w-full flex justify-center py-3 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 transition-colors"
+                                >
+                                    {loading ? 'Signing In...' : 'Sign In'}
+                                </button>
+                            </div>
+                        </form>
+
+                        <div className="mt-6 text-center text-sm text-gray-600">
+                            <p>
+                                Don't have a company account?{' '}
+                                <Link to="/signUp" className="font-medium text-blue-600 hover:text-blue-500">
+                                    Sign up
+                                </Link>
+                            </p>
                         </div>
                     </div>
-                </form>
-                <Link to='/signUp' className={`px-[12px] py-[9px] rounded-sm flex justify-start items-center gap-[12px] hover: transition-all w-full mb-1 underline`}>
-                    <span>
-                        Don't have an account? Sign up here.
-                    </span>
-                </Link>
 
-            </div>
+                    <div className="text-center text-sm text-gray-600 space-y-2">
+                        <p>
+                            Are you a homeowner?{' '}
+                            <Link to="/homeOwnerSignIn" className="font-medium text-blue-600 hover:text-blue-500">
+                                Sign in here
+                            </Link>
+                        </p>
+                        <p>
+                            Have an invite code?{' '}
+                            <Link to="/reedemInviteCode" className="font-medium text-blue-600 hover:text-blue-500">
+                                Redeem it here
+                            </Link>
+                        </p>
+                    </div>
+                </div>
+            </main>
         </div>
     );
-};
-
-
-export default SignIn;
+}
