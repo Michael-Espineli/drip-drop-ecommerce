@@ -1,14 +1,26 @@
 # Firebase
 .firebase/hosting.*.cache
+.firebase/
 
 # Env files
 .env
 .env.*
+!.env.example
 
 # Node
 node_modules
+
+# React build output
+build/
+coverage/
 
 # Logs
 npm-debug.log
 yarn-debug.log
 yarn-error.log
+
+# Local editor/system files
+.DS_Store
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
