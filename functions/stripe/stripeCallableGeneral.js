@@ -8,7 +8,7 @@ const admin = require("firebase-admin");
 const db = admin.firestore();
 
 // CORRECTED: Use the Stripe API key from the environment variables loaded in index.js
-const stripe = require("stripe")(process.env.STRIPE_API_KEY);
+const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 exports.createSubscriptionCheckoutSession = onCall(async (request) => {
     if (!request.auth) {

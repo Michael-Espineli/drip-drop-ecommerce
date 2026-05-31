@@ -33,11 +33,11 @@ const Sales = () => {
         const commonQuery = (name) => query(collection(db, name), where('companyId', '==', recentlySelectedCompany));
 
         const unsubscribes = [
-            onSnapshot(commonQuery('homeOwnerServiceRequests'), snapshot => setLeadsCount(snapshot.size)),
+            onSnapshot(commonQuery('homeownerServiceRequests'), snapshot => setLeadsCount(snapshot.size)),
             onSnapshot(query(commonQuery('contracts'), where('status', '==', 'Pending')), snapshot => setEstimatesCount(snapshot.size)),
             onSnapshot(query(commonQuery('contracts'), where('status', '==', 'Accepted'), orderBy('dateAccepted', 'desc')), snapshot => setActiveContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
             onSnapshot(query(commonQuery('recurringContracts'), where('status', '==', 'Active')), snapshot => setRecurringContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })))),
-            onSnapshot(query(commonQuery('homeOwnerServiceRequests'), orderBy('createdAt', 'desc'), limit(5)), snapshot => {
+            onSnapshot(query(commonQuery('homeownerServiceRequests'), orderBy('createdAt', 'desc'), limit(5)), snapshot => {
                 setRecentLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setLoading(false);
             }),
@@ -62,7 +62,7 @@ const Sales = () => {
             {/* Stats Grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
                 <StatCard title="Active Leads" value={leadsCount} description="Ready to be assessed" linkTo="/company/leads" />
-                <StatCard title="Pending Estimates" value={estimatesCount} description="Awaiting customer approval" linkTo="/company/estimates" />
+                <StatCard title="Pending Estimates" value={estimatesCount} description="Awaiting customer approval" linkTo="/company/contracts" />
                 <StatCard title="Total One-Time Sales" value={`$${totalOneTimeSales.toLocaleString()}`} description={`${activeContracts.length} active contracts`} linkTo="/company/monies/contracts" />
                 <StatCard title="Monthly Recurring Revenue" value={`$${totalRecurringRevenue.toLocaleString()}`} description={`${recurringContracts.length} recurring contracts`} linkTo="/company/monies/recurring-contracts" />
             </div>
@@ -87,7 +87,7 @@ const Sales = () => {
                                     {recentLeads.map(lead => (
                                         <tr key={lead.id}>
                                             <td className="px-5 py-5 border-b border-gray-200 bg-white text-sm"><p className="text-gray-900 whitespace-no-wrap">{lead.serviceName}</p></td>
-                                            <td className="px-5 py-5 border-b border-gray-200 bg-white text-sm"><p className="text-gray-900 whitespace-no-wrap">{lead.ownerDetails?.displayName || lead.homeownerName }</p></td>
+                                            <td className="px-5 py-5 border-b border-gray-200 bg-white text-sm"><p className="text-gray-900 whitespace-no-wrap">{lead.ownerDetails?.displayName || lead.homeownerName}</p></td>
                                             <td className="px-5 py-5 border-b border-gray-200 bg-white text-sm"><p className="text-gray-900 whitespace-no-wrap">{lead.createdAt ? format(lead.createdAt.toDate(), 'PPP') : 'N/A'}</p></td>
                                             <td className="px-5 py-5 border-b border-gray-200 bg-white text-sm text-right">
                                                 <Link to={`/company/leads/${lead.id}`} className="text-blue-600 hover:underline">View</Link>
@@ -105,7 +105,7 @@ const Sales = () => {
                     <h2 className="text-2xl font-bold mb-4">Recent Sales</h2>
                     <div className="bg-white shadow-md rounded-lg overflow-auto">
                         {activeContracts.length > 0 ? (
-                             <table className="min-w-full leading-normal">
+                            <table className="min-w-full leading-normal">
                                 <thead>
                                     <tr>
                                         <th className="px-5 py-3 border-b-2 border-gray-200 bg-gray-100 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Customer</th>

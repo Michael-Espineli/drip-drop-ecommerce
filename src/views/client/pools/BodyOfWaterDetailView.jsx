@@ -14,7 +14,7 @@ const BodyOfWaterDetailView = () => {
     const { bodyOfWaterId } = useParams();
     const { user } = useContext(Context);
     const navigate = useNavigate();
-    
+
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [isSaving, setIsSaving] = useState(false);
@@ -35,7 +35,7 @@ const BodyOfWaterDetailView = () => {
         const fetchData = async () => {
             setLoading(true);
             try {
-                const bowDocRef = doc(db, 'homeOwnerBodiesOfWater', bodyOfWaterId);
+                const bowDocRef = doc(db, 'homeownerBodiesOfWater', bodyOfWaterId);
                 const bowDocSnap = await getDoc(bowDocRef);
 
                 if (!bowDocSnap.exists() || bowDocSnap.data().userId !== user.uid) {
@@ -48,10 +48,10 @@ const BodyOfWaterDetailView = () => {
                 setEditableBodyOfWater(data);
 
                 // Fetch related data in parallel
-                const equipQuery = query(collection(db, 'homeOwnerEquipment'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid));
-                const serviceStopsQuery = query(collection(db, 'homeOwnerServiceStops'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'), limit(5));
+                const equipQuery = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid));
+                const serviceStopsQuery = query(collection(db, 'homeownerServiceStops'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'), limit(5));
                 const stopDataQuery = query(collection(db, 'stopData'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), orderBy('date', 'desc'), limit(5));
-                const repairQuery = query(collection(db, 'homeOwnerRepairRequests'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), where('status', 'not-in', ['Completed', 'Cancelled']));
+                const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('bodyOfWaterId', '==', bodyOfWaterId), where('userId', '==', user.uid), where('status', 'not-in', ['Completed', 'Cancelled']));
 
                 const [equipSnap, serviceStopsSnap, stopDataSnap, repairSnap] = await Promise.all([
                     getDocs(equipQuery),
@@ -63,7 +63,7 @@ const BodyOfWaterDetailView = () => {
                 setEquipment(equipSnap.docs.map(d => ({ id: d.id, ...d.data() })));
                 setServiceStops(serviceStopsSnap.docs.map(d => ({ id: d.id, ...d.data() })));
                 setRepairRequests(repairSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-                
+
                 const processedStopData = stopDataSnap.docs.map(doc => {
                     const data = doc.data();
                     return { ...data, date: data.date?.toDate ? data.date.toDate() : new Date() };
@@ -94,7 +94,7 @@ const BodyOfWaterDetailView = () => {
         setIsSaving(true);
         setError(null);
         try {
-            const bowDocRef = doc(db, 'homeOwnerBodiesOfWater', bodyOfWaterId);
+            const bowDocRef = doc(db, 'homeownerBodiesOfWater', bodyOfWaterId);
             await updateDoc(bowDocRef, {
                 name: editableBodyOfWater.name,
                 shape: editableBodyOfWater.shape,
@@ -126,9 +126,9 @@ const BodyOfWaterDetailView = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto">
-                <Header 
-                    name={bodyOfWater.name} 
-                    onBack={() => navigate(-1)} 
+                <Header
+                    name={bodyOfWater.name}
+                    onBack={() => navigate(-1)}
                     isOwner={isOwner}
                     isEditing={isEditing}
                     onEdit={() => setIsEditing(true)}
@@ -136,7 +136,7 @@ const BodyOfWaterDetailView = () => {
                     onCancel={handleCancel}
                     isSaving={isSaving}
                 />
-                
+
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
                     <div className="lg:col-span-2 space-y-8">
                         <OutstandingRepairsWidget repairRequests={repairRequests} />
@@ -203,7 +203,7 @@ const PoolInfo = ({ bodyOfWater }) => (
             <p><strong>Shape:</strong> {bodyOfWater.shape || 'N/A'}</p>
             <p><strong>Material:</strong> {bodyOfWater.material || 'N/A'}</p>
             <p><strong>Volume:</strong> {bodyOfWater.gallons ? `${bodyOfWater.gallons} gallons` : 'N/A'}</p>
-            {bodyOfWater.notes && <p className="pt-2"><strong>Notes:</strong><br/>{bodyOfWater.notes}</p>}
+            {bodyOfWater.notes && <p className="pt-2"><strong>Notes:</strong><br />{bodyOfWater.notes}</p>}
         </div>
     </Widget>
 );
@@ -293,7 +293,7 @@ const RecentReadings = ({ readings }) => (
     <Widget title="Recent Water Readings">
         {readings.length > 0 ? (
             <div className="overflow-x-auto">
-                 <table className="min-w-full text-sm">
+                <table className="min-w-full text-sm">
                     <thead className="bg-gray-100 text-left">
                         <tr>
                             <th className="p-2">Date</th>

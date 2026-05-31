@@ -5,7 +5,7 @@ export const getNav = (accountType) => {
     if (!accountType || !Array.isArray(allNav)) {
         return {};
     }
-    
+
     // Filter the navigation items that match the user's account type
     const filteredNavs = allNav.filter(nav => nav.role === accountType);
 

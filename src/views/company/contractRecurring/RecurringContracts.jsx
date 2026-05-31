@@ -1,287 +1,328 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { getFunctions, httpsCallable } from 'firebase/functions';
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
-import { db } from "../../../utils/config";
-import { Link } from 'react-router-dom';
-import { Context } from "../../../context/AuthContext";
+import { query, collection, getDocs, where } from 'firebase/firestore';
+import { db } from '../../../utils/config';
+import { Link, useNavigate } from 'react-router-dom';
+import { Context } from '../../../context/AuthContext';
+
 const functions = getFunctions();
 
-function RecurringContracts () { 
-    const {stripeConnectedAccountId, user} = useContext(Context);
-    const [ contractList, setContractList] = useState([]);
-    const [contracts, setContracts] = useState([]);
-    const [contractsPending, setContractsPending] = useState([]);
-    const [contractsAccepted, setContractsAccepted] = useState([]);
-    const [contractsRejected, setContractsRejected] = useState([]);
-    const [contractsPast, setContractsPast] = useState([]);
+const SectionCard = ({ title, children, rightContent }) => (
+    <div className="bg-white shadow-lg rounded-2xl p-6 mb-6">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+            <h2 className="text-xl font-bold text-gray-900">{title}</h2>
+            {rightContent}
+        </div>
+        {children}
+    </div>
+);
 
-    const [firstDoc, setFirstDoc] = useState();
-    const [lastDoc, setLastDoc] = useState();
-    useEffect(() => {
-        (async () => {
-            console.log('On Load')
-            //Fire base
-            try{
-                //Accepted
-                let q = query(collection(db, 'contracts'),where('status','==','Pending'));
-                const querySnapshot = await getDocs(q);       
-                let count = 1   
-                setContractsPending([])      
-                querySnapshot.forEach((doc) => {
-                    if (count == 1) {
-                        setFirstDoc(doc)
-                    } else {
-                        setLastDoc(doc)
-                    }
-                    const contractData = doc.data()
-                    const  contract = {
-                        id:contractData.id,
-                        companyName:contractData.companyName,
-                        rate:contractData.rate,
-                        status: contractData.status
-                    }
-                    count = count + 1
-                    setContractsPending(contractsPending => [...contractsPending, contract]); 
-                });
-                //Pending
-                let q2 = query(collection(db, 'contracts'),where('status','==','Accepted'));
-                const querySnapshot2 = await getDocs(q2);       
-                let count2 = 1   
-                setContractsAccepted([])      
-                querySnapshot2.forEach((doc2) => {
-                    if (count2 == 1) {
-                        setFirstDoc(doc2)
-                    } else {
-                        setLastDoc(doc2)
-                    }
-                    const contractData2 = doc2.data()
-                    const  contract2 = {
-                        id:contractData2.id,
-                        companyName:contractData2.companyName,
-                        rate:contractData2.rate,
-                        status: contractData2.status
-                    }
-                    count2 = count2 + 1
-                    setContractsAccepted(contractsAccepted => [...contractsAccepted, contract2]); 
-                });
-            } catch (error){
+const EmptyState = ({ text }) => (
+    <div className="py-8 text-center text-gray-500 text-sm">
+        {text}
+    </div>
+);
 
-            }
-
-            //From Stripe
-            const getSubcriptionList = httpsCallable(functions, 'getSubcriptionList');
-            getSubcriptionList({ 
-                customerId: 'cus_RBsy3ZCArWYVkW',
-                connectedAccount:'acct_1QIep2PPLD20PPKn',
-                method: "POST",
-            })
-            .then((result) => result.data.subscriptions.data)            
-            .then((subscriptions) => {
-                console.log(subscriptions)
-                // Handle the result from the function
-                setContractList(subscriptions)
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
-        })();
-    },[])
-
-    async function acceptContract(e) {
-        e.preventDefault()
-        console.log('acceptContract')
-
-        const acceptContract = httpsCallable(functions, 'acceptContract');
-        acceptContract({ 
-            name: 'name',
-            description: 'description',
-            customerId: 'cus_RBsy3ZCArWYVkW',
-            priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
-            connectedAccount:'acct_1QIep2PPLD20PPKn',
-            method: "POST",
-        })
-        .then((result) => result.data.subscription)            
-        .then((session) => {
-            console.log(session)
-            console.log(session.id)
-            // Handle the result from the function
-        
-        })
-        .catch((error) => {
-            // Handle any errors
-            console.error(error);
-        });
-    }
-    
-    async function acceptContract2(e) {
-        e.preventDefault()
-        console.log('acceptContract2')
-
-        const acceptContract2 = httpsCallable(functions, 'acceptContract2');
-        acceptContract2({ 
-            name: 'name',
-            description: 'description',
-            customerId: 'cus_RBsy3ZCArWYVkW',
-            priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
-            connectedAccount:'acct_1QIep2PPLD20PPKn', 
-            method: "POST",
-        })
-        .then((result) => result.data.session)            
-        .then((session) => {
-                console.log(session)
-                console.log(session.id)
-                // Handle the result from the function
-                const url = session.url
-                if (url) {
-                    window.location.href = url;
-                }
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
-    }
-    async function setUpCustomer(e) {
-        e.preventDefault()
-        console.log('setUpCustomer')
-
-        const setUpCustomer = httpsCallable(functions, 'setUpCustomer');
-        setUpCustomer({ 
-            name: 'name',
-            description: 'description',
-            connectedAccount:'acct_1QIep2PPLD20PPKn',
-            method: "POST",
-        })
-        .then((result) => result.data.customer)            
-        .then((customer) => {
-                console.log(customer)
-                console.log(customer.id)
-                // Handle the result from the function
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
+const ContractTable = ({ contracts, navigate }) => {
+    if (!contracts?.length) {
+        return <EmptyState text="No contracts found in this section." />;
     }
 
     return (
-        <div className='px-2 md:px-7 py-5'>
-
-            <h2 className="text-2xl font-bold mb-4">Recurring Contracts</h2>
-                    
-
-                <div className='py-2'>
-                    <div className='flex justify-between items-center'>
-                        <Link 
-                        to='/company/contracts/createNew/NA'
-                        className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
-                        >Send New Contract</Link>
-                        <Link className='red-fg rounded-md py-1 px-2'>See Past and Rejected Contracts</Link>
-                    </div>
-                </div>
-                {/* <div className='flex justify-between'>
-                    <button onClick={(e) => {acceptContract(e)}} 
-                    className='bg-[#000000] p-2 rounded-md'
-                    >Accept Contract</button>
-                    <button onClick={(e) => {acceptContract2(e)}} 
-                    className='bg-[#000000] p-2 rounded-md'
-                    >Accept Contract 2</button>
-                    <button onClick={(e) => {setUpCustomer(e)}} 
-                    className='bg-[#000000] p-2 rounded-md'
-                    >Set Up Customer</button>
-                </div> */}
-                <h1  className='text-xl font-bold mb-4'>Accepted Contracts</h1>
-                <div className='relative overflow-x-auto'>
-
-                    <table className="min-w-full bg-white border border-gray-200">
-                        <thead>
-                            <tr>
-                                <th className='px-4 py-2 border-b'>Company Name</th>
-                                <th className='px-4 py-2 border-b'>Amount</th>
-                                <th className='px-4 py-2 border-b'>Status</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            contractsAccepted?.map( contract => (
-                                    <tr key={contract.id}>
-                                        <td className='px-4 py-2 border-b'>{contract.companyName}</td>
-                                        <td className='px-4 py-2 border-b'>{contract.rate/100}</td>
-                                        <td className='px-4 py-2 border-b'>{contract.status}</td>
-                                        <td>
-                                            <Link 
-                                            className='bg-[#454b39] rounded-md py-1 px-2'
-                                            to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
-                                        </td>
-                                    </tr>
-                                
-                            ))
-                        }
-                        </tbody>
-                    </table>
-                </div>
-                <hr/>
-                <h1  className='text-xl font-bold mb-4'>Pending Contracts</h1>
-                <table className="min-w-full bg-white border border-gray-200">
-                    <thead>
-                        <tr>
-                            <th className='px-4 py-2 border-b'>Company Name</th>
-                            <th className='px-4 py-2 border-b'>Amount</th>
-                            <th className='px-4 py-2 border-b'>Status</th>
+        <div className="relative overflow-x-auto">
+            <table className="min-w-full bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <thead className="bg-gray-50">
+                    <tr>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Company Name</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Amount</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Status</th>
+                    </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200">
+                    {contracts.map((contract) => (
+                        <tr
+                            key={contract.id}
+                            className="hover:bg-gray-50 transition-colors cursor-pointer"
+                            onClick={() => navigate(`/company/recurring-contracts/detail/${contract.id}`)}
+                        >
+                            <td className="p-4 whitespace-nowrap text-sm text-gray-800 font-medium">
+                                {contract.customerName || contract.receiverName || 'N/A'}
+                            </td>
+                            <td className="p-4 whitespace-nowrap text-sm text-gray-700">
+                                ${Number((contract.rate || 0) / 100).toLocaleString()}
+                            </td>
+                            <td className="p-4 whitespace-nowrap text-sm text-gray-700">
+                                {contract.status || 'N/A'}
+                            </td>
                         </tr>
-                    </thead>
-                    <tbody>
-                    {
-                        contractsPending?.map( contract => (
-                                <tr key={contract.id}>
-                                    <td className='px-4 py-2 border-b'>{contract.companyName}</td>
-                                    <td className='px-4 py-2 border-b'>{contract.rate/100}</td>
-                                    <td className='px-4 py-2 border-b'>{contract.status}</td>
-                                    <td>
-                                        <Link 
-                                        className='bg-[#454b39] rounded-md py-1 px-2'
-                                        to={`/company/contracts/contract/${contract.id}`}>Detail</Link>
-                                    </td>
-                                </tr>
-                            
-                        ))
-                    }
-                    </tbody>
-                </table>
-            <div className='py-2'>
-
-                <div className='relative overflow-x-auto'>
-                    <h1 className='text-xl font-bold mb-4'>Stripe Subscriptions</h1>
-                    <table className="min-w-full bg-white border border-gray-200">
-                        <thead>
-                            <tr>
-                                <th className='px-4 py-2 border-b'>id</th>
-                                <th className='px-4 py-2 border-b'>Name</th>
-                                <th className='px-4 py-2 border-b'>Interval</th>
-                                <th className='px-4 py-2 border-b'>Amount</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                        {
-                            contractList?.map(subscription => (
-                                <tr key={subscription.id}>
-                                    <td className='px-4 py-2 border-b'>{subscription.id}</td>
-                                    <td className='px-4 py-2 border-b'>{subscription.plan.nickName}</td>
-                                    <td className='px-4 py-2 border-b'>{subscription.plan.interval}</td>
-                                    <td className='px-4 py-2 border-b'>{subscription.plan.amount/100}</td>
-                                    <td className='px-4 py-2 border-b'>Edit</td>
-                                </tr>
-                                
-                            ))
-                        }
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 };
+
+const SubscriptionTable = ({ subscriptions }) => {
+    if (!subscriptions?.length) {
+        return <EmptyState text="No Stripe subscriptions found." />;
+    }
+
+    return (
+        <div className="relative overflow-x-auto">
+            <table className="min-w-full bg-white border border-gray-200 rounded-lg overflow-hidden">
+                <thead className="bg-gray-50">
+                    <tr>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Subscription ID</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Name</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Interval</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {subscriptions.map((subscription) => (
+                        <tr key={subscription.id} className="hover:bg-gray-50">
+                            <td className="px-4 py-3 border-b text-sm text-gray-800">{subscription.id}</td>
+                            <td className="px-4 py-3 border-b text-sm text-gray-800">
+                                {subscription?.plan?.nickname || subscription?.plan?.nickName || 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 border-b text-sm text-gray-800">
+                                {subscription?.plan?.interval || 'N/A'}
+                            </td>
+                            <td className="px-4 py-3 border-b text-sm text-gray-800">
+                                ${((subscription?.plan?.amount || 0) / 100).toLocaleString()}
+                            </td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
+function RecurringContracts() {
+    const navigate = useNavigate();
+    const { stripeConnectedAccountId, user, recentlySelectedCompany } = useContext(Context);
+
+    const [contractList, setContractList] = useState([]);
+    const [contractsPending, setContractsPending] = useState([]);
+    const [contractsAccepted, setContractsAccepted] = useState([]);
+    const [contractsPast, setContractsPast] = useState([]);
+    const [contractsRejected, setContractsRejected] = useState([]);
+    const [contractsDraft, setContractsDraft] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                setLoading(true);
+
+                const pendingQuery = query(
+                    collection(db, 'recurringContracts'),
+                    where('status', '==', 'Pending'),
+                    where('senderId', '==', recentlySelectedCompany)
+                );
+                const pendingSnapshot = await getDocs(pendingQuery);
+                const pendingContracts = pendingSnapshot.docs.map((docSnap) => {
+                    const data = docSnap.data();
+                    return {
+                        id: docSnap.id,
+                        companyName: data.companyName,
+                        rate: data.rate,
+                        status: data.status,
+                        ...data,
+                    };
+                });
+                setContractsPending(pendingContracts);
+
+                const acceptedQuery = query(
+                    collection(db, 'recurringContracts'),
+                    where('status', '==', 'Accepted'),
+                    where('senderId', '==', recentlySelectedCompany)
+                );
+                const acceptedSnapshot = await getDocs(acceptedQuery);
+                const acceptedContracts = acceptedSnapshot.docs.map((docSnap) => {
+                    const data = docSnap.data();
+                    return {
+                        id: docSnap.id,
+                        companyName: data.companyName,
+                        rate: data.rate,
+                        status: data.status,
+                        ...data,
+                    };
+                });
+                setContractsAccepted(acceptedContracts);
+
+                const pastQuery = query(
+                    collection(db, 'recurringContracts'),
+                    where('status', '==', 'Past'),
+                    where('senderId', '==', recentlySelectedCompany)
+                );
+                const pastSnapshot = await getDocs(pastQuery);
+                const pastContracts = pastSnapshot.docs.map((docSnap) => {
+                    const data = docSnap.data();
+                    return {
+                        id: docSnap.id,
+                        companyName: data.companyName,
+                        rate: data.rate,
+                        status: data.status,
+                        ...data,
+                    };
+                });
+                setContractsPast(pastContracts);
+
+                const rejectedQuery = query(
+                    collection(db, 'recurringContracts'),
+                    where('status', '==', 'Rejected'),
+                    where('senderId', '==', recentlySelectedCompany)
+                );
+                const rejectedSnapshot = await getDocs(rejectedQuery);
+                const rejectedContracts = rejectedSnapshot.docs.map((docSnap) => {
+                    const data = docSnap.data();
+                    return {
+                        id: docSnap.id,
+                        companyName: data.companyName,
+                        rate: data.rate,
+                        status: data.status,
+                        ...data,
+                    };
+                });
+                setContractsRejected(rejectedContracts);
+
+                const draftQuery = query(
+                    collection(db, 'recurringContracts'),
+                    where('status', '==', 'Draft'),
+                    where('senderId', '==', recentlySelectedCompany)
+                );
+                const draftSnapshot = await getDocs(draftQuery);
+                const draftContracts = draftSnapshot.docs.map((docSnap) => {
+                    const data = docSnap.data();
+                    return {
+                        id: docSnap.id,
+                        companyName: data.companyName,
+                        rate: data.rate,
+                        status: data.status,
+                        ...data,
+                    };
+                });
+                setContractsDraft(draftContracts);
+            } catch (error) {
+                console.error('Error loading recurring contracts:', error);
+            }
+
+            try {
+                const getSubcriptionList = httpsCallable(functions, 'getSubcriptionList');
+                const result = await getSubcriptionList({
+                    customerId: 'cus_RBsy3ZCArWYVkW',
+                    connectedAccount: stripeConnectedAccountId || 'acct_1QIep2PPLD20PPKn',
+                    method: 'POST',
+                });
+
+                setContractList(result?.data?.subscriptions?.data || []);
+            } catch (error) {
+                console.error('Error loading Stripe subscriptions:', error);
+            } finally {
+                setLoading(false);
+            }
+        })();
+    }, [stripeConnectedAccountId, user, recentlySelectedCompany]);
+
+    if (loading) {
+        return (
+            <div className="bg-gray-50 min-h-screen p-4 sm:p-6 lg:p-8">
+                <div className="mx-auto max-w-7xl">
+                    <div className="bg-white shadow-lg rounded-2xl p-6">
+                        <p className="text-gray-600">Loading recurring contracts...</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="bg-gray-50 min-h-screen p-4 sm:p-6 lg:p-8">
+            <div className="mx-auto">
+                <div className="bg-white shadow-lg rounded-2xl p-6 mb-6">
+                    <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <div>
+                            <Link
+                                to="/company/contracts"
+                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            >
+                                &larr; Back to Contracts
+                            </Link>
+                            <h1 className="text-3xl font-bold text-gray-900">Recurring Contracts</h1>
+                            <p className="text-gray-500 mt-1">
+                                Manage recurring contract activity and Stripe-backed subscriptions.
+                            </p>
+                        </div>
+
+                        <div className="flex flex-col sm:flex-row gap-3">
+                            <Link
+                                to="/company/contracts/createNew/NA"
+                                className="px-4 py-2 text-sm font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-xl shadow-sm hover:bg-yellow-100 transition"
+                            >
+                                Send New Contract
+                            </Link>
+
+                            <Link
+                                to="/company/contracts/past"
+                                className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"
+                            >
+                                View Past
+                            </Link>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+                    <div className="bg-white shadow-lg rounded-2xl p-5">
+                        <p className="text-sm text-gray-500">Pending</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{contractsPending.length}</p>
+                    </div>
+                    <div className="bg-white shadow-lg rounded-2xl p-5">
+                        <p className="text-sm text-gray-500">Accepted</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{contractsAccepted.length}</p>
+                    </div>
+                    <div className="bg-white shadow-lg rounded-2xl p-5">
+                        <p className="text-sm text-gray-500">Past</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{contractsPast.length}</p>
+                    </div>
+                    <div className="bg-white shadow-lg rounded-2xl p-5">
+                        <p className="text-sm text-gray-500">Rejected</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{contractsRejected.length}</p>
+                    </div>
+                    <div className="bg-white shadow-lg rounded-2xl p-5">
+                        <p className="text-sm text-gray-500">Draft</p>
+                        <p className="text-2xl font-bold text-gray-900 mt-1">{contractsDraft.length}</p>
+                    </div>
+                </div>
+
+                <SectionCard title="Accepted Contracts">
+                    <ContractTable contracts={contractsAccepted} navigate={navigate} />
+                </SectionCard>
+
+                <SectionCard title="Pending Contracts">
+                    <ContractTable contracts={contractsPending} navigate={navigate} />
+                </SectionCard>
+
+                <SectionCard title="Past Contracts">
+                    <ContractTable contracts={contractsPast} navigate={navigate} />
+                </SectionCard>
+
+                <SectionCard title="Rejected Contracts">
+                    <ContractTable contracts={contractsRejected} navigate={navigate} />
+                </SectionCard>
+
+                <SectionCard title="Draft Contracts">
+                    <ContractTable contracts={contractsDraft} navigate={navigate} />
+                </SectionCard>
+
+                <SectionCard title="Stripe Subscriptions">
+                    <SubscriptionTable subscriptions={contractList} />
+                </SectionCard>
+            </div>
+        </div>
+    );
+}
 
 export default RecurringContracts;

@@ -28,7 +28,7 @@ const EquipmentDetailView = () => {
         const fetchEquipmentAndHistory = async () => {
             setLoading(true);
             try {
-                const equipDocRef = doc(db, 'homeOwnerEquipment', equipmentId);
+                const equipDocRef = doc(db, 'homeownerEquipment', equipmentId);
                 const equipDocSnap = await getDoc(equipDocRef);
 
                 if (!equipDocSnap.exists() || equipDocSnap.data().userId !== user.uid) {
@@ -45,7 +45,7 @@ const EquipmentDetailView = () => {
 
                 // 1. Fetch Body of Water Name
                 if (equipData.bodyOfWaterId) {
-                    const bowDocRef = doc(db, 'homeOwnerBodiesOfWater', equipData.bodyOfWaterId);
+                    const bowDocRef = doc(db, 'homeownerBodiesOfWater', equipData.bodyOfWaterId);
                     promises.push(getDoc(bowDocRef));
                 } else {
                     promises.push(Promise.resolve(null)); // Placeholder
@@ -53,12 +53,12 @@ const EquipmentDetailView = () => {
 
                 // 2. Fetch Repair History
                 const repairQuery = query(
-                    collection(db, 'homeOwnerRepairRequests'),
+                    collection(db, 'homeownerRepairRequests'),
                     where('equipmentId', '==', equipmentId),
                     orderBy('createdAt', 'desc')
                 );
                 promises.push(getDocs(repairQuery));
-                
+
                 const [bowDocSnap, repairHistorySnap] = await Promise.all(promises);
 
                 if (bowDocSnap && bowDocSnap.exists()) {
@@ -84,7 +84,7 @@ const EquipmentDetailView = () => {
         setIsDeleting(true);
         setError(null);
         try {
-            await deleteDoc(doc(db, 'homeOwnerEquipment', equipmentId));
+            await deleteDoc(doc(db, 'homeownerEquipment', equipmentId));
             navigate('/equipment'); // Redirect to the list view after deletion
         } catch (err) {
             console.error("Error deleting equipment: ", err);
@@ -119,8 +119,8 @@ const EquipmentDetailView = () => {
                             </h2>
                             <p className="text-gray-600">{equipment.make} {equipment.model}</p>
                         </div>
-                        <button 
-                            onClick={handleDelete} 
+                        <button
+                            onClick={handleDelete}
                             disabled={isDeleting}
                             className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 disabled:bg-gray-400"
                         >
@@ -139,8 +139,8 @@ const EquipmentDetailView = () => {
                     </div>
                     {equipment.notes && (
                         <div className="p-6 border-t">
-                           <p className="font-semibold text-gray-800">Notes</p>
-                           <p className="text-gray-600 mt-1 whitespace-pre-wrap">{equipment.notes}</p>
+                            <p className="font-semibold text-gray-800">Notes</p>
+                            <p className="text-gray-600 mt-1 whitespace-pre-wrap">{equipment.notes}</p>
                         </div>
                     )}
                 </div>
@@ -192,8 +192,8 @@ const RepairHistoryList = ({ history }) => {
                                     <p className="text-sm text-gray-500">Status: <span className="font-medium">{req.status}</span></p>
                                 </div>
                                 <div className="text-right flex-shrink-0 ml-4">
-                                     <p className="text-sm text-gray-600">{req.createdAt ? format(req.createdAt.toDate(), 'MMM d, yyyy') : ''}</p>
-                                     <ChevronRightIcon className="w-5 h-5 text-gray-400 mt-1 ml-auto" />
+                                    <p className="text-sm text-gray-600">{req.createdAt ? format(req.createdAt.toDate(), 'MMM d, yyyy') : ''}</p>
+                                    <ChevronRightIcon className="w-5 h-5 text-gray-400 mt-1 ml-auto" />
                                 </div>
                             </div>
                         </Link>

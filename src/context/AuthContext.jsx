@@ -1,11 +1,11 @@
 import { createContext, useState, useEffect } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from "../utils/config";
-import { getDoc, doc, getDocs, where, query, collection } from "firebase/firestore"; 
+import { getDoc, doc, getDocs, where, query, collection } from "firebase/firestore";
 
 export const Context = createContext();
 
-export function AuthContext({children}) {
+export function AuthContext({ children }) {
     // User Information
     const auth = getAuth();
     const [user, setUser] = useState(null);
@@ -26,7 +26,7 @@ export function AuthContext({children}) {
 
     // Subscription Information
     const [companySubscription, setCompanySubscription] = useState(null);
-    
+
     // Invite Information
     const [pendingInvite, setPendingInvite] = useState(null);
 
@@ -56,8 +56,8 @@ export function AuthContext({children}) {
                 try {
                     const docRef = doc(db, "users", currentUser.uid);
                     const docSnap = await getDoc(docRef);
-                    console.log("currentUser.uid ",currentUser.uid)
-                    if (docSnap.exists()){
+                    console.log("currentUser.uid ", currentUser.uid)
+                    if (docSnap.exists()) {
                         const dbUser = docSnap.data();
                         setDataBaseUser(dbUser);
                         setAccountType(dbUser.accountType);
@@ -74,14 +74,14 @@ export function AuthContext({children}) {
                                 if (companyDoc.exists()) {
                                     setRecentlySelectedCompanyName(companyDoc.data().name);
                                     setStripeConnectedAccountId(companyDoc.data().stripeConnectedAccountId);
-                                    setStripeId(companyDoc.data().setStripeConnectedAccountId)
+                                    setStripeId(companyDoc.data().stripeConnectedAccountId)
                                 }
                             }
                         }
                     } else {
                         console.log("No DB User Found on Auth Context");
                     }
-                } catch(error) {
+                } catch (error) {
                     console.error('Auth Context Error:', error);
                 }
 
@@ -104,7 +104,7 @@ export function AuthContext({children}) {
     }, [auth]);
 
     const values = {
-        user, 
+        user,
         setUser,
         dataBaseUser,
         setDataBaseUser,
@@ -119,14 +119,14 @@ export function AuthContext({children}) {
         setStripeId,
         recentlySelectedCompanyName,
         setRecentlySelectedCompanyName,
-        role, 
+        role,
         setRole,
         companySubscription,
         setCompanySubscription,
         pendingInvite, // Pass invite data down
         setPendingInvite, // Pass setter function down
     };
-    
+
     return (
         <Context.Provider value={values}>
             {!loading && children}

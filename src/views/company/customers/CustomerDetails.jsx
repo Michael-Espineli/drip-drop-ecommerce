@@ -11,7 +11,7 @@ import { RepairRequest } from '../../../utils/models/RepairRequest';
 // Reusable Components
 const TabButton = ({ text, active, onClick }) => (
     <button
-        onClick={onClick} 
+        onClick={onClick}
         className={`relative inline-flex items-center justify-center whitespace-nowrap px-4 py-2 text-sm font-semibold transition
             ${active
                 ? 'text-slate-900'
@@ -207,77 +207,77 @@ const ServiceLocationsTab = ({ customer }) => {
                         title="Service Location"
                         actions={
                             <button className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition">
-                            Edit
+                                Edit
                             </button>
                         }
-                        >
+                    >
 
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                Main Contact
-                            </p>
-                            <p className="text-sm text-slate-900">{selectedLocation.mainContact?.name || "—"}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    Main Contact
+                                </p>
+                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.name || "—"}</p>
                             </div>
-                    
+
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                Email
-                            </p>
-                            <p className="text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    Email
+                                </p>
+                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
                             </div>
-                    
+
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                Phone Number
-                            </p>
-                            <p className="text-sm text-slate-900">{selectedLocation.mainContact?.phoneNumber || "—"}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    Phone Number
+                                </p>
+                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.phoneNumber || "—"}</p>
                             </div>
-                    
+
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                Gate Code
-                            </p>
-                            <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    Gate Code
+                                </p>
+                                <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
                             </div>
                         </div>
-                    
-                    
+
+
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                            Contact Notes
+                                Contact Notes
                             </p>
                             <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                            {selectedLocation.mainContact?.notes || "No contact notes added."}
+                                {selectedLocation.mainContact?.notes || "No contact notes added."}
                             </p>
                         </div>
-                    
+
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                            Dogs on Property
+                                Dogs on Property
                             </p>
-                    
+
                             {selectedLocation.dogName?.length > 0 ? (
-                            <ul className="flex flex-wrap gap-2">
-                                {selectedLocation.dogName.map((dog) => (
-                                <li
-                                    key={dog}
-                                    className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 border border-blue-100"
-                                >
-                                    {dog}
-                                </li>
-                                ))}
-                            </ul>
+                                <ul className="flex flex-wrap gap-2">
+                                    {selectedLocation.dogName.map((dog) => (
+                                        <li
+                                            key={dog}
+                                            className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 border border-blue-100"
+                                        >
+                                            {dog}
+                                        </li>
+                                    ))}
+                                </ul>
                             ) : (
-                            <p className="text-sm text-slate-500">None found.</p>
+                                <p className="text-sm text-slate-500">None found.</p>
                             )}
                         </div>
                         <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                            Location Notes
+                                Location Notes
                             </p>
                             <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                            {selectedLocation.notes || "No location notes added."}
+                                {selectedLocation.notes || "No location notes added."}
                             </p>
                         </div>
 
@@ -330,273 +330,272 @@ const LocationDetails = ({ location, customerId }) => {
 
     return (<div className="space-y-8">
 
-      
+
         <InfoCard
-          title="Bodies of Water"
-          actions={
-            <Link
-              to={`/company/bodiesOfWater/createNew/${customerId}/${location.id}`}
-              className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
-            >
-              + Add
-            </Link>
-          }
+            title="Bodies of Water"
+            actions={
+                <Link
+                    to={`/company/bodiesOfWater/createNew/${customerId}/${location.id}`}
+                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                >
+                    + Add
+                </Link>
+            }
         >
-          {loading ? (
-            <ClipLoader size={20} />
-          ) : (
-            <ul className="space-y-3">
-              {bodiesOfWater.map((bow) => (
-                <li key={bow.id}>
-                  <Link
-                    to={`/company/bodiesOfWater/detail/${bow.id}`}
-                    className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {bow.name || "Unnamed Body of Water"}
-                        </h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          ID: {bow.id}
-                        </p>
-                      </div>
-      
-                      <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 border border-blue-100 whitespace-nowrap">
-                        {bow.gallons ? `${Number(bow.gallons).toLocaleString()} gal` : "No volume"}
-                      </span>
-                    </div>
-      
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Material
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {bow.material || "Not specified"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Last Filled
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {bow.lastFilled
-                            ? format(bow.lastFilled.toDate(), "PPP")
-                            : "Not recorded"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Service Location
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {bow.serviceLocationId || "—"}
-                        </p>
-                      </div>
-                    </div>
-      
-                    <div className="mt-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                        Notes
-                      </p>
-                      <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                        {bow.notes || "No notes added."}
-                      </p>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-      
-              {bodiesOfWater.length === 0 && (
-                <p className="text-sm text-slate-500">None found.</p>
-              )}
-            </ul>
-          )}
+            {loading ? (
+                <ClipLoader size={20} />
+            ) : (
+                <ul className="space-y-3">
+                    {bodiesOfWater.map((bow) => (
+                        <li key={bow.id}>
+                            <Link
+                                to={`/company/bodiesOfWater/detail/${bow.id}`}
+                                className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
+                            >
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-slate-900">
+                                            {bow.name || "Unnamed Body of Water"}
+                                        </h3>
+                                        <p className="mt-1 text-sm text-slate-500">
+                                            ID: {bow.id}
+                                        </p>
+                                    </div>
+
+                                    <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 border border-blue-100 whitespace-nowrap">
+                                        {bow.gallons ? `${Number(bow.gallons).toLocaleString()} gal` : "No volume"}
+                                    </span>
+                                </div>
+
+                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Material
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {bow.material || "Not specified"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Last Filled
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {bow.lastFilled
+                                                ? format(bow.lastFilled.toDate(), "PPP")
+                                                : "Not recorded"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Service Location
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {bow.serviceLocationId || "—"}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-4">
+                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                        Notes
+                                    </p>
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                        {bow.notes || "No notes added."}
+                                    </p>
+                                </div>
+                            </Link>
+                        </li>
+                    ))}
+
+                    {bodiesOfWater.length === 0 && (
+                        <p className="text-sm text-slate-500">None found.</p>
+                    )}
+                </ul>
+            )}
         </InfoCard>
-      
+
         <InfoCard
-          title="Equipment"
-          actions={
-            <Link
-              to={`/company/equipment/createNew/${customerId}/${location.id}`}
-              className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
-            >
-              + Add
-            </Link>
-          }
+            title="Equipment"
+            actions={
+                <Link
+                    to={`/company/equipment/createNew/${customerId}/${location.id}`}
+                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                >
+                    + Add
+                </Link>
+            }
         >
-          {loading ? (
-            <ClipLoader size={20} />
-          ) : (
-            <ul className="space-y-3">
-              {equipment.map((eq) => (
-                <li key={eq.id}>
-                  <Link
-                    to={`/company/equipment/detail/${eq.id}`}
-                    className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
-                  >
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 className="text-sm font-semibold text-slate-900">
-                          {eq.name || "Unnamed Equipment"}
-                        </h3>
-                        <p className="mt-1 text-sm text-slate-500">
-                          {eq.type || "Unknown Type"}
-                          {eq.model ? ` • ${eq.model}` : ""}
-                          {eq.make ? ` • ${eq.make}` : ""}
-                        </p>
-                      </div>
-      
-                      <div className="flex flex-col items-end gap-2">
-                        <span
-                          className={`rounded-full px-3 py-1 text-xs font-semibold border ${
-                            eq.status === "Operational"
-                              ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-                              : "bg-amber-50 text-amber-700 border-amber-100"
-                          }`}
-                        >
-                          {eq.status || "Unknown"}
-                        </span>
-      
-                        {eq.needsService && (
-                          <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 border border-red-100">
-                            Needs Service
-                          </span>
-                        )}
-                      </div>
-                    </div>
-      
-                    <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Type
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">{eq.type || "Not specified"}</p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Make / Model
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {[eq.make, eq.model].filter(Boolean).join(" / ") || "Not specified"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Body of Water
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {eq.bodyOfWaterId || "Unassigned"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Pressure
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          Current: {eq.currentPressure ?? "—"} PSI
-                          <br />
-                          Clean: {eq.cleanFilterPressure ?? "—"} PSI
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Last Service
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {eq.lastServiceDate
-                            ? format(eq.lastServiceDate.toDate(), "PPP")
-                            : "Not recorded"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Next Service
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {eq.nextServiceDate
-                            ? format(eq.nextServiceDate.toDate(), "PPP")
-                            : "Not scheduled"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Service Frequency
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          Every {eq.serviceFrequency || "—"} {eq.serviceFrequencyEvery || ""}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Installed
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {eq.dateInstalled
-                            ? format(eq.dateInstalled.toDate(), "PPP")
-                            : "Not recorded"}
-                        </p>
-                      </div>
-      
-                      <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Active
-                        </p>
-                        <p className="mt-1 text-sm text-slate-800">
-                          {eq.isActive ? "Yes" : "No"}
-                        </p>
-                      </div>
-                    </div>
-      
-                    <div className="mt-4">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                        Notes
-                      </p>
-                      <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                        {eq.notes || "No notes added."}
-                      </p>
-                    </div>
-                  </Link>
-                </li>
-              ))}
-      
-              {equipment.length === 0 && (
-                <p className="text-sm text-slate-500">None found.</p>
-              )}
-            </ul>
-          )}
+            {loading ? (
+                <ClipLoader size={20} />
+            ) : (
+                <ul className="space-y-3">
+                    {equipment.map((eq) => (
+                        <li key={eq.id}>
+                            <Link
+                                to={`/company/equipment/detail/${eq.id}`}
+                                className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
+                            >
+                                <div className="flex items-start justify-between gap-4">
+                                    <div>
+                                        <h3 className="text-sm font-semibold text-slate-900">
+                                            {eq.name || "Unnamed Equipment"}
+                                        </h3>
+                                        <p className="mt-1 text-sm text-slate-500">
+                                            {eq.type || "Unknown Type"}
+                                            {eq.model ? ` • ${eq.model}` : ""}
+                                            {eq.make ? ` • ${eq.make}` : ""}
+                                        </p>
+                                    </div>
+
+                                    <div className="flex flex-col items-end gap-2">
+                                        <span
+                                            className={`rounded-full px-3 py-1 text-xs font-semibold border ${eq.status === "Operational"
+                                                ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                                : "bg-amber-50 text-amber-700 border-amber-100"
+                                                }`}
+                                        >
+                                            {eq.status || "Unknown"}
+                                        </span>
+
+                                        {eq.needsService && (
+                                            <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 border border-red-100">
+                                                Needs Service
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Type
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">{eq.type || "Not specified"}</p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Make / Model
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {[eq.make, eq.model].filter(Boolean).join(" / ") || "Not specified"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Body of Water
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {eq.bodyOfWaterId || "Unassigned"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Pressure
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            Current: {eq.currentPressure ?? "—"} PSI
+                                            <br />
+                                            Clean: {eq.cleanFilterPressure ?? "—"} PSI
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Last Service
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {eq.lastServiceDate
+                                                ? format(eq.lastServiceDate.toDate(), "PPP")
+                                                : "Not recorded"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Next Service
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {eq.nextServiceDate
+                                                ? format(eq.nextServiceDate.toDate(), "PPP")
+                                                : "Not scheduled"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Service Frequency
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            Every {eq.serviceFrequency || "—"} {eq.serviceFrequencyEvery || ""}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Installed
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {eq.dateInstalled
+                                                ? format(eq.dateInstalled.toDate(), "PPP")
+                                                : "Not recorded"}
+                                        </p>
+                                    </div>
+
+                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Active
+                                        </p>
+                                        <p className="mt-1 text-sm text-slate-800">
+                                            {eq.isActive ? "Yes" : "No"}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-4">
+                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                        Notes
+                                    </p>
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                        {eq.notes || "No notes added."}
+                                    </p>
+                                </div>
+                            </Link>
+                        </li>
+                    ))}
+
+                    {equipment.length === 0 && (
+                        <p className="text-sm text-slate-500">None found.</p>
+                    )}
+                </ul>
+            )}
         </InfoCard>
-      
+
         <InfoCard title="Recent Service History">
-          {loading ? (
-            <ClipLoader size={20} />
-          ) : (
-            <ul className="divide-y divide-slate-200">
-              {serviceHistory.map((stop) => (
-                <li key={stop.id} className="py-3 flex items-center justify-between gap-4">
-                  <span className="text-sm font-medium text-slate-800">
-                    {format(stop.serviceDate.toDate(), "PPP")}
-                  </span>
-                  <span className="text-sm text-slate-500">{stop.tech}</span>
-                </li>
-              ))}
-              {serviceHistory.length === 0 && (
-                <p className="text-sm text-slate-500">No recent stops.</p>
-              )}
-            </ul>
-          )}
+            {loading ? (
+                <ClipLoader size={20} />
+            ) : (
+                <ul className="divide-y divide-slate-200">
+                    {serviceHistory.map((stop) => (
+                        <li key={stop.id} className="py-3 flex items-center justify-between gap-4">
+                            <span className="text-sm font-medium text-slate-800">
+                                {format(stop.serviceDate.toDate(), "PPP")}
+                            </span>
+                            <span className="text-sm text-slate-500">{stop.tech}</span>
+                        </li>
+                    ))}
+                    {serviceHistory.length === 0 && (
+                        <p className="text-sm text-slate-500">No recent stops.</p>
+                    )}
+                </ul>
+            )}
         </InfoCard>
-      </div>
+    </div>
     );
 };
 
@@ -626,7 +625,7 @@ const ContractsTab = ({ customer }) => {
     }, [customer, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/estimates/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
+        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/contracts/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
             {loading ? <ClipLoader size={30} /> : (
                 <div className="overflow-x-auto">
                     <table className="w-full text-left">
@@ -671,7 +670,7 @@ const LeadsTab = ({ customer }) => {
         const fetchLeads = async () => {
             setLoading(true);
             try {
-                const q = query(collection(db, 'homeOwnerServiceRequests'), where("customerId", "==", customer.id));
+                const q = query(collection(db, 'homeownerServiceRequests'), where("customerId", "==", customer.id));
                 const snapshot = await getDocs(q);
                 setLeads(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
             } catch (error) {
@@ -737,7 +736,7 @@ const RecurringTab = ({ customer }) => {
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <InfoCard title="Recurring Contracts" actions={<Link to={`/company/recurringContract/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
+            <InfoCard title="Recurring Contracts" actions={<Link to={`/company/recurring-contracts/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
                 {loading ? <ClipLoader size={20} /> : (
                     <ul className="divide-y divide-gray-200">
                         {recurringContracts.map(rc => (
@@ -799,7 +798,7 @@ const WorkOrdersTab = ({ customer }) => {
                                 <p className="font-semibold text-gray-800 truncate">{order.description}</p>
                                 <p className="text-sm text-gray-600">Status: {order.operationStatus}</p>
                             </div>
-                            <Link to={`/company/jobs/details/${order.id}`} className="text-sm font-semibold text-blue-600 hover:underline">View Details</Link>
+                            <Link to={`/company/jobs/detail/${order.id}`} className="text-sm font-semibold text-blue-600 hover:underline">View Details</Link>
                         </li>
                     ))}
                     {workOrders.length === 0 && <p className="text-gray-500">No jobs found.</p>}
@@ -841,7 +840,7 @@ const RepairRequestsSection = ({ customer }) => {
 
         const requestsQuery = query(collection(db, 'companies', recentlySelectedCompany, 'repairRequests'));
         const requestsSnapshot = await getDocs(requestsQuery);
-        
+
         const allRequests = requestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
 
         // TODO: add your internal repair request query here
@@ -850,10 +849,10 @@ const RepairRequestsSection = ({ customer }) => {
 
     const fetchExternalRepairRequests = async () => {
         // TODO: add your external repair request query here
-                                    
-        const customerRequestsQuery = query(collection(db, 'homeOwnerRepairRequests'),where("companyId","==",recentlySelectedCompany));
+
+        const customerRequestsQuery = query(collection(db, 'homeownerRepairRequests'), where("companyId", "==", recentlySelectedCompany));
         const customerRequestsSnapshot = await getDocs(customerRequestsQuery);
-        
+
         const customerRequests = customerRequestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
 
         return customerRequests;
@@ -983,7 +982,7 @@ const HistoryTab = ({ customer }) => {
     }, [customer, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/estimates/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
+        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/contracts/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
             {loading ? <ClipLoader size={30} /> : (
                 <div className="overflow-x-auto">
                     <table className="w-full text-left">
@@ -1030,7 +1029,7 @@ export default function CustomerDetails() {
     const [activeTab, setActiveTab] = useState(getInitialTab(tab));
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showInactiveModal, setShowInactiveModal] = useState(false);
-    
+
     useEffect(() => {
         setActiveTab(getInitialTab(tab));
     }, [tab, getInitialTab]);
@@ -1086,7 +1085,7 @@ export default function CustomerDetails() {
 
             const bowQ = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where("customerId", "==", customerId));
             const bowSnap = await getDocs(bowQ);
-             for (const bowDoc of bowSnap.docs) {
+            for (const bowDoc of bowSnap.docs) {
                 await deleteDoc(bowDoc.ref);
             }
 
@@ -1109,7 +1108,7 @@ export default function CustomerDetails() {
             setShowDeleteModal(false);
         }
     };
-    
+
     const handleMakeInactive = async () => {
         try {
             const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
@@ -1138,25 +1137,25 @@ export default function CustomerDetails() {
 
     const ModalShell = ({ title, children, onClose, footer }) => (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
-          <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-xl">
-            <div className="flex items-start justify-between gap-3 mb-5">
-              <div>
-                <h3 className="text-2xl font-bold text-gray-800">{title}</h3>
-              </div>
-              <button
-                onClick={onClose}
-                className="h-10 w-10 rounded-xl bg-gray-100 hover:bg-gray-200 transition flex items-center justify-center text-gray-700"
-                aria-label="Close"
-                type="button"
-              >
-                ✕
-              </button>
+            <div className="bg-white p-6 sm:p-8 rounded-2xl shadow-2xl w-full max-w-xl">
+                <div className="flex items-start justify-between gap-3 mb-5">
+                    <div>
+                        <h3 className="text-2xl font-bold text-gray-800">{title}</h3>
+                    </div>
+                    <button
+                        onClick={onClose}
+                        className="h-10 w-10 rounded-xl bg-gray-100 hover:bg-gray-200 transition flex items-center justify-center text-gray-700"
+                        aria-label="Close"
+                        type="button"
+                    >
+                        ✕
+                    </button>
+                </div>
+                <div className="text-gray-700">{children}</div>
+                {footer && <div className="mt-6 pt-6 border-t border-gray-200">{footer}</div>}
             </div>
-            <div className="text-gray-700">{children}</div>
-            {footer && <div className="mt-6 pt-6 border-t border-gray-200">{footer}</div>}
-          </div>
         </div>
-      );
+    );
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-slate-50 min-h-screen">
@@ -1164,9 +1163,9 @@ export default function CustomerDetails() {
                 <div className="mb-8">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                            <Link 
-                            to="/company/customers" 
-                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            <Link
+                                to="/company/customers"
+                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                             >&larr; Back to Customers</Link>
                             <h1 className="text-3xl font-semibold text-slate-900 mt-2">{customerName}</h1>
                             <p className="text-sm text-slate-500">{customer.email}</p>
@@ -1177,11 +1176,10 @@ export default function CustomerDetails() {
                                 onClick={() => setShowInactiveModal(true)}
                                 type="button"
                                 disabled={!customer.active}
-                                className={`px-4 py-2 text-sm font-medium rounded-xl shadow-sm border transition ${
-                                    customer.active
-                                        ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
-                                        : 'text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed'
-                                }`}
+                                className={`px-4 py-2 text-sm font-medium rounded-xl shadow-sm border transition ${customer.active
+                                    ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
+                                    : 'text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed'
+                                    }`}
                             >
                                 Make Inactive
                             </button>
@@ -1234,7 +1232,7 @@ export default function CustomerDetails() {
                     <p>Are you sure you want to permanently delete this customer and all of their associated data? This action cannot be undone.</p>
                 </ModalShell>
             )}
-            
+
             {showInactiveModal && (
                 <ModalShell
                     title="Make Customer Inactive"

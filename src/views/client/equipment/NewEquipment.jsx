@@ -22,7 +22,7 @@ const NewEquipment = () => {
     useEffect(() => {
         if (!user) return;
         const fetchLocations = async () => {
-            const q = query(collection(db, 'homeOwnerServiceLocations'), where("userId", "==", user.uid));
+            const q = query(collection(db, 'homeownerServiceLocations'), where("userId", "==", user.uid));
             const querySnapshot = await getDocs(q);
             const locations = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setServiceLocations(locations);
@@ -36,7 +36,7 @@ const NewEquipment = () => {
             return;
         }
         const fetchBodiesOfWater = async () => {
-            const q = query(collection(db, 'homeOwnerBodiesOfWater'), where("serviceLocationId", "==", selectedLocation));
+            const q = query(collection(db, 'homeownerBodiesOfWater'), where("serviceLocationId", "==", selectedLocation));
             const querySnapshot = await getDocs(q);
             const bow = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bow);
@@ -59,7 +59,7 @@ const NewEquipment = () => {
 
         try {
             const equipmentId = 'hoe_' + uuidv4();
-            const equipmentRef = doc(db, 'homeOwnerEquipment', equipmentId);
+            const equipmentRef = doc(db, 'homeownerEquipment', equipmentId);
 
             await setDoc(equipmentRef, {
                 ...equipment.toFirestore(),

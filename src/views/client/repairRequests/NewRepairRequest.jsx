@@ -6,7 +6,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Context } from '../../../context/AuthContext';
 import { RepairRequest } from '../../../utils/models/RepairRequest';
 import { ArrowUpOnSquareIcon, PhotoIcon } from '@heroicons/react/24/solid';
-import {v4 as uuidv4} from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 
 const NewRepairRequest = () => {
     const { user } = useContext(Context);
@@ -30,7 +30,7 @@ const NewRepairRequest = () => {
     useEffect(() => {
         if (!user) return;
         const fetchLocations = async () => {
-            const q = query(collection(db, 'homeOwnerServiceLocations'), where('userId', '==', user.uid));
+            const q = query(collection(db, 'homeownerServiceLocations'), where('userId', '==', user.uid));
             const querySnapshot = await getDocs(q);
             setServiceLocations(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         };
@@ -45,7 +45,7 @@ const NewRepairRequest = () => {
             return;
         }
         const fetchBodiesOfWater = async () => {
-            const q = query(collection(db, 'homeOwnerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation));
+            const q = query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation));
             const querySnapshot = await getDocs(q);
             setBodiesOfWater(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         };
@@ -60,7 +60,7 @@ const NewRepairRequest = () => {
             return;
         }
         const fetchEquipment = async () => {
-            const q = query(collection(db, 'homeOwnerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater));
+            const q = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater));
             const querySnapshot = await getDocs(q);
             setEquipment(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         };
@@ -97,7 +97,7 @@ const NewRepairRequest = () => {
             // 2. Create RepairRequest object
             const repairRequestId = "rr_" + uuidv4();
             const newRequest = new RepairRequest({
-                id:repairRequestId,
+                id: repairRequestId,
                 requesterId: user.uid,
                 requesterName: user.displayName || 'N/A',
                 date: new Date(),
@@ -107,11 +107,11 @@ const NewRepairRequest = () => {
                 locationId: selectedLocation,
                 bodyOfWaterId: selectedBodyOfWater,
                 equipmentId: selectedEquipment,
-                userId:user.uid
+                userId: user.uid
             });
-            
+
             // 3. Save to Firestore
-            await setDoc(doc(db, 'homeOwnerRepairRequests',repairRequestId), {
+            await setDoc(doc(db, 'homeownerRepairRequests', repairRequestId), {
                 ...newRequest.toFirestore(),
                 createdAt: serverTimestamp()
             });
@@ -130,7 +130,7 @@ const NewRepairRequest = () => {
             <div className="max-w-3xl mx-auto bg-white p-8 rounded-lg shadow-md">
                 <h1 className="text-3xl font-bold text-gray-900 mb-6">New Repair Request</h1>
                 <form onSubmit={handleSubmit} className="space-y-6">
-                    
+
                     <div>
                         <label htmlFor="location" className="block text-sm font-medium text-gray-700">Service Location</label>
                         <select id="location" value={selectedLocation} onChange={(e) => setSelectedLocation(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md" required>

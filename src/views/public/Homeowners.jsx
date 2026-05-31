@@ -47,7 +47,7 @@ export default function Homeowners() {
                                 <h2 className="text-2xl font-bold mb-3">Access Your Portal</h2>
                                 <p className="text-gray-600 mb-6">Sign in to view your service history, pay invoices, and communicate with your pool professional.</p>
                                 <Link
-                                    to="/homeOwnerSignIn"
+                                    to="/homeownerSignIn"
                                     className="inline-flex items-center bg-blue-600 text-white px-6 py-3 rounded-full font-semibold hover:bg-blue-700 transition"
                                 >
                                     <span>Homeowner Sign In</span>
@@ -58,7 +58,7 @@ export default function Homeowners() {
                                 <h2 className="text-2xl font-bold mb-3">New User?</h2>
                                 <p className="text-gray-600 mb-6">If your pool company has invited you to Drip Drop, sign up to create your account and access your portal.</p>
                                 <Link
-                                    to="/homeOwnerSignUp"
+                                    to="/homeownerSignUp"
                                     className="inline-flex items-center bg-green-500 text-white px-6 py-3 rounded-full font-semibold hover:bg-green-600 transition"
                                 >
                                     <span>Create Your Account</span>

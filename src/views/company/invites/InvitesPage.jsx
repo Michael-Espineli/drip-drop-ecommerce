@@ -16,16 +16,16 @@ const InvitesPage = ({ status: initialStatus }) => {
 
     useEffect(() => {
         if (!user?.email) return;
-        console.log("User Email: ",user.email)
-        console.log("Status: ",status)
-        
+        console.log("User Email: ", user.email)
+        console.log("Status: ", status)
+
         const invitesRef = collection(db, 'invites');
         const q = query(invitesRef, where('email', '==', user.email), where('status', '==', status));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const newInvites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
 
-            console.log("New Invites: ",newInvites)
+            console.log("New Invites: ", newInvites)
             setInvites(newInvites);
             setLoading(false);
         }, (error) => {
@@ -43,7 +43,7 @@ const InvitesPage = ({ status: initialStatus }) => {
             if (newStatus === 'accepted') {
                 const acceptTechInvite = httpsCallable(functions, 'acceptTechInvite');
                 const result = await acceptTechInvite({ inviteId: inviteId, userId: user.uid });
-                console.log("result: ",result)
+                console.log("result: ", result)
             }
         } catch (error) {
             console.error('Error updating invite status:', error);
@@ -87,9 +87,13 @@ const InvitesPage = ({ status: initialStatus }) => {
 
     return (
         <div className='w-full min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-4xl mx-auto">
-                <h1 className="text-3xl font-bold text-gray-800 mb-6">My Invitations</h1>
-                
+            <div className="mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-800">My Invitations</h1>
+                        <p className="text-gray-600 mt-1">Review and respond to invitations from pool companies.</p>
+                    </div>
+                </div>
                 <div className="flex space-x-2 border-b mb-6">
                     <Tab to="/invites/pending" title="Pending" active={status === 'pending'} />
                     <Tab to="/invites/accepted" title="Accepted" active={status === 'accepted'} />

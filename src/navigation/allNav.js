@@ -10,21 +10,27 @@ import {
     AiOutlineGlobal,
     AiOutlineTool,
     AiOutlineSolution
+
 } from "react-icons/ai";
+
+import {
+    ArchiveBoxIcon
+} from '@heroicons/react/24/outline';
 import { BiCategory, BiTachometer, BiPurchaseTagAlt, BiSolidReport } from "react-icons/bi";
 import {
-    FaUsers, 
-    FaUserTimes, 
-    FaCode, 
-    FaStore, 
-    FaRoute, 
-    FaSwimmingPool, 
-    FaHouseUser, 
-    FaUserCog, 
-    FaRegHandshake, 
-    FaRegFileAlt 
+    FaUsers,
+    FaUserTimes,
+    FaCode,
+    FaStore,
+    FaRoute,
+    FaSwimmingPool,
+    FaHouseUser,
+    FaUserCog,
+    FaRegHandshake,
+    FaRegFileAlt,
+    FaTruck
 } from "react-icons/fa";
-import { MdPayment, MdOutlineLocalOffer, MdEmail } from "react-icons/md";
+import { MdPayment, MdOutlineLocalOffer, MdEmail, MdShoppingCart } from "react-icons/md";
 import { IoIosChatbubbles, IoIosPeople, IoIosPricetags } from "react-icons/io";
 import { FaGear, FaWrench, FaFileContract, FaFileInvoiceDollar, FaRegBuilding, FaRegMap } from "react-icons/fa6";
 import { IoDocumentTextOutline } from "react-icons/io5";
@@ -52,6 +58,8 @@ export const allNav = [
     { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Marketing' },
     { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing' },
     { id: 66, title: 'Estimates', icon: <IoIosPricetags />, role: 'Company', path: '/company/estimates', category: 'Marketing' },
+    { id: 67, title: 'Recurring Contracts', icon: <AiOutlineFileText />, role: 'Company', path: '/company/recurring-contracts', category: 'Marketing' },
+    { id: 68, title: 'Contracts', icon: <AiOutlineFileText />, role: 'Company', path: '/company/contracts', category: 'Marketing' },
     { id: 90, title: 'Public Page', icon: <FaStore />, role: 'Company', path: '/company/public-profile', category: 'Marketing' },
 
     // Operations
@@ -59,14 +67,17 @@ export const allNav = [
     { id: 25, title: 'Customers', icon: <FaHouseUser />, role: 'Company', path: '/company/customers', category: 'Operations' },
     { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs', category: 'Operations' },
     { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment', category: 'Operations' },
-    { id: 32, title: 'Service Stops', icon: <AiOutlineTool />, role: 'Company', path: '/company/serviceStops', category: 'Operations' },
+    { id: 32, title: 'Fleet', icon: <FaTruck />, role: 'Company', path: '/company/fleet', category: 'Operations' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations' },
+    { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },
+    { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Operations' },
 
     // Routing
     { id: 50, title: 'Route Dashboard', icon: <FaRegMap />, role: 'Company', path: '/company/route-dashboard', category: 'Routing' },
     { id: 52, title: 'Route Management', icon: <FaRoute />, role: 'Company', path: '/company/route-management', category: 'Routing' },
+    { id: 58, title: 'Route Builder', icon: <AiOutlineGlobal />, role: 'Company', path: '/company/route-builder', category: 'Routing' },
     { id: 54, title: 'Recurring Service Stops', icon: <AiOutlineFileText />, role: 'Company', path: '/company/recurringServiceStop', category: 'Routing' },
-    { id: 56, title: 'Route Builder', icon: <AiOutlineGlobal />, role: 'Company', path: '/company/route-builder', category: 'Routing' },
+    { id: 56, title: 'Service Stops', icon: <AiOutlineTool />, role: 'Company', path: '/company/serviceStops', category: 'Routing' },
 
     // Users
     { id: 111, title: 'User Dashboard', icon: <AiOutlineDashboard />, role: 'Company', path: '/company/user-dashboard', category: 'Users' },
@@ -80,7 +91,7 @@ export const allNav = [
     // Settings
     // { id: 102, title: 'Reports', icon: <BiSolidReport />, role: 'Company', path: '/company/reports', category: 'Settings' },
     { id: 100, title: 'Settings', icon: <FaGear />, role: 'Company', path: '/company/Settings', category: 'Settings' },
-    
+
     // --- Client Routes ---
     { id: 1, title: 'Dashboard', icon: <AiOutlineDashboard />, role: 'Client', path: '/dashboard', category: 'NA' },
     { id: 2, title: 'My Pool', icon: <FaSwimmingPool />, role: 'Client', path: '/mypool/NA', category: 'NA' },

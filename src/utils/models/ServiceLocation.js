@@ -24,6 +24,7 @@ export class ServiceLocation {
     verified = false,
     photoUrls = [],
     label = "",
+    isActive = true,
   } = {}) {
     this.id = id;
     this.nickName = nickName;
@@ -48,6 +49,7 @@ export class ServiceLocation {
     this.verified = verified;
     this.photoUrls = photoUrls;
     this.label = label;
+    this.isActive = isActive;
   }
 
   static fromFirestore(snapshot, options) {
@@ -76,34 +78,36 @@ export class ServiceLocation {
       preText: data.preText,
       verified: data.verified,
       photoUrls: data.photoUrls || [], // Assuming photoUrls is an array and can be empty
-      label: data.address.streetAddress + ' ' + data.address.city + ' ' +  data.address.state + ' ' + data.address.zip 
+      label: data.address.streetAddress + ' ' + data.address.city + ' ' + data.address.state + ' ' + data.address.zip,
+      isActive: data.isActive || false
     });
   }
 
   toFirestore() {
     return {
-    nickName: this.nickName,
-    address: this.address, // Assuming Address has its own toFirestore or is a plain object
-    gateCode: this.gateCode,
-    dogName: this.dogName,
-    estimatedTime: this.estimatedTime,
-    mainContact: this.mainContact, // Assuming Contact has its own toFirestore or is a plain object
-    notes: this.notes,
-    bodiesOfWaterId: this.bodiesOfWaterId,
-    rateType: this.rateType,
-    laborType: this.laborType,
-    chemicalCost: this.chemicalCost,
-    laborCost: this.laborCost,
-    rate: this.rate,
-    customerId: this.customerId,
-    customerName: this.customerName,
-    backYardTree: this.backYardTree,
-    backYardBushes: this.backYardBushes,
-    backYardOther: this.backYardOther,
-    preText: this.preText,
-    verified: this.verified,
-    photoUrls: this.photoUrls,
-    label: this.label,
+      nickName: this.nickName,
+      address: this.address, // Assuming Address has its own toFirestore or is a plain object
+      gateCode: this.gateCode,
+      dogName: this.dogName,
+      estimatedTime: this.estimatedTime,
+      mainContact: this.mainContact, // Assuming Contact has its own toFirestore or is a plain object
+      notes: this.notes,
+      bodiesOfWaterId: this.bodiesOfWaterId,
+      rateType: this.rateType,
+      laborType: this.laborType,
+      chemicalCost: this.chemicalCost,
+      laborCost: this.laborCost,
+      rate: this.rate,
+      customerId: this.customerId,
+      customerName: this.customerName,
+      backYardTree: this.backYardTree,
+      backYardBushes: this.backYardBushes,
+      backYardOther: this.backYardOther,
+      preText: this.preText,
+      verified: this.verified,
+      photoUrls: this.photoUrls,
+      label: this.label,
+      isActive: this.isActive,
     };
   }
 

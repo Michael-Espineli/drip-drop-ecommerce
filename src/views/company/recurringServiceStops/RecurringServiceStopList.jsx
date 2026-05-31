@@ -40,7 +40,7 @@ const RecurringServiceStopList = () => {
         // Corrected navigation path
         navigate('/company/recurring-service-stops/create');
     };
-    
+
     const handleRowClick = (stopId) => {
         // Corrected navigation path
         navigate(`/company/recurringServiceStop/details/${stopId}`);
@@ -48,18 +48,19 @@ const RecurringServiceStopList = () => {
 
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-screen-xl mx-auto">
+            <div className="mx-auto">
                 <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold text-gray-800">Recurring Service Stops</h2>
+                    <div>
+                        <h2 className="text-3xl font-bold text-gray-800">Recurring Service Stops</h2>
+                    </div>
                     <button
                         onClick={handleCreateNew}
-                        className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>
-                        Create New
-                    </button>
+                        className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                    >Create New</button>
                 </div>
 
                 <div className="bg-white shadow-lg rounded-xl overflow-hidden">
-                     {isLoading ? (
+                    {isLoading ? (
                         <div className="text-center p-8"><p className="text-gray-500">Loading stops...</p></div>
                     ) : stops.length === 0 ? (
                         <div className="text-center p-8">
@@ -73,6 +74,7 @@ const RecurringServiceStopList = () => {
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned Tech</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Day</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Frequency</th>
                                     <th scope="col" className="relative px-6 py-3"><span className="sr-only">View</span></th>
                                 </tr>
@@ -90,8 +92,10 @@ const RecurringServiceStopList = () => {
                                             <div className="text-sm text-gray-900">{stop.tech || 'Not Assigned'}</div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
+                                            <div className="text-sm text-gray-500">{Array.isArray(stop.day) ? stop.day.join(', ') : stop.day}</div>
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="text-sm text-gray-900">{stop.frequency}</div>
-                                            <div className="text-sm text-gray-500">{Array.isArray(stop.daysOfWeek) ? stop.daysOfWeek.join(', ') : stop.daysOfWeek}</div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                             <span className="text-blue-600 hover:text-blue-900">View</span>

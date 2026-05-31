@@ -26,7 +26,7 @@ import { format } from "date-fns";
  *   techName: string,
  *   jobId: string,
  *   partIds: string[], // may be empty for service history
- *   source: "maintenance" | "service"
+ *   source: "maintenance" | "repair"
  * }
  */
 
@@ -44,7 +44,7 @@ export default function EquipmentServiceHistory() {
   const { recentlySelectedCompany } = useContext(Context);
 
   const [records, setRecords] = useState([]);
-  const [filter, setFilter] = useState("all"); // all | service | maintenance
+  const [filter, setFilter] = useState("all"); // all | maintenance | repair
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null); // { id, source }
@@ -56,36 +56,19 @@ export default function EquipmentServiceHistory() {
       if (!recentlySelectedCompany || !equipmentId) return;
 
       try {
-        // 1) serviceHistory
-        const serviceQ = query(
+        const serviceHistoryQ = query(
           collection(
             db,
             "companies",
             recentlySelectedCompany,
             "equipment",
             equipmentId,
-            "repairHistory"
+            "serviceHistory"
           ),
           orderBy("date", "desc")
         );
 
-        // 2) maintenanceHistory
-        const maintenanceQ = query(
-          collection(
-            db,
-            "companies",
-            recentlySelectedCompany,
-            "equipment",
-            equipmentId,
-            "maintenanceHistory"
-          ),
-          orderBy("date", "desc")
-        );
-
-        const [serviceSnap, maintenanceSnap] = await Promise.all([
-          getDocs(serviceQ),
-          getDocs(maintenanceQ),
-        ]);
+        const serviceHistorySnap = await getDocs(serviceHistoryQ);
 
         const toDateSafe = (maybeTimestamp) => {
           // Firestore Timestamp has .toDate()
@@ -109,16 +92,14 @@ export default function EquipmentServiceHistory() {
             techName: data?.techName ?? "",
             jobId: data?.jobId ?? "",
             partIds: Array.isArray(data?.partIds) ? data.partIds : [],
-            source, // "service" | "maintenance"
+            source,
           };
         };
 
-        const serviceRecords = serviceSnap.docs.map((d) => mapDoc(d, "repair"));
-        const maintenanceRecords = maintenanceSnap.docs.map((d) =>
-          mapDoc(d, "maintenance")
-        );
-
-        const merged = [...serviceRecords, ...maintenanceRecords].sort((a, b) => {
+        const merged = serviceHistorySnap.docs.map((d) => {
+          const type = String(d.data()?.type ?? "").toLowerCase();
+          return mapDoc(d, type === "repair" ? "repair" : "maintenance");
+        }).sort((a, b) => {
           const ad = a.date ? a.date.getTime() : 0;
           const bd = b.date ? b.date.getTime() : 0;
           return bd - ad;
@@ -154,9 +135,6 @@ export default function EquipmentServiceHistory() {
     if (!itemToDelete?.id || !itemToDelete?.source) return;
 
     try {
-      const collectionName =
-        itemToDelete.source === "maintenance" ? "serviceHistory" : "repairHistory";
-
       await deleteDoc(
         doc(
           db,
@@ -164,7 +142,7 @@ export default function EquipmentServiceHistory() {
           recentlySelectedCompany,
           "equipment",
           equipmentId,
-          collectionName,
+          "serviceHistory",
           itemToDelete.id
         )
       );
@@ -177,20 +155,20 @@ export default function EquipmentServiceHistory() {
   };
 
   const deleteLabel =
-    itemToDelete?.source === "service" ? "service record" : "maintenance record";
+    itemToDelete?.source === "repair" ? "repair record" : "maintenance record";
 
   return (
     <div className="px-2 md:px-7 py-6">
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-5">
         <div>
           <div>
-              <Link to={`/company/equipment/${equipmentId}`} className="text-sm font-semibold text-slate-600 hover:text-slate-900">&larr; Back to Equipment</Link>
-              
+            <Link to={`/company/equipment/detail/${equipmentId}`} className="text-sm font-semibold text-slate-600 hover:text-slate-900">&larr; Back to Equipment</Link>
+
             <h2 className="text-2xl font-semibold text-slate-900">
               Equipment Service History
             </h2>
             <p className="text-sm text-slate-500 mt-1">
-              View all service and maintenance events for this equipment.
+              View all maintenance and repair events for this equipment.
             </p>
           </div>
         </div>
@@ -250,12 +228,12 @@ export default function EquipmentServiceHistory() {
                       <span
                         className={[
                           "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border",
-                          item.source === "service"
-                            ? "bg-blue-50 text-blue-700 border-blue-100"
+                          item.source === "repair"
+                            ? "bg-rose-50 text-rose-700 border-rose-100"
                             : "bg-emerald-50 text-emerald-700 border-emerald-100",
                         ].join(" ")}
                       >
-                        {item.source === "service" ? "Service" : "Maintenance"}
+                        {item.source === "repair" ? "Repair" : "Maintenance"}
                       </span>
                     </td>
 

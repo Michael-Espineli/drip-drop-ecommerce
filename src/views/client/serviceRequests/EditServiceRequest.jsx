@@ -9,7 +9,7 @@ const EditServiceRequest = () => {
     const { requestId } = useParams();
     const { user } = useContext(Context);
     const navigate = useNavigate();
-    
+
     const [company, setCompany] = useState(null);
     const [description, setDescription] = useState('');
     const [serviceLocation, setServiceLocation] = useState('');
@@ -48,7 +48,7 @@ const EditServiceRequest = () => {
                 }
 
                 // Fetch user's service locations
-                const locationsRef = collection(db, 'homeOwnerServiceLocations');
+                const locationsRef = collection(db, 'homeownerServiceLocations');
                 const q = query(locationsRef, where("userId", "==", user.uid));
                 const querySnapshot = await getDocs(q);
                 const locations = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));

@@ -182,7 +182,7 @@ const EquipmentDetail = () => {
     (async () => {
       try {
         const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
-        const snap = await getDocs(query(usersRef, orderBy("name", "asc")));
+        const snap = await getDocs(query(usersRef, orderBy("userName", "asc")));
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setCompanyUsers(data);
 
@@ -462,7 +462,7 @@ const EquipmentDetail = () => {
       };
 
       await setDoc(serviceHistoryDoc, newMaintenanceRecord);
-  
+
       // ✅ compute next based on maintenance date + current schedule
       const next = computeNextServiceDate(maintenanceDate, serviceFrequency, serviceFrequencyEvery);
 
@@ -573,15 +573,15 @@ const EquipmentDetail = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-screen-xl mx-auto space-y-6">
+      <div className="mx-auto space-y-6">
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
 
-          <Link 
+            <Link
               to="/company/equipment"
               className="text-sm font-semibold text-slate-600 hover:text-slate-900"
-          >&larr; Back to Equipment</Link>
+            >&larr; Back to Equipment List</Link>
             <h2 className="text-3xl font-bold text-gray-800">Equipment</h2>
             <p className="text-gray-600 mt-1">
               <span className="font-semibold text-gray-800">{equipment?.name || "—"}</span>{" "}
@@ -589,7 +589,7 @@ const EquipmentDetail = () => {
                 to={`/company/customers/details/${equipment?.customerId}/locations`}
                 className="hover:text-blue-800"
               >
-              <span className="text-gray-400">•</span> {equipment?.customerName || "—"}
+                <span className="text-gray-400">•</span> {equipment?.customerName || "—"}
               </Link>
             </p>
           </div>
@@ -663,11 +663,11 @@ const EquipmentDetail = () => {
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.model || "—"}</p>
                 </div>
                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Installed</p>
-                      <p className="mt-1 text-gray-800 font-semibold">
-                        {equipment?.dateInstalled ? format(equipment.dateInstalled, "PP") : "N/A"}
-                      </p>
-                    </div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Installed</p>
+                  <p className="mt-1 text-gray-800 font-semibold">
+                    {equipment?.dateInstalled ? format(equipment.dateInstalled, "PP") : "N/A"}
+                  </p>
+                </div>
                 {
                   equipment.needsService ? (<>
                     <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -702,7 +702,7 @@ const EquipmentDetail = () => {
                           : "—"}
                       </p>
                     </div>
-                    </>):(<></>)
+                  </>) : (<></>)
                 }
               </div>
 
@@ -733,33 +733,33 @@ const EquipmentDetail = () => {
                 </Field>
 
                 <Field label="Date Installed">
-                  <DatePicker 
+                  <DatePicker
                     showIcon
-                    selected={dateInstalled ? format(dateInstalled, "yyyy-MM-dd") : ""} 
+                    selected={dateInstalled ? format(dateInstalled, "yyyy-MM-dd") : ""}
                     onChange={(e) => setDateInstalled(e)}
                     className={inputBase}
                     icon={
-                    <svg
+                      <svg
                         xmlns="http://www.w3.org/2000/svg"
                         width="1em"
                         height="1em"
                         viewBox="0 0 48 48"
-                    >
+                      >
                         <mask id="ipSApplication0">
-                        <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
+                          <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
                             <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
                             <path
-                            fill="#fff"
-                            d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
+                              fill="#fff"
+                              d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
                             ></path>
-                        </g>
+                          </g>
                         </mask>
                         <path
-                        fill="currentColor"
-                        d="M0 0h48v48H0z"
-                        mask="url(#ipSApplication0)"
+                          fill="currentColor"
+                          d="M0 0h48v48H0z"
+                          mask="url(#ipSApplication0)"
                         ></path>
-                    </svg>
+                      </svg>
                     }
                   />
                 </Field>
@@ -774,7 +774,7 @@ const EquipmentDetail = () => {
                     <span className="text-gray-700 font-semibold">{needsService ? "Yes" : "No"}</span>
                   </div>
                 </Field>
-    
+
                 <Field label="Status">
                   <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputBase}>
                     <option value="Operational">Operational</option>
@@ -788,11 +788,11 @@ const EquipmentDetail = () => {
                     <Field label="Clean Filter Pressure">
                       <input value={cleanFilterPressure} onChange={(e) => setCleanFilterPressure(e.target.value)} className={inputBase} />
                     </Field>
-    
+
                     <Field label="Current Pressure">
                       <input value={currentPressure} onChange={(e) => setCurrentPressure(e.target.value)} className={inputBase} />
                     </Field>
-    
+
                     {/* ✅ Date picker + drives nextServiceDate */}
                     {/* <Field label="Last Service Date">
                       <input
@@ -803,37 +803,37 @@ const EquipmentDetail = () => {
                       />
                     </Field> */}
                     <Field label="Last Service Date">
-                      <DatePicker 
+                      <DatePicker
                         showIcon
-                        selected={lastServiceDate ? format(lastServiceDate, "yyyy-MM-dd") : ""} 
+                        selected={lastServiceDate ? format(lastServiceDate, "yyyy-MM-dd") : ""}
                         onChange={(e) => setLastServiceDate(e)}
                         className={inputBase}
                         icon={
-                        <svg
+                          <svg
                             xmlns="http://www.w3.org/2000/svg"
                             width="1em"
                             height="1em"
                             viewBox="0 0 48 48"
-                        >
+                          >
                             <mask id="ipSApplication0">
-                            <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
+                              <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
                                 <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
                                 <path
-                                fill="#fff"
-                                d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
+                                  fill="#fff"
+                                  d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
                                 ></path>
-                            </g>
+                              </g>
                             </mask>
                             <path
-                            fill="currentColor"
-                            d="M0 0h48v48H0z"
-                            mask="url(#ipSApplication0)"
+                              fill="currentColor"
+                              d="M0 0h48v48H0z"
+                              mask="url(#ipSApplication0)"
                             ></path>
-                        </svg>
+                          </svg>
                         }
                       />
                     </Field>
-    
+
                     <Field label="Next Service Date (auto)">
                       <input
                         type="date"
@@ -842,7 +842,7 @@ const EquipmentDetail = () => {
                         className={`${inputBase} bg-gray-50`}
                       />
                     </Field>
-    
+
                     <Field label="Service Frequency (number)">
                       <input
                         type="number"
@@ -853,7 +853,7 @@ const EquipmentDetail = () => {
                         placeholder="e.g. 3"
                       />
                     </Field>
-    
+
                     <Field label="Service Frequency Every">
                       <select value={serviceFrequencyEvery} onChange={(e) => setServiceFrequencyEvery(e.target.value)} className={inputBase}>
                         <option value="">Select…</option>
@@ -863,8 +863,8 @@ const EquipmentDetail = () => {
                         <option value="Year">Year</option>
                       </select>
                     </Field>
-                  
-                  </>):(<>
+
+                  </>) : (<>
                   </>)
                 }
 
@@ -1050,7 +1050,7 @@ const EquipmentDetail = () => {
                   ) : (
                     companyUsers.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.name || u.fullName || u.email || u.id}
+                        {u.userName || u.email || u.id}
                       </option>
                     ))
                   )}
@@ -1124,7 +1124,7 @@ const EquipmentDetail = () => {
                   ) : (
                     companyUsers.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.name || u.fullName || u.email || u.id}
+                        {u.userName || u.email || u.id}
                       </option>
                     ))
                   )}
@@ -1194,7 +1194,7 @@ const EquipmentDetail = () => {
                 Cancel
               </button>
               <button
-              
+
                 onClick={async () => {
                   await handleDelete();
                 }}

@@ -295,7 +295,7 @@ const TaskGroupDetails = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
@@ -312,12 +312,14 @@ const TaskGroupDetails = () => {
             </p>
           </div>
 
-          <button
-            className="inline-flex items-center justify-center rounded-xl bg-red-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-red-700 transition"
-            onClick={customToast}
-          >
-            Delete Group
-          </button>
+          {taskGroup.canDelete && (
+            <button
+              className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 transition"
+              onClick={customToast}
+            >
+              Delete Group
+            </button>
+          )}
         </div>
 
         {/* Task List */}
@@ -499,7 +501,7 @@ const TaskGroupDetails = () => {
                 </button>
                 <button
                   onClick={(e) => handleAddTask(e)}
-                  className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-3 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition"
+                  className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 transition"
                 >
                   Add
                 </button>
@@ -562,7 +564,7 @@ const TaskGroupDetails = () => {
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
           <button
             onClick={(e) => clearNewTask(e)}
-            className="w-full inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+            className="w-full inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 transition"
           >
             Update Task Group
           </button>

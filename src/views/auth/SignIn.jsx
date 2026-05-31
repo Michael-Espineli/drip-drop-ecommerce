@@ -143,7 +143,7 @@ export default function SignIn() {
                     <div className="text-center text-sm text-gray-600 space-y-2">
                         <p>
                             Are you a homeowner?{' '}
-                            <Link to="/homeOwnerSignIn" className="font-medium text-blue-600 hover:text-blue-500">
+                            <Link to="/homeownerSignIn" className="font-medium text-blue-600 hover:text-blue-500">
                                 Sign in here
                             </Link>
                         </p>

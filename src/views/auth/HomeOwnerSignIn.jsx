@@ -107,7 +107,7 @@ export default function HomeOwnerSignIn() {
                         </form>
 
                         <p className="mt-6 text-center text-sm">
-                            Don't have an account? <Link to="/homeOwnerSignUp" className="font-medium text-blue-600">Sign up</Link>
+                            Don't have an account? <Link to="/signUp" className="font-medium text-blue-600">Sign up</Link>
                         </p>
                     </div>
 

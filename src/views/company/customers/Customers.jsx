@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { query, collection, getDocs, where, getCountFromServer, orderBy, doc, getDoc } from 'firebase/firestore';
+import { query, collection, getDocs, where, updateDoc, orderBy, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
+import { Equipment } from '../../../utils/models/Equipment';
 import { ClipLoader } from 'react-spinners';
 
 const UpgradeBanner = ({ remaining, onUpgrade }) => (
@@ -14,7 +15,7 @@ const UpgradeBanner = ({ remaining, onUpgrade }) => (
                     {remaining <= 0 ? 'Upgrade Required' : 'Approaching Limit'}
                 </p>
                 <p className={`text-sm ${remaining <= 0 ? 'text-red-700' : 'text-yellow-700'}`}>
-                    {remaining <= 0 
+                    {remaining <= 0
                         ? 'You have reached your maximum number of customers. Please upgrade your plan to add more.'
                         : `You can only add ${remaining} more customer(s). Please upgrade your plan soon.`}
                 </p>
@@ -53,20 +54,20 @@ export default function Customers() {
                 // In a real app, you would fetch this from your subscription management service.
                 const subQuery = query(collection(db, 'companies', recentlySelectedCompany, 'subscriptions'));
                 const subSnap = await getDocs(subQuery);
-                
+
                 if (!subSnap.empty) {
                     const subData = subSnap.docs[0].data();
                     //Get universal subscription info
                     const unSubRef = doc(db, 'subscriptions', subData.dripDropSubscriptionId);
-                    
+
                     const docSnap = await getDoc(unSubRef);
                     if (docSnap.exists()) {
                         const activeCount = customerData.filter(c => c.active).length;
                         // This is a placeholder for actual feature limits from your subscription model
                         const subscriptionFeatures = docSnap.data().features.filter(feature => feature.name === 'customerCount');
-                        console.log("[][] ",subscriptionFeatures)
+                        console.log("[][] ", subscriptionFeatures)
                         const customerLimit = subscriptionFeatures.limit
-                        console.log("[][] ",customerLimit)
+                        console.log("[][] ", customerLimit)
 
                         if (customerLimit === -1) {
                             setUpgradeState({ isUnlimited: true, remaining: Infinity });
@@ -102,22 +103,55 @@ export default function Customers() {
     }, [searchTerm, allCustomers]);
 
     const handleUpgradeClick = () => navigate('/company/settings/subscriptions/picker');
+    const updateCustomerAndLocations = async () => {
+        try {
+            const customerQuery = query(collection(db, 'companies', recentlySelectedCompany, 'equipment'));
+            const customerSnapshot = await getDocs(customerQuery);
+            const customerData = customerSnapshot.docs.map(doc => Equipment.fromFirestore(doc));
 
+            for (const customer of customerData) {
+                //update isActiveField
+                const customerRef = doc(db, 'companies', recentlySelectedCompany, 'equipment', customer.id);
+                await updateDoc(customerRef, { isActive: true });
+                console.log("update Equipment: ", customer.name);
+            }
+            // //get all serviceLocations
+            // const serviceLocationsQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'));
+            // const serviceLocationsSnapshot = await getDocs(serviceLocationsQuery);
+            // const serviceLocationsData = serviceLocationsSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
+            // for (const serviceLocation of serviceLocationsData) {
+            //     //update isActiveField
+            //     const serviceLocationRef = doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocation.id);
+            //     await updateDoc(serviceLocationRef, { isActive: true });
+            //     console.log("update: ", serviceLocation.customerName);
+            // }
+            console.log("done!")
+        } catch (error) {
+            console.log('Failed to update customer.');
+        }
+    };
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
-            <div className="max-w-7xl mx-auto">
+            <div className="mx-auto">
                 {/* Header */}
                 <div className="flex justify-between items-center mb-6">
-                    <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
+                    <div>
+                        <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
+                        <p className="text-gray-600 mt-1">Manage your customers and their information.</p>
+
+                    </div>
                     <div className="flex space-x-4">
                         <Link to="/company/customers/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
                             Upload Bulk
                         </Link>
-                        <Link to="/company/customers/createNew" 
-                        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700"
+                        <Link to="/company/customers/createNew"
+                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
                         >
                             + Create New
                         </Link>
+                        <button onClick={updateCustomerAndLocations} className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition">
+                            Update Equipment
+                        </button>
                     </div>
                 </div>
 
@@ -129,7 +163,7 @@ export default function Customers() {
                 {/* Main Content */}
                 <div className="bg-white p-6 rounded-2xl shadow-lg">
                     <div className="mb-4">
-                        <input 
+                        <input
                             type="text"
                             placeholder="Search customers..."
                             value={searchTerm}
@@ -155,9 +189,9 @@ export default function Customers() {
                                 </thead>
                                 <tbody>
                                     {filteredCustomers.map(customer => (
-                                        <tr 
-                                            key={customer.id} 
-                                            onClick={() => navigate(`/company/customers/details/${customer.id}`)} 
+                                        <tr
+                                            key={customer.id}
+                                            onClick={() => navigate(`/company/customers/details/${customer.id}`)}
                                             className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer"
                                         >
                                             <td className="px-4 py-4">

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { query, collection, getDocs } from "firebase/firestore";
-import { Link,useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Equipment } from "../../../utils/models/Equipment";
 import { format, isBefore, isEqual, startOfToday } from "date-fns";
 import * as XLSX from "xlsx";
@@ -32,7 +32,7 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
 );
 
 export default function EquipmentList() {
-    const navigate = useNavigate();
+  const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
 
   const [equipmentList, setEquipmentList] = useState([]);
@@ -253,7 +253,7 @@ export default function EquipmentList() {
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-screen-xl mx-auto">
+      <div className="mx-auto">
         <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6">
           <div>
             <h2 className="text-3xl font-bold text-gray-800">Equipment</h2>
@@ -272,7 +272,7 @@ export default function EquipmentList() {
 
           <Link
             to={"/company/equipment/createNew"}
-            className="inline-flex items-center justify-center py-2.5 px-4 bg-blue-600 text-white font-semibold rounded-xl shadow-md hover:bg-blue-700 transition"
+            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
           >
             Create New
           </Link>
@@ -375,29 +375,28 @@ export default function EquipmentList() {
 
                   return (
                     <tr key={equipment.id} className="hover:bg-gray-50 transition-colors"
-                    onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
+                      onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                       <td className="p-4 whitespace-nowrap">
-                          {equipment.customerName}
+                        {equipment.customerName}
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
-                          {equipment.make}
+                        {equipment.make}
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
-                          {equipment.model}
+                        {equipment.model}
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
-                          {equipment.type}
+                        {equipment.type}
                       </td>
 
                       <td
-                        className={`p-4 whitespace-nowrap ${
-                          dateIsDue(equipment.nextServiceDate) ? "text-red-600 font-semibold" : "text-gray-700"
-                        }`}
+                        className={`p-4 whitespace-nowrap ${dateIsDue(equipment.nextServiceDate) ? "text-red-600 font-semibold" : "text-gray-700"
+                          }`}
                       >
-                          {equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
+                        {equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
                       </td>
 
                       <td className="p-4 whitespace-nowrap">
@@ -412,7 +411,7 @@ export default function EquipmentList() {
                       </td>
 
                       <td className="p-4 whitespace-nowrap max-w-xs truncate text-gray-700" title={equipment.notes}>
-                          {equipment.notes}
+                        {equipment.notes}
                       </td>
                     </tr>
                   );
@@ -440,7 +439,7 @@ export default function EquipmentList() {
           <button
             type="button"
             onClick={downloadExcel}
-            className="inline-flex items-center justify-center py-2.5 px-4 bg-green-600 text-white font-semibold rounded-xl shadow-md hover:bg-green-700 transition"
+            className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl shadow-sm hover:bg-green-100 transition"
           >
             Download Excel
           </button>

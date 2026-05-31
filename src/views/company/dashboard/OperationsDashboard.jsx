@@ -1,13 +1,13 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, getDocs, orderBy, limit, Timestamp } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
-import { 
-    BriefcaseIcon, 
-    WrenchScrewdriverIcon, 
-    MapIcon, 
-    DocumentTextIcon, 
+import {
+    BriefcaseIcon,
+    WrenchScrewdriverIcon,
+    MapIcon,
+    DocumentTextIcon,
     ArrowRightIcon
 } from '@heroicons/react/24/outline';
 import { Link } from 'react-router-dom';
@@ -51,25 +51,26 @@ const OperationsDashboard = () => {
     const [upcomingJobs, setUpcomingJobs] = useState([]);
     const [repairRequests, setRepairRequests] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
-
+    const [operationStatusFilter, setOperationStatusFilter] = useState(["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]);
+    const [billingStatusFilter, setBillingStatusFilter] = useState(["Draft", "Estimate", "Accepted", "In Progress"]);
     useEffect(() => {
         if (!recentlySelectedCompany) return;
 
         const fetchData = async () => {
             setIsLoading(true);
             try {
-                const jobsRef = collection(db, 'companies', recentlySelectedCompany, 'jobs');
+                const jobsRef = collection(db, 'companies', recentlySelectedCompany, 'workOrders');
                 const repairsRef = collection(db, 'companies', recentlySelectedCompany, 'repairRequests');
                 const routesRef = collection(db, 'companies', recentlySelectedCompany, 'routes');
-                const contractsRef = collection(db, 'companies', recentlySelectedCompany, 'contracts');
+                const equipRef = collection(db, 'companies', recentlySelectedCompany, 'equipment');
 
                 const [jobsSnap, repairsSnap, routesSnap, contractsSnap, upcomingJobsSnap, repairRequestsSnap] = await Promise.all([
-                    getDocs(query(jobsRef, where('status', '==', 'active'))),
-                    getDocs(query(repairsRef, where('status', '==', 'pending'))),
+                    getDocs(query(jobsRef, where('operationStatus', 'in', operationStatusFilter), where('billingStatus', 'in', billingStatusFilter))),
+                    getDocs(query(repairsRef, where('status', '==', 'Pending'))),
                     getDocs(query(routesRef)),
-                    getDocs(query(contractsRef, where('status', '==', 'active'))),
-                    getDocs(query(jobsRef, where('status', '==', 'active'), orderBy('startDate'), limit(5))),
-                    getDocs(query(repairsRef, where('status', '==', 'pending'), orderBy('requestDate', 'desc'), limit(5))),
+                    getDocs(query(equipRef, where('nextServiceDate', '<=', Timestamp.now()))),
+                    getDocs(query(jobsRef, where('operationStatus', 'in', operationStatusFilter), limit(5))),
+                    getDocs(query(repairsRef, where('status', '==', 'Pending'), orderBy('requestDate', 'desc'), limit(5))),
                 ]);
 
                 setStats({
@@ -98,7 +99,7 @@ const OperationsDashboard = () => {
 
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-7xl mx-auto">
+            <div className="mx-auto">
                 <header className="mb-8">
                     <h1 className="text-3xl font-bold text-gray-800">Operations Dashboard</h1>
                     <p className="text-gray-600 mt-1">A real-time overview of your company's activities.</p>
@@ -115,25 +116,25 @@ const OperationsDashboard = () => {
                     <InfoSection title="Upcoming Jobs" viewAllLink="/company/jobs">
                         {upcomingJobs.length > 0 ? (
                             upcomingJobs.map(job => (
-                                <InfoListItem 
-                                    key={job.id} 
-                                    primary={job.name}
+                                <InfoListItem
+                                    key={job.id}
+                                    primary={job.internalId || job.description || job.id}
                                     secondary={job.customerName}
-                                    date={job.startDate?.toDate().toLocaleDateString()}
-                                    linkTo={`/company/jobs/${job.id}`}
+                                    date={job.dateCreated?.toDate().toLocaleDateString()}
+                                    linkTo={`/company/jobs/detail/${job.id}`}
                                 />
                             ))
                         ) : <p className='text-gray-500 p-3'>No upcoming jobs.</p>}
                     </InfoSection>
-                    <InfoSection title="Recent Repair Requests" viewAllLink="/company/repairs">
-                         {repairRequests.length > 0 ? (
+                    <InfoSection title="Recent Repair Requests" viewAllLink="/company/repair-requests">
+                        {repairRequests.length > 0 ? (
                             repairRequests.map(req => (
-                                <InfoListItem 
-                                    key={req.id} 
+                                <InfoListItem
+                                    key={req.id}
                                     primary={req.issueDescription}
                                     secondary={req.customerName}
                                     date={req.requestDate?.toDate().toLocaleDateString()}
-                                    linkTo={`/company/repairs/${req.id}`}
+                                    linkTo={`/company/repair-requests/detail/${req.id}`}
                                 />
                             ))
                         ) : <p className='text-gray-500 p-3'>No pending repair requests.</p>}

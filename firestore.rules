@@ -1,8 +1,169 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function userAccessPath(companyId) {
+      return /databases/$(database)/documents/users/$(request.auth.uid)/userAccess/$(companyId);
+    }
+
+    function hasCompanyAccess(companyId) {
+      return signedIn()
+        && companyId is string
+        && exists(userAccessPath(companyId));
+    }
+
+    function isCompanyAdmin(companyId) {
+      return hasCompanyAccess(companyId)
+        && get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"];
+    }
+
+    function isPersonalOrCompanyData(data) {
+      return signedIn()
+        && (
+          (data.userId is string && data.userId == request.auth.uid)
+          || (data.ownerId is string && data.ownerId == request.auth.uid)
+          || (data.clientId is string && data.clientId == request.auth.uid)
+          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
+          || (data.companyId is string && hasCompanyAccess(data.companyId))
+          || (data.senderId is string && hasCompanyAccess(data.senderId))
+          || (data.receiverId is string && hasCompanyAccess(data.receiverId))
+        );
+    }
+
+    function chatParticipant(data) {
+      return signedIn()
+        && data.participantIds is list
+        && request.auth.uid in data.participantIds;
+    }
+
+    match /users/{userId} {
+      allow create: if isSelf(userId)
+        && request.resource.data.id == request.auth.uid;
+      allow read, update: if isSelf(userId);
+      allow delete: if false;
+
+      match /userAccess/{accessId} {
+        allow read: if isSelf(userId);
+        allow create, update, delete: if false;
+      }
+
+      match /savedCompanies/{savedCompanyId} {
+        allow read, write: if isSelf(userId);
+      }
+
+      match /recentActivity/{activityId} {
+        allow read, write: if isSelf(userId);
+      }
+    }
+
+    match /companies/{companyId} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.ownerId == request.auth.uid;
+      allow update: if isCompanyAdmin(companyId);
+      allow delete: if false;
+
+      match /{document=**} {
+        allow read, write: if hasCompanyAccess(companyId);
+      }
+    }
+
+    match /invites/{inviteId} {
+      allow read: if signedIn()
+        && (
+          (resource.data.email is string && resource.data.email == request.auth.token.email)
+          || (resource.data.userId is string && resource.data.userId == request.auth.uid)
+          || (resource.data.companyId is string && hasCompanyAccess(resource.data.companyId))
+        );
+      allow create: if signedIn()
+        && request.resource.data.companyId is string
+        && hasCompanyAccess(request.resource.data.companyId);
+      allow update: if signedIn()
+        && resource.data.companyId is string
+        && (
+          hasCompanyAccess(resource.data.companyId)
+          || (
+            resource.data.email is string
+            && resource.data.email == request.auth.token.email
+            && request.resource.data.companyId == resource.data.companyId
+            && request.resource.data.roleId == resource.data.roleId
+          )
+        );
+      allow delete: if signedIn()
+        && resource.data.companyId is string
+        && isCompanyAdmin(resource.data.companyId);
+    }
+
+    match /chats/{chatId} {
+      allow create: if chatParticipant(request.resource.data);
+      allow read, update, delete: if chatParticipant(resource.data);
+    }
+
+    match /messages/{messageId} {
+      allow create: if signedIn()
+        && request.resource.data.senderId == request.auth.uid;
+      allow read, update, delete: if signedIn()
+        && (
+          resource.data.senderId == request.auth.uid
+          || resource.data.receiverId == request.auth.uid
+        );
+    }
+
+    match /homeownerServiceRequests/{requestId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /contracts/{contractId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /recurringContracts/{contractId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /laborContracts/{contractId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /serviceStops/{serviceStopId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /workOrders/{workOrderId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /invoices/{invoiceId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /subscriptions/{subscriptionId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /universal/{document=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     match /{document=**} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
   }
 }

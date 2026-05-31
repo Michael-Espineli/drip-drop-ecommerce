@@ -89,7 +89,7 @@ const SubscriptionPicker = () => {
                 subscriptionId: activeSubscription.stripeSubscriptionId,
                 newPriceId: selectedPlanForPreview.stripePriceId,
             });
-            
+
             toast.success('Subscription updated successfully!', { id: toastId });
             // The webhook will handle the DB update, we just need to navigate.
             navigate('/company/settings/subscriptions');
@@ -109,7 +109,7 @@ const SubscriptionPicker = () => {
         }
 
         // SCENARIO 1: User has an active subscription and is changing plans.
-        if (activeSubscription) {
+        if (activeSubscription.stripeSubscriptionId) {
             setIsPreviewLoading(true);
             const toastId = toast.loading('Generating preview...');
 
@@ -140,13 +140,13 @@ const SubscriptionPicker = () => {
             try {
                 if (!stripeId || !dataBaseUser?.id || !recentlySelectedCompany) {
                     navigate('/company/settings/subscriptions/picker');
-                     throw new Error("User, company, or Stripe customer information is missing.");
+                    throw new Error("User, company, or Stripe customer information is missing.");
                 }
                 const successUrl = `${window.location.origin}/company/settings/subscriptions?success=true`;
                 const cancelUrl = `${window.location.origin}/company/settings/subscriptions/picker?canceled=true`;
 
-                const createCheckoutSession = httpsCallable(functions, 'createSubscriptionCheckoutSession');
-                const result = await createCheckoutSession({
+                const createSubscriptionCheckoutSession = httpsCallable(functions, 'createSubscriptionCheckoutSession');
+                const result = await createSubscriptionCheckoutSession({
                     stripePriceId: selectedPlan.stripePriceId,
                     stripeId: stripeId,
                     userId: dataBaseUser.id,
@@ -179,14 +179,14 @@ const SubscriptionPicker = () => {
             <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
                 <div className="bg-gray-800 rounded-lg shadow-xl p-8 max-w-lg w-full text-white">
                     <h2 className="text-3xl font-bold mb-6 text-center">Confirm Your Plan Change</h2>
-                    
+
                     <div className="space-y-4 mb-8">
                         <div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
                             <span className="font-semibold text-gray-300">Current Plan:</span>
                             <span className="font-bold text-lg">{activeSubscription.name}</span>
                         </div>
                         <div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                             <span className="font-semibold text-gray-300">New Plan:</span>
+                            <span className="font-semibold text-gray-300">New Plan:</span>
                             <span className="font-bold text-lg text-yellow-500">{selectedPlanForPreview.name}</span>
                         </div>
                     </div>
@@ -211,7 +211,7 @@ const SubscriptionPicker = () => {
                                 <span className="font-bold">Immediate Total:</span>
                                 <span className="font-extrabold text-yellow-500">{formatCurrency(immediateCharge)}</span>
                             </div>
-                             <div className="flex justify-between mt-2">
+                            <div className="flex justify-between mt-2">
                                 <span className="text-gray-400">Next billing date ({new Date(previewInvoice.next_payment_attempt * 1000).toLocaleDateString()}):</span>
                                 <span className="font-medium">{formatCurrency(nextPayment)}</span>
                             </div>
@@ -219,13 +219,13 @@ const SubscriptionPicker = () => {
                     </div>
 
                     <div className="flex justify-end space-x-4">
-                        <button 
+                        <button
                             onClick={() => setShowPreviewModal(false)}
                             className="py-2 px-6 bg-gray-600 hover:bg-gray-500 rounded-lg font-bold transition duration-200"
                         >
                             Cancel
                         </button>
-                        <button 
+                        <button
                             onClick={handleConfirmUpdate}
                             className="py-2 px-6 bg-yellow-500 hover:bg-yellow-600 text-black rounded-lg font-bold transition duration-200"
                         >
@@ -241,7 +241,7 @@ const SubscriptionPicker = () => {
         <>
             <PreviewModal />
             <div className='px-4 md:px-8 py-10 bg-gray-800 text-white min-h-screen'>
-                 <div className="max-w-6xl mx-auto">
+                <div className="max-w-6xl mx-auto">
                     <div className="text-center mb-12">
                         <h1 className="text-4xl md:text-5xl font-bold mb-4">Choose Your Plan</h1>
                         <p className="text-lg text-gray-400">Select the perfect plan to fit the needs of your business.</p>
@@ -264,7 +264,7 @@ const SubscriptionPicker = () => {
                                             {sub.price > 0 && <span className="text-lg font-medium text-gray-400">/ month</span>}
                                         </p>
                                         <p className="text-gray-400 mb-6 min-h-[50px]">{sub.description}</p>
-                                        
+
                                         <ul className="space-y-4 mb-8 flex-grow">
                                             {sub.featureSet?.map((feature, index) => (
                                                 <li key={index} className="flex items-start">
@@ -277,13 +277,12 @@ const SubscriptionPicker = () => {
                                         <button
                                             onClick={() => handlePlanSelection(sub)}
                                             disabled={isCurrentPlan || isPreviewLoading}
-                                            className={`mt-auto w-full font-bold py-3 px-6 rounded-lg text-lg transition duration-300 ${
-                                                isCurrentPlan 
-                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed' 
-                                                : isPreviewLoading 
-                                                ? 'bg-gray-500 text-gray-300 cursor-wait'
-                                                : 'bg-yellow-500 hover:bg-yellow-600 text-black'
-                                            }`}
+                                            className={`mt-auto w-full font-bold py-3 px-6 rounded-lg text-lg transition duration-300 ${isCurrentPlan
+                                                ? 'bg-gray-600 text-gray-400 cursor-not-allowed'
+                                                : isPreviewLoading
+                                                    ? 'bg-gray-500 text-gray-300 cursor-wait'
+                                                    : 'bg-yellow-500 hover:bg-yellow-600 text-black'
+                                                }`}
                                         >
                                             {isCurrentPlan ? 'Current Plan' : 'Select Plan'}
                                         </button>

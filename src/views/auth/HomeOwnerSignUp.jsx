@@ -106,19 +106,19 @@ export default function HomeOwnerSignUp() {
 
                         <form onSubmit={handleSignUp} className="space-y-4">
                             <div className="flex gap-4">
-                                <input name="firstName" type="text" value={formData.firstName} onChange={handleChange} placeholder="First Name" required className="w-full px-3 py-3 border rounded-md"/>
-                                <input name="lastName" type="text" value={formData.lastName} onChange={handleChange} placeholder="Last Name" required className="w-full px-3 py-3 border rounded-md"/>
+                                <input name="firstName" type="text" value={formData.firstName} onChange={handleChange} placeholder="First Name" required className="w-full px-3 py-3 border rounded-md" />
+                                <input name="lastName" type="text" value={formData.lastName} onChange={handleChange} placeholder="Last Name" required className="w-full px-3 py-3 border rounded-md" />
                             </div>
-                            <input name="email" type="email" value={formData.email} onChange={handleChange} placeholder="Email address" required className="w-full px-3 py-3 border rounded-md"/>
-                            <input name="password" type="password" value={formData.password} onChange={handleChange} placeholder="Password (8+ characters)" required className="w-full px-3 py-3 border rounded-md"/>
-                            <input name="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleChange} placeholder="Confirm Password" required className="w-full px-3 py-3 border rounded-md"/>
+                            <input name="email" type="email" value={formData.email} onChange={handleChange} placeholder="Email address" required className="w-full px-3 py-3 border rounded-md" />
+                            <input name="password" type="password" value={formData.password} onChange={handleChange} placeholder="Password (8+ characters)" required className="w-full px-3 py-3 border rounded-md" />
+                            <input name="confirmPassword" type="password" value={formData.confirmPassword} onChange={handleChange} placeholder="Confirm Password" required className="w-full px-3 py-3 border rounded-md" />
 
                             <button type="submit" disabled={loading} className="w-full py-3 mt-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium disabled:opacity-50">
                                 {loading ? 'Creating Account...' : 'Sign Up'}
                             </button>
 
                             <p className="text-center text-sm pt-4">
-                                Already have an account? <Link to="/homeOwnerSignIn" className="font-medium text-blue-600">Sign In</Link>
+                                Already have an account? <Link to="/homeownerSignIn" className="font-medium text-blue-600">Sign In</Link>
                             </p>
                         </form>
                     </div>

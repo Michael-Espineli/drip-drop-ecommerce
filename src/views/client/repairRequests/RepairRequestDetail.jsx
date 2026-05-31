@@ -25,7 +25,7 @@ const RepairRequestDetail = () => {
             try {
                 setLoading(true);
                 console.log("Getting Repair Requets: ", repairRequestId)
-                const requestRef = doc(db, 'homeOwnerRepairRequests', repairRequestId);
+                const requestRef = doc(db, 'homeownerRepairRequests', repairRequestId);
                 const requestSnap = await getDoc(requestRef);
 
                 if (requestSnap.exists()) {
@@ -33,30 +33,30 @@ const RepairRequestDetail = () => {
                     const requestData = requestSnap.data();
                     setRequest({ id: requestSnap.id, ...requestData });
 
-                
+
                     // Fetch related data
                     if (requestData.locationId) {
-                        const locationRef = doc(db, 'homeOwnerServiceLocations', requestData.locationId);
+                        const locationRef = doc(db, 'homeownerServiceLocations', requestData.locationId);
                         const locationSnap = await getDoc(locationRef);
                         if (locationSnap.exists()) {
                             setLocation(locationSnap.data());
                         }
                     }
                     if (requestData.bodyOfWaterId) {
-                        const bodyOfWaterRef = doc(db, 'homeOwnerBodiesOfWater', requestData.bodyOfWaterId);
+                        const bodyOfWaterRef = doc(db, 'homeownerBodiesOfWater', requestData.bodyOfWaterId);
                         const bodyOfWaterSnap = await getDoc(bodyOfWaterRef);
                         if (bodyOfWaterSnap.exists()) {
                             setBodyOfWater(bodyOfWaterSnap.data());
                         }
                     }
                     if (requestData.equipmentId) {
-                        const equipmentRef = doc(db, 'homeOwnerEquipment', requestData.equipmentId);
+                        const equipmentRef = doc(db, 'homeownerEquipment', requestData.equipmentId);
                         const equipmentSnap = await getDoc(equipmentRef);
                         if (equipmentSnap.exists()) {
                             setEquipment(equipmentSnap.data());
                         }
                     }
-                    
+
                 } else {
                     setError('Repair request not found.');
                 }
@@ -93,7 +93,7 @@ const RepairRequestDetail = () => {
                         <h1 className="text-3xl font-bold text-gray-800">Repair Request Details</h1>
                         <p className="text-sm text-gray-500 mt-1">Submitted on {new Date(request.date.seconds * 1000).toLocaleDateString()}</p>
                     </div>
-                    
+
                     <div className="p-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div>
@@ -102,11 +102,10 @@ const RepairRequestDetail = () => {
                             </div>
                             <div>
                                 <h3 className="font-semibold text-lg text-gray-700 mb-2">Request Status</h3>
-                                <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                                    request.status === 'pending' ? 'bg-yellow-200 text-yellow-800' :
-                                    request.status === 'in-progress' ? 'bg-blue-200 text-blue-800' :
-                                    'bg-green-200 text-green-800'
-                                }`}>
+                                <span className={`px-3 py-1 rounded-full text-sm font-semibold ${request.status === 'pending' ? 'bg-yellow-200 text-yellow-800' :
+                                        request.status === 'in-progress' ? 'bg-blue-200 text-blue-800' :
+                                            'bg-green-200 text-green-800'
+                                    }`}>
                                     {request.status}
                                 </span>
                             </div>
@@ -136,8 +135,8 @@ const RepairRequestDetail = () => {
                                 <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
                                     {images.map(image => (
                                         <div key={image.id} className="relative">
-                                            <img 
-                                                src={image.imageURL} 
+                                            <img
+                                                src={image.imageURL}
                                                 alt={image.description || 'Repair request photo'}
                                                 className="w-full h-32 object-cover rounded-lg shadow-md"
                                             />

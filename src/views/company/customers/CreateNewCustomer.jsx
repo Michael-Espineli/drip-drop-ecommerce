@@ -47,13 +47,15 @@ const CreateNewCustomer = () => {
     // Form state
     const [displayAsCompany, setDisplayAsCompany] = useState(false);
     const [useDifferentBillingAddress, setUseDifferentBillingAddress] = useState(false);
-    
+
     const [formData, setFormData] = useState({ firstName: '', lastName: '', company: '', email: '', phoneNumber: '', billingNotes: '' });
     const [serviceAddress, setServiceAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: null, longitude: null });
     const [billingAddress, setBillingAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: null, longitude: null });
-    const [serviceLocationDetails, setServiceLocationDetails] = useState({ gateCode: '', notes: '', preText: false, estimatedTime:15,nickName:"Main", verified:false, rateType:"", laborType:"", chemicalCost:"", laborCost:"", rate:"", 
-        photoUrls:[]  });
-    const [mainContact, setMainContact] = useState({ id: "com_cus_con_"+uuidv4() ,name: '', email: '', phoneNumber: '', notes: '' });
+    const [serviceLocationDetails, setServiceLocationDetails] = useState({
+        gateCode: '', notes: '', preText: false, estimatedTime: 15, nickName: "Main", verified: false, rateType: "", laborType: "", chemicalCost: "", laborCost: "", rate: "",
+        photoUrls: []
+    });
+    const [mainContact, setMainContact] = useState({ id: "com_cus_con_" + uuidv4(), name: '', email: '', phoneNumber: '', notes: '' });
     const [dogName, setDogName] = useState("");
 
     const [bodyOfWater, setBodyOfWater] = useState({ name: 'Main', gallons: '16000', waterType: 'Chlorine', material: 'Plaster', notes: '', shape: '' });
@@ -61,7 +63,7 @@ const CreateNewCustomer = () => {
         { name: 'Pump', category: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, customCategory: '', customMake: '', customModel: '' },
         { name: 'Filter', category: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: true, customCategory: '', customMake: '', customModel: '' }
     ]);
-    
+
     const [equipmentTypes, setEquipmentTypes] = useState([]);
     const [equipmentMakes, setEquipmentMakes] = useState([[], []]);
     const [equipmentModels, setEquipmentModels] = useState([[], []]);
@@ -101,8 +103,8 @@ const CreateNewCustomer = () => {
                 }
             }
         } else {
-             setEquipmentMakes(prev => { const next = [...prev]; next[index] = []; return next; });
-             setEquipmentModels(prev => { const next = [...prev]; next[index] = []; return next; });
+            setEquipmentMakes(prev => { const next = [...prev]; next[index] = []; return next; });
+            setEquipmentModels(prev => { const next = [...prev]; next[index] = []; return next; });
         }
     };
 
@@ -125,12 +127,12 @@ const CreateNewCustomer = () => {
             return next;
         });
     };
-    
+
     const handlePlaceSelected = (place, type) => {
         if (!place) return;
-        const address = { 
-            streetAddress: place.streetAddress, city: place.city, state: place.state, zip: place.zipCode, 
-            latitude: place.latitude, longitude: place.longitude 
+        const address = {
+            streetAddress: place.streetAddress, city: place.city, state: place.state, zip: place.zipCode,
+            latitude: place.latitude, longitude: place.longitude
         };
         if (type === 'billing') setBillingAddress(address);
         else setServiceAddress(address);
@@ -159,24 +161,24 @@ const CreateNewCustomer = () => {
 
             // 1. Create Customer
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customerId), {
-                id: customerId, ...formData, 
-                displayAsCompany, 
-                active: true, 
-                billingAddress: finalBillingAddress, 
+                id: customerId, ...formData,
+                displayAsCompany,
+                active: true,
+                billingAddress: finalBillingAddress,
                 linkedCustomerIds: [],
                 linkedInviteId: "",
                 hireDate: new Date(),
-                phoneLabel:""
+                phoneLabel: ""
             });
 
             // 2. Create Service Location
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), {
-                id: serviceLocationId, 
-                customerId, 
-                address: serviceAddress, 
-                mainContact, ...serviceLocationDetails, 
+                id: serviceLocationId,
+                customerId,
+                address: serviceAddress,
+                mainContact, ...serviceLocationDetails,
                 bodiesOfWaterId: [bodyOfWaterId],
-                dogName:[dogName]
+                dogName: [dogName]
             });
 
             // 3. Create Body of Water
@@ -192,23 +194,23 @@ const CreateNewCustomer = () => {
                     const finalMake = eq.make === 'Other' ? eq.customMake : eq.make;
                     const finalModel = eq.model === 'Other' ? eq.customModel : eq.model;
 
-                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), { 
+                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
                         id: equipmentId, name: eq.name, notes: eq.notes, needsService: eq.needsService,
-                        type: finalCategory, 
+                        type: finalCategory,
                         typeId: "",
-                        make: finalMake, 
+                        make: finalMake,
                         makeId: "",
                         model: finalModel,
                         modelId: "",
-                        customerId, 
-                        serviceLocationId, 
-                        bodyOfWaterId, 
+                        customerId,
+                        serviceLocationId,
+                        bodyOfWaterId,
                         customerName: displayAsCompany ? formData.company : `${formData.firstName} ${formData.lastName}`,
                         dateInstalled: new Date(), active: true, status: 'Operational'
                     });
                 }
             }
-            
+
             toast.success('Customer created successfully!', { id: toastId });
             navigate('/company/customers');
         } catch (error) {
@@ -222,22 +224,25 @@ const CreateNewCustomer = () => {
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
                 <UpgradeModal isOpen={showUpgradeModal} onClose={() => setShowUpgradeModal(false)} featureName="Active Customers" />
-                <h1 className='text-3xl font-bold text-gray-900 mb-6'>Create New Customer</h1>
+                <div>
+                    <h1 className='text-3xl font-bold text-gray-900 mb-6'>Create New Customer</h1>
+                    <p className="text-gray-600 mt-1">Create a new customer and add their service locations and bodies of water.</p>
+                </div>
                 <form onSubmit={handleCreate} className="bg-white p-8 rounded-2xl shadow-lg space-y-8">
-                    
+
                     <InfoSection title="Customer Details">
                         <div className="flex justify-end">
-                            <label className="flex items-center"><input type="checkbox" checked={displayAsCompany} onChange={(e) => setDisplayAsCompany(e.target.checked)} className="mr-2 h-4 w-4"/>Display as Company</label>
+                            <label className="flex items-center"><input type="checkbox" checked={displayAsCompany} onChange={(e) => setDisplayAsCompany(e.target.checked)} className="mr-2 h-4 w-4" />Display as Company</label>
                         </div>
                         {displayAsCompany ? (
-                           <FormInput label="Company Name" name="company" value={formData.company} onChange={e => handleStateChange(setFormData, 'company', e.target.value)} required />
+                            <FormInput label="Company Name" name="company" value={formData.company} onChange={e => handleStateChange(setFormData, 'company', e.target.value)} required />
                         ) : (
                             <div className='grid md:grid-cols-2 gap-4'>
                                 <FormInput label="First Name" name="firstName" value={formData.firstName} onChange={e => handleStateChange(setFormData, 'firstName', e.target.value)} required />
                                 <FormInput label="Last Name" name="lastName" value={formData.lastName} onChange={e => handleStateChange(setFormData, 'lastName', e.target.value)} required />
                             </div>
                         )}
-                         <div className='grid md:grid-cols-2 gap-4'>
+                        <div className='grid md:grid-cols-2 gap-4'>
                             <FormInput label="Email" name="email" type="email" value={formData.email} onChange={e => handleStateChange(setFormData, 'email', e.target.value)} />
                             <FormInput label="Phone" name="phoneNumber" type="tel" value={formData.phoneNumber} onChange={e => handleStateChange(setFormData, 'phoneNumber', e.target.value)} />
                         </div>
@@ -245,17 +250,17 @@ const CreateNewCustomer = () => {
                     </InfoSection>
 
                     <InfoSection title="Service Location">
-                         <label className="flex items-center mb-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={(e) => setUseDifferentBillingAddress(e.target.checked)} className="mr-2"/>Use different billing address</label>
-                         <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'service')} customClasses={inputClasses} />
-                         <FormInput label="Nick Name" name="nickName" value={serviceLocationDetails.nickName} onChange={e => handleStateChange(setServiceLocationDetails, 'nickName', e.target.value)} />
+                        <label className="flex items-center mb-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={(e) => setUseDifferentBillingAddress(e.target.checked)} className="mr-2" />Use different billing address</label>
+                        <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'service')} customClasses={inputClasses} />
+                        <FormInput label="Nick Name" name="nickName" value={serviceLocationDetails.nickName} onChange={e => handleStateChange(setServiceLocationDetails, 'nickName', e.target.value)} />
 
-                         <div className='grid md:grid-cols-2 gap-4'>
+                        <div className='grid md:grid-cols-2 gap-4'>
                             <FormInput label="Gate Code" name="gateCode" value={serviceLocationDetails.gateCode} onChange={e => handleStateChange(setServiceLocationDetails, 'gateCode', e.target.value)} />
                             <FormInput label="Dog Name" name="dogName" value={dogName} onChange={e => setDogName(e.target.value)} />
                         </div>
                         <FormTextarea label="Service Location Notes" name="notes" value={serviceLocationDetails.notes} onChange={e => handleStateChange(setServiceLocationDetails, 'notes', e.target.value)} />
-                        <label className="flex items-center"><input type="checkbox" name="preText" checked={serviceLocationDetails.preText} onChange={e => handleStateChange(setServiceLocationDetails, 'preText', e.target.checked)} className="mr-2 h-4 w-4"/>Pre-Service Text Message</label>
-                        
+                        <label className="flex items-center"><input type="checkbox" name="preText" checked={serviceLocationDetails.preText} onChange={e => handleStateChange(setServiceLocationDetails, 'preText', e.target.checked)} className="mr-2 h-4 w-4" />Pre-Service Text Message</label>
+
                         <div className="mt-6">
                             <div className="flex justify-between items-center mb-2">
                                 <h3 class="text-lg font-semibold">Main Contact</h3>
@@ -272,59 +277,59 @@ const CreateNewCustomer = () => {
                         </div>
                     </InfoSection>
 
-                     {useDifferentBillingAddress && (
+                    {useDifferentBillingAddress && (
                         <InfoSection title="Billing Address">
                             <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'billing')} customClasses={inputClasses} />
                         </InfoSection>
                     )}
 
                     <InfoSection title="Body of Water">
-                         <div className='grid md:grid-cols-2 gap-4'>
+                        <div className='grid md:grid-cols-2 gap-4'>
                             <FormInput label="Name" name="name" value={bodyOfWater.name} onChange={e => handleStateChange(setBodyOfWater, 'name', e.target.value)} required />
                             <FormInput label="Volume (gallons)" name="gallons" type="number" value={bodyOfWater.gallons} onChange={e => handleStateChange(setBodyOfWater, 'gallons', e.target.value)} />
                             <FormInput label="Shape" name="shape" value={bodyOfWater.shape} onChange={e => handleStateChange(setBodyOfWater, 'shape', e.target.value)} />
                             <FormInput label="Material" name="material" value={bodyOfWater.material} onChange={e => handleStateChange(setBodyOfWater, 'material', e.target.value)} />
-                             <FormSelect label="Water Type" name="waterType" value={bodyOfWater.waterType} onChange={e => handleStateChange(setBodyOfWater, 'waterType', e.target.value)}>
-                                 <option value="Chlorine">Chlorine</option>
-                                 <option value="Saltwater">Saltwater</option>
-                                 <option value="Mineral">Mineral</option>
-                             </FormSelect>
-                             <div className="md:col-span-2"><FormTextarea label="Notes" name="notes" value={bodyOfWater.notes} onChange={e => handleStateChange(setBodyOfWater, 'notes', e.target.value)} /></div>
-                         </div>
-                     </InfoSection>
+                            <FormSelect label="Water Type" name="waterType" value={bodyOfWater.waterType} onChange={e => handleStateChange(setBodyOfWater, 'waterType', e.target.value)}>
+                                <option value="Chlorine">Chlorine</option>
+                                <option value="Saltwater">Saltwater</option>
+                                <option value="Mineral">Mineral</option>
+                            </FormSelect>
+                            <div className="md:col-span-2"><FormTextarea label="Notes" name="notes" value={bodyOfWater.notes} onChange={e => handleStateChange(setBodyOfWater, 'notes', e.target.value)} /></div>
+                        </div>
+                    </InfoSection>
 
-                     <InfoSection title="Equipment">
+                    <InfoSection title="Equipment">
                         {equipment.map((eq, index) => (
                             <div key={index} className="p-4 border rounded-lg mt-4 space-y-3 bg-gray-50">
                                 <h3 className="font-bold">Equipment #{index + 1}</h3>
                                 <FormInput label="Name" name="name" value={eq.name} onChange={(e) => handleEquipmentChange(index, 'name', e.target.value)} />
-                                
+
                                 <FormSelect label="Category" name="category" value={eq.category} onChange={(e) => handleEquipmentChange(index, 'category', e.target.value)}>
-                                     <option value="">Select a Category</option>
-                                     {equipmentTypes.map(type => <option key={type.id} value={type.name}>{type.name}</option>)}
-                                     <option value="Other">Other</option>
+                                    <option value="">Select a Category</option>
+                                    {equipmentTypes.map(type => <option key={type.id} value={type.name}>{type.name}</option>)}
+                                    <option value="Other">Other</option>
                                 </FormSelect>
-                                {eq.category === 'Other' && <FormInput label="Custom Category" name="customCategory" value={eq.customCategory} onChange={(e) => handleEquipmentChange(index, 'customCategory', e.target.value)} />} 
-                                
+                                {eq.category === 'Other' && <FormInput label="Custom Category" name="customCategory" value={eq.customCategory} onChange={(e) => handleEquipmentChange(index, 'customCategory', e.target.value)} />}
+
                                 <FormSelect label="Make" name="make" value={eq.make} onChange={(e) => handleEquipmentChange(index, 'make', e.target.value)}>
-                                     <option value="">Select a Make</option>
-                                     {equipmentMakes[index].map(make => <option key={make.id} value={make.name}>{make.name}</option>)}
-                                     <option value="Other">Other</option>
+                                    <option value="">Select a Make</option>
+                                    {equipmentMakes[index].map(make => <option key={make.id} value={make.name}>{make.name}</option>)}
+                                    <option value="Other">Other</option>
                                 </FormSelect>
-                                {eq.make === 'Other' && <FormInput label="Custom Make" name="customMake" value={eq.customMake} onChange={(e) => handleEquipmentChange(index, 'customMake', e.target.value)} />} 
+                                {eq.make === 'Other' && <FormInput label="Custom Make" name="customMake" value={eq.customMake} onChange={(e) => handleEquipmentChange(index, 'customMake', e.target.value)} />}
 
                                 <FormSelect label="Model" name="model" value={eq.model} onChange={(e) => handleEquipmentChange(index, 'model', e.target.value)}>
-                                     <option value="">Select a Model</option>
-                                     {equipmentModels[index].map(model => <option key={model.id} value={model.model}>{model.model}</option>)}
-                                     <option value="Other">Other</option>
+                                    <option value="">Select a Model</option>
+                                    {equipmentModels[index].map(model => <option key={model.id} value={model.model}>{model.model}</option>)}
+                                    <option value="Other">Other</option>
                                 </FormSelect>
-                                {eq.model === 'Other' && <FormInput label="Custom Model" name="customModel" value={eq.customModel} onChange={(e) => handleEquipmentChange(index, 'customModel', e.target.value)} />} 
+                                {eq.model === 'Other' && <FormInput label="Custom Model" name="customModel" value={eq.customModel} onChange={(e) => handleEquipmentChange(index, 'customModel', e.target.value)} />}
 
                                 <FormTextarea label="Notes" name="notes" value={eq.notes} onChange={(e) => handleEquipmentChange(index, 'notes', e.target.value)} />
-                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={(e) => handleEquipmentChange(index, 'needsService', e.target.checked)} className="mr-2 h-4 w-4"/>Needs Service</label>
+                                <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={(e) => handleEquipmentChange(index, 'needsService', e.target.checked)} className="mr-2 h-4 w-4" />Needs Service</label>
                             </div>
                         ))}
-                     </InfoSection>
+                    </InfoSection>
 
                     <div className="flex justify-end gap-4 pt-4">
                         <button type="button" onClick={() => navigate('/company/customers')} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">Cancel</button>

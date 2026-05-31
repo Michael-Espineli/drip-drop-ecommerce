@@ -5,7 +5,7 @@ const admin = require("firebase-admin");
 const { v4: uuidv4 } = require('uuid');
 
 // Securely access the Stripe API key from the environment variables.
-const stripe = require("stripe")(process.env.STRIPE_API_KEY);
+const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 // Securely access the webhook secret from the environment variables.
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;

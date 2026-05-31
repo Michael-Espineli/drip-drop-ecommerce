@@ -37,20 +37,20 @@ export default function Leads() {
 
         // Queries for stats
         const queries = {
-            pending: query(collection(db, "homeOwnerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Pending")),
-            inProgress: query(collection(db, "homeOwnerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "In Progress")),
-            completed: query(collection(db, "homeOwnerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Completed"), where("dateCompleted", ">=", thirtyDaysAgo)),
-            cancelled: query(collection(db, "homeOwnerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Cancelled"), where("dateCompleted", ">=", thirtyDaysAgo)),
+            pending: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Pending")),
+            inProgress: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "In Progress")),
+            completed: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Completed"), where("dateCompleted", ">=", thirtyDaysAgo)),
+            cancelled: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Cancelled"), where("dateCompleted", ">=", thirtyDaysAgo)),
         };
 
-        const unsubscribes = Object.keys(queries).map(key => 
+        const unsubscribes = Object.keys(queries).map(key =>
             onSnapshot(queries[key], snapshot => {
                 setStats(prev => ({ ...prev, [key]: snapshot.size }));
             }, err => console.error(`Error fetching ${key} stats:`, err))
         );
 
         // Query for leads list
-        const leadsQuery = query(collection(db, "homeOwnerServiceRequests"), where("companyId", "==", companyId));
+        const leadsQuery = query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId));
         const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
             const leadsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setLeads(leadsData.sort((a, b) => b.createdAt.toDate() - a.createdAt.toDate()));
@@ -78,8 +78,8 @@ export default function Leads() {
     };
 
     const renderSource = (source) => {
-        return source === 'Manual' 
-            ? <span className="px-2 py-1 text-xs font-semibold rounded-full bg-indigo-200 text-indigo-800">Manual</span> 
+        return source === 'Manual'
+            ? <span className="px-2 py-1 text-xs font-semibold rounded-full bg-indigo-200 text-indigo-800">Manual</span>
             : <span className="px-2 py-1 text-xs font-semibold rounded-full bg-teal-200 text-teal-800">Customer</span>;
     };
 
@@ -134,7 +134,7 @@ export default function Leads() {
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {leads.map(lead => (
                                     <tr key={lead.id} className="hover:bg-gray-50"
-                                    onClick={() => navigate(`/company/leads/${lead.id}`)}
+                                        onClick={() => navigate(`/company/leads/${lead.id}`)}
                                     >
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="font-medium text-gray-900">{lead.homeownerName}</div>

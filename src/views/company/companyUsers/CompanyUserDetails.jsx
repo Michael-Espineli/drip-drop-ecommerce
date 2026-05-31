@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, query, where, collection, getDocs, limit } from "firebase/firestore";
+import { doc, query, where, collection, getDocs, limit, updateDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
@@ -23,6 +23,25 @@ const DetailCard = ({ title, children }) => (
     </div>
 );
 
+const VEHICLE_TYPES = ["Car", "Truck", "Van"];
+
+const emptyPersonalVehicle = {
+    nickName: "",
+    vehicalType: "Car",
+    year: "",
+    make: "",
+    model: "",
+    color: "",
+    plate: "",
+    miles: "",
+};
+
+const buildPersonalVehicleForm = (companyUser) => ({
+    ...emptyPersonalVehicle,
+    ...(companyUser?.personalVehicle || {}),
+    miles: companyUser?.personalVehicle?.miles?.toString() || "",
+});
+
 const CompanyUserDetails = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { companyUserId } = useParams(); // This should be the userId
@@ -30,6 +49,9 @@ const CompanyUserDetails = () => {
 
     const [user, setUser] = useState(null);
     const [isLoading, setIsLoading] = useState(true);
+    const [allowPersonalVehicle, setAllowPersonalVehicle] = useState(false);
+    const [personalVehicle, setPersonalVehicle] = useState(emptyPersonalVehicle);
+    const [isSavingVehicleAccess, setIsSavingVehicleAccess] = useState(false);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !companyUserId) return;
@@ -45,7 +67,10 @@ const CompanyUserDetails = () => {
 
                 if (!querySnapshot.empty) {
                     const userDoc = querySnapshot.docs[0];
-                    setUser({ id: userDoc.id, ...userDoc.data() });
+                    const fetchedUser = { id: userDoc.id, ...userDoc.data() };
+                    setUser(fetchedUser);
+                    setAllowPersonalVehicle(Boolean(fetchedUser.allowPersonalVehicle));
+                    setPersonalVehicle(buildPersonalVehicleForm(fetchedUser));
                 } else {
                     toast.error("User not found in this company.");
                     navigate('/company/companyUsers');
@@ -67,6 +92,44 @@ const CompanyUserDetails = () => {
             case 'Pending': return 'bg-yellow-100 text-yellow-800';
             case 'Inactive': return 'bg-red-100 text-red-800';
             default: return 'bg-gray-100 text-gray-800';
+        }
+    };
+
+    const updatePersonalVehicleField = (field, value) => {
+        setPersonalVehicle((current) => ({ ...current, [field]: value }));
+    };
+
+    const handleSaveVehicleAccess = async () => {
+        if (!recentlySelectedCompany || !user?.id) return;
+
+        setIsSavingVehicleAccess(true);
+        try {
+            const payload = {
+                allowPersonalVehicle,
+                personalVehicle: {
+                    nickName: personalVehicle.nickName.trim(),
+                    vehicalType: personalVehicle.vehicalType || "Car",
+                    year: personalVehicle.year.trim(),
+                    make: personalVehicle.make.trim(),
+                    model: personalVehicle.model.trim(),
+                    color: personalVehicle.color.trim(),
+                    plate: personalVehicle.plate.trim().toUpperCase(),
+                    miles: Number(personalVehicle.miles || 0),
+                },
+            };
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id), payload);
+
+            setUser((current) => ({
+                ...current,
+                ...payload,
+            }));
+            toast.success("Vehicle access updated.");
+        } catch (error) {
+            console.error("Error updating vehicle access:", error);
+            toast.error("Failed to update vehicle access.");
+        } finally {
+            setIsSavingVehicleAccess(false);
         }
     };
 
@@ -120,6 +183,118 @@ const CompanyUserDetails = () => {
                             <DetailItem label="Company ID" value={user.linkedCompanyId} />
                         </DetailCard>
                     )}
+
+                    <section className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200">
+                        <div className="flex flex-col gap-3 border-b border-gray-200 pb-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-800">Route Vehicle Access</h3>
+                                <p className="mt-1 text-sm text-gray-500">
+                                    Permit this technician to use a personal vehicle when starting or managing active routes.
+                                </p>
+                            </div>
+                            <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                <input
+                                    type="checkbox"
+                                    checked={allowPersonalVehicle}
+                                    onChange={(event) => setAllowPersonalVehicle(event.target.checked)}
+                                    className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                />
+                                Allow personal vehicle
+                            </label>
+                        </div>
+
+                        <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Nickname</span>
+                                <input
+                                    value={personalVehicle.nickName}
+                                    onChange={(event) => updatePersonalVehicleField("nickName", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="Mike's truck"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Type</span>
+                                <select
+                                    value={personalVehicle.vehicalType}
+                                    onChange={(event) => updatePersonalVehicleField("vehicalType", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                >
+                                    {VEHICLE_TYPES.map((type) => (
+                                        <option key={type} value={type}>{type}</option>
+                                    ))}
+                                </select>
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Year</span>
+                                <input
+                                    value={personalVehicle.year}
+                                    onChange={(event) => updatePersonalVehicleField("year", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="2021"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Make</span>
+                                <input
+                                    value={personalVehicle.make}
+                                    onChange={(event) => updatePersonalVehicleField("make", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="Toyota"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Model</span>
+                                <input
+                                    value={personalVehicle.model}
+                                    onChange={(event) => updatePersonalVehicleField("model", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="Tacoma"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Color</span>
+                                <input
+                                    value={personalVehicle.color}
+                                    onChange={(event) => updatePersonalVehicleField("color", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="White"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Plate</span>
+                                <input
+                                    value={personalVehicle.plate}
+                                    onChange={(event) => updatePersonalVehicleField("plate", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm uppercase focus:border-blue-500 focus:outline-none"
+                                    placeholder="ABC123"
+                                />
+                            </label>
+                            <label className="space-y-1.5">
+                                <span className="text-sm font-semibold text-gray-700">Current Miles</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="1"
+                                    value={personalVehicle.miles}
+                                    onChange={(event) => updatePersonalVehicleField("miles", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                                    placeholder="0"
+                                />
+                            </label>
+                        </div>
+
+                        <div className="mt-5 flex justify-end">
+                            <button
+                                type="button"
+                                onClick={handleSaveVehicleAccess}
+                                disabled={isSavingVehicleAccess}
+                                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {isSavingVehicleAccess ? "Saving..." : "Save Vehicle Access"}
+                            </button>
+                        </div>
+                    </section>
                 </div>
             </div>
         </div>

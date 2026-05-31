@@ -1,5 +1,5 @@
-import {DripDropStoredImage} from "./DripDropStoredImage";
-import { format } from 'date-fns/format'; 
+import { DripDropStoredImage } from "./DripDropStoredImage";
+import { format } from 'date-fns/format';
 
 export class BodyOfWater {
   constructor({
@@ -17,6 +17,7 @@ export class BodyOfWater {
     photoUrls = [],
     lastFilled = new Date(),
     label = "",
+    isActive = true
   } = {}) {
     this.id = id;
     this.name = name;
@@ -32,6 +33,7 @@ export class BodyOfWater {
     this.photoUrls = photoUrls;
     this.lastFilled = lastFilled;
     this.label = label;
+    this.isActive = isActive;
   }
 
   toFirestore() {
@@ -48,6 +50,7 @@ export class BodyOfWater {
       width: this.width,
       photoUrls: this.photoUrls,
       lastFilled: this.lastFilled,
+      isActive: this.isActive,
 
     };
   }
@@ -57,7 +60,7 @@ export class BodyOfWater {
 
     const lastFilled = data.lastFilled.toDate()
     const lastFilledFormatted = format(lastFilled, 'MM / d / yyyy');
-    console.log(lastFilledFormatted) 
+    console.log(lastFilledFormatted)
     return new BodyOfWater({
       id: snapshot.id,
       name: data.name || "",
@@ -74,6 +77,7 @@ export class BodyOfWater {
       lastFilled: data.lastFilled ? data.lastFilled.toDate() : new Date(),
       lastFilledFormatted: lastFilledFormatted,
       label: data.name + ' ' + data.shape + ' ' + data.material,
+      isActive: data.isActive || false
     });
   }
 

@@ -11,7 +11,7 @@ const MyPool = () => {
     const { user } = useContext(Context);
     const [serviceLocations, setServiceLocations] = useState([]);
     const [selectedLocation, setSelectedLocation] = useState('all');
-    
+
     const [allData, setAllData] = useState({
         bodiesOfWater: [],
         equipment: [],
@@ -37,14 +37,13 @@ const MyPool = () => {
 
         const fetchAllData = async () => {
             setLoading(true);
-            const userFilter = where('userId', '==', user.uid);
             try {
-                const locationQuery = query(collection(db, 'homeOwnerServiceLocations'), userFilter);
-                const bowQuery = query(collection(db, 'homeOwnerBodiesOfWater'), userFilter);
-                const equipQuery = query(collection(db, 'homeOwnerEquipment'), userFilter);
-                const repairQuery = query(collection(db, 'homeOwnerRepairRequests'), userFilter, orderBy('createdAt', 'desc'));
-                const serviceQuery = query(collection(db, 'homeOwnerServiceStops'), userFilter, orderBy('serviceDate', 'desc'));
-                const contractQuery = query(collection(db, 'contracts'), userFilter);
+                const locationQuery = query(collection(db, 'homeownerServiceLocations'), where('userId', '==', user.uid));
+                const bowQuery = query(collection(db, 'homeownerBodiesOfWater'), where('userId', '==', user.uid));
+                const equipQuery = query(collection(db, 'homeownerEquipment'), where('userId', '==', user.uid));
+                const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('userId', '==', user.uid), orderBy('createdAt', 'desc'));
+                const serviceQuery = query(collection(db, 'homeownerServiceStops'), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'));
+                const contractQuery = query(collection(db, 'contracts'), where('userId', '==', user.uid));
 
                 const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, contractSnap] = await Promise.all([
                     getDocs(locationQuery),
@@ -52,7 +51,7 @@ const MyPool = () => {
                     getDocs(equipQuery),
                     getDocs(repairQuery),
                     getDocs(serviceQuery),
-                    getDocs(contractQuery) 
+                    getDocs(contractQuery)
                 ]);
 
                 setServiceLocations(locSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
@@ -100,7 +99,7 @@ const MyPool = () => {
             repairRequests: filteredRepairRequests.slice(0, 5),
             contracts: filteredContracts,
             lastService: lastService,
-            nextService: null, 
+            nextService: null,
         });
 
     }, [selectedLocation, allData, initialLoad]);
@@ -121,12 +120,12 @@ const MyPool = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto">
-                <Header 
-                    locations={serviceLocations} 
+                <Header
+                    locations={serviceLocations}
                     selected={selectedLocation}
                     onSelect={handleLocationChange}
                 />
-                
+
                 {loading ? (
                     <div className="text-center py-10">Loading dashboard...</div>
                 ) : (
@@ -137,9 +136,9 @@ const MyPool = () => {
                             <RepairRequestsWidget repairRequests={displayData.repairRequests} />
                         </div>
                         <div className="lg:col-span-1 space-y-8">
-                            <ServiceRecapWidget 
-                                lastService={displayData.lastService} 
-                                nextService={displayData.nextService} 
+                            <ServiceRecapWidget
+                                lastService={displayData.lastService}
+                                nextService={displayData.nextService}
                                 contracts={displayData.contracts}
                                 selectedLocation={selectedLocation}
                             />
@@ -194,7 +193,7 @@ const Widget = ({ title, icon: Icon, linkTo, addLinkTo, children }) => (
             </div>
             <div className="flex items-center gap-4">
                 {addLinkTo && (
-                     <Link to={addLinkTo} className="text-sm font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1">
+                    <Link to={addLinkTo} className="text-sm font-semibold text-blue-600 hover:text-blue-800 flex items-center gap-1">
                         <PlusIcon className="w-4 h-4" />
                         <span>Add New</span>
                     </Link>
@@ -295,7 +294,7 @@ const ServiceRecapWidget = ({ lastService, nextService, contracts, selectedLocat
                     <div className="border-t pt-4">
                         <h3 className="font-semibold text-gray-700 mb-2">Next Scheduled Service</h3>
                         {nextService ? (
-                             <p className="text-sm"><strong>Date:</strong> {format(nextService.serviceDate.toDate(), 'PPP')}</p>
+                            <p className="text-sm"><strong>Date:</strong> {format(nextService.serviceDate.toDate(), 'PPP')}</p>
                         ) : <p className="text-sm text-gray-500">Not yet scheduled.</p>}
                     </div>
                 </div>

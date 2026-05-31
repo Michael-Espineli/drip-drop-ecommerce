@@ -1,4 +1,4 @@
-import React, {useState, useEffect, useContext} from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where } from "firebase/firestore";
@@ -9,7 +9,7 @@ import 'react-datepicker/dist/react-datepicker.css'
 import { format } from 'date-fns'; // Or any other date formatting library
 
 const Venders = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const { name, recentlySelectedCompany } = useContext(Context);
 
     const [venderList, setVenderList] = useState([]);
 
@@ -18,16 +18,16 @@ const Venders = () => {
     useEffect(() => {
         (async () => {
 
-            try{
+            try {
                 let q;
-        
-                q = query(collection(db, 'companies',recentlySelectedCompany,'settings','venders','vender'));
-                
+
+                q = query(collection(db, 'companies', recentlySelectedCompany, 'settings', 'vendors', 'vendor'));
+
                 const querySnapshot = await getDocs(q);
 
-                let count = 1 
+                let count = 1
 
-                setVenderList([])  
+                setVenderList([])
 
                 querySnapshot.forEach((doc) => {
 
@@ -35,35 +35,35 @@ const Venders = () => {
 
                     const vender = {
 
-                        id:venderData.id,
+                        id: venderData.id,
 
-                        name:venderData.name,
+                        name: venderData.name,
 
-                        email:venderData.email,
+                        email: venderData.email,
 
-                        phoneNumber:venderData.phoneNumber,
+                        phoneNumber: venderData.phoneNumber,
 
                         streetAddress: venderData.address.streetAddress,
 
-                        city:venderData.address.city,
+                        city: venderData.address.city,
 
-                        state:venderData.address.state,
+                        state: venderData.address.state,
 
-                        zip:venderData.address.zip,
+                        zip: venderData.address.zip,
 
                     }
 
                     count = count + 1
 
-                    setVenderList(venderList => [...venderList, vender]); 
+                    setVenderList(venderList => [...venderList, vender]);
 
                 });
 
-            } catch(error){
+            } catch (error) {
                 console.log('Error')
             }
         })();
-    },[])
+    }, [])
 
     return (
         // 030811 - almost black
@@ -78,23 +78,23 @@ const Venders = () => {
         // 2B600F - Pool Green
 
         <div className='px-2 md:px-7 py-5'>
-            <h2 className="text-2xl font-bold mb-4">Venders</h2>
-            <Link 
-            className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
-            to={`/company/venders/createNew`}>Create New Vender</Link>
+            <h2 className="text-2xl font-bold mb-4">Vendors</h2>
+            <Link
+                className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
+                to={`/company/vendors/create-new`}>Create New Vendor</Link>
             <div className='w-full rounded-md mt-3'>
-            <div className='relative overflow-x-auto'>
-                        <table className="min-w-full bg-white border border-gray-200">
-                            <thead>
-                                <tr>
-                                    <th className='py-3 px-4'>Name</th>
-                                    <th className='py-3 px-4'>price</th>
-                                    <th className='py-3 px-4'>quantity String</th>
-                                    <th className='py-3 px-4'>tech Name</th>
-                                    <th className='py-3 px-4 visible sm:invisible lg:invisible '>vender Name</th>
-                                </tr>
-                            </thead>
-                            <tbody>
+                <div className='relative overflow-x-auto'>
+                    <table className="min-w-full bg-white border border-gray-200">
+                        <thead>
+                            <tr>
+                                <th className='py-3 px-4'>Name</th>
+                                <th className='py-3 px-4'>price</th>
+                                <th className='py-3 px-4'>quantity String</th>
+                                <th className='py-3 px-4'>tech Name</th>
+                                <th className='py-3 px-4 visible sm:invisible lg:invisible '>vender Name</th>
+                            </tr>
+                        </thead>
+                        <tbody>
                             {
                                 venderList?.map(vender => (
                                     <tr key={vender.id}>
@@ -106,10 +106,10 @@ const Venders = () => {
                                     </tr>
                                 ))
                             }
-                            </tbody>
-                        </table>
-                    </div>
+                        </tbody>
+                    </table>
                 </div>
+            </div>
         </div>
     );
 };

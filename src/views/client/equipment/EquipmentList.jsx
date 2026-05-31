@@ -9,7 +9,7 @@ import { WrenchScrewdriverIcon, PlusIcon, ChevronRightIcon, ArrowLeftIcon } from
 const EquipmentList = () => {
     const navigate = useNavigate();
     const { user } = useContext(Context);
-    
+
     const [equipment, setEquipment] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -24,7 +24,7 @@ const EquipmentList = () => {
         setLoading(true);
 
         // Listener for Equipment
-        const equipmentQuery = query(collection(db, 'homeOwnerEquipment'), where('userId', '==', user.uid));
+        const equipmentQuery = query(collection(db, 'homeownerEquipment'), where('userId', '==', user.uid));
         const unsubscribeEquipment = onSnapshot(equipmentQuery, (snapshot) => {
             const equipmentData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setEquipment(equipmentData);
@@ -36,7 +36,7 @@ const EquipmentList = () => {
         });
 
         // Listener for Bodies of Water
-        const bowQuery = query(collection(db, 'homeOwnerBodiesOfWater'), where('userId', '==', user.uid));
+        const bowQuery = query(collection(db, 'homeownerBodiesOfWater'), where('userId', '==', user.uid));
         const unsubscribeBows = onSnapshot(bowQuery, (snapshot) => {
             const bowData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bowData);
@@ -71,7 +71,7 @@ const EquipmentList = () => {
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-7xl mx-auto">
                 <Header onBack={() => navigate(-1)} onNew={() => navigate('/client/equipment/new')} />
-                
+
                 {equipment.length === 0 ? (
                     <NoEquipmentView onNew={() => navigate('/client/equipment/new')} />
                 ) : (
@@ -81,7 +81,7 @@ const EquipmentList = () => {
                             <EquipmentGroup key={bow.id} title={bow.name} equipment={groupedEquipment[bow.id]} />
                         ))}
                         {(groupedEquipment.unassigned.length > 0) &&
-                           <EquipmentGroup title="Unassigned Equipment" equipment={groupedEquipment.unassigned} />
+                            <EquipmentGroup title="Unassigned Equipment" equipment={groupedEquipment.unassigned} />
                         }
                     </div>
                 )}

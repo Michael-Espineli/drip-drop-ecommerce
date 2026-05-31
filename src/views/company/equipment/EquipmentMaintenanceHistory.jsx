@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, orderBy, doc, deleteDoc } from "firebase/firestore";
+import { query, collection, getDocs, orderBy, where, doc, deleteDoc } from "firebase/firestore";
 import { MaintenanceHistory } from '../../../utils/models/MaintenanceHistory';
 import { format } from 'date-fns';
 
@@ -17,7 +17,11 @@ export default function EquipmentMaintenanceHistory() {
         (async () => {
             if (recentlySelectedCompany && equipmentId) {
                 try {
-                    const q = query(collection(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory'), orderBy('date', 'desc'));
+                    const q = query(
+                        collection(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory'),
+                        where('type', '==', 'Maintenance'),
+                        orderBy('date', 'desc')
+                    );
                     const querySnapshot = await getDocs(q);
                     const maintenanceHistoryData = querySnapshot.docs.map(doc => MaintenanceHistory.fromFirestore(doc));
                     setMaintenanceHistory(maintenanceHistoryData);
@@ -41,7 +45,7 @@ export default function EquipmentMaintenanceHistory() {
     const handleDelete = async () => {
         if (itemToDelete) {
             try {
-                await deleteDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'maintenanceHistory', itemToDelete));
+                await deleteDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory', itemToDelete));
                 setMaintenanceHistory(maintenanceHistory.filter(item => item.id !== itemToDelete));
                 closeDeleteModal();
             } catch (error) {
@@ -66,9 +70,9 @@ export default function EquipmentMaintenanceHistory() {
                     <tbody>
                         {maintenanceHistory?.map(item => (
                             <tr key={item.id} className="border-b border-slate-700 hover:bg-gray-100">
-                                <td className='px-4 py-2 border-b'>{format(item.date, 'PP')}</td>
+                                <td className='px-4 py-2 border-b'>{item.date ? format(item.date, 'PP') : '—'}</td>
                                 <td className='px-4 py-2 border-b'>{item.techName}</td>
-                                <td className='px-4 py-2 border-b'>{item.notes}</td>
+                                <td className='px-4 py-2 border-b'>{item.description}</td>
                                 <td className='px-4 py-2 border-b'>
                                     <button onClick={() => openDeleteModal(item.id)} className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
                                         Delete

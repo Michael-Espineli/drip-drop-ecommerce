@@ -1,21 +1,22 @@
-import React, {useState, useEffect, useContext} from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import Select from 'react-select';
-import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where, setDoc, doc,Timestamp  } from "firebase/firestore";
+import { query, collection, getDocs, limit, orderBy, startAt, startAfter, where, setDoc, doc, Timestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { Context } from "../../../context/AuthContext";
-import {v4 as uuidv4} from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { format } from 'date-fns'; // Or any other date formatting library
 import { id } from './../../../../node_modules/webpack/lib/util/concatenate';
 import { Link, useParams } from 'react-router-dom';
 import { FaChevronLeft } from "react-icons/fa";
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 
+
 const functions = getFunctions();
 
 const CreateNew = () => {
-    const {customerId} = useParams();
-    const {stripeConnectedAccountId, user, recentlySelectedCompany, recentlySelectedCompanyName} = useContext(Context);
+    const { customerId } = useParams();
+    const { stripeConnectedAccountId, user, recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
 
     const [customerList, setCustomerList] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState('');
@@ -42,19 +43,19 @@ const CreateNew = () => {
     const [laborRate, setLaborRate] = useState('11');
     const [defaultPrice, setDefaultPrice] = useState('11');
 
-     useEffect(() => {
+    useEffect(() => {
         (async () => {
             if (customerList.length < 3) {
-                
-                try{
-                    let q;
-            
-                        // q = query(collection(db, 'companies',recentlySelectedCompany,'customers'),limit(10));
-                        q = query(collection(db, 'companies',recentlySelectedCompany,'customers'), orderBy("firstName"), where('active','==',true));
 
-                    const querySnapshot = await getDocs(q);       
-                    let count = 1   
-                    setCustomerList([])      
+                try {
+                    let q;
+
+                    // q = query(collection(db, 'companies',recentlySelectedCompany,'customers'),limit(10));
+                    q = query(collection(db, 'companies', recentlySelectedCompany, 'customers'), orderBy("firstName"), where('active', '==', true));
+
+                    const querySnapshot = await getDocs(q);
+                    let count = 1
+                    setCustomerList([])
                     querySnapshot.forEach((doc) => {
                         if (count == 1) {
                             setFirstDoc(doc)
@@ -63,97 +64,97 @@ const CreateNew = () => {
                         }
                         const customerDoc = doc.data()
                         const customerData = {
-                            id:customerDoc.id,
-                            name:customerDoc.firstName + ' ' + customerDoc.lastName,
-                            streetAddress:customerDoc.billingAddress.streetAddress,
+                            id: customerDoc.id,
+                            name: customerDoc.firstName + ' ' + customerDoc.lastName,
+                            streetAddress: customerDoc.billingAddress.streetAddress,
                             phoneNumber: customerDoc.phoneNumber,
-                            email:customerDoc.email,
-                            label:customerDoc.firstName + ' ' + customerDoc.lastName,
+                            email: customerDoc.email,
+                            label: customerDoc.firstName + ' ' + customerDoc.lastName,
                         }
                         count = count + 1
 
-                        setCustomerList(customerList => [...customerList, customerData]); 
-                   
+                        setCustomerList(customerList => [...customerList, customerData]);
+
                     });
-                    if (customerId != 'NA'){
+                    if (customerId != 'NA') {
                         console.log('Customer Selected')
                         querySnapshot.forEach((doc) => {
                             const customerDocData = doc.data()
-                            if (customerDocData.id == customerId){
+                            if (customerDocData.id == customerId) {
                                 console.log('Found it')
                                 console.log(customerDocData.id)
 
                                 const customerData1 = {
-                                    id:customerDocData.id,
-                                    name:customerDocData.firstName + ' ' + customerDocData.lastName,
-                                    streetAddress:customerDocData.billingAddress.streetAddress,
+                                    id: customerDocData.id,
+                                    name: customerDocData.firstName + ' ' + customerDocData.lastName,
+                                    streetAddress: customerDocData.billingAddress.streetAddress,
                                     phoneNumber: customerDocData.phoneNumber,
-                                    email:customerDocData.email,
-                                    label:customerDocData.firstName + ' ' + customerDocData.lastName,
+                                    email: customerDocData.email,
+                                    label: customerDocData.firstName + ' ' + customerDocData.lastName,
                                 }
                                 console.log(customerData1)
                                 setSelectedCustomer(customerData1)
                                 console.log(customerData1.email)
                                 setEmail(customerData1.email)
                             }
-                        });                        
-                        try{
+                        });
+                        try {
                             let q;
-                    
-                                q = query(collection(db, 'companies',recentlySelectedCompany,'serviceLocations'), where('customerId','==',customerId));
-                            
-                            const querySnapshot = await getDocs(q);       
-                            let count = 1   
-                            setServiceLocationList([])      
+
+                            q = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', customerId));
+
+                            const querySnapshot = await getDocs(q);
+                            let count = 1
+                            setServiceLocationList([])
                             querySnapshot.forEach((doc) => {
-            
+
                                 const serviceLocationData = doc.data()
                                 const serviceLocationDoc = {
-                                    id:serviceLocationData.id,
-                                    bodiesOfWaterId:serviceLocationData.bodiesOfWaterId,
-                                    streetAddress:serviceLocationData.address.streetAddress,
+                                    id: serviceLocationData.id,
+                                    bodiesOfWaterId: serviceLocationData.bodiesOfWaterId,
+                                    streetAddress: serviceLocationData.address.streetAddress,
                                     nickName: serviceLocationData.nickName,
-                                    label:serviceLocationData.address.streetAddress + ' ' + serviceLocationData.address.city + ' ' +  serviceLocationData.address.state + ' ' + serviceLocationData.address.zip 
+                                    label: serviceLocationData.address.streetAddress + ' ' + serviceLocationData.address.city + ' ' + serviceLocationData.address.state + ' ' + serviceLocationData.address.zip
                                 }
                                 count = count + 1
-                                setServiceLocationList(serviceLocationList => [...serviceLocationList, serviceLocationDoc]); 
+                                setServiceLocationList(serviceLocationList => [...serviceLocationList, serviceLocationDoc]);
                             });
-                        } catch(error){
+                        } catch (error) {
                             console.log('Error')
                         }
                     } else {
                         console.log('No Customer Selected')
                     }
-                } catch(error){
+                } catch (error) {
                     console.log('Error')
                 }
             }
             const getProductList = httpsCallable(functions, 'getProductList');
-            getProductList({ 
+            getProductList({
                 active: true,
-                connectedAccount:stripeConnectedAccountId,
+                connectedAccount: stripeConnectedAccountId,
                 method: "POST",
             })
-            .then((result) => result.data.productList.data)            
-            .then((list) => {
-                setProductList([])
-                list.forEach((doc) => {
-                    //Here i wil have to do something to get the price options / default Price
-                    doc.label = doc.name + ' ' + doc.description
-                    setProductList(productList => [...productList, doc]); 
+                .then((result) => result.data.productList.data)
+                .then((list) => {
+                    setProductList([])
+                    list.forEach((doc) => {
+                        //Here i wil have to do something to get the price options / default Price
+                        doc.label = doc.name + ' ' + doc.description
+                        setProductList(productList => [...productList, doc]);
+
+                    })
+                    console.log('----- Product List ------')
+                    console.log(productList)
 
                 })
-                console.log('----- Product List ------')
-                console.log(productList)
-                
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.error(error);
-            });
+                .catch((error) => {
+                    // Handle any errors
+                    console.error(error);
+                });
         })();
 
-    },[])
+    }, [])
     const handleCustomerChange = (selectedOption2) => {
 
         (async () => {
@@ -161,50 +162,50 @@ const CreateNew = () => {
             setSelectedCustomer(selectedOption2)
             console.log(selectedOption2.email)
             setEmail(selectedOption2.email)
-            try{
+            try {
 
-                
+
                 //   Get service Locations By Customer
-           
-                setServiceLocationList([])  
-                let locationQuery = query(collection(db, 'companies',recentlySelectedCompany,'serviceLocations'),where("customerId",'==',customerId));
-     
-                const locationSnapShot = await getDocs(locationQuery);    
+
+                setServiceLocationList([])
+                let locationQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where("customerId", '==', customerId));
+
+                const locationSnapShot = await getDocs(locationQuery);
                 const serviceLocations = locationSnapShot.docs.map(doc => ServiceLocation.fromFirestore(doc));
                 console.log("Received " + serviceLocations.length + " Service Locations");
                 setServiceLocationList(serviceLocations)
-                if (serviceLocations.length > 0 ){
+                if (serviceLocations.length > 0) {
                     setServiceLocation(serviceLocations[0])
                 }
-            } catch(error){
+            } catch (error) {
                 console.log('Error')
             }
-            
+
         })();
     };
-    
+
     const handleProductChange = (selectedOption2) => {
         console.log(`Option selected:`, selectedOption2);
         setSelectedProduct(selectedOption2)
         //Get Default Price For Product
         const getDefaultPrice = httpsCallable(functions, 'getDefaultPrice');
-        getDefaultPrice({ 
+        getDefaultPrice({
             priceId: selectedOption2.default_price,
-            connectedAccount:stripeConnectedAccountId,
+            connectedAccount: stripeConnectedAccountId,
             method: "POST",
         })
-        .then((result) => result.data.price)            
-        .then((price) => {
-            console.log(price)
-            setDefaultPrice(price);  
-            setRate(price.unit_amount/100)   
-            setRateInterval(price.recurring.interval)
-            setRateIntervalAmount(price.recurring.interval_count)
-        })
-        .catch((error) => {
-            // Handle any errors
-            console.error(error);
-        });
+            .then((result) => result.data.price)
+            .then((price) => {
+                console.log(price)
+                setDefaultPrice(price);
+                setRate(price.unit_amount / 100)
+                setRateInterval(price.recurring.interval)
+                setRateIntervalAmount(price.recurring.interval_count)
+            })
+            .catch((error) => {
+                // Handle any errors
+                console.error(error);
+            });
     };
     const handleServiceLocationChange = (selectedOption2) => {
         console.log(`Option selected:`, selectedOption2);
@@ -230,18 +231,18 @@ const CreateNew = () => {
         e.preventDefault()
         //Guard Email For customer / client Id
         if (email != '') {
-        
+
             let id = 'cont_' + uuidv4();
 
             console.log('Contract Submitted   ' + id)
             const currentTime = Timestamp.now();
             // if (defaultPrice.id != '') {
-                let serviceLocationIdList = [];
-                for (let i = 0; i < serviceLocation.length; i++) {
-                    serviceLocationIdList.push(serviceLocation[i].id)
-                }
-                //Guard At Least one location Selected
-                if (serviceLocationIdList.length != 0){
+            let serviceLocationIdList = [];
+            for (let i = 0; i < serviceLocation.length; i++) {
+                serviceLocationIdList.push(serviceLocation[i].id)
+            }
+            //Guard At Least one location Selected
+            if (serviceLocationIdList.length != 0) {
                 await setDoc(doc(db, "contracts", id), {
                     chemType: chemType,
                     companyId: recentlySelectedCompany,
@@ -257,23 +258,23 @@ const CreateNew = () => {
                     locations: serviceLocationIdList.length,
                     notes: notes,
                     rate: parseInt(rate),
-                    rateInterval:rateInterval,
-                    rateIntervalAmount:rateIntervalAmount,
+                    rateInterval: rateInterval,
+                    rateIntervalAmount: rateIntervalAmount,
                     serviceLocationIds: serviceLocationIdList,
-                    startDate:currentTime,
+                    startDate: currentTime,
                     status: "pending",
                     terms: terms,
                     // priceId: defaultPrice.id, 
                     // productId:selectedProduct.id,
 
-                    priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa', 
+                    priceId: 'price_1QJN3JPPLD20PPKnO8w5XHVa',
 
-                    productId:'acct_1QIep2PPLD20PPKn',
+                    productId: 'acct_1QIep2PPLD20PPKn',
                     stripeCustomerId: "",
                     connectedAccountId: "",
                 });
                 console.log('Successfully Uploaded. ')
-                            //Navigate Back to Contract PAGe
+                //Navigate Back to Contract PAGe
                 // }
             }
         }
@@ -292,20 +293,20 @@ const CreateNew = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='py-2'>
                 <div>
-                <div className='flex'>
-                        <Link 
-                        className='bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6] justify-start items-center gap-3 flex'
-                        to='/company/contracts'>
-                                <FaChevronLeft />
-                                <p>
-                                 Contract List
-                                </p>                    
+                    <div className='flex'>
+                        <Link
+                            className='bg-[#454b39] rounded-md py-1 px-2 text-[#d0d2d6] justify-start items-center gap-3 flex'
+                            to='/company/contracts'>
+                            <FaChevronLeft />
+                            <p>
+                                Contract List
+                            </p>
                         </Link>
-                    </div>   
+                    </div>
                     <p>Create New Service Contract</p>
                 </div>
                 <form>
-                    
+
                     <div className='w-full bg-[#747e79] p-4 rounded-md text-[#d0d2d6]'>
                         <div className='py-2'>
 
@@ -316,124 +317,124 @@ const CreateNew = () => {
                                 isSearchable
                                 placeholder="Select a Customer"
                                 theme={(theme) => ({
-                                ...theme,
-                                borderRadius: 0,
-                                colors: {
-                                    ...theme.colors,
-                                    primary25: 'green',
-                                    primary: 'black',
-                                },
+                                    ...theme,
+                                    borderRadius: 0,
+                                    colors: {
+                                        ...theme.colors,
+                                        primary25: 'green',
+                                        primary: 'black',
+                                    },
                                 })}
                             />
                         </div>
                         <div className='flex justify-between gap-3 items-center py-2'>
 
-                            <h1>Email : </h1>  
+                            <h1>Email : </h1>
 
                             <input className="w-3/4 px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
-                            text-[#030811] focus:border-[#ededed] overflow-hidden" 
-                            value={email}
-                            onChange={(e) => {setEmail(e.target.value)}}
-                            type="text" name='search' placeholder='Email'  />
+                            text-[#030811] focus:border-[#ededed] overflow-hidden"
+                                value={email}
+                                onChange={(e) => { setEmail(e.target.value) }}
+                                type="text" name='search' placeholder='Email' />
                         </div>
 
                         <h1>Service Locations </h1>
                         <div className='py-2'>
                             <Select
-                            value={serviceLocation}
-                            options={serviceLocationList}
-                            onChange={handleServiceLocationChange}
-                            isSearchable
-                            isMulti
-                            placeholder="Select Service Location"
-                            theme={(theme) => ({
-                            ...theme,
-                            borderRadius: 0,
-                            colors: {
-                                ...theme.colors,
-                                primary25: 'green',
-                                primary: 'black',
-                            },
-                            })}
+                                value={serviceLocation}
+                                options={serviceLocationList}
+                                onChange={handleServiceLocationChange}
+                                isSearchable
+                                isMulti
+                                placeholder="Select Service Location"
+                                theme={(theme) => ({
+                                    ...theme,
+                                    borderRadius: 0,
+                                    colors: {
+                                        ...theme.colors,
+                                        primary25: 'green',
+                                        primary: 'black',
+                                    },
+                                })}
                             />
                         </div>
                         <div className='py-2'>
                             <Select
-                            value={selectedProduct}
-                            options={productList}
-                            onChange={handleProductChange}
-                            isSearchable
-                            placeholder="Select a Product"
-                            theme={(theme) => ({
-                            ...theme,
-                            borderRadius: 0,
-                            colors: {
-                                ...theme.colors,
-                                primary25: 'green',
-                                primary: 'black',
-                            },
-                            })}
+                                value={selectedProduct}
+                                options={productList}
+                                onChange={handleProductChange}
+                                isSearchable
+                                placeholder="Select a Product"
+                                theme={(theme) => ({
+                                    ...theme,
+                                    borderRadius: 0,
+                                    colors: {
+                                        ...theme.colors,
+                                        primary25: 'green',
+                                        primary: 'black',
+                                    },
+                                })}
                             />
                         </div>
-                        
+
                         <div className='flex justify-between gap-3 items-center py-2'>
 
-                            <h1>Rate: </h1>  
-                            <input 
-                            value={rate}
-                            onChange={(e) => {setRate(e.target.value)}}
-                            className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
-                            text-[#030811] focus:border-[#ededed] overflow-hidden" type="text" name='search' placeholder='Rate'  />
+                            <h1>Rate: </h1>
+                            <input
+                                value={rate}
+                                onChange={(e) => { setRate(e.target.value) }}
+                                className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
+                            text-[#030811] focus:border-[#ededed] overflow-hidden" type="text" name='search' placeholder='Rate' />
                         </div>
                         <div className='flex justify-between'>
-                            <h1>Rate Type : </h1>  
+                            <h1>Rate Type : </h1>
                             <p>{rateInterval}</p>
                             <p>{rateIntervalAmount}</p>
                         </div>
                         <p>Offer how many times to Clean the pool</p>
                         <div className='flex justify-between gap-3 items-center py-2'>
-                            <h1>Chem Type : </h1>    
+                            <h1>Chem Type : </h1>
 
-                            <select 
-                            value={chemType } onChange={(e) => handleChemTypeChange(e)}
-                            className='p-2 rounded-md bg-[#ededed] text-[#030811]'>
+                            <select
+                                value={chemType} onChange={(e) => handleChemTypeChange(e)}
+                                className='p-2 rounded-md bg-[#ededed] text-[#030811]'>
                                 <option value="5">All Inclusive</option>
                                 <option value="10">Without Chems</option>
                                 <option value="25">Includes Specific Chems</option>
                                 <option value="50">Excludes Specific Chems</option>
                             </select>
                         </div>
-                        <hr/>
+                        <hr />
                         <p className='text-xs'><bold className='font-bold text-base'>Internal Notes</bold> ( Your client will not see these )</p>
                         <div className='flex justify-between gap-3 items-center py-2'>
 
-                            <p className='flex justify-between gap-3 items-center'>Labor Rate: </p>  
+                            <p className='flex justify-between gap-3 items-center'>Labor Rate: </p>
 
-                            <input 
-                            value={laborRate}
-                            onChange={(e) => {setLaborRate(e.target.value)}}
-                            className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
-                            text-[#030811] focus:border-[#ededed] overflow-hidden" type="text" name='search' placeholder='Labor Rate'  />
+                            <input
+                                value={laborRate}
+                                onChange={(e) => { setLaborRate(e.target.value) }}
+                                className="px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
+                            text-[#030811] focus:border-[#ededed] overflow-hidden" type="text" name='search' placeholder='Labor Rate' />
                         </div>
                         <div className='flex justify-between gap-3 items-center py-2'>
 
-                            <h1>laborType : </h1>    
+                            <h1>laborType : </h1>
 
-                            <select 
-                            value={laborType} onChange={(e) => handleLaborTypeChange(e)}
-                            className='p-2 rounded-md bg-[#ededed] text-[#030811]'>
+                            <select
+                                value={laborType} onChange={(e) => handleLaborTypeChange(e)}
+                                className='p-2 rounded-md bg-[#ededed] text-[#030811]'>
                                 <option value="5">per Stop</option>
                                 <option value="10">per Week</option>
                                 <option value="25">per Month</option>
                             </select>
-                        </div>  
-                        <h1>Internal Notes : </h1>  
+                        </div>
+                        <h1>Internal Notes : </h1>
                         <textarea className="w-full px-3 py-2 outline-none border bg-[#ededed] border-[#030811] rounded-md 
-                        text-[#030811] focus:border-[#ededed] overflow-hidden resize-y" type="text" name='search' placeholder='Internal Notes'/>
+                        text-[#030811] focus:border-[#ededed] overflow-hidden resize-y" type="text" name='search' placeholder='Internal Notes' />
                         <button onClick={(e) => submitContract(e)} className='w-full mt-7 bg-[#2B600F] rounded-md py-1 px-2'>Offer</button>
-                    </div>  
-                </form>  
-            </div>    
+                    </div>
+                </form>
+            </div>
         </div>
     );
 };

@@ -12,12 +12,12 @@ const Input = (props) => <input {...props} className={`bg-gray-50 border-2 borde
 const SelectInput = (props) => <Select {...props} styles={{ control: (base) => ({ ...base, background: '#F9FAFB', border: '2px solid #E5E7EB', borderRadius: '0.5rem', padding: '0.25rem' }) }} />;
 
 const TabButton = ({ active, onClick, children }) => (
-    <button 
+    <button
         type="button"
         onClick={onClick}
         className={`py-2 px-4 text-sm font-medium rounded-t-lg transition-colors border-b-2 
-            ${active 
-                ? 'border-blue-600 text-blue-600' 
+            ${active
+                ? 'border-blue-600 text-blue-600'
                 : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`
         }
     >
@@ -36,7 +36,7 @@ const CreateNewCompanyUser = () => {
     const [lastName, setLastName] = useState('');
     const [email, setEmail] = useState('');
     const [role, setRole] = useState(null);
-    
+
     const [roleList, setRoleList] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [areRolesLoading, setAreRolesLoading] = useState(true);
@@ -82,7 +82,7 @@ const CreateNewCompanyUser = () => {
             const usersRef = collection(db, "users");
             const q = query(usersRef, where("email", "==", email));
             const userQuerySnapshot = await getDocs(q);
-            
+
             if (!userQuerySnapshot.empty) {
                 toast.error('A user with this email already exists. Please use the "Add Existing User" tab.', { id: toastId });
                 return;
@@ -90,13 +90,13 @@ const CreateNewCompanyUser = () => {
 
             const inviteId = 'invi_' + uuidv4();
             const inviteData = {
-                id: inviteId, userId: null, firstName, lastName, email, companyName, 
-                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label, 
+                id: inviteId, userId: null, firstName, lastName, email, companyName,
+                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label,
                 status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
             };
 
             await setDoc(doc(db, "invites", inviteId), inviteData);
-            
+
             toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
             navigate('/company/companyUsers');
 
@@ -113,7 +113,7 @@ const CreateNewCompanyUser = () => {
             toast.error("Please provide an email and select a role.");
             return;
         }
-        
+
         setIsLoading(true);
         const toastId = toast.loading('Adding user to company...');
 
@@ -126,33 +126,44 @@ const CreateNewCompanyUser = () => {
                 toast.error('No user found with this email. Please invite them as a new user.', { id: toastId });
                 return;
             }
+            const inviteId = 'invi_' + uuidv4();
+            const inviteData = {
+                id: inviteId, userId: null, firstName, lastName, email, companyName,
+                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label,
+                status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
+            };
 
-            const userDoc = userQuerySnapshot.docs[0];
-            const userData = userDoc.data();
-            const companyUserRef = doc(db, 'companies', recentlySelectedCompany, 'companyUsers', userDoc.id);
-            
-            const userName = (userData.firstName && userData.lastName) 
-                ? `${userData.firstName} ${userData.lastName}` 
-                : userData.email;
+            await setDoc(doc(db, "invites", inviteId), inviteData);
 
-            await setDoc(companyUserRef, {
-                userId: userDoc.id,
-                userName: userName,
-                email: userData.email,
-                roleId: role.id,
-                roleName: role.label,
-                status: 'Active',
-                workerType: 'Employee',
-            }, { merge: true });
-
-            await updateDoc(userDoc.ref, {
-                companies: arrayUnion(recentlySelectedCompany)
-            });
-
-            toast.success('User successfully added to your company!', { id: toastId });
+            toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
             navigate('/company/companyUsers');
 
-        } catch(error) {
+            // const userDoc = userQuerySnapshot.docs[0];
+            // const userData = userDoc.data();
+            // const companyUserRef = doc(db, 'companies', recentlySelectedCompany, 'companyUsers', userDoc.id);
+
+            // const userName = (userData.firstName && userData.lastName) 
+            //     ? `${userData.firstName} ${userData.lastName}` 
+            //     : userData.email;
+
+            // await setDoc(companyUserRef, {
+            //     userId: userDoc.id,
+            //     userName: userName,
+            //     email: userData.email,
+            //     roleId: role.id,
+            //     roleName: role.label,
+            //     status: 'Active',
+            //     workerType: 'Employee',
+            // }, { merge: true });
+
+            // await updateDoc(userDoc.ref, {
+            //     companies: arrayUnion(recentlySelectedCompany)
+            // });
+
+            // toast.success('User successfully added to your company!', { id: toastId });
+            // navigate('/company/companyUsers');
+
+        } catch (error) {
             console.error("Error adding existing user: ", error);
             toast.error(`Error: ${error.message}`, { id: toastId });
         } finally {
@@ -164,7 +175,7 @@ const CreateNewCompanyUser = () => {
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="max-w-4xl mx-auto">
                 <header className="mb-6">
-                     <h1 className="text-3xl font-bold text-gray-800">Manage User Access</h1>
+                    <h1 className="text-3xl font-bold text-gray-800">Manage User Access</h1>
                     <p className="text-gray-600 mt-1">Add a new or existing user to your company.</p>
                 </header>
 
@@ -178,7 +189,7 @@ const CreateNewCompanyUser = () => {
                 <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg border border-gray-200 space-y-6">
                     {activeTab === 'new' && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                             <div className="md:col-span-2">
+                            <div className="md:col-span-2">
                                 <p className="text-sm text-gray-600">An invitation will be sent to the user to create an account and join your company.</p>
                             </div>
                             <div>
@@ -191,13 +202,13 @@ const CreateNewCompanyUser = () => {
                             </div>
                         </div>
                     )}
-                    
+
                     {activeTab === 'existing' && (
-                         <div className="md:col-span-2">
+                        <div className="md:col-span-2">
                             <p className="text-sm text-gray-600">If the user already has an account, add them directly to your company here.</p>
                         </div>
                     )}
-                    
+
                     <div className="space-y-6">
                         <div className="md:col-span-2">
                             <label className="block mb-2 text-sm font-medium text-gray-700">Email Address</label>

@@ -31,7 +31,7 @@ const CreateNewEquipment = () => {
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [selectedLocation, setSelectedLocation] = useState(null);
     const [selectedBodyOfWater, setSelectedBodyOfWater] = useState(null);
-    
+
     // Lists for Selects
     const [customers, setCustomers] = useState([]);
     const [serviceLocations, setServiceLocations] = useState([]);
@@ -51,8 +51,8 @@ const CreateNewEquipment = () => {
                     const customerData = custSnapshot.docs.map(doc => ({ ...Customer.fromFirestore(doc), value: doc.id, label: `${doc.data().firstName} ${doc.data().lastName}` }));
                     setCustomers(customerData);
                 }
-            // Fetch all universal equipment types
-            const typesQuery = query(collection(db, 'universal', 'equipment', 'equipmentTypes'));
+                // Fetch all universal equipment types
+                const typesQuery = query(collection(db, 'universal', 'equipment', 'equipmentTypes'));
                 const typesSnapshot = await getDocs(typesQuery);
                 setEquipmentTypes(typesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), value: doc.data().name, label: doc.data().name })));
             }
@@ -83,7 +83,7 @@ const CreateNewEquipment = () => {
         };
         loadParamData();
     }, [customerIdParam, locationIdParam, bodyOfWaterIdParam, recentlySelectedCompany]);
-    
+
 
     // Dependent dropdown logic
     useEffect(() => {
@@ -93,7 +93,7 @@ const CreateNewEquipment = () => {
                 const locSnapshot = await getDocs(locQuery);
                 let list = locSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), value: doc.id, label: doc.data().address.streetAddress }))
                 setServiceLocations(list);
-                if (list.length>0) setSelectedLocation(list[0])
+                if (list.length > 0) setSelectedLocation(list[0])
             };
             fetchLocations();
         }
@@ -106,7 +106,7 @@ const CreateNewEquipment = () => {
                 const bowSnapshot = await getDocs(bowQuery);
                 let list = bowSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), value: doc.id, label: doc.data().name }))
                 setBodiesOfWater(list);
-                if (list.length>0) setSelectedBodyOfWater(list[0])
+                if (list.length > 0) setSelectedBodyOfWater(list[0])
 
             };
             fetchBOWs();
@@ -151,7 +151,7 @@ const CreateNewEquipment = () => {
         try {
             const equipmentId = "com_equ_" + uuidv4()
             const newEquipment = {
-                id:equipmentId,
+                id: equipmentId,
                 name,
                 type: (category && category.value === 'Other') ? customCategory : (category && category.label) || '',
                 typeId: (category && category.id) || '',
@@ -175,14 +175,14 @@ const CreateNewEquipment = () => {
                 status: 'Operational',
                 currentPressure: ''
             };
-            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment',equipmentId), newEquipment);
-            navigate('/company/equipment');
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
+            navigate(`/company/equipment/detail/${equipmentId}`);
         } catch (error) {
             console.error("Error creating new equipment: ", error);
             alert("Failed to create equipment. Please check the console for details.");
         }
-    }; 
-    
+    };
+
     const selectStyles = {
         control: (provided) => ({ ...provided, backgroundColor: 'white', border: '1px solid #d1d5db', borderRadius: '0.5rem', padding: '0.3rem' }),
         menu: (provided) => ({ ...provided, zIndex: 20 }),
@@ -234,22 +234,22 @@ const CreateNewEquipment = () => {
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
                             <Select options={[...equipmentTypes, { value: 'Other', label: 'Other' }]} value={category} onChange={setCategory} styles={selectStyles} placeholder="Select Category..." />
-                            {category?.value === 'Other' && <input type="text" value={customCategory} onChange={e => setCustomCategory(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Category Name" />} 
+                            {category?.value === 'Other' && <input type="text" value={customCategory} onChange={e => setCustomCategory(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Category Name" />}
                         </div>
                         <div>
-                             <label className="block text-sm font-medium text-gray-700 mb-1">Make</label>
-                             <Select options={[...equipmentMakes, { value: 'Other', label: 'Other' }]} value={make} onChange={setMake} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
-                             {make?.value === 'Other' && <input type="text" value={customMake} onChange={e => setCustomMake(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Make Name" />} 
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Make</label>
+                            <Select options={[...equipmentMakes, { value: 'Other', label: 'Other' }]} value={make} onChange={setMake} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
+                            {make?.value === 'Other' && <input type="text" value={customMake} onChange={e => setCustomMake(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Make Name" />}
                         </div>
                         <div>
-                             <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                             <Select options={[...equipmentModels, { value: 'Other', label: 'Other' }]} value={model} onChange={setModel} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
-                             {model?.value === 'Other' && <input type="text" value={customModel} onChange={e => setCustomModel(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Model Name" />} 
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
+                            <Select options={[...equipmentModels, { value: 'Other', label: 'Other' }]} value={model} onChange={setModel} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
+                            {model?.value === 'Other' && <input type="text" value={customModel} onChange={e => setCustomModel(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Model Name" />}
                         </div>
                     </div>
 
-                     {/* Section 3: Additional Info */}
-                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    {/* Section 3: Additional Info */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <h3 className="text-lg font-semibold text-gray-700 md:col-span-3">Service & Installation</h3>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Equipment Nickname</label>
@@ -261,7 +261,7 @@ const CreateNewEquipment = () => {
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Clean Filter Pressure (PSI)</label>
-                            <input type="text" value={cleanFilterPressure} onChange={e => setCleanFilterPressure(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., 25"/>
+                            <input type="text" value={cleanFilterPressure} onChange={e => setCleanFilterPressure(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., 25" />
                         </div>
                         <div className="md:col-span-3">
                             <label className="block text-sm font-medium text-gray-700 mb-1">Service Frequency</label>

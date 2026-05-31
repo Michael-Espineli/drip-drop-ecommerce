@@ -1,358 +1,229 @@
 import React, { useState, useEffect, useContext, useRef } from 'react';
-import {Link, useParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { query, doc, setDoc, collection, getDocs, orderBy } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
-import 'react-datepicker/dist/react-datepicker.css'
+import 'react-datepicker/dist/react-datepicker.css';
 import Select from 'react-select';
-import {v4 as uuidv4} from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
-import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 
 const CreateNewPurchase = () => {
-    const {name,recentlySelectedCompany} = useContext(Context);
+    const { recentlySelectedCompany } = useContext(Context);
     const fileInputRef = useRef(null);
+    const navigate = useNavigate();
+
     const [fileRef, setFileRef] = useState('');
-
-    const navigate = useNavigate()
-
-    // Purchase Fields
-    const [showSidebar, setShowSidebar] = useState();
+    const [showSidebar, setShowSidebar] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
 
-    const [refrence, setRefrence] = useState();
-    const [quantity, setQuantity] = useState();
+    const [refrence, setRefrence] = useState('');
+    const [quantity, setQuantity] = useState('');
     const [purchaseDate, setPurchaseDate] = useState(new Date());
-    const [formattedPurchaseDate,setFormattedPurchaseDate] = useState('')
+    const [formattedPurchaseDate, setFormattedPurchaseDate] = useState('');
+    const [notes, setNotes] = useState('');
 
-    const [notes,setNotes] = useState('')
     const [companyUserList, setCompanyUserList] = useState([]);
-    
-    const [selectedUser,setSelectedUser] = useState({})
+    const [selectedUser, setSelectedUser] = useState(null);
 
     const [venderList, setVenderList] = useState([]);
-    
-    const [selectedVender,setSelectedVender] = useState({})
+    const [selectedVender, setSelectedVender] = useState(null);
 
     const [genericItemList, setGenericItemList] = useState([]);
-    
-    const [selectedGenericItem,setSelectedGenericItem] = useState({})
-    
+    const [selectedGenericItem, setSelectedGenericItem] = useState(null);
+
     const [purchaseItemlist, setPurchaseItemList] = useState([]);
 
-    // Add new Data Base Items
-    
     const [billable, setBillable] = useState(false);
-
-    const [rate, setRate] = useState('0');
-
+    const [rate, setRate] = useState('');
     const [rateUSD, setRateUSD] = useState('0');
-
-    const [billingRate, setBillingRate] = useState('0');
-
+    const [billingRate, setBillingRate] = useState('');
     const [billingRateUSD, setBillingRateUSD] = useState('0');
-
     const [sku, setSku] = useState('');
-
-    const [uom, setUom] = useState('');
-
-    const [category, setCategory] = useState('');
-        
-    const [subcategory, setSubcategory] = useState('');
-
+    const [uom, setUom] = useState(null);
+    const [category, setCategory] = useState(null);
+    const [subcategory, setSubcategory] = useState(null);
     const [color, setColor] = useState('');
-
     const [description, setDescription] = useState('');
-
     const [itemName, setItemName] = useState('');
-
     const [size, setSize] = useState('');
-
-    const [vender, setVender] = useState('');
-
+    const [vender, setVender] = useState(null);
     const [venderName, setVenderName] = useState('');
-
     const [venderId, setVenderId] = useState('');
 
-    const [uomList, setUomList] = useState([
-        {
-            id:1,
-            label:'Gallon'
-        }
-        ,
-        {
-            id:2,
-            label:'Pounds'
-        }
-        ,
-        {
-            id:3,
-            label:'Oz'
-        }
-        ,
-        {
-            id:4,
-            label:'Feet'
-        }
-        ,
-        {
-            id:5,
-            label:'Square Feet'
-        }
-        ,
-        {
-            id:6,
-            label:'Liter'
-        }
-        ,
-        {
-            id:7,
-            label:'Inch'
-        }
-        ,
-        {
-            id:8,
-            label:'Quart'
-        }
-        ,
-        {
-            id:9,
-            label:'Tab'
-        }
-        ,
-        {
-            id:10,
-            label:'Unit'
-        }
-        ,
+    const [uomList] = useState([
+        { id: 1, label: 'Gallon' },
+        { id: 2, label: 'Pounds' },
+        { id: 3, label: 'Oz' },
+        { id: 4, label: 'Feet' },
+        { id: 5, label: 'Square Feet' },
+        { id: 6, label: 'Liter' },
+        { id: 7, label: 'Inch' },
+        { id: 8, label: 'Quart' },
+        { id: 9, label: 'Tab' },
+        { id: 10, label: 'Unit' },
     ]);
 
-    const [categoryList, setCategoryList] = useState([
-        {
-            id:1,
-            label:'PVC'
-        }
-        ,
-        {
-            id:2,
-            label:'Galvanized'
-        }
-        ,
-        {
-            id:3,
-            label:'Chemicals'
-        }
-        ,
-        {
-            id:4,
-            label:'Useables'
-        }
-        ,
-        {
-            id:5,
-            label:'Equipment'
-        }
-        ,
-        {
-            id:6,
-            label:'Parts'
-        }
-        ,
-        {
-            id:7,
-            label:'Electrical'
-        }
-        ,
-        {
-            id:8,
-            label:'Tools'
-        }
-        ,
-        {
-            id:9,
-            label:'Misc'
-        }
+    const [categoryList] = useState([
+        { id: 1, label: 'PVC' },
+        { id: 2, label: 'Galvanized' },
+        { id: 3, label: 'Chemicals' },
+        { id: 4, label: 'Useables' },
+        { id: 5, label: 'Equipment' },
+        { id: 6, label: 'Parts' },
+        { id: 7, label: 'Electrical' },
+        { id: 8, label: 'Tools' },
+        { id: 9, label: 'Misc' }
     ]);
 
-    const [subcategoryList, setSubcategoryList] = useState([
-        {
-            id:1,
-            label:'Please Update'
-        }
+    const [subcategoryList] = useState([
+        { id: 1, label: 'Please Update' }
     ]);
-    
-    const handleUOMChange = (selectedOption2) => {
 
-        (async () => {
-            setUom(selectedOption2)
-        })();
-    };
-
-    const handleCategoryChange = (selectedOption2) => {
-
-        (async () => {
-            setCategory(selectedOption2)
-        })();
-    };
-
-    const handleSubcategoryChange = (selectedOption2) => {
-
-        (async () => {
-            setSubcategory(selectedOption2)
-        })();
-    };
-
-    const handleVenderChange = (selectedOption2) => {
-
-        (async () => {
-            setVenderName(selectedOption2.label)
-            setVenderId(selectedOption2.id)
-            setVender(selectedOption2)
-        })();
+    const selectStyles = {
+        control: (provided) => ({
+            ...provided,
+            backgroundColor: 'white',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.5rem',
+            padding: '0.2rem',
+            minHeight: '46px',
+            boxShadow: 'none',
+        }),
+        menu: (provided) => ({
+            ...provided,
+            zIndex: 50,
+            borderRadius: '0.75rem',
+            overflow: 'hidden',
+        }),
+        valueContainer: (provided) => ({
+            ...provided,
+            paddingLeft: '0.5rem',
+            paddingRight: '0.5rem',
+        }),
     };
 
     function formatCurrency(number, locale = 'en-US', currency = 'USD') {
         return new Intl.NumberFormat(locale, {
             style: 'currency',
             currency: currency
-        }).format(number);
+        }).format(number || 0);
     }
 
     useEffect(() => {
         (async () => {
-            try{
-                let q = query(collection(db, 'companies',recentlySelectedCompany,'companyUsers'));
-                const querySnapshot = await getDocs(q);       
-                setCompanyUserList([])      
-                querySnapshot.forEach((doc) => {
-                    const companyUserData = doc.data()
+            try {
+                let q = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
+                const querySnapshot = await getDocs(q);
+                setCompanyUserList([]);
+                querySnapshot.forEach((docSnap) => {
+                    const companyUserData = docSnap.data();
                     const companyUser = {
-                        id:companyUserData.id,
-                        userId:companyUserData.userId,
-                        userName:companyUserData.userName,
-                        roleName:companyUserData.roleName,
+                        id: companyUserData.id,
+                        userId: companyUserData.userId,
+                        userName: companyUserData.userName,
+                        roleName: companyUserData.roleName,
                         status: companyUserData.status,
                         workerType: companyUserData.workerType,
                         linkedCompanyId: companyUserData.linkedCompanyId,
-                        linkedCompanyName:companyUserData.linkedCompanyName,
-                        label:companyUserData.userName
-                    }
-                    setCompanyUserList(companyUserList => [...companyUserList, companyUser]); 
+                        linkedCompanyName: companyUserData.linkedCompanyName,
+                        label: companyUserData.userName
+                    };
+                    setCompanyUserList(prev => [...prev, companyUser]);
                 });
 
-                //Get Generic Data Base Items
-                let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'), orderBy('name') );
-                const genericItemQuerySnapshot = await getDocs(genericItemQuery);       
-                setGenericItemList([])
-                genericItemQuerySnapshot.forEach((doc) => {
-                    const itemData = doc.data()
+                let genericItemQuery = query(
+                    collection(db, "companies", recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'),
+                    orderBy('name')
+                );
+                const genericItemQuerySnapshot = await getDocs(genericItemQuery);
+                setGenericItemList([]);
+                genericItemQuerySnapshot.forEach((docSnap) => {
+                    const itemData = docSnap.data();
                     const genericItem = {
-                        UOM : itemData.id,
-                        billable : itemData.billable,
-                        category : itemData.category,
-                        color : itemData.color,
-                        dateUpdated : itemData.dateUpdated,
-                        description : itemData.description,
-                        id : itemData.id,
-                        name : itemData.name,
-                        rate : itemData.rate,
-                        size : itemData.size,
-                        sku : itemData.sku,
-                        storeName : itemData.storeName,
-                        subCategory : itemData.subCategory,
-                        timesPurchased : itemData.timesPurchased,
-                        venderId : itemData.venderId,
-                        label: itemData.name + ' - ' + formatCurrency(itemData.rate/100) + ' - ' + itemData.sku
-                    }
-                    setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
+                        UOM: itemData.id,
+                        billable: itemData.billable,
+                        category: itemData.category,
+                        color: itemData.color,
+                        dateUpdated: itemData.dateUpdated,
+                        description: itemData.description,
+                        id: itemData.id,
+                        name: itemData.name,
+                        rate: itemData.rate,
+                        size: itemData.size,
+                        sku: itemData.sku,
+                        storeName: itemData.storeName,
+                        subCategory: itemData.subCategory,
+                        timesPurchased: itemData.timesPurchased,
+                        venderId: itemData.venderId,
+                        vendorId: itemData.venderId,
+                        label: `${itemData.name} - ${formatCurrency(itemData.rate / 100)} - ${itemData.sku}`
+                    };
+                    setGenericItemList(prev => [...prev, genericItem]);
                 });
 
-                //Venders
-                    let qv;
-                    qv = query(collection(db, 'companies',recentlySelectedCompany,'settings','venders','vender'));
-                    const querySnapshotv = await getDocs(qv);
-                    let count = 1 
-                    setVenderList([])  
-                    querySnapshotv.forEach((doc) => {
-                        const venderData = doc.data()
-                        const vender = {
-                            id:venderData.id,
-                            name:venderData.name,
-                            email:venderData.email,
-                            phoneNumber:venderData.phoneNumber,
-                            streetAddress: venderData.address.streetAddress,
-                            city:venderData.address.city,
-                            state:venderData.address.state,
-                            zip:venderData.address.zip,
-                            label:venderData.name
-                        }
-                        count = count + 1
-                        setVenderList(venderList => [...venderList, vender]); 
-                    });
-
-            } catch(error){
-                console.log('Error')
-                console.log(error)
+                let qv = query(collection(db, 'companies', recentlySelectedCompany, 'settings', 'vendors', 'vendor'));
+                const querySnapshotv = await getDocs(qv);
+                setVenderList([]);
+                querySnapshotv.forEach((docSnap) => {
+                    const venderData = docSnap.data();
+                    const venderObj = {
+                        id: venderData.id,
+                        name: venderData.name,
+                        email: venderData.email,
+                        phoneNumber: venderData.phoneNumber,
+                        streetAddress: venderData.address?.streetAddress,
+                        city: venderData.address?.city,
+                        state: venderData.address?.state,
+                        zip: venderData.address?.zip,
+                        label: venderData.name
+                    };
+                    setVenderList(prev => [...prev, venderObj]);
+                });
+            } catch (error) {
+                console.log('Error');
+                console.log(error);
             }
         })();
-    },[])
+    }, [recentlySelectedCompany]);
 
     const handlePurchaseDateChange = (dateOption) => {
-        setPurchaseDate(dateOption)
+        setPurchaseDate(dateOption);
         const formattedDate = dateOption.toLocaleDateString('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric'
-        }); 
-        setFormattedPurchaseDate(formattedDate)
-
-    }
-    const handleSelectedGenericItemChange = (selectedOption2) => {
-
-        (async () => {
-            setSelectedGenericItem(selectedOption2)
-        })();
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+        setFormattedPurchaseDate(formattedDate);
     };
-    const handleSelectedUserChange = (selectedOption2) => {
-        (async () => {
-            setSelectedUser(selectedOption2)
-        })();
-    };
-    
 
-    const handleSelectedVenderChange = (selectedOption2) => {
-        (async () => {
-            setSelectedVender(selectedOption2)
-        })();
+    const handleVenderChange = (selectedOption) => {
+        setVenderName(selectedOption?.label || '');
+        setVenderId(selectedOption?.id || '');
+        setVender(selectedOption);
     };
-    async function createNewDBItem(e) {
-        e.preventDefault()
-    }
 
     async function revealSideBar(e) {
-        e.preventDefault()
-        setShowSidebar(true)
+        e.preventDefault();
+        setShowSidebar(true);
     }
 
     async function closeSideBar(e) {
-        e.preventDefault()
-        setShowSidebar(false)
+        e.preventDefault();
+        setShowSidebar(false);
     }
 
-
     async function addNewItem(e) {
-        e.preventDefault()
-        
-        toast.dismiss()
-        if (quantity != "" && selectedGenericItem.id != "") {
-            let rate = parseFloat( selectedGenericItem.rate)/100//Need to Change to *100. because I store all numbers as cents, rather than dollars
-            let quantityFloat = parseFloat( quantity)
+        e.preventDefault();
 
-            let totalCost = rate*quantityFloat
+        toast.dismiss();
 
-            let id = "comp_pi_" + uuidv4()
+        if (quantity !== "" && selectedGenericItem?.id) {
+            let rate = parseFloat(selectedGenericItem.rate) / 100;
+            let quantityFloat = parseFloat(quantity);
+            let totalCost = rate * quantityFloat;
+            let id = "comp_pi_" + uuidv4();
 
             let newItem = {
                 id: id,
@@ -365,761 +236,752 @@ const CreateNewPurchase = () => {
                 quantityString: quantity,
                 description: selectedGenericItem.description,
                 totalCost: totalCost.toFixed(2),
-                category:selectedGenericItem.category,
-            }
-            
-            setPurchaseItemList(purchaseItemlist => [...purchaseItemlist, newItem]); 
-            setQuantity('')
-            setSelectedGenericItem({})
+                category: selectedGenericItem.category,
+            };
+
+            setPurchaseItemList(prev => [...prev, newItem]);
+            setQuantity('');
+            setSelectedGenericItem(null);
         }
     }
 
-    async function removeItem(e,itemId) {
-        e.preventDefault()
-        console.log(itemId)
-
-        let workingList = purchaseItemlist
-        console.log(workingList)
-        workingList = workingList.filter(item => item.id !== itemId);
-        console.log(workingList)
-        
-        setPurchaseItemList(workingList); 
+    async function removeItem(e, itemId) {
+        e.preventDefault();
+        let workingList = purchaseItemlist.filter(item => item.id !== itemId);
+        setPurchaseItemList(workingList);
     }
 
     async function submitReceipt(e) {
-        e.preventDefault()
+        e.preventDefault();
         if (!isLoading) {
-            setIsLoading(true)
-            console.log('submitReceipt')
-            let receiptId = 'com_rec_' + uuidv4()
+            setIsLoading(true);
+            let receiptId = 'com_rec_' + uuidv4();
 
-            let cost = 0
-            let purchaseItemIds = []
+            let cost = 0;
+            let purchaseItemIds = [];
+
             for (let i = 0; i < purchaseItemlist.length; i++) {
-                let item = purchaseItemlist[i]
-                
-                console.log('Added Item ' + item)
+                let item = purchaseItemlist[i];
 
-                cost = cost + parseFloat(item.totalCost)
-                let price = Math.floor(parseFloat(item.rate*100))
-                let priceBillable = Math.floor(parseFloat(item.billable*100))
+                cost = cost + parseFloat(item.totalCost);
+                let price = Math.floor(parseFloat(item.rate * 100));
+                let priceBillable = Math.floor(parseFloat(item.billable * 100));
 
-                purchaseItemIds.push(item.id)
+                purchaseItemIds.push(item.id);
                 let purchaseItem = {
-                    id : item.id,
-                    receiptId : receiptId,
-                    invoiceNum : refrence,
-                    venderId : selectedVender.id,
-                    venderName : selectedVender.name,
-                    techId : selectedUser.userId,
-                    techName : selectedUser.userName,
+                    id: item.id,
+                    receiptId: receiptId,
+                    invoiceNum: refrence,
+                    venderId: selectedVender?.id || '',
+                    venderName: selectedVender?.name || '',
+                    vendorId: selectedVender?.id || '',
+                    vendorName: selectedVender?.name || '',
+                    techId: selectedUser?.userId || '',
+                    techName: selectedUser?.userName || '',
                     itemId: item.itemId,
                     name: item.name,
                     price: price,
                     quantityString: item.quantityString,
-                    date : purchaseDate,
+                    date: purchaseDate,
                     billable: item.billable,
                     invoiced: false,
                     returned: false,
-                    customerId : "",
-                    customerName : "",
-                    sku : item.sku,
-                    notes : notes,
-                    jobId : "",
+                    customerId: "",
+                    customerName: "",
+                    sku: item.sku,
+                    notes: notes,
+                    jobId: "",
                     billingRate: priceBillable,
-                }
-                console.log(purchaseItem)
-                await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
-            }
-            console.log(cost*100)
-            cost = Math.floor(parseFloat(cost*100))
-            let costAfterTax = Math.floor(parseFloat(cost*1.085))
+                };
 
-            console.log('Added Receipt ' + receiptId)
-            let receipt = {
-                id : receiptId,
-                invoiceNum : refrence,
-                date : purchaseDate,
-                storeId : selectedVender.id,
-                storeName : selectedVender.name,
-                tech : selectedUser.userName,
-                techId : selectedUser.userId,
-                purchasedItemIds : purchaseItemIds,
-                numberOfItems : purchaseItemIds.length,
-                cost : cost,
-                costAfterTax : costAfterTax,
-                pdfUrlList : [],
+                await setDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", item.id), purchaseItem);
             }
-            console.log(receipt)
-            await setDoc(doc(db,"companies",recentlySelectedCompany,"receipts", receiptId),receipt );
-            setIsLoading(false)
-            navigate('/company/receipts/detail/' + receiptId)
-                
+
+            cost = Math.floor(parseFloat(cost * 100));
+            let costAfterTax = Math.floor(parseFloat(cost * 1.085));
+
+            let receipt = {
+                id: receiptId,
+                invoiceNum: refrence,
+                date: purchaseDate,
+                storeId: selectedVender?.id || '',
+                storeName: selectedVender?.name || '',
+                tech: selectedUser?.userName || '',
+                techId: selectedUser?.userId || '',
+                purchasedItemIds: purchaseItemIds,
+                numberOfItems: purchaseItemIds.length,
+                cost: cost,
+                costAfterTax: costAfterTax,
+                pdfUrlList: [],
+            };
+
+            await setDoc(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), receipt);
+            setIsLoading(false);
+            navigate('/company/receipts/detail/' + receiptId);
         }
     }
 
     async function submitReceiptAndAddAnother(e) {
-        e.preventDefault()
+        e.preventDefault();
         if (!isLoading) {
-            setIsLoading(true)
-            console.log('submitReceiptAndAddAnother')
-            let receiptId = 'com_rec_' + uuidv4()
+            setIsLoading(true);
+            let receiptId = 'com_rec_' + uuidv4();
 
-            let cost = 0
-            let purchaseItemIds = []
+            let cost = 0;
+            let purchaseItemIds = [];
+
             for (let i = 0; i < purchaseItemlist.length; i++) {
-                let item = purchaseItemlist[i]
-                
-                console.log('Added Item ' + item)
+                let item = purchaseItemlist[i];
 
-                cost = cost + parseFloat(item.totalCost)
-                let price = Math.floor(parseFloat(item.rate*100))
-                let priceBillable = Math.floor(parseFloat(item.billable*100))
+                cost = cost + parseFloat(item.totalCost);
+                let price = Math.floor(parseFloat(item.rate * 100));
+                let priceBillable = Math.floor(parseFloat(item.billable * 100));
 
-                purchaseItemIds.push(item.id)
+                purchaseItemIds.push(item.id);
                 let purchaseItem = {
-                    id : item.id,
-                    receiptId : receiptId,
-                    invoiceNum : refrence,
-                    venderId : selectedVender.id,
-                    venderName : selectedVender.name,
-                    techId : selectedUser.userId,
-                    techName : selectedUser.userName,
+                    id: item.id,
+                    receiptId: receiptId,
+                    invoiceNum: refrence,
+                    venderId: selectedVender?.id || '',
+                    venderName: selectedVender?.name || '',
+                    techId: selectedUser?.userId || '',
+                    techName: selectedUser?.userName || '',
                     itemId: item.itemId,
                     name: item.name,
                     price: price,
                     quantityString: item.quantityString,
-                    date : purchaseDate,
+                    date: purchaseDate,
                     billable: item.billable,
                     invoiced: false,
                     returned: false,
-                    customerId : "",
-                    customerName : "",
-                    sku : item.sku,
-                    notes : notes,
-                    jobId : "",
+                    customerId: "",
+                    customerName: "",
+                    sku: item.sku,
+                    notes: notes,
+                    jobId: "",
                     billingRate: priceBillable,
-                }
-                console.log(purchaseItem)
-                await setDoc(doc(db,"companies",recentlySelectedCompany,"purchasedItems",item.id),purchaseItem);
-            }
-            console.log(cost*100)
-            cost = Math.floor(parseFloat(cost*100))
-            let costAfterTax = Math.floor(parseFloat(cost*1.085))
+                };
 
-            console.log('Added Receipt ' + receiptId)
+                await setDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", item.id), purchaseItem);
+            }
+
+            cost = Math.floor(parseFloat(cost * 100));
+            let costAfterTax = Math.floor(parseFloat(cost * 1.085));
+
             let receipt = {
-                id : receiptId,
-                invoiceNum : refrence,
-                date : purchaseDate,
-                storeId : selectedVender.id,
-                storeName : selectedVender.name,
-                tech : selectedUser.userName,
-                techId : selectedUser.userId,
-                purchasedItemIds : purchaseItemIds,
-                numberOfItems : purchaseItemIds.length,
-                cost : cost,
-                costAfterTax : costAfterTax,
-                pdfUrlList : [],
-            }
-            console.log(receipt)
-            await setDoc(doc(db,"companies",recentlySelectedCompany,"receipts", receiptId),receipt );
-            setPurchaseItemList([])
-            setRefrence("")
-            setNotes("")
-            setIsLoading(false)
+                id: receiptId,
+                invoiceNum: refrence,
+                date: purchaseDate,
+                storeId: selectedVender?.id || '',
+                storeName: selectedVender?.name || '',
+                tech: selectedUser?.userName || '',
+                techId: selectedUser?.userId || '',
+                purchasedItemIds: purchaseItemIds,
+                numberOfItems: purchaseItemIds.length,
+                cost: cost,
+                costAfterTax: costAfterTax,
+                pdfUrlList: [],
+            };
 
+            await setDoc(doc(db, "companies", recentlySelectedCompany, "receipts", receiptId), receipt);
+
+            setPurchaseItemList([]);
+            setRefrence("");
+            setNotes("");
+            setIsLoading(false);
         }
     }
 
-    //Add new Database Item
-    
-    
     async function rateInput(e) {
-        e.preventDefault()
-        try{
-            //Original
-
+        e.preventDefault();
+        try {
             let value = e.target.value.replace(/[^\d.]/g, '');
-            
-            setRate(value)
+            setRate(value);
+
             const parts = value.split('.');
             if (parts.length > 1) {
                 parts[1] = parts[1].slice(0, 2);
                 value = parts.join('.');
             }
-            // e.target.value = value;
 
-            // let value = parseFloat(e.target.value);
-            if (!isNaN(value)) {
-                let newRate = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-                // setRateUSD(newRate)
-                setRateUSD(value)
+            if (!isNaN(value) && value !== '') {
+                setRateUSD(value);
             } else {
-                let newRate = '0';
-                setRateUSD(newRate)
-
+                setRateUSD('0');
             }
-
-        } catch(error){
-            console.log(error)
+        } catch (error) {
+            console.log(error);
         }
     }
-    
+
     async function billingRateInput(e) {
-        e.preventDefault()
-        try{
-            //Original
-
+        e.preventDefault();
+        try {
             let value = e.target.value.replace(/[^\d.]/g, '');
-            
-            setBillingRate(value)
+            setBillingRate(value);
+
             const parts = value.split('.');
             if (parts.length > 1) {
                 parts[1] = parts[1].slice(0, 2);
                 value = parts.join('.');
             }
-            // e.target.value = value;
 
-            // let value = parseFloat(e.target.value);
-            if (!isNaN(value)) {
-                let newRate = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
-                // setRateUSD(newRate)
-                setBillingRateUSD(value)
+            if (!isNaN(value) && value !== '') {
+                setBillingRateUSD(value);
             } else {
-                let newRate = '0';
-                setBillingRateUSD(newRate)
-
+                setBillingRateUSD('0');
             }
-
-        } catch(error){
-            console.log(error)
+        } catch (error) {
+            console.log(error);
         }
     }
 
-    async function billableTrue(e) {
-        setBillable(true)
+    async function billableTrue() {
+        setBillable(true);
     }
-    
-    async function billableFalse(e) {
-        setBillable(false)
+
+    async function billableFalse() {
+        setBillable(false);
     }
 
     async function createNewDataBaseItem(e) {
-        //Create New DataBase Item
-        e.preventDefault()
-        try{
+        e.preventDefault();
+        try {
+            let id = 'com_sett_db_' + uuidv4();
+            let rateCents = Math.floor(parseFloat(rateUSD * 100));
+            let billingRateCents = Math.floor(parseFloat(billingRateUSD * 100));
 
-            //Create New Item
-            let id = 'com_sett_db_' + uuidv4()
-    
-            console.log('Added New Item ' + id)
-
-            let rateCents = Math.floor(parseFloat(rateUSD*100))
-
-            let billingRateCents = Math.floor(parseFloat(billingRateUSD*100))
             let item = {
+                UOM: uom?.label || '',
+                id: id,
+                billable: billable,
+                category: category?.label || '',
+                color: color,
+                dateUpdated: new Date(),
+                description: description,
+                name: itemName,
+                rate: rateCents,
+                size: size,
+                sku: sku,
+                storeName: "",
+                subCategory: subcategory?.label || "",
+                timesPurchased: 0,
+                venderId: venderId || "",
+                billingRate: billingRateCents
+            };
 
-                UOM : uom.label,
-                id : id,
-                billable : billable,
-                category : category.label,
-                color : color,
-                dateUpdated : new Date(),
-                description : description,
-                name : itemName,
-                rate : rateCents,
-                size : size,
-                sku : sku, 
-                storeName : "",
-                subCategory : "",
-                timesPurchased : 0,
-                venderId : "",
-                billingRate : billingRateCents
-                
-            }
+            await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", 'dataBase', 'dataBase', id), item);
 
-            console.log(item)
+            setItemName('');
+            setBillable(false);
+            setRate('');
+            setRateUSD('0');
+            setBillingRate('');
+            setBillingRateUSD('0');
+            setSku('');
+            setUom(null);
+            setCategory(null);
+            setSubcategory(null);
+            setColor('');
+            setDescription('');
+            setSize('');
+            setVender(null);
+            setVenderName('');
+            setVenderId('');
 
-            console.log('2')
+            let genericItemQuery = query(
+                collection(db, "companies", recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'),
+                orderBy('name')
+            );
 
-            await setDoc(doc(db,"companies",recentlySelectedCompany,"settings",'dataBase','dataBase', id), item);
+            const genericItemQuerySnapshot = await getDocs(genericItemQuery);
+            setGenericItemList([]);
 
-            console.log('3')
-
-            setItemName('')
-            setBillable(false)
-            setRate('')
-            setRateUSD('')
-            setBillingRate('')
-            setBillingRateUSD('')
-            setSku('')
-            setUom('')
-            setCategory('')
-            setSubcategory('')
-            setColor('')
-            setDescription('')
-            setSize('')
-            console.log('New Item Created')
-            //Get Generic Data Base Items
-            let genericItemQuery = query(collection(db, "companies",recentlySelectedCompany,'settings','dataBase','dataBase'));
-
-            const genericItemQuerySnapshot = await getDocs(genericItemQuery);    
-              
-            setGenericItemList([])
-
-            genericItemQuerySnapshot.forEach((doc) => {
-                const itemData = doc.data()
+            genericItemQuerySnapshot.forEach((docSnap) => {
+                const itemData = docSnap.data();
                 const genericItem = {
-                    id : itemData.id,
-                    UOM : itemData.id,
-                    billable : itemData.billable,
-                    category : itemData.category,
-                    color : itemData.color,
-                    dateUpdated : itemData.dateUpdated,
-                    description : itemData.description,
-                    name : itemData.name,
-                    rate : itemData.rate,
-                    size : itemData.size,
-                    sku : itemData.sku,
-                    storeName : itemData.storeName,
-                    subCategory : itemData.subCategory,
-                    timesPurchased : itemData.timesPurchased,
-                    venderId : itemData.venderId,
-                    label: itemData.name + ' - ' + formatCurrency(itemData.rate/100) + ' - ' + itemData.sku
-                }
-                setGenericItemList(genericItemList => [...genericItemList, genericItem]); 
+                    id: itemData.id,
+                    UOM: itemData.id,
+                    billable: itemData.billable,
+                    category: itemData.category,
+                    color: itemData.color,
+                    dateUpdated: itemData.dateUpdated,
+                    description: itemData.description,
+                    name: itemData.name,
+                    rate: itemData.rate,
+                    size: itemData.size,
+                    sku: itemData.sku,
+                    storeName: itemData.storeName,
+                    subCategory: itemData.subCategory,
+                    timesPurchased: itemData.timesPurchased,
+                    venderId: itemData.venderId,
+                    label: `${itemData.name} - ${formatCurrency(itemData.rate / 100)} - ${itemData.sku}`
+                };
+                setGenericItemList(prev => [...prev, genericItem]);
             });
-            console.log('Got New Items')
 
-            toast.dismiss()
-            setShowSidebar(false)
-
-        } catch(error){
-            console.log('Error From Create New Data Base Item')
-            console.log(error)
+            toast.dismiss();
+            setShowSidebar(false);
+        } catch (error) {
+            console.log('Error From Create New Data Base Item');
+            console.log(error);
         }
     }
+
     const handleFileChange = (event) => {
         const file = event.target.files[0];
         if (file) {
-          console.log('Selected file:', file);
-          // Here you would trigger the PDF processing logic
-          console.log('Selected fileName:', file.name);
-
-          setFileRef(file.name)
+            setFileRef(file.name);
         }
-      };
+    };
 
     const handleUploadClick = () => {
         fileInputRef.current.click();
     };
 
+    const totalEstimated = purchaseItemlist.reduce((sum, item) => sum + parseFloat(item.totalCost || 0), 0);
+
     return (
+        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+            <div className="max-w-screen-xl mx-auto">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-6">
+                    <div>
 
-        // 030811 - almost black
-        // 282c28 - black green
-        // 454b39 - dark olive green
-        // 536546 - olive green
-        // 747e79 - gray green
-        // ededed - off white // secondary white cfcfcf
-        // 1D2E76 - Pool Blue
-        // 0e245c
-        // CDC07B - Pool Yellow
-        // 9C0D38 - Pool Red
-        // 2B600F - Pool Green
-        // 919191 - gray
-        <div>
-            <div className='px-2 md:px-7 py-5'>
-                <div className='lg:flex'>
-                    <div className='w-full'>
-                        <div className='py-2 flex justify-between'>
-                            <Link 
-                            className='py-1 px-2 bg-[#0e245c] rounded-md py-1 px-2 text-[#d0d2d6]'
-                            to={`/company/purchasedItems`}>
-                                Back
-                            </Link>
-                            <button onClick={handleUploadClick} className="py-1 px-4 rounded-md bg-[#2B600F] text-[#ffffff] mt-2">Upload Receipt</button>
-                            <h1>{fileRef}</h1>
-                            <input
-                            type="file"
-                            ref={fileInputRef}
-                            onChange={handleFileChange}
-                            style={{ display: 'none' }}
-                            accept="application/pdf"
-                            />
-                            <div className="">
-                                <button
-                                className='py-1 px-2 rounded-md bg-[#CDC07B] text-[#000000]'
-                                onClick={(e) => submitReceipt(e)} 
-                                >Submit</button>
+                        <Link
+                            to="/company/purchasedItems"
+                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                        >
+                            &larr; Back to Purchased Items
+                        </Link>
+                        <h2 className="text-3xl font-bold text-gray-800">Create New Receipt</h2>
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                        <button
+                            onClick={submitReceipt}
+                            className="py-2 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
+                        >
+                            Submit
+                        </button>
+                    </div>
+                </div>
 
+                {fileRef && (
+                    <div className="mb-6 text-sm text-gray-600">
+                        Selected file: <span className="font-medium text-gray-800">{fileRef}</span>
+                    </div>
+                )}
+
+                <input
+                    type="file"
+                    ref={fileInputRef}
+                    onChange={handleFileChange}
+                    style={{ display: 'none' }}
+                    accept="application/pdf"
+                />
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            <h3 className="text-xl font-bold mb-4 text-gray-800">Receipt Details</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Purchase Date</label>
+                                    <div className="w-full">
+                                        <DatePicker
+                                            selected={purchaseDate}
+                                            onChange={(date) => handlePurchaseDateChange(date)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Reference</label>
+                                    <input
+                                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                        onChange={(e) => setRefrence(e.target.value)}
+                                        type="text"
+                                        placeholder="Reference"
+                                        value={refrence}
+                                    />
+                                </div>
+
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Notes</label>
+                                    <textarea
+                                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                        onChange={(e) => setNotes(e.target.value)}
+                                        placeholder="Notes"
+                                        value={notes}
+                                        rows={3}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Store</label>
+                                    <Select
+                                        value={selectedVender}
+                                        options={venderList}
+                                        onChange={setSelectedVender}
+                                        isSearchable
+                                        placeholder="Select a Vendor"
+                                        styles={selectStyles}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Tech</label>
+                                    <Select
+                                        value={selectedUser}
+                                        options={companyUserList}
+                                        onChange={setSelectedUser}
+                                        isSearchable
+                                        placeholder="Select a Tech"
+                                        styles={selectStyles}
+                                    />
+                                </div>
                             </div>
                         </div>
-                        <div className='w-full bg-[#0e245c] p-4 rounded-md text-[#ffffff]'>
-                            <div className='left-0 w-full justify-between'>
-                                <h2 className="font-bold">Create New Receipt</h2>
-                                <form className='gap-2'>
-                                    <div className='flex justify-between w-full items-center gap-2 text-[#000000]'>
-                                        <h2 className="text-[#ffffff]">Purchase Date</h2>
-                                        <div>
-                                            <DatePicker 
-                                                showIcon
-                                                selected={purchaseDate} 
-                                                onChange={(purchaseDate) => handlePurchaseDateChange(purchaseDate)}
-                                                icon={
-                                                <svg
-                                                    xmlns="http://www.w3.org/2000/svg"
-                                                    width="1em"
-                                                    height="1em"
-                                                    viewBox="0 0 48 48"
-                                                >
-                                                    <mask id="ipSApplication0">
-                                                    <g fill="none" stroke="#fff" strokeLinejoin="round" strokeWidth="4">
-                                                        <path strokeLinecap="round" d="M40.04 22v20h-32V22"></path>
-                                                        <path
-                                                        fill="#fff"
-                                                        d="M5.842 13.777C4.312 17.737 7.263 22 11.51 22c3.314 0 6.019-2.686 6.019-6a6 6 0 0 0 6 6h1.018a6 6 0 0 0 6-6c0 3.314 2.706 6 6.02 6c4.248 0 7.201-4.265 5.67-8.228L39.234 6H8.845l-3.003 7.777Z"
-                                                        ></path>
-                                                    </g>
-                                                    </mask>
-                                                    <path
-                                                    fill="currentColor"
-                                                    d="M0 0h48v48H0z"
-                                                    mask="url(#ipSApplication0)"
-                                                    ></path>
-                                                </svg>
-                                                }
-                                            />
-                                        </div>
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                            <h2>Refrence</h2>
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                            onChange={(e) => {setRefrence(e.target.value)}} type="text" placeholder='Refrence' value={refrence}></input>
-                                            
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                            <h2>Notes</h2>
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md mt-2 text-[#000000]'
-                                            onChange={(e) => {setNotes(e.target.value)}} type="text" placeholder='Notes' value={notes}></input>
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                        <div className='w-full'>
-                                            <h1>Store</h1>
-                                            <Select
-                                                value={selectedVender}
-                                                options={venderList}
-                                                onChange={handleSelectedVenderChange}
-                                                isSearchable
-                                                placeholder="Select a Vender"
-                                                theme={(theme) => ({
-                                                ...theme,
-                                                borderRadius: 0,
-                                                colors: {
-                                                    ...theme.colors,
-                                                    primary25: 'green',
-                                                    primary: 'gray',
-                                                },
-                                                })}
-                                            />
-                                        </div>
-                                        <div className='w-full'>
-                                            <h1>Tech</h1>
-                                            <Select
-                                                value={selectedUser}
-                                                options={companyUserList}
-                                                onChange={handleSelectedUserChange}
-                                                isSearchable
-                                                placeholder="Select a Task Type"
-                                                theme={(theme) => ({
-                                                ...theme,
-                                            borderRadius: 0,
-                                                colors: {
-                                                    ...theme.colors,
-                                                    primary25: 'green',
-                                                    primary: 'gray',
-                                                },
-                                                })}
-                                            />
-                                        </div>
-                                    </div>
-                                    <hr className='mt-2'/>
-                                    <table className='w-full text-sm text-left text-[#d0d2d6]'>
-                                        <thead className='text-sm text-[#d0d2d6] border-b border-slate-700'>
+
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
+                                <h3 className="text-xl font-bold text-gray-800">Line Items</h3>
+
+                            </div>
+
+                            {purchaseItemlist.length > 0 ? (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-sm text-left text-gray-700">
+                                        <thead className="text-sm text-gray-600 border-b border-gray-200">
                                             <tr>
-                                                <th className='py-3 px-4'>Sku</th>
-                                                <th className='py-3 px-4'>Name</th>
-                                                <th className='py-3 px-4'>Description</th>
-                                                <th className='py-3 px-4'>Cost</th>
-                                                <th className='py-3 px-4'>Quantity</th>
-                                                <th className='py-3 px-4'>Total Cost</th>
-                                                <th className='py-3 px-4'></th>
+                                                <th className="py-3 px-4">SKU</th>
+                                                <th className="py-3 px-4">Name</th>
+                                                <th className="py-3 px-4">Description</th>
+                                                <th className="py-3 px-4">Cost</th>
+                                                <th className="py-3 px-4">Quantity</th>
+                                                <th className="py-3 px-4">Total</th>
+                                                <th className="py-3 px-4"></th>
                                             </tr>
                                         </thead>
                                         <tbody>
-                                        {
-                                            purchaseItemlist?.map( item => (
-                                                <tr key={item.id}>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.sku}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.name}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.description}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.rate}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.quantity}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>{item.totalCost}</td>
-                                                    <td className='py-3 px-4 font-medium whitespace-nonwrap'>
+                                            {purchaseItemlist.map(item => (
+                                                <tr key={item.id} className="border-b border-gray-100">
+                                                    <td className="py-3 px-4">{item.sku}</td>
+                                                    <td className="py-3 px-4 font-medium">{item.name}</td>
+                                                    <td className="py-3 px-4">{item.description}</td>
+                                                    <td className="py-3 px-4">${item.rate}</td>
+                                                    <td className="py-3 px-4">{item.quantity}</td>
+                                                    <td className="py-3 px-4 font-semibold">${item.totalCost}</td>
+                                                    <td className="py-3 px-4">
                                                         <button
-                                                        onClick={(e) => removeItem(e,item.id)} 
-                                                        className='w-full py-1 px-2 rounded-md bg-[#9C0D38] text-[#ffffff] mt-2'
-                                                        >Remove</button>
+                                                            onClick={(e) => removeItem(e, item.id)}
+                                                            className="text-red-500 hover:text-red-700 font-semibold"
+                                                        >
+                                                            Remove
+                                                        </button>
                                                     </td>
                                                 </tr>
-                                            ))
-                                        }
+                                            ))}
                                         </tbody>
                                     </table>
-                                    {/* <button
-                                    className='w-full py-1 px-2 rounded-md bg-[#1D2E76] text-[#ffffff] mt-2'
-                                    >Add First Line Item</button> */}
-                                    <div className='flex justify-between items-center py-1'>
-                                        <button
-                                        onClick={(e) => revealSideBar(e)}
-                                        className='py-1 px-2 red-fg'
-                                        >Create Item</button>
-                                        <div className='w-full px-1'>
-                                            <div className='w-full px-1'>
-                                                <Select
-                                                    value={selectedGenericItem}
-                                                    options={genericItemList}
-                                                    onChange={handleSelectedGenericItemChange}
-                                                    isSearchable
-                                                    placeholder="Select a Generic Item"
-                                                    theme={(theme) => ({
-                                                    ...theme,
-                                                    borderRadius: 0,
-                                                    colors: {
-                                                        ...theme.colors,
-                                                        primary25: 'green',
-                                                        primary: 'gray',
-                                                    },
-                                                    })}
-                                                />
-                                            </div>
-                                        </div>
-                                        <div className="px-2 w-1/4">
-                                            <input 
-                                            className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                            onChange={(e) => {setQuantity(e.target.value)}} type="text" placeholder='Quantity' value={quantity}>
-                                            </input>
-                                        </div>
-                                        <div className="px-2">
-                                            <button
-                                            onClick={(e) => addNewItem(e)}
-                                            className='py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff]'
-                                            >Add</button>
-                                        </div>
-                                    </div>
-                                    <div className='flex justify-between w-full items-center gap-2'>
-                                        <div className='w-full'>
-                                            <button
-                                                onClick={(e) => submitReceipt(e)} 
-                                                className='w-full py-1 px-2 rounded-md bg-[#2B600F] text-[#ffffff] mt-2'
-                                            >Submit</button>
-                                        </div>
-                                        <div className='w-full'>
-                                            <button
-                                                onClick={(e) => submitReceiptAndAddAnother(e)} 
-                                                className='w-full py-1 px-2 rounded-md yellow-bg text-[#ffffff] mt-2'
-                                            >Submit And Add Another</button>
-                                        </div>
-                                    </div>
-                                </form>
+                                </div>
+                            ) : (
+                                <div className="text-sm text-gray-500 border border-dashed border-gray-300 rounded-lg p-6 text-center">
+                                    No line items added yet.
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 mt-6 border-t pt-6">
+                                <div className="md:col-span-7">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Generic Item</label>
+                                    <Select
+                                        value={selectedGenericItem}
+                                        options={genericItemList}
+                                        onChange={setSelectedGenericItem}
+                                        isSearchable
+                                        placeholder="Select a Generic Item"
+                                        styles={selectStyles}
+                                    />
+                                </div>
+
+                                <div className="md:col-span-3">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Quantity</label>
+                                    <input
+                                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                        onChange={(e) => setQuantity(e.target.value)}
+                                        type="text"
+                                        placeholder="Quantity"
+                                        value={quantity}
+                                    />
+                                </div>
+
+                                <div className="md:col-span-2 flex items-end">
+                                    <button
+                                        onClick={addNewItem}
+                                        className="py-2 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
+                                    >
+                                        Add Item
+                                    </button>
+                                </div>
                             </div>
+                            <button
+                                onClick={revealSideBar}
+                                className="py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Create Item
+                            </button>
+                        </div>
+                        <div className="py-6">
+
+                            <button
+                                onClick={handleUploadClick}
+                                className="py-2 px-4 bg-green-100 text-green-800 font-semibold rounded-lg hover:bg-green-200 transition"
+                            >
+                                Add File To Receipt
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            <h3 className="text-xl font-bold mb-4 text-gray-800">Receipt Summary</h3>
+                            <div className="space-y-3 text-gray-700">
+                                <div className="flex justify-between">
+                                    <span>Purchase Date:</span>
+                                    <span>{formattedPurchaseDate || purchaseDate.toLocaleDateString()}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Store:</span>
+                                    <span>{selectedVender?.name || '—'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Tech:</span>
+                                    <span>{selectedUser?.userName || '—'}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Items:</span>
+                                    <span>{purchaseItemlist.length}</span>
+                                </div>
+                                <div className="flex justify-between font-bold text-lg text-gray-800 border-t pt-3">
+                                    <span>Total:</span>
+                                    <span>{formatCurrency(totalEstimated)}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            <button
+                                onClick={submitReceipt}
+                                className="py-2 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
+                            >
+                                Submit Receipt
+                            </button>
+                            <button
+                                onClick={submitReceiptAndAddAnother}
+                                className="py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Submit And Add Another
+                            </button>
                         </div>
                     </div>
                 </div>
             </div>
-            {
-                isLoading && (
-                    
-                <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">
-                    <div className="top-20 lg:top-100 relative p-10">
-                        <p>Loading</p>
+
+            {isLoading && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+                    <div className="bg-white rounded-xl shadow-xl px-8 py-6 text-gray-800 font-semibold">
+                        Loading...
                     </div>
                 </div>
-                )}
-                {/* Basic Filter Modal Structure */}
+            )}
+
             {showSidebar && (
-            <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">
-                <div className="top-20 lg:top-100 relative p-10">
-                    <div className='w-1/2 visible duration-200 sm:w-2/3 shadow-md shadow-[#000000] p-2 blue-bg text-[#cfcfcf] rounded-md lg:absolute z-141 lg:right-10'>
-                        <button 
-                        onClick={(e) => closeSideBar(e)}
-                        className="py-1 px-2 bg-[#CDC07B] rounded-md py-1 px-2 text-[#000000]">
-                            Close
-                        </button>
-                        <div>
-                            <div className="flex py-1 ">
-                                <p className="px-2 items-center line-clamp-1 w-[150px]">Item Name</p>
-                                <input 
-                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                onChange={(e) => {setItemName(e.target.value)}} type="text" placeholder='Item Name' value={itemName}>
-                                </input>
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-2xl bg-white rounded-2xl shadow-2xl p-6 max-h-[90vh] overflow-y-auto">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-2xl font-bold text-gray-800">Create New Database Item</h3>
+                            <button
+                                onClick={closeSideBar}
+                                className="py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Item Name</label>
+                                <input
+                                    className="w-full p-3 border border-gray-300 rounded-lg"
+                                    onChange={(e) => setItemName(e.target.value)}
+                                    type="text"
+                                    placeholder="Item Name"
+                                    value={itemName}
+                                />
                             </div>
-                            <div className="flex  py-1">
-                                <p className="px-2 items-center">Rate</p>
-                                <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff]'>
-                                    <p className="px-2">$</p>
-                                    <input 
-                                    className='flex w-full'
-                                    onChange={(e) => {rateInput(e)}} type="text" placeholder='Rate' value={rate}>
-                                    </input>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Rate</label>
+                                <div className="flex items-center border border-gray-300 rounded-lg px-3 bg-white">
+                                    <span className="text-gray-500 mr-2">$</span>
+                                    <input
+                                        className="w-full p-3 outline-none"
+                                        onChange={rateInput}
+                                        type="text"
+                                        placeholder="Rate"
+                                        value={rate}
+                                    />
                                 </div>
                             </div>
-                            {
-                                billable ? <div className="py-1">
+
+                            <div className="flex items-end">
+                                {billable ? (
                                     <button
-                                    onClick={(e) =>{billableFalse(e)}}
-                                    className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
+                                        onClick={billableFalse}
+                                        className="w-full py-3 px-4 bg-green-100 text-green-800 font-semibold rounded-lg hover:bg-green-200 transition"
+                                    >
                                         Billable
                                     </button>
-                                    <div className="flex  py-1">
-                                        <p className="px-2 items-center line-clamp-1 w-[150px]">Billing Rate</p>
-                                        <div className='flex w-full py-1 px-2 rounded-md text-[#000000] bg-[#ffffff] items-center'>
-                                            
-                                            <p className="px-2">$</p>
-                                            <input 
-                                            className='flex w-full'
-                                            onChange={(e) => {billingRateInput(e)}} type="text" placeholder='Billing Rate' value={billingRate}>
-                                            </input>
-                                        </div>
-                                    </div>
-                                </div> : <div className="flex  py-1">
+                                ) : (
                                     <button
-                                    onClick={(e) =>{billableTrue(e)}}
-                                    className='py-1 px-2 bg-[#9C0D38] rounded-md text-[#ffffff] w-full'>
+                                        onClick={billableTrue}
+                                        className="w-full py-3 px-4 bg-red-100 text-red-800 font-semibold rounded-lg hover:bg-red-200 transition"
+                                    >
                                         Not Billable
                                     </button>
+                                )}
+                            </div>
+
+                            {billable && (
+                                <div className="md:col-span-2">
+                                    <label className="block text-sm font-semibold text-gray-700 mb-2">Billing Rate</label>
+                                    <div className="flex items-center border border-gray-300 rounded-lg px-3 bg-white">
+                                        <span className="text-gray-500 mr-2">$</span>
+                                        <input
+                                            className="w-full p-3 outline-none"
+                                            onChange={billingRateInput}
+                                            type="text"
+                                            placeholder="Billing Rate"
+                                            value={billingRate}
+                                        />
+                                    </div>
                                 </div>
-                            }
-                            
-                            <div className="flex py-1">
-                                <p className="px-2 items-center">SKU</p>
-                                <input 
-                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                onChange={(e) => {setSku(e.target.value)}} type="text" placeholder='sku' value={sku}>
-                                </input>
+                            )}
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">SKU</label>
+                                <input
+                                    className="w-full p-3 border border-gray-300 rounded-lg"
+                                    onChange={(e) => setSku(e.target.value)}
+                                    type="text"
+                                    placeholder="SKU"
+                                    value={sku}
+                                />
                             </div>
-                            <div className="flex py-1 justify-between items-center">
-                                <p className="px-2">Vender</p>
-                                    <Select
-                                        value={vender}
-                                        options={venderList}
-                                        onChange={handleVenderChange}
-                                        isSearchable
-                                        placeholder="Select a Vender"
-                                        theme={(theme) => ({
-                                        ...theme,
-                                        borderRadius: 0,
-                                        colors: {
-                                            ...theme.colors,
-                                            primary25: 'green',
-                                            primary: 'gray',
-                                        },
-                                        })}
-                                    />
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Vendor</label>
+                                <Select
+                                    value={vender}
+                                    options={venderList}
+                                    onChange={handleVenderChange}
+                                    isSearchable
+                                    placeholder="Select a Vendor"
+                                    styles={selectStyles}
+                                />
+
+
+                                <Link
+                                    to="/company/vendors/create-new"
+                                    className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                                >
+                                    Create New Vendor
+                                </Link>
                             </div>
-                            <div className="flex py-1 justify-between items-center">
-                                <p className="px-2 ">U.O.M. <p className="text-sm px-5">unit of measurment</p></p>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">U.O.M.</label>
                                 <Select
                                     value={uom}
                                     options={uomList}
-                                    onChange={handleUOMChange}
+                                    onChange={setUom}
                                     isSearchable
                                     placeholder="Select a UOM"
-                                    theme={(theme) => ({
-                                    ...theme,
-                                    borderRadius: 0,
-                                    colors: {
-                                        ...theme.colors,
-                                        primary25: 'green',
-                                        primary: 'gray',
-                                    },
-                                    })}
+                                    styles={selectStyles}
                                 />
                             </div>
-                            <div className="flex py-1 justify-between items-center">
-                                <p className="px-2">Category</p>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Size</label>
+                                <input
+                                    className="w-full p-3 border border-gray-300 rounded-lg"
+                                    onChange={(e) => setSize(e.target.value)}
+                                    type="text"
+                                    placeholder="Size"
+                                    value={size}
+                                />
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Category</label>
                                 <Select
                                     value={category}
                                     options={categoryList}
-                                    onChange={handleCategoryChange}
+                                    onChange={setCategory}
                                     isSearchable
                                     placeholder="Select a Category"
-                                    theme={(theme) => ({
-                                    ...theme,
-                                    borderRadius: 0,
-                                    colors: {
-                                        ...theme.colors,
-                                        primary25: 'green',
-                                        primary: 'gray',
-                                    },
-                                    })}
+                                    styles={selectStyles}
                                 />
-                            </div>  
-                            <div className="flex py-1 justify-between items-center">
-                                <p className="px-2 line-clamp-1 w-[150px]">Sub-category</p>
+                            </div>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Sub-category</label>
                                 <Select
                                     value={subcategory}
                                     options={subcategoryList}
-                                    onChange={handleSubcategoryChange}
+                                    onChange={setSubcategory}
                                     isSearchable
                                     placeholder="Select a Sub-category"
-                                    theme={(theme) => ({
-                                    ...theme,
-                                    borderRadius: 0,
-                                    colors: {
-                                        ...theme.colors,
-                                        primary25: 'green',
-                                        primary: 'gray',
-                                    },
-                                    })}
+                                    styles={selectStyles}
                                 />
-                            </div> 
-                            <div className="flex  py-1">
-                                <p className="px-2 items-center">Color</p>
-                                <input 
-                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                onChange={(e) => {setColor(e.target.value)}} type="text" placeholder='Color' value={color}>
-                                </input>
                             </div>
-                            <div className="flex py-1 ">
-                                <p className="px-2 items-center">Size</p>
-                                <input 
-                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                onChange={(e) => {setSize(e.target.value)}} type="text" placeholder='Size' value={size}>
-                                </input>
+
+                            <div>
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Color</label>
+                                <input
+                                    className="w-full p-3 border border-gray-300 rounded-lg"
+                                    onChange={(e) => setColor(e.target.value)}
+                                    type="text"
+                                    placeholder="Color"
+                                    value={color}
+                                />
                             </div>
-                            <div className="flex py-1 ">
-                                <p className="px-2 items-center">Description</p>
-                                <input 
-                                className='w-full py-1 px-2 rounded-md text-[#000000]'
-                                onChange={(e) => {setDescription(e.target.value)}} type="text" placeholder='Description' value={description}>
-                                </input>
+
+                            <div className="md:col-span-2">
+                                <label className="block text-sm font-semibold text-gray-700 mb-2">Description</label>
+                                <textarea
+                                    className="w-full p-3 border border-gray-300 rounded-lg"
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    placeholder="Description"
+                                    value={description}
+                                    rows={3}
+                                />
                             </div>
-                            <button
-                                onClick={(e) =>{createNewDataBaseItem(e)}}
-                                className='py-1 px-2 bg-[#2B600F] rounded-md text-[#ffffff] w-full'>
-                                    Create New
-                            </button>
-                        </div> 
+
+                            <div className="md:col-span-2">
+                                <button
+                                    onClick={createNewDataBaseItem}
+                                    className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
+                                >
+                                    Create New Item
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </div>
-            </div>
             )}
         </div>
     );
-}
+};
+
 export default CreateNewPurchase;

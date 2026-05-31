@@ -9,22 +9,22 @@ import { v4 as uuidv4 } from 'uuid';
 const NewRequest = () => {
     const { companyId } = useParams();
     const navigate = useNavigate();
-    const { user } = useContext(Context);
+    const { user, dataBaseUser } = useContext(Context);
 
     const [company, setCompany] = useState(null);
     const [userLocations, setUserLocations] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipment, setEquipment] = useState([]);
-    
+
     const [selectedLocation, setSelectedLocation] = useState('');
     const [selectedBodyOfWater, setSelectedBodyOfWater] = useState('');
     const [selectedEquipment, setSelectedEquipment] = useState('');
 
-    const [issueDescription, setIssueDescription] = useState('');
+    const [issueDescription, setIssueDescription] = useState('Id like to inquire about weekly maintenance plans.');
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [error, setError] = useState(null);
-    const [requestType, setRequestType] = useState('repair'); // 'repair' or 'service'
+    const [requestType, setRequestType] = useState('service'); // 'repair' or 'service'
 
     useEffect(() => {
         const fetchData = async () => {
@@ -40,7 +40,7 @@ const NewRequest = () => {
                 }
 
                 // Fetch user's service locations
-                const locationsQuery = query(collection(db, 'homeOwnerServiceLocations'), where('userId', '==', user.uid));
+                const locationsQuery = query(collection(db, 'homeownerServiceLocations'), where('userId', '==', user.uid));
                 const locationsSnap = await getDocs(locationsQuery);
                 const locations = locationsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 setUserLocations(locations);
@@ -64,7 +64,7 @@ const NewRequest = () => {
                 setSelectedBodyOfWater('');
                 return;
             }
-            const q = query(collection(db, 'homeOwnerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation), where('userId', '==', user.uid));
+            const q = query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', selectedLocation), where('userId', '==', user.uid));
             const snap = await getDocs(q);
             const bows = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setBodiesOfWater(bows);
@@ -81,7 +81,7 @@ const NewRequest = () => {
                 setSelectedEquipment('');
                 return;
             }
-            const q = query(collection(db, 'homeOwnerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater), where('userId', '==', user.uid));
+            const q = query(collection(db, 'homeownerEquipment'), where('bodyOfWaterId', '==', selectedBodyOfWater), where('userId', '==', user.uid));
             const snap = await getDocs(q);
             const equip = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setEquipment(equip);
@@ -105,27 +105,27 @@ const NewRequest = () => {
             const location = userLocations.find(loc => loc.id === selectedLocation);
             const serviceLocationAddress = location ? location.address : {};
             let requestId = "hosr_" + uuidv4();
-            await setDoc(doc(db, 'homeOwnerServiceRequests'), {
+            await setDoc(doc(db, 'homeownerServiceRequests', requestId), {
                 id: requestId,
                 source: 'Customer',
                 status: 'Pending', //Pending, In Progress, Completed, Cancelled
-                dateCreated: serverTimestamp(),
+                createdAt: serverTimestamp(),
                 companyId,
                 companyName: company.name,
-                serviceDescription:issueDescription,
-                serviceName:'',
+                serviceDescription: issueDescription,
+                serviceName: '',
                 serviceLocationAddress,
                 creatorId: user.uid,
-                creatorName: user.firstName + ' ' + user.lastName,
+                creatorName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName,
                 customerId: '', //comp
                 customerName: '', //comp
-                homeOwnerName: user.firstName + ' ' + user.lastName, //shared
-                homeOwnerEmail: '', //shared
-                homeOwnerPhone: '', //shared
-                homeOwnerId: '', //homeOwner
-                homeOwnerserviceLocationId: selectedLocation, //homeOwner
-                homeOwnerbodyOfWaterId: selectedBodyOfWater || "", //homeOwner
-                homeOwnerequipmentId: selectedEquipment || "", //homeOwner
+                homeownerName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName, //shared
+                homeownerEmail: '', //shared
+                homeownerPhone: '', //shared
+                homeownerId: user.uid, //homeowner
+                homeownerServiceLocationId: selectedLocation, //homeowner
+                homeownerBodyOfWaterId: selectedBodyOfWater || "", //homeowner
+                homeownerEquipmentId: selectedEquipment || "", //homeowner
             });
 
             navigate('/client/service-requests');
@@ -196,7 +196,7 @@ const NewRequest = () => {
                     )}
 
                     {selectedBodyOfWater && equipment.length > 0 && (
-                         <div>
+                        <div>
                             <label htmlFor="equipment" className="block text-sm font-medium text-gray-700 mb-1">
                                 Equipment (Optional)
                             </label>
@@ -222,7 +222,7 @@ const NewRequest = () => {
                             Request Type
                         </label>
                         <div className="flex items-center space-x-4">
-                             <label className="flex items-center">
+                            <label className="flex items-center">
                                 <input
                                     type="radio"
                                     name="requestType"

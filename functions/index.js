@@ -1,7 +1,7 @@
-require('dotenv').config({ path: `.env.${process.env.GCLOUD_PROJECT}` });
+require('dotenv').config({ path: process.env.GCLOUD_PROJECT ? `.env.${process.env.GCLOUD_PROJECT}` : '.env' });
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const functions1 = require('firebase-functions/v1');
-const {getFirestore} = require("firebase-admin/firestore");
+const { getFirestore } = require("firebase-admin/firestore");
 const { defineSecret } = require('firebase-functions/params');
 const { v4: uuidv4 } = require('uuid');
 const { Timestamp } = require('firebase-admin/firestore');
@@ -12,10 +12,10 @@ const { title } = require("process");
 const sgMail = require("@sendgrid/mail");
 
 admin.initializeApp();
-const db = admin.firestore(); 
+const db = admin.firestore();
 
 // Securely access the Stripe API key from the environment variables.
-const stripe = require("stripe")(process.env.STRIPE_API_KEY);
+const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 // =========================================================================
 //   CORRECTED AUTOMATED FUNCTION: Create Stripe customer on new user signup
@@ -48,7 +48,7 @@ const stripe = require("stripe")(process.env.STRIPE_API_KEY);
 //         transfers: { requested: true },
 //       },
 //       // ... other account details as needed
-      
+
 //     });
 //     console.log('account: ',account)
 
@@ -60,7 +60,7 @@ const stripe = require("stripe")(process.env.STRIPE_API_KEY);
 
 //     console.log(`Stripe customer ID ${customer.id} saved for user ${user.uid}`);
 
-    
+
 //     return { success: true };
 
 //   } catch (error) {
@@ -83,7 +83,7 @@ exports.sendPaymentConfirmationEmail = sendGridGeneral.sendPaymentConfirmationEm
 const callableGeneral = require('./callableFunctions/general');
 exports.createFirstRecurringServiceStop2 = callableGeneral.createFirstRecurringServiceStop2;
 
-exports.createFirstRecurringServiceStop = callableGeneral.createFirstRecurringServiceStop;
+exports.createFirstRecurringServiceStop = callableGeneral.createFirstRecurringServiceStop; // Removed
 exports.createCompanyAfterSignUp = callableGeneral.createCompanyAfterSignUp;
 exports.updateCompanyHistory = callableGeneral.updateCompanyHistory;
 exports.createCompanyAdminNotes = callableGeneral.createCompanyAdminNotes;
@@ -98,6 +98,7 @@ exports.makeUpdatesToRecurringRoutes = callableGeneral.makeUpdatesToRecurringRou
 
 exports.deleteRecurringServiceStop = callableGeneral.deleteRecurringServiceStop;
 exports.endRecurringServiceStop = callableGeneral.endRecurringServiceStop;
+exports.updateRecurringServiceStop = callableGeneral.updateRecurringServiceStop;
 
 
 //-----------------Stripe Functions----------------------------
@@ -162,16 +163,16 @@ exports.onContractCreate = functions1.firestore
     const companyName = snap.data().companyName;
 
     console.log('ClientId : ' + clientId)
-    
-    if (clientId != ''){
+
+    if (clientId != '') {
 
       console.log('Has Client Id')
       const alertId = 'user_aler_' + uuidv4();
       console.log(alertId)
-          // Perform asynchronous operations
+      // Perform asynchronous operations
       try {
         await db.collection('users').doc(clientId).collection('alerts').doc(alertId).set({
-          id:alertId,
+          id: alertId,
           route: 'Routes',
           hasItem: false,
           itemId: '',
@@ -191,67 +192,67 @@ exports.onContractCreate = functions1.firestore
   });
 
 exports.updatedContract = functions1.firestore
-.document("/contracts/{documentId}")
-.onUpdate(async(change, context) => {
+  .document("/contracts/{documentId}")
+  .onUpdate(async (change, context) => {
 
-  // ...the new value after this update
-  const newValue = change.after.data()||{};
+    // ...the new value after this update
+    const newValue = change.after.data() || {};
 
-  // ...the previous value before this update
-  const previousValue = change.before.data()||{};
+    // ...the previous value before this update
+    const previousValue = change.before.data() || {};
 
-  // access a particular field as you would any JS property
+    // access a particular field as you would any JS property
 
-  //The value after an update operation
-  const newStatus = newValue.status;
+    //The value after an update operation
+    const newStatus = newValue.status;
 
-  // the value before an update operation
-  const oldStatus = previousValue.status;
+    // the value before an update operation
+    const oldStatus = previousValue.status;
 
-console.log('Old Status ' + oldStatus)
-console.log('New Status ' + newStatus)
+    console.log('Old Status ' + oldStatus)
+    console.log('New Status ' + newStatus)
 
-  if(newStatus!==oldStatus){
-   if (newStatus === 'Accepted'){
-    // Sends Alert to Company
-    try {
-      const alertId = 'comp_aler_' + uuidv4();
+    if (newStatus !== oldStatus) {
+      if (newStatus === 'Accepted') {
+        // Sends Alert to Company
+        try {
+          const alertId = 'comp_aler_' + uuidv4();
 
-      await db.collection('companies').doc(previousValue.companyId).collection('alerts').doc(alertId).set({
-        id:alertId,
-        route: 'Routes',
-        hasItem: false,
-        itemId: 'ItemId',
-        name: 'Contracted Accepted By ' + previousValue.customerName,
-        description:'Contracted Accepted By ' + previousValue.customerName,
-        // date:admin.firestore.FieldValue.serverTimestamp()
-      });
-      console.log('Successsfully Uploaded Alert')
-    } catch (error) {
-      console.error('Error:', error);
-      // Handle errors appropriately
+          await db.collection('companies').doc(previousValue.companyId).collection('alerts').doc(alertId).set({
+            id: alertId,
+            route: 'Routes',
+            hasItem: false,
+            itemId: 'ItemId',
+            name: 'Contracted Accepted By ' + previousValue.customerName,
+            description: 'Contracted Accepted By ' + previousValue.customerName,
+            // date:admin.firestore.FieldValue.serverTimestamp()
+          });
+          console.log('Successsfully Uploaded Alert')
+        } catch (error) {
+          console.error('Error:', error);
+          // Handle errors appropriately
+        }
+      } else if (newStatus === 'Rejected') {
+        // Sends Alert to Company
+        try {
+          const alertId = 'comp_aler_' + uuidv4();
+
+          await db.collection('companies').doc(previousValue.companyId).collection('alerts').doc(alertId).set({
+            id: alertId,
+            route: 'Routes',
+            hasItem: false,
+            itemId: 'ItemId',
+            name: 'Contracted Rejected By ' + previousValue.customerName,
+            description: 'Contracted Rejected By ' + previousValue.customerName,
+            // date:admin.firestore.FieldValue.serverTimestamp()
+          });
+          console.log('Successsfully Uploaded Alert')
+        } catch (error) {
+          console.error('Error:', error);
+          // Handle errors appropriately
+        }
+      }
+    } else {
+      console.log('No Change To Status')
     }
-   } else if (newStatus === 'Rejected'){
-    // Sends Alert to Company
-    try {
-      const alertId = 'comp_aler_' + uuidv4();
-
-      await db.collection('companies').doc(previousValue.companyId).collection('alerts').doc(alertId).set({
-        id:alertId,
-        route: 'Routes',
-        hasItem: false,
-        itemId: 'ItemId',
-        name: 'Contracted Rejected By ' + previousValue.customerName,
-        description: 'Contracted Rejected By ' + previousValue.customerName,
-        // date:admin.firestore.FieldValue.serverTimestamp()
-      });
-      console.log('Successsfully Uploaded Alert')
-    } catch (error) {
-      console.error('Error:', error);
-      // Handle errors appropriately
-    }
-   }
-  }else{
-    console.log('No Change To Status')
-  }
-});
+  });

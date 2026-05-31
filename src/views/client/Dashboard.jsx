@@ -39,7 +39,7 @@ const MyPoolSnapshot = () => {
             return;
         }
 
-        const locationsRef = collection(db, 'homeOwnerServiceLocations');
+        const locationsRef = collection(db, 'homeownerServiceLocations');
         const q = query(locationsRef, where('userId', '==', user.uid), limit(2));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
@@ -52,7 +52,7 @@ const MyPoolSnapshot = () => {
 
         return () => unsubscribe();
     }, [user]);
-    
+
     const renderSkeleton = () => (
         <div className="space-y-4 animate-pulse">
             <div className="h-8 bg-gray-200 rounded w-3/4"></div>
@@ -92,8 +92,8 @@ const MyPoolSnapshot = () => {
                     </div>
                 )}
             </div>
-            <Link 
-                to={locations.length > 0 ? "/client/my-pool" : "/client/my-pool/new"} 
+            <Link
+                to={locations.length > 0 ? "/client/my-pool" : "/client/my-pool/new"}
                 className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-teal-600 hover:bg-teal-700 transition-colors"
             >
                 {locations.length > 0 ? 'View All Pools' : 'Add a New Pool'}
@@ -113,7 +113,7 @@ const RepairRequestsWidget = () => {
             return;
         }
         console.log("Getting Repair Requsts")
-        const requestsRef = collection(db, 'homeOwnerRepairRequests');
+        const requestsRef = collection(db, 'homeownerRepairRequests');
         const q = query(
             requestsRef,
             where('userId', '==', user.uid),
@@ -190,7 +190,7 @@ const ContractsWidget = () => {
 
         return () => unsubscribe();
     }, [user]);
-    
+
     const renderSkeleton = () => (
         <div className="space-y-3 animate-pulse">
             <div className="h-6 bg-gray-200 rounded w-3/4"></div>
@@ -277,11 +277,10 @@ const ServiceRequestsWidget = () => {
                         {requests.map(req => (
                             <li key={req.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
                                 <p className="text-gray-700 font-medium truncate">{req.companyName}</p>
-                                <span className={`text-sm font-semibold px-2 py-1 rounded-full ${
-                                    req.status === 'pending' ? 'text-yellow-600 bg-yellow-100' :
-                                    req.status === 'approved' ? 'text-green-600 bg-green-100' :
-                                    'text-red-600 bg-red-100'
-                                }`}>{req.status}</span>
+                                <span className={`text-sm font-semibold px-2 py-1 rounded-full ${req.status === 'pending' ? 'text-yellow-600 bg-yellow-100' :
+                                        req.status === 'approved' ? 'text-green-600 bg-green-100' :
+                                            'text-red-600 bg-red-100'
+                                    }`}>{req.status}</span>
                             </li>
                         ))}
                     </ul>
@@ -323,7 +322,7 @@ const ClientDashboard = () => {
                         <MyPoolSnapshot />
                     </div>
                 </div>
-                
+
                 {/* Mid Widgets Section */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
                     <RepairRequestsWidget />

@@ -23,7 +23,7 @@ const NewBodyOfWater = () => {
     useEffect(() => {
         if (!user) return;
         const fetchLocations = async () => {
-            const q = query(collection(db, 'homeOwnerServiceLocations'), where("userId", "==", user.uid));
+            const q = query(collection(db, 'homeownerServiceLocations'), where("userId", "==", user.uid));
             const querySnapshot = await getDocs(q);
             const locations = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
             setServiceLocations(locations);
@@ -62,7 +62,7 @@ const NewBodyOfWater = () => {
         try {
             const batch = writeBatch(db);
             const bodyOfWaterId = 'hobow_' + uuidv4();
-            const bodyOfWaterRef = doc(db, 'homeOwnerBodiesOfWater', bodyOfWaterId);
+            const bodyOfWaterRef = doc(db, 'homeownerBodiesOfWater', bodyOfWaterId);
             const bodyData = {
                 ...bodyOfWater.toFirestore(),
                 id: bodyOfWaterId,
@@ -74,7 +74,7 @@ const NewBodyOfWater = () => {
 
             for (const equip of equipment) {
                 const equipmentId = 'hoe_' + uuidv4();
-                const equipmentRef = doc(db, 'homeOwnerEquipment', equipmentId);
+                const equipmentRef = doc(db, 'homeownerEquipment', equipmentId);
                 const equipData = {
                     ...equip.toFirestore(),
                     id: equipmentId,
@@ -136,7 +136,7 @@ const NewBodyOfWater = () => {
                             <h3 className="text-lg font-semibold">Equipment</h3>
                             {equipment.map((equip, index) => (
                                 <div key={index} className="p-3 border rounded-lg space-y-3">
-                                     <div className="flex gap-4 items-center">
+                                    <div className="flex gap-4 items-center">
                                         <input
                                             type="text"
                                             placeholder="Equipment Name (e.g., Main Filter)"
@@ -150,7 +150,7 @@ const NewBodyOfWater = () => {
                                         <input type="text" placeholder="Category (e.g., Filter)" value={equip.category} onChange={(e) => handleEquipmentChange(index, 'category', e.target.value)} className={formInputClasses} />
                                         <input type="text" placeholder="Make (e.g., Pentair)" value={equip.make} onChange={(e) => handleEquipmentChange(index, 'make', e.target.value)} className={formInputClasses} />
                                         <input type="text" placeholder="Model (e.g., FNS Plus 60)" value={equip.model} onChange={(e) => handleEquipmentChange(index, 'model', e.target.value)} className={formInputClasses} />
-                                        <input type="text" placeholder="Date Installed" onFocus={(e) => e.target.type='date'} onBlur={(e) => e.target.type='text'} value={equip.dateInstalled} onChange={(e) => handleEquipmentChange(index, 'dateInstalled', e.target.value)} className={formInputClasses} />
+                                        <input type="text" placeholder="Date Installed" onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} value={equip.dateInstalled} onChange={(e) => handleEquipmentChange(index, 'dateInstalled', e.target.value)} className={formInputClasses} />
                                     </div>
                                 </div>
                             ))}

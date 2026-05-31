@@ -12,6 +12,7 @@ import "react-datepicker/dist/react-datepicker.css";
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 
+const functions = getFunctions();
 // Reusable form components
 const Input = (props) => (
   <input
@@ -25,7 +26,7 @@ const Button = ({ children, ...props }) => (
     className={`py-2 px-4 rounded-lg font-semibold shadow-md transition-all ${props.className}`}
   >
     {children}
-  </button> 
+  </button>
 );
 const SelectInput = (props) => (
   <Select
@@ -108,10 +109,10 @@ const RouteBuilder = () => {
         serviceLocationId: recurringServiceStop.serviceLocationId,
         estimatedTime: recurringServiceStop.estimatedTime ?? null,
 
-        otherCompany: recurringServiceStop.otherCompany ?? null,
-        laborContractId: recurringServiceStop.laborContractId ?? null,
-        contractedCompanyId: recurringServiceStop.contractedCompanyId ?? null,
-        mainCompanyId: recurringServiceStop.mainCompanyId ?? null,
+        otherCompany: recurringServiceStop.otherCompany ?? false,
+        laborContractId: recurringServiceStop.laborContractId ?? "",
+        contractedCompanyId: recurringServiceStop.contractedCompanyId ?? "",
+        mainCompanyId: recurringServiceStop.mainCompanyId ?? "",
       },
     };
 
@@ -201,6 +202,7 @@ const RouteBuilder = () => {
   // - If editingTemplate: update route doc only (your old behavior)
   // - Else: create RSS via callable for each stop, then create route doc (iOS behavior)
   // =============================
+
   const handleSaveTemplate = async () => {
     if (!description || !selectedTechnician || !selectedDay || routeStops.length === 0) {
       toast.error("Please provide a description, select a day and technician, and add at least one stop.");
@@ -217,6 +219,30 @@ const RouteBuilder = () => {
         const batch = writeBatch(db);
         const routeId = editingTemplate.id;
         const routeRef = doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
+
+        // RSS ids that were previously on the template
+        const previousRssIds = (editingTemplate.order || [])
+          .map(item => item.recurringServiceStopId)
+          .filter(Boolean);
+
+        // RSS ids that are still present in the edited routeStops
+        const currentRssIds = routeStops
+          .map(stop => stop.recurringServiceStopId)
+          .filter(Boolean);
+
+        // RSS ids removed during edit
+        const removedRssIds = previousRssIds.filter(
+          rssId => !currentRssIds.includes(rssId)
+        );
+
+        // Delete removed recurring service stops
+        for (const rssId of removedRssIds) {
+          const callable = httpsCallable(functions, "deleteRecurringServiceStop");
+          await callable({
+            stopId: rssId,
+            companyId: recentlySelectedCompany,
+          });
+        }
 
         const newRouteOrder = routeStops.map((stop, index) => ({
           id: stop.id,
@@ -251,7 +277,7 @@ const RouteBuilder = () => {
       // 2) build binder order[]
       // 3) save recurringRoute doc
       // -------------------------
-      
+
       const batch = writeBatch(db);
       const routeId = `com_rr_${uuidv4()}`;
       const routeRef = doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', routeId);
@@ -267,27 +293,27 @@ const RouteBuilder = () => {
 
         //Get Internal ID
 
-          let recurringServiceStopCount = 0;
-  
-          const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
-          const snap = await getDoc(ref);
-        
-          if (snap.exists()) {
-            const data = snap.data();
-            recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
-          }
-          console.log("");
-          console.log(
-            `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
-          );
-        
-          const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
-          await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
-        
-          console.log("");
-          console.log(
-            `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
-          );
+        let recurringServiceStopCount = 0;
+
+        const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
+        const snap = await getDoc(ref);
+
+        if (snap.exists()) {
+          const data = snap.data();
+          recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
+        }
+        console.log("");
+        console.log(
+          `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
+        );
+
+        const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
+        await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
+
+        console.log("");
+        console.log(
+          `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
+        );
         const internalId = "RRS_" + String(recurringServiceStopCount)
         const recurringServiceStop = {
           id: `comp_rss_${uuidv4()}`,
@@ -363,17 +389,29 @@ const RouteBuilder = () => {
       );
   }, [allStops, routeStops, searchTerm]);
 
-  const mapLocations = useMemo(
-    () =>
-      routeStops
-        .map(stop => ({
-          ...stop,
-          lat: parseFloat(stop.address?.latitude),
-          lng: parseFloat(stop.address?.longitude)
-        }))
-        .filter(loc => !isNaN(loc.lat) && !isNaN(loc.lng)),
-    [routeStops]
-  );
+  // const mapLocations = useMemo(
+  //   () =>
+  //     routeStops
+  //       .map(stop => ({
+  //         ...stop,
+  //         lat: parseFloat(stop.address?.latitude),
+  //         lng: parseFloat(stop.address?.longitude)
+  //       }))
+  //       .filter(loc => !isNaN(loc.lat) && !isNaN(loc.lng)),
+  //   [routeStops]
+  // );
+  const mapLocations = useMemo(() => {
+    return routeStops.map(stop => {
+      const lat = parseFloat(stop.address?.latitude);
+      const lng = parseFloat(stop.address?.longitude);
+
+      if (!isNaN(lat) && !isNaN(lng)) {
+        return { ...stop.address, id: stop.id, lat, lng };
+      }
+
+      return null;
+    }).filter(Boolean);
+  }, [routeStops]);
 
   const handleOnDragEnd = (result) => {
     if (!result.destination) return;

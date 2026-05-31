@@ -1,4 +1,4 @@
-const {onSchedule} = require("firebase-functions/scheduler");
+const { onSchedule } = require("firebase-functions/scheduler");
 const { onDocumentCreated, onDocumentUpdated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
 const { defineSecret } = require('firebase-functions/params');
@@ -11,9 +11,9 @@ if (admin.apps.length === 0) {
   admin.initializeApp();
 }
 
-const db = getFirestore(); 
-const mySecret = defineSecret('stripe_secret_key'); 
-const stripe = require("stripe")(process.env.STRIPE_API_KEY);
+const db = getFirestore();
+const mySecret = defineSecret('stripe_secret_key');
+const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 /**
  * Runs every Sunday at 00:00 America/New_York (explicit).
@@ -119,7 +119,7 @@ function isWeekend(date) {
   return dow === 0 || dow === 6;
 }
 
-const weekdayArry = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const weekdayArry = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 function dayNameToIndex(name) {
   return weekdayArry.indexOf(name);
 }
@@ -233,6 +233,60 @@ async function createDailyStops(companyId, rssData, lastCreated, horizon) {
     });
 
     await db.collection(serviceStopsCol).doc(idss).set(serviceStop);
+    //upload tasks
+    //Get task group settings
+    // get tasks from task subcollection
+    let taskGroupId = "com_set_tg_recurring_service_stops"
+    const taskGroupRef = db.collection("companies").doc(companyId).collection("settings").doc("taskGroup").collection("taskGroup").doc(taskGroupId);
+
+    const tasksRef = taskGroupRef.collection("tasks");
+    const tasksDoc = await tasksRef.get();
+
+    //Add Tasks to Task Group
+    for (let i = 0; i < tasksDoc.length; i++) {
+      let task = tasksDoc[i];
+
+      const serviceStopTaskId = "com_ss_tas_" + uuidv4();
+      const serviceStopTask = {
+        id: serviceStopTaskId,
+        name: task.name.trim(),
+        type: task.type,
+        status: task.status || "Not Finished",
+        contractedRate: Number(task.contractedRate || 0),
+        estimatedTime: Number(task.estimatedTime || 0),
+        customerApproval: false,
+        actualTime: 0,
+
+        workerId: "",
+        workerType: "",
+        workerName: "",
+
+        laborContractId: "",
+
+        serviceStopId: {
+          id: idss,
+          internalId: stop.internalId || "",
+        },
+        jobId: {
+          id: "",
+          internalId: "",
+        },
+        recurringServiceStopId: {
+          id: rssData.id,
+          internalId: rssData.internalId || "",
+        },
+        jobTaskId: "",
+        recurringServiceStopTaskId: task.id,
+        equipmentId: "",
+        serviceLocationId: stop.serviceLocationId || rssData.serviceLocationId || "",
+        bodyOfWaterId: "",
+        shoppingListItemId: "",
+      };
+      await setDoc(
+        db.collection("companies").doc(companyId).collection("serviceStops").doc(idss).collection("tasks").doc(serviceStopTaskId).set(serviceStopTask)
+      );
+    }
+
     last = serviceDate;
   }
 
@@ -470,7 +524,7 @@ exports.onRssCreated = onDocumentCreated(
     const db = getFirestore();
     const companyId = event.params.companyId;
     const rssId = event.params.rssId;
-    console.log("Called onRssCreated ",rssId)
+    console.log("Called onRssCreated ", rssId)
     // Usually create won't affect any routes unless you add it to a route separately.
     // But if you do create+attach in one batch, this can still be helpful.
     const routeDocs = await findRoutesContainingRss({ db, companyId, rssId });
@@ -492,7 +546,7 @@ exports.onRssUpdated = onDocumentUpdated(
     const db = getFirestore();
     const companyId = event.params.companyId;
     const rssId = event.params.rssId;
-    console.log("Called onRssUpdated ",rssId)
+    console.log("Called onRssUpdated ", rssId)
 
     const routeDocs = await findRoutesContainingRss({ db, companyId, rssId });
     for (const routeDoc of routeDocs) {
@@ -513,7 +567,7 @@ exports.onRssDeleted = onDocumentDeleted(
     const db = getFirestore();
     const companyId = event.params.companyId;
     const rssId = event.params.rssId;
-    console.log("Called onRssDeleted ",rssId)
+    console.log("Called onRssDeleted ", rssId)
 
     const routeDocs = await findRoutesContainingRss({ db, companyId, rssId });
 

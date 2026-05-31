@@ -53,72 +53,72 @@ const CreateNewRecurringServiceStop = () => {
         { value: "Monthly", label: "Monthly" },
     ];
 
-  // =============================
-  // iOS helper -> React helper
-  // =============================
-  const ms = (d) => (d ? Math.floor(new Date(d).getTime()) : null);
+    // =============================
+    // iOS helper -> React helper
+    // =============================
+    const ms = (d) => (d ? Math.floor(new Date(d).getTime()) : null);
 
-  const createFirstRecurringServiceStop = async (companyId, recurringServiceStop) => {
-    const functions = getFunctions();
-    const callable = httpsCallable(functions, "createFirstRecurringServiceStop2");
+    const createFirstRecurringServiceStop = async (companyId, recurringServiceStop) => {
+        const functions = getFunctions();
+        const callable = httpsCallable(functions, "createFirstRecurringServiceStop2");
 
-    const payload = {
-      companyId,
-      recurringServiceStop: {
-        id: recurringServiceStop.id,
-        internalId: recurringServiceStop.internalId ?? null,
+        const payload = {
+            companyId,
+            recurringServiceStop: {
+                id: recurringServiceStop.id,
+                internalId: recurringServiceStop.internalId ?? null,
 
-        type: recurringServiceStop.type,
-        typeId: recurringServiceStop.typeId,
-        typeImage: recurringServiceStop.typeImage ?? null,
+                type: recurringServiceStop.type,
+                typeId: recurringServiceStop.typeId,
+                typeImage: recurringServiceStop.typeImage ?? null,
 
-        customerName: recurringServiceStop.customerName,
-        customerId: recurringServiceStop.customerId,
+                customerName: recurringServiceStop.customerName,
+                customerId: recurringServiceStop.customerId,
 
-        address: {
-          streetAddress: recurringServiceStop.address?.streetAddress ?? "",
-          city: recurringServiceStop.address?.city ?? "",
-          state: recurringServiceStop.address?.state ?? "",
-          zip: recurringServiceStop.address?.zip ?? "",
-          latitude: recurringServiceStop.address?.latitude ?? null,
-          longitude: recurringServiceStop.address?.longitude ?? null,
-        },
+                address: {
+                    streetAddress: recurringServiceStop.address?.streetAddress ?? "",
+                    city: recurringServiceStop.address?.city ?? "",
+                    state: recurringServiceStop.address?.state ?? "",
+                    zip: recurringServiceStop.address?.zip ?? "",
+                    latitude: recurringServiceStop.address?.latitude ?? null,
+                    longitude: recurringServiceStop.address?.longitude ?? null,
+                },
 
-        tech: recurringServiceStop.tech,
-        techId: recurringServiceStop.techId,
+                tech: recurringServiceStop.tech,
+                techId: recurringServiceStop.techId,
 
-        dateCreated: ms(recurringServiceStop.dateCreated ?? new Date()),
-        startDate: ms(recurringServiceStop.startDate),
-        endDate: ms(recurringServiceStop.endDate ?? null),
-        noEndDate: !!recurringServiceStop.noEndDate,
+                dateCreated: ms(recurringServiceStop.dateCreated ?? new Date()),
+                startDate: ms(recurringServiceStop.startDate),
+                endDate: ms(recurringServiceStop.endDate ?? null),
+                noEndDate: !!recurringServiceStop.noEndDate,
 
-        // raw strings (like Swift .rawValue)
-        frequency: recurringServiceStop.frequency,
-        day: recurringServiceStop.day,
+                // raw strings (like Swift .rawValue)
+                frequency: recurringServiceStop.frequency,
+                day: recurringServiceStop.day,
 
-        description: recurringServiceStop.description ?? "",
-        lastCreated: ms(recurringServiceStop.lastCreated ?? new Date()),
+                description: recurringServiceStop.description ?? "",
+                lastCreated: ms(recurringServiceStop.lastCreated ?? new Date()),
 
-        serviceLocationId: recurringServiceStop.serviceLocationId,
-        estimatedTime: recurringServiceStop.estimatedTime ?? null,
+                serviceLocationId: recurringServiceStop.serviceLocationId,
+                estimatedTime: recurringServiceStop.estimatedTime ?? null,
 
-        otherCompany: recurringServiceStop.otherCompany ?? null,
-        laborContractId: recurringServiceStop.laborContractId ?? null,
-        contractedCompanyId: recurringServiceStop.contractedCompanyId ?? null,
-        mainCompanyId: recurringServiceStop.mainCompanyId ?? null,
-      },
+                otherCompany: recurringServiceStop.otherCompany ?? false,
+                laborContractId: recurringServiceStop.laborContractId ?? "",
+                contractedCompanyId: recurringServiceStop.contractedCompanyId ?? "",
+                mainCompanyId: recurringServiceStop.mainCompanyId ?? "",
+            },
+        };
+
+        const result = await callable(payload);
+
+        // mimic Swift "guard let json = result.data as? [String: Any]"
+        if (result.data === null || typeof result.data !== "object") {
+            throw new Error("unable_to_read_function_response");
+        }
+
+        // Swift returns recurringServiceStop.id
+        return recurringServiceStop.id;
     };
-
-    const result = await callable(payload);
-
-    // mimic Swift "guard let json = result.data as? [String: Any]"
-    if (result.data === null || typeof result.data !== "object") {
-      throw new Error("unable_to_read_function_response");
-    }
-
-    // Swift returns recurringServiceStop.id
-    return recurringServiceStop.id;
-  };
 
     useEffect(() => {
         if (!recentlySelectedCompany) return;
@@ -169,7 +169,7 @@ const CreateNewRecurringServiceStop = () => {
             const locSnapshot = await getDocs(locQuery);
             const locations = locSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
             setServiceLocationList(locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress })));
-            if (locations.length > 0 ){
+            if (locations.length > 0) {
                 setServiceLocation(locations[0])
             }
         }
@@ -185,30 +185,30 @@ const CreateNewRecurringServiceStop = () => {
 
         const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
         const snap = await getDoc(ref);
-      
+
         if (snap.exists()) {
-          const data = snap.data();
-          recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
+            const data = snap.data();
+            recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
         }
         console.log("");
         console.log(
-          `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
+            `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
         );
-      
+
         const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
         await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
-      
+
         console.log("");
         console.log(
-          `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
+            `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
         );
         const stopId = `com_rss_${uuidv4()}`;
-        const internalId = "RSS_" + String(recurringServiceStopCount)
+        const internalId = "RSS" + String(recurringServiceStopCount)
         const newRSSData = {
             id: stopId,
             internalId: internalId,
             type: "",
-            typeId: "" ,
+            typeId: "",
             typeImage: "",
             customerName: `${customer.firstName} ${customer.lastName}`,
             customerId: customer.id,
@@ -226,21 +226,21 @@ const CreateNewRecurringServiceStop = () => {
             lastCreated: new Date(),
             serviceLocationId: serviceLocation.id,
             estimatedTime: 15,
-            otherCompany:false,
-            laborContractId:"",
-            contractedCompanyId:"",
-            mainCompanyId:""
+            otherCompany: false,
+            laborContractId: "",
+            contractedCompanyId: "",
+            mainCompanyId: ""
         };
-        
+
 
         try {
             toast.loading('Creating new recurring service stop...');
             const rssId = await createFirstRecurringServiceStop(recentlySelectedCompany, newRSSData);
 
-                
+
             console.log(rssId)
             toast.success('Successfully created recurring stop!', { id: internalId });
-            navigate(`/company/recurringServiceStop/details/${rssId}`);
+            // navigate(`/company/recurringServiceStop/details/${rssId}`);
 
         } catch (error) {
             console.error("Error creating new stop: ", error);
@@ -251,8 +251,11 @@ const CreateNewRecurringServiceStop = () => {
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="max-w-4xl mx-auto bg-white p-8 rounded-2xl shadow-lg">
-                <h1 className='text-3xl font-bold text-gray-800 mb-6'>Create New Recurring Service Stop</h1>
-                
+                <div>
+                    <h1 className='text-3xl font-bold text-gray-800 mb-6'>Create New Recurring Service Stop</h1>
+                    <p className="text-gray-600 mt-1">Create a new recurring service stop for a customer.</p>
+                </div>
+
                 <form onSubmit={createNewStop} className="space-y-6">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
@@ -260,7 +263,7 @@ const CreateNewRecurringServiceStop = () => {
                         <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
                         <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
                         <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />
-                        
+
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
                             <DatePicker selected={startDate} onChange={setStartDate} className="w-full p-2 border border-gray-300 rounded-md shadow-sm" />
@@ -268,8 +271,8 @@ const CreateNewRecurringServiceStop = () => {
                     </div>
 
                     <div className="flex items-center space-x-4">
-                         <input type="checkbox" id="no-end-date" checked={noEndDate} onChange={(e) => setNoEndDate(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
-                         <label htmlFor="no-end-date" className="text-sm font-medium text-gray-700">No End Date</label>
+                        <input type="checkbox" id="no-end-date" checked={noEndDate} onChange={(e) => setNoEndDate(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
+                        <label htmlFor="no-end-date" className="text-sm font-medium text-gray-700">No End Date</label>
                     </div>
 
                     {!noEndDate && (

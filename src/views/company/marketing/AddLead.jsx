@@ -11,7 +11,7 @@ const AddLead = () => {
     const db = getFirestore();
     const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
     const [isSubmitting, setIsSubmitting] = useState(false);
-    
+
     const [formData, setFormData] = useState({
         homeownerName: '',
         homeownerEmail: '',
@@ -46,13 +46,14 @@ const AddLead = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSubmitting || !user) return;
+        if (!formData.homeownerName || !formData.serviceDescription || !formData.serviceName) return;
 
         setIsSubmitting(true);
         const toastId = toast.loading('Adding new lead...');
         const leadId = "hosr_" + uuidv4();
 
         try {
-            await setDoc(doc(db, 'homeOwnerServiceRequests', leadId), {
+            await setDoc(doc(db, 'homeownerServiceRequests', leadId), {
                 id: leadId,
                 source: 'Manual', //Customer or Manual
                 status: 'Pending',//Pending, In Progress, Completed, Cancelled
@@ -62,24 +63,25 @@ const AddLead = () => {
                 serviceDescription: formData.serviceDescription,
                 serviceName: formData.serviceName,
                 serviceLocationAddress: {
-                    streetAddress: formData.streetAddress,
-                    city: formData.city,
-                    state: formData.state,
-                    zip: formData.zip,
-                    latitude: formData.latitude,
-                    longitude: formData.longitude,
+                    streetAddress: formData.streetAddress || "",
+                    city: formData.city || "",
+                    state: formData.state || "",
+                    zip: formData.zip || "",
+                    latitude: formData.latitude || null,
+                    longitude: formData.longitude || null,
                 },
                 creatorId: user.uid,
-                creatorName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName,
+                creatorName: dataBaseUser.userName,
                 customerId: '', //comp
                 customerName: '', //comp
                 homeownerName: formData.homeownerName,
-                homeownerEmail: formData.homeownerEmail,
-                homeownerPhone: formData.homeownerPhone,
-                homeOwnerId: '', //homeOwner
-                homeOwnerserviceLocationId: "", //homeOwner
-                homeOwnerbodyOfWaterId: "", //homeOwner
-                homeOwnerequipmentId: "", //homeOwner
+                homeownerEmail: formData.homeownerEmail || "",
+                homeownerPhone: formData.homeownerPhone || "",
+                homeownerId: '', //homeowner
+                homeownerserviceLocationId: "", //homeowner
+                homeownerbodyOfWaterId: "", //homeowner
+                homeownerequipmentId: "", //homeowner
+                dateCompleted: null
             });
             toast.success('New lead added successfully!', { id: toastId });
             navigate('/company/leads');
@@ -94,14 +96,25 @@ const AddLead = () => {
 
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
-            <div className="max-w-2xl mx-auto">
-                <h1 className="text-3xl font-bold text-gray-900 mb-6">Add New Lead</h1>
+            <div className="mx-auto">
+                <div className="flex justify-between items-center mb-6">
+                    <div>
+                        <button
+                            onClick={() => navigate('/company/leads')}
+                            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                        >
+                            Back
+                        </button>
+                        <h1 className="text-3xl font-bold text-gray-900">Add New Lead</h1>
+                        <p className="text-gray-600 mt-1">Add a new lead to your customer list.</p>
+                    </div>
+                </div>
                 <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg space-y-6">
-                    
+
                     <div>
                         <h2 class="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Lead Info</h2>
                         <div className="grid grid-cols-1 gap-6">
-                             <div>
+                            <div>
                                 <label htmlFor="serviceName" className="block text-sm font-medium text-gray-700">Service Name</label>
                                 <input type="text" name="serviceName" id="serviceName" value={formData.serviceName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
                             </div>
@@ -114,12 +127,12 @@ const AddLead = () => {
 
                     <div>
                         <h2 class="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Homeowner</h2>
-                         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+                        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
                             <div>
                                 <label htmlFor="homeownerName" className="block text-sm font-medium text-gray-700">Name</label>
                                 <input type="text" name="homeownerName" id="homeownerName" value={formData.homeownerName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
                             </div>
-                             <div>
+                            <div>
                                 <label htmlFor="homeownerPhone" className="block text-sm font-medium text-gray-700">Phone</label>
                                 <input type="tel" name="homeownerPhone" id="homeownerPhone" value={formData.homeownerPhone} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
                             </div>
@@ -134,10 +147,10 @@ const AddLead = () => {
                     <div>
                         <h2 class="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Service Location</h2>
                         <AddressAutocomplete onAddressSelect={(p) => handleAddressSelect(p, 'service')} customClasses={inputClasses} />
-                        
+
                         {/* <AddressAutocomplete onAddressSelect={handleAddressSelect} /> */}
                         {formData.streetAddress && (
-                             <div className="mt-4 p-4 bg-gray-100 rounded-lg">
+                            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
                                 <p className="font-semibold">Selected Address:</p>
                                 <p>{formData.streetAddress}, {formData.city}, {formData.state} {formData.zip}</p>
                             </div>

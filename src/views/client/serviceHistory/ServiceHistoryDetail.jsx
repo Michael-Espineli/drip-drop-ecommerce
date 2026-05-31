@@ -25,7 +25,7 @@ const ServiceHistoryDetail = () => {
         const fetchServiceStop = async () => {
             setLoading(true);
             try {
-                const stopDocRef = doc(db, 'homeOwnerServiceStops', serviceStopId);
+                const stopDocRef = doc(db, 'homeownerServiceStops', serviceStopId);
                 const stopDocSnap = await getDoc(stopDocRef);
 
                 if (!stopDocSnap.exists() || stopDocSnap.data().userId !== user.uid) {
@@ -62,26 +62,26 @@ const ServiceHistoryDetail = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
-                <Header 
-                    companyName={serviceStop.companyName} 
-                    serviceType={serviceStop.type} 
-                    onBack={() => navigate(-1)} 
+                <Header
+                    companyName={serviceStop.companyName}
+                    serviceType={serviceStop.type}
+                    onBack={() => navigate(-1)}
                 />
-                
+
                 <div className="bg-white rounded-lg shadow-md mt-8">
                     <div className="p-6 space-y-6">
-                        <InfoItem 
-                            icon={CalendarDaysIcon} 
+                        <InfoItem
+                            icon={CalendarDaysIcon}
                             label="Service Date"
                             value={serviceStop.serviceDate ? format(serviceStop.serviceDate.toDate(), 'PPP') : 'N/A'}
                         />
-                        <InfoItem 
-                            icon={UserIcon} 
+                        <InfoItem
+                            icon={UserIcon}
                             label="Technician"
                             value={serviceStop.techName || 'Not specified'}
                         />
-                        <InfoItem 
-                            icon={DocumentTextIcon} 
+                        <InfoItem
+                            icon={DocumentTextIcon}
                             label="Service Notes"
                             value={serviceStop.notes || 'No notes were provided for this service.'}
                             isBlock={true}

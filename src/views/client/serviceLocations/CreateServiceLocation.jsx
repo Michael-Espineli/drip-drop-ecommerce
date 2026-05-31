@@ -103,9 +103,9 @@ const CreateServiceLocation = () => {
 
         try {
             const batch = writeBatch(db);
-            
+
             const serviceLocationId = 'hosl_' + uuidv4();
-            const serviceLocationRef = doc(db, 'homeOwnerServiceLocations', serviceLocationId);
+            const serviceLocationRef = doc(db, 'homeownerServiceLocations', serviceLocationId);
             const serviceLocationData = {
                 ...serviceLocation.toFirestore(),
                 id: serviceLocationId,
@@ -124,7 +124,7 @@ const CreateServiceLocation = () => {
 
             for (let i = 0; i < bodiesOfWater.length; i++) {
                 const bodyOfWaterId = 'hobow_' + uuidv4();
-                const bodyOfWaterRef = doc(db, 'homeOwnerBodiesOfWater', bodyOfWaterId);
+                const bodyOfWaterRef = doc(db, 'homeownerBodiesOfWater', bodyOfWaterId);
                 const bodyData = {
                     ...bodiesOfWater[i].toFirestore(),
                     id: bodyOfWaterId,
@@ -137,7 +137,7 @@ const CreateServiceLocation = () => {
                 if (equipment[i]) {
                     for (const equip of equipment[i]) {
                         const equipmentId = 'hoe_' + uuidv4();
-                        const equipmentRef = doc(db, 'homeOwnerEquipment', equipmentId);
+                        const equipmentRef = doc(db, 'homeownerEquipment', equipmentId);
                         const equipData = {
                             ...equip.toFirestore(),
                             id: equipmentId,
@@ -185,7 +185,7 @@ const CreateServiceLocation = () => {
                         {bodiesOfWater.map((body, index) => (
                             <div key={index} className="p-4 border rounded-lg space-y-4 relative">
                                 <input type="text" placeholder="Pool or Spa Name (e.g., Main Pool)" value={body.name} onChange={(e) => handleBodyOfWaterChange(index, 'name', e.target.value)} className={formInputClasses} />
-                                
+
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <input type="text" placeholder="Shape (e.g., Kidney, Rectangular)" value={body.shape} onChange={(e) => handleBodyOfWaterChange(index, 'shape', e.target.value)} className={formInputClasses} />
                                     <input type="text" placeholder="Material (e.g., Plaster, Vinyl)" value={body.material} onChange={(e) => handleBodyOfWaterChange(index, 'material', e.target.value)} className={formInputClasses} />
@@ -219,7 +219,7 @@ const CreateServiceLocation = () => {
                                                 <input type="text" placeholder="Category (e.g., Filter)" value={equip.category} onChange={(e) => handleEquipmentChange(index, equipIndex, 'category', e.target.value)} className={formInputClasses} />
                                                 <input type="text" placeholder="Make (e.g., Pentair)" value={equip.make} onChange={(e) => handleEquipmentChange(index, equipIndex, 'make', e.target.value)} className={formInputClasses} />
                                                 <input type="text" placeholder="Model (e.g., FNS Plus 60)" value={equip.model} onChange={(e) => handleEquipmentChange(index, equipIndex, 'model', e.target.value)} className={formInputClasses} />
-                                                 <input type="text" placeholder="Date Installed" onFocus={(e) => e.target.type='date'} onBlur={(e) => e.target.type='text'} value={equip.dateInstalled} onChange={(e) => handleEquipmentChange(index, equipIndex, 'dateInstalled', e.target.value)} className={formInputClasses} />
+                                                <input type="text" placeholder="Date Installed" onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} value={equip.dateInstalled} onChange={(e) => handleEquipmentChange(index, equipIndex, 'dateInstalled', e.target.value)} className={formInputClasses} />
 
                                             </div>
                                             <textarea placeholder="Notes" value={equip.notes} onChange={(e) => handleEquipmentChange(index, equipIndex, 'notes', e.target.value)} className={`${formInputClasses} h-20`}></textarea>

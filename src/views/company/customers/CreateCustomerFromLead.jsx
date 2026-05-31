@@ -42,7 +42,7 @@ const CreateCustomerFromLead = () => {
         if (!leadId || !recentlySelectedCompany) return;
         const fetchLead = async () => {
             setLoading(true);
-            const leadRef = doc(db, 'homeOwnerServiceRequests', leadId);
+            const leadRef = doc(db, 'homeownerServiceRequests', leadId);
             try {
                 const docSnap = await getDoc(leadRef);
                 if (docSnap.exists()) {
@@ -77,10 +77,10 @@ const CreateCustomerFromLead = () => {
         if (setter) {
             setter(prev => nestedField ? { ...prev, [nestedField]: { ...prev[nestedField], [name]: val } } : { ...prev, [name]: val });
         } else {
-            setFormData(prev => ({...prev, [name]: val}));
+            setFormData(prev => ({ ...prev, [name]: val }));
         }
     };
-    
+
     const handleEquipmentListChange = (index, e) => {
         const { name, value } = e.target;
         const newList = [...equipmentData];
@@ -94,26 +94,26 @@ const CreateCustomerFromLead = () => {
 
         setIsSubmitting(true);
         const toastId = toast.loading('Creating customer and assets...');
-        
+
         const customerId = 'com_cus_' + uuidv4();
         const serviceLocationId = 'com_sl_' + uuidv4();
         const bodyOfWaterId = 'com_bow_' + uuidv4();
-        
+
         const finalBillingAddress = useDifferentBillingAddress ? billingAddress : lead.serviceLocationAddress;
 
         try {
             // 1. Create Customer
             const customerData = {
-                id: customerId, 
-                companyId: recentlySelectedCompany, 
+                id: customerId,
+                companyId: recentlySelectedCompany,
                 createdAt: new Date(),
-                firstName: formData.firstName, 
+                firstName: formData.firstName,
                 lastName: formData.lastName,
-                companyName: displayAsCompany ? formData.companyName : '', 
+                companyName: displayAsCompany ? formData.companyName : '',
                 displayAsCompany, active: true,
-                email: formData.email, 
+                email: formData.email,
                 phoneNumber: formData.phone,
-                billingAddress: finalBillingAddress, 
+                billingAddress: finalBillingAddress,
                 billingNotes: formData.billingNotes,
                 hireDate: new Date(),
                 linkedInviteId: ""
@@ -133,7 +133,7 @@ const CreateCustomerFromLead = () => {
                     await setDoc(doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', bodyOfWaterId), {
                         id: bodyOfWaterId, customerId, serviceLocationId, companyId: recentlySelectedCompany, ...bodyOfWaterData
                     });
-                    
+
                     // 4. Create Equipment (if checked)
                     if (addEquipment) {
                         for (const equip of equipmentData) {
@@ -147,13 +147,14 @@ const CreateCustomerFromLead = () => {
                     }
                 }
             }
-            
+
             // 5. Update Lead
             const fullName = formData.firstName + " " + formData.lastName
-            await updateDoc(doc(db, 'homeOwnerServiceRequests', leadId), { customerId, customerName:fullName});
+            await updateDoc(doc(db, 'homeownerServiceRequests', leadId), { customerId, customerName: fullName });
+            //6. Update lead to add customerId and customerName
 
             toast.success('Successfully converted lead to customer!', { id: toastId });
-            navigate(`/company/customers/details/${customerId}`);
+            navigate(`/company/leads/${leadId}`);
 
         } catch (error) {
             console.error("Error creating customer from lead:", error);
@@ -161,7 +162,7 @@ const CreateCustomerFromLead = () => {
             setIsSubmitting(false);
         }
     };
-    
+
     if (loading) return <div className="flex justify-center items-center h-screen"><ClipLoader size={50} /></div>;
 
     return (
@@ -169,35 +170,35 @@ const CreateCustomerFromLead = () => {
             <div className="max-w-4xl mx-auto">
                 <h1 className="text-3xl font-bold text-gray-900 mb-6">Create Customer from Lead</h1>
                 <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg space-y-8">
-                    
+
                     {/* Customer Details */}
                     <div className="border-b pb-6">
                         <div className="flex justify-between items-center">
-                             <h2 className="text-xl font-bold">Customer Details</h2>
-                             <label className="flex items-center"><input type="checkbox" checked={displayAsCompany} onChange={e => setDisplayAsCompany(e.target.checked)} className="mr-2"/>Display as Company</label>
+                            <h2 className="text-xl font-bold">Customer Details</h2>
+                            <label className="flex items-center"><input type="checkbox" checked={displayAsCompany} onChange={e => setDisplayAsCompany(e.target.checked)} className="mr-2" />Display as Company</label>
                         </div>
-                         {displayAsCompany ? (
-                            <div><label className="block text-sm font-medium text-gray-700">Company Name</label><input type="text" name="companyName" value={formData.companyName} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required/></div>
-                         ) : (
-                             <div className="grid md:grid-cols-2 gap-4 mt-4">
-                                <div><label className="block text-sm font-medium">First Name</label><input type="text" name="firstName" value={formData.firstName} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required/></div>
+                        {displayAsCompany ? (
+                            <div><label className="block text-sm font-medium text-gray-700">Company Name</label><input type="text" name="companyName" value={formData.companyName} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required /></div>
+                        ) : (
+                            <div className="grid md:grid-cols-2 gap-4 mt-4">
+                                <div><label className="block text-sm font-medium">First Name</label><input type="text" name="firstName" value={formData.firstName} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required /></div>
                                 <div><label className="block text-sm font-medium">Last Name</label><input type="text" name="lastName" value={formData.lastName} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
-                             </div>
-                         )}
-                         <div className="grid md:grid-cols-2 gap-4 mt-4">
-                            <div><label className="block text-sm font-medium">Email</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required/></div>
-                            <div><label className="block text-sm font-medium">Phone</label><input type="tel" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md"/></div>
+                            </div>
+                        )}
+                        <div className="grid md:grid-cols-2 gap-4 mt-4">
+                            <div><label className="block text-sm font-medium">Email</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required /></div>
+                            <div><label className="block text-sm font-medium">Phone</label><input type="tel" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
                         </div>
-                        <div className="mt-4"><label className="block text-sm font-medium">Billing Notes</label><textarea name="billingNotes" value={formData.billingNotes} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md"/></div>
-                        <label className="flex items-center mt-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={e => setUseDifferentBillingAddress(e.target.checked)} className="mr-2"/>Use different billing address</label>
-                         {useDifferentBillingAddress && (
+                        <div className="mt-4"><label className="block text-sm font-medium">Billing Notes</label><textarea name="billingNotes" value={formData.billingNotes} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
+                        <label className="flex items-center mt-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={e => setUseDifferentBillingAddress(e.target.checked)} className="mr-2" />Use different billing address</label>
+                        {useDifferentBillingAddress && (
                             <div className="mt-2 p-4 border rounded-lg bg-gray-50">
                                 <h3 className="font-semibold mb-2">Billing Address</h3>
-                                <input type="text" name="streetAddress" placeholder="Street Address" value={billingAddress.streetAddress} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full mt-2 p-2 border rounded-md" required/>
+                                <input type="text" name="streetAddress" placeholder="Street Address" value={billingAddress.streetAddress} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full mt-2 p-2 border rounded-md" required />
                                 <div className="grid md:grid-cols-3 gap-4 mt-2">
-                                    <input type="text" name="city" placeholder="City" value={billingAddress.city} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required/>
-                                    <input type="text" name="state" placeholder="State" value={billingAddress.state} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required/>
-                                    <input type="text" name="zipCode" placeholder="Zip Code" value={billingAddress.zip} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required/>
+                                    <input type="text" name="city" placeholder="City" value={billingAddress.city} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required />
+                                    <input type="text" name="state" placeholder="State" value={billingAddress.state} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required />
+                                    <input type="text" name="zipCode" placeholder="Zip Code" value={billingAddress.zip} onChange={e => handleInputChange(e, setBillingAddress, 'billingAddress')} className="w-full p-2 border rounded-md" required />
                                 </div>
                             </div>
                         )}
@@ -205,23 +206,23 @@ const CreateCustomerFromLead = () => {
 
                     {/* Service Location, BOW, Equipment */}
                     <div className="border-b pb-6">
-                        <label className="flex items-center font-bold"><input type="checkbox" checked={addServiceLocation} onChange={e => setAddServiceLocation(e.target.checked)} className="mr-2 h-5 w-5"/>Add Service Location</label>
+                        <label className="flex items-center font-bold"><input type="checkbox" checked={addServiceLocation} onChange={e => setAddServiceLocation(e.target.checked)} className="mr-2 h-5 w-5" />Add Service Location</label>
                         {addServiceLocation && (
                             <div className="pl-6 mt-4 space-y-4">
-                                <p className="p-4 bg-blue-50 rounded-lg">Service Address will be pre-filled from the lead: <br/><b>{lead?.serviceLocationAddress?.streetAddress}, {lead?.serviceLocationAddress?.city}</b></p>
+                                <p className="p-4 bg-blue-50 rounded-lg">Service Address will be pre-filled from the lead: <br /><b>{lead?.serviceLocationAddress?.streetAddress}, {lead?.serviceLocationAddress?.city}</b></p>
                                 <div><label className="block text-sm font-medium">Location Nickname</label><input type="text" name="nickName" value={serviceLocationData.nickName} onChange={e => handleInputChange(e, setServiceLocationData)} className="w-full mt-1 p-2 border rounded-md" /></div>
-                                
-                                <label className="flex items-center font-semibold"><input type="checkbox" checked={addBodyOfWater} onChange={e => setAddBodyOfWater(e.target.checked)} className="mr-2 h-5 w-5"/>Add Body of Water</label>
+
+                                <label className="flex items-center font-semibold"><input type="checkbox" checked={addBodyOfWater} onChange={e => setAddBodyOfWater(e.target.checked)} className="mr-2 h-5 w-5" />Add Body of Water</label>
                                 {addBodyOfWater && (
                                     <div className="pl-6 mt-2 space-y-4 p-4 border-l-2">
                                         <div><label className="block text-sm font-medium">Pool Name</label><input type="text" name="name" value={bodyOfWaterData.name} onChange={e => handleInputChange(e, setBodyOfWaterData)} className="w-full mt-1 p-2 border rounded-md" /></div>
                                         <div><label className="block text-sm font-medium">Volume (Gallons)</label><input type="number" name="gallons" value={bodyOfWaterData.gallons} onChange={e => handleInputChange(e, setBodyOfWaterData)} className="w-full mt-1 p-2 border rounded-md" /></div>
-                                        
-                                        <label className="flex items-center font-semibold"><input type="checkbox" checked={addEquipment} onChange={e => setAddEquipment(e.target.checked)} className="mr-2 h-5 w-5"/>Add Equipment</label>
+
+                                        <label className="flex items-center font-semibold"><input type="checkbox" checked={addEquipment} onChange={e => setAddEquipment(e.target.checked)} className="mr-2 h-5 w-5" />Add Equipment</label>
                                         {addEquipment && (
                                             <div className="pl-6 mt-2 space-y-4 p-4 border-l-2">
                                                 {[0, 1].map(index => (
-                                                     <div key={index} className="p-2 border rounded-md">
+                                                    <div key={index} className="p-2 border rounded-md">
                                                         <h4 className="font-medium mb-1">Equipment #{index + 1}</h4>
                                                         <input placeholder="Name (e.g., Pump)" name="name" value={equipmentData[index].name} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md" />
                                                         <input placeholder="Make" name="make" value={equipmentData[index].make} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md" />

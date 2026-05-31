@@ -13,7 +13,20 @@ export const WorkerTypeEnum = {
 };
 
 export class CompanyUser {
-    constructor(id, userId, userName, roleId, roleName, dateCreated, status, workerType, linkedCompanyId = null, linkedCompanyName = null) {
+    constructor(
+        id,
+        userId,
+        userName,
+        roleId,
+        roleName,
+        dateCreated,
+        status,
+        workerType,
+        linkedCompanyId = null,
+        linkedCompanyName = null,
+        allowPersonalVehicle = false,
+        personalVehicle = null
+    ) {
         this.id = id;
         this.userId = userId;
         this.userName = userName;
@@ -24,6 +37,8 @@ export class CompanyUser {
         this.workerType = workerType;
         this.linkedCompanyId = linkedCompanyId;
         this.linkedCompanyName = linkedCompanyName;
+        this.allowPersonalVehicle = allowPersonalVehicle;
+        this.personalVehicle = personalVehicle;
     }
 
     // Optional: Add a static method to create a CompanyUser from a Firebase document
@@ -39,7 +54,9 @@ export class CompanyUser {
             data.status,
             data.workerType,
             data.linkedCompanyId,
-            data.linkedCompanyName
+            data.linkedCompanyName,
+            Boolean(data.allowPersonalVehicle),
+            data.personalVehicle || null
         );
     }
 
@@ -54,7 +71,9 @@ export class CompanyUser {
             status: this.status,
             workerType: this.workerType,
             linkedCompanyId: this.linkedCompanyId,
-            linkedCompanyName: this.linkedCompanyName
+            linkedCompanyName: this.linkedCompanyName,
+            allowPersonalVehicle: this.allowPersonalVehicle,
+            personalVehicle: this.personalVehicle
         };
     }
 }

@@ -19,7 +19,7 @@ if (process.env.NODE_ENV === 'production') {
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
-const analytics = getAnalytics(app);
+const analytics = process.env.NODE_ENV === 'test' ? null : getAnalytics(app);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const functions = getFunctions(app);

@@ -31,7 +31,7 @@ export default function ScheduleEstimate() {
 
         const fetchLead = async () => {
             setLoading(true);
-            const leadRef = doc(db, 'homeOwnerServiceRequests', leadId);
+            const leadRef = doc(db, 'homeownerServiceRequests', leadId);
             try {
                 const docSnap = await getDoc(leadRef);
                 if (docSnap.exists()) {
@@ -41,7 +41,7 @@ export default function ScheduleEstimate() {
                         navigate('/company/leads');
                         return;
                     }
-                    
+
                     const userSnap = await getDoc(doc(db, 'users', leadData.userId));
                     const enhancedLead = {
                         id: docSnap.id,
@@ -201,13 +201,13 @@ export default function ScheduleEstimate() {
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                         <div>
+                        <div>
                             <label htmlFor="estimatedDuration" className="block text-sm font-medium text-gray-700">Estimated Duration (minutes)</label>
                             <input type="number" name="estimatedDuration" id="estimatedDuration" value={formData.estimatedDuration} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
                         </div>
                         <div>
-                           <label htmlFor="tech" className="block text-sm font-medium text-gray-700">Assign Technician</label>
-                           <input type="text" name="tech" id="tech" value={formData.tech} onChange={handleInputChange} placeholder="Technician name" className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
+                            <label htmlFor="tech" className="block text-sm font-medium text-gray-700">Assign Technician</label>
+                            <input type="text" name="tech" id="tech" value={formData.tech} onChange={handleInputChange} placeholder="Technician name" className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
                         </div>
                     </div>
 

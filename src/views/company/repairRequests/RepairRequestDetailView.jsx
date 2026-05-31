@@ -34,7 +34,7 @@ const RepairRequestDetailView = () => {
             setRepairRequest(req);
             setDescriptionDraft(req.description || "");
             setFormData({
-              status: req.status || 'Pending',
+              status: req.status || 'Unresolved',
             });
           } else {
             console.log("No such document!");
@@ -109,7 +109,7 @@ const RepairRequestDetailView = () => {
 
   const handleCancel = () => {
     setFormData({
-      status: repairRequest?.status || 'Pending',
+      status: repairRequest?.status || 'Unresolved',
     });
     setIsEditing(false);
   };
@@ -148,9 +148,9 @@ const RepairRequestDetailView = () => {
       <div className="max-w-screen-xl mx-auto">
         <div className="flex justify-between items-center mb-6">
           <div>
-            <Link 
-            to={"/company/repair-requests"}
-            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+            <Link
+              to={"/company/repair-requests"}
+              className="text-sm font-semibold text-slate-600 hover:text-slate-900"
             >&larr; Back to Repair Requests</Link>
             <h2 className="text-3xl font-bold text-gray-800">Repair Request Details</h2>
             <p className="text-sm text-gray-500">ID: {repairRequest.id}</p>
@@ -299,24 +299,23 @@ const RepairRequestDetailView = () => {
                       onChange={handleInputChange}
                       className="ml-2 p-2 border border-gray-300 rounded-lg"
                     >
-                      <option value="Pending">Pending</option>
+                      <option value="Unresolved">Unresolved</option>
                       <option value="In Progress">In Progress</option>
-                      <option value="Completed">Completed</option>
+                      <option value="Resolved">Resolved</option>
                       <option value="Cancelled">Cancelled</option>
                     </select>
                   ) : (
                     <span
-                      className={`ml-2 px-3 py-1 text-sm font-bold rounded-full ${
-                        repairRequest.status?.toLowerCase() === 'completed'
-                          ? 'bg-green-100 text-green-800'
-                          : repairRequest.status?.toLowerCase() === 'cancelled'
+                      className={`ml-2 px-3 py-1 text-sm font-bold rounded-full ${repairRequest.status?.toLowerCase() === 'resolved'
+                        ? 'bg-green-100 text-green-800'
+                        : repairRequest.status?.toLowerCase() === 'cancelled'
                           ? 'bg-red-100 text-red-800'
                           : repairRequest.status?.toLowerCase() === 'in progress'
-                          ? 'bg-blue-100 text-blue-800'
-                          : 'bg-yellow-100 text-yellow-800'
-                      }`}
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-yellow-100 text-yellow-800'
+                        }`}
                     >
-                      {repairRequest.status || 'Pending'}
+                      {repairRequest.status || 'Unresolved'}
                     </span>
                   )}
                 </div>
@@ -326,8 +325,8 @@ const RepairRequestDetailView = () => {
                   {repairRequest.date
                     ? format(repairRequest.date, 'PP')
                     : repairRequest.dateCreated
-                    ? format(repairRequest.dateCreated, 'PP')
-                    : 'N/A'}
+                      ? format(repairRequest.dateCreated, 'PP')
+                      : 'N/A'}
                 </p>
 
                 <Link to={`/company/customers/details/${repairRequest.customerId}`}>
@@ -363,3 +362,4 @@ const RepairRequestDetailView = () => {
 };
 
 export default RepairRequestDetailView;
+

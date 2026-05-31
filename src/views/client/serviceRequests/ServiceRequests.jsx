@@ -19,8 +19,8 @@ const ServiceRequests = () => {
         }
 
         setLoading(true);
-        const requestsRef = collection(db, 'homeOwnerServiceRequests');
-        const q = query(requestsRef, where('userId', '==', user.uid));
+        const requestsRef = collection(db, 'homeownerServiceRequests');
+        const q = query(requestsRef, where('homeownerId', '==', user.uid));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             if (snapshot.empty) {
@@ -49,7 +49,7 @@ const ServiceRequests = () => {
     const handleRequestClick = (requestId) => {
         navigate(`/client/service-requests/${requestId}`);
     };
-    
+
     if (loading) {
         return <div className="p-8">Loading your service requests...</div>;
     }
@@ -94,13 +94,12 @@ const ServiceRequests = () => {
                                 {requests.map(request => (
                                     <tr key={request.id} className="hover:bg-gray-50 transition-colors">
                                         <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{request.companyName}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{request.createdAt}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{request.dateCreated}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">
-                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                                                request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' : 
+                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
                                                 request.status === 'approved' ? 'bg-green-100 text-green-800' :
-                                                'bg-red-100 text-red-800'
-                                            }`}>
+                                                    'bg-red-100 text-red-800'
+                                                }`}>
                                                 {request.status}
                                             </span>
                                         </td>

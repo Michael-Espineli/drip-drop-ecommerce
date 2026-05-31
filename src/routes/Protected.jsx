@@ -2,9 +2,9 @@ import { Navigate, useLocation } from "react-router-dom";
 import React, { useContext } from "react";
 import { Context } from "../context/AuthContext";
 
-export function Protected({route,children}){
+export function Protected({ route, children }) {
 
-    const {user, accountType, recentlySelectedCompany, companySubscription} = useContext(Context);
+    const { user, accountType, recentlySelectedCompany, companySubscription } = useContext(Context);
     const location = useLocation();
 
     if (!user) {
@@ -34,7 +34,7 @@ export function Protected({route,children}){
             }
 
         } else if (accountType == 'Client') {
-            if (route.path == "/homeOwnerSignIn") {
+            if (route.path == "/homeownerSignIn") {
                 return <Navigate to='/client/dashboard' />
             }
             if (route.role == 'Client') {

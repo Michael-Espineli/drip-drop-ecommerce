@@ -78,7 +78,7 @@ export default function CreateEstimate() {
         const fetchLeadAndCompany = async () => {
             setLoading(true);
             try {
-                const leadRef = doc(db, 'homeOwnerServiceRequests', leadId);
+                const leadRef = doc(db, 'homeownerServiceRequests', leadId);
                 const leadSnap = await getDoc(leadRef);
 
                 if (leadSnap.exists() && leadSnap.data().companyId === recentlySelectedCompany) {
@@ -138,10 +138,10 @@ export default function CreateEstimate() {
     const removeTerm = index => setFormData(prev => ({ ...prev, terms: formData.terms.filter((_, i) => i !== index) }));
 
     const onSelectTemplate = async (template) => {
-        const clausesRef = collection(db, 'companies', recentlySelectedCompany, 'settings','termsTemplates','termsTemplates', template.id, 'clauses');
+        const clausesRef = collection(db, 'companies', recentlySelectedCompany, 'settings', 'termsTemplates', 'termsTemplates', template.id, 'clauses');
         const clausesSnap = await getDocs(clausesRef);
         const clauses = clausesSnap.docs.map(doc => ({ description: doc.data().text }));
-        const newTerms = [{description: template.content}, ...clauses].filter(t => t.description && t.description.trim() !== '');
+        const newTerms = [{ description: template.content }, ...clauses].filter(t => t.description && t.description.trim() !== '');
         setFormData(prev => ({ ...prev, terms: newTerms.length > 0 ? newTerms : [{ description: '' }] }));
         setIsModalOpen(false);
     };
@@ -169,7 +169,7 @@ export default function CreateEstimate() {
                 leadId: lead.id
             });
 
-            const leadRef = doc(db, 'homeOwnerServiceRequests', leadId);
+            const leadRef = doc(db, 'homeownerServiceRequests', leadId);
             await updateDoc(leadRef, { estimateId: estimateRef.id });
 
             toast.success('Estimate created successfully!', { id: toastId });
@@ -199,7 +199,7 @@ export default function CreateEstimate() {
             <TermsTemplateModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} onSelectTemplate={onSelectTemplate} />
             <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
                 <div className="max-w-6xl mx-auto">
-                     <div className="mb-6">
+                    <div className="mb-6">
                         <h1 className="text-3xl font-bold text-gray-900">New Estimate</h1>
                         <p className="text-gray-600 mt-1">From lead: <Link to={`/company/leads/${lead.id}`} className="text-blue-600 hover:underline">{lead?.serviceName}</Link></p>
                     </div>

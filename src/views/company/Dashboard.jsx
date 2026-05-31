@@ -35,18 +35,18 @@ const Dashboard = () => {
 
             const getWorkOrders = async () => {
                 const jobsCol = collection(db, "companies", recentlySelectedCompany, "workOrders");
-                const q = query(jobsCol, 
-                    where("operationStatus", "in", ["Estimate Pending","Unscheduled", "Scheduled", "In Progress"]),
+                const q = query(jobsCol,
+                    where("operationStatus", "in", ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]),
                     orderBy("internalId", "desc"),
                     limit(5));
                 const querySnapshot = await getDocs(q);
                 const orders = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
                 setWorkOrders(orders);
             };
-            
+
             const getLeads = async () => {
-                const leadsCol = collection(db, "homeOwnerServiceRequests");
-                const q = query(leadsCol, 
+                const leadsCol = collection(db, "homeownerServiceRequests");
+                const q = query(leadsCol,
                     where("companyId", "==", recentlySelectedCompany),
                     where("status", "==", "Pending"),
                     orderBy("createdAt", "desc"),
@@ -64,9 +64,9 @@ const Dashboard = () => {
 
     const stats = [
         { id: 1, name: 'Total Sales', stat: `$${totalSales.toFixed(2)}`, icon: MdCurrencyExchange, link: '/company/reports' },
-        { id: 2, name: 'Active Customers', stat: customerCount, icon: FaUsers, link: '/company/customers'  },
-        { id: 3, name: 'Technicians', stat: techCount, icon: FaUsers, link: '/company/companyUsers'  },
-        { id: 4, name: 'Jobs', stat: jobCount, icon: MdConstruction, link: '/company/jobs'  },
+        { id: 2, name: 'Active Customers', stat: customerCount, icon: FaUsers, link: '/company/customers' },
+        { id: 3, name: 'Technicians', stat: techCount, icon: FaUsers, link: '/company/companyUsers' },
+        { id: 4, name: 'Jobs', stat: jobCount, icon: MdConstruction, link: '/company/jobs' },
     ]
 
     return (
@@ -100,7 +100,7 @@ const Dashboard = () => {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
-                 <div className="lg:col-span-1">
+                <div className="lg:col-span-1">
                     <h2 className="text-xl font-bold mb-4">Recent Leads</h2>
                     <div className="bg-white rounded-lg shadow p-4">
                         {leads.length > 0 ? (

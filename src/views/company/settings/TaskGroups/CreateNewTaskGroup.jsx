@@ -14,16 +14,17 @@ const CreateNewTaskGroup = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
 
   const [groupName, setGroupName] = useState();
+  const [groupDescription, setGroupDescription] = useState();
 
   const [taskList, setTaskList] = useState([]);
 
-  const [taskLaborCost, setTaskLaborCost] = useState();
+  const [taskLaborCost, setTaskLaborCost] = useState("0");
 
   const [taskName, setTaskName] = useState();
 
   const [description, setDescription] = useState();
 
-  const [estimatedTime, setEstimatedTime] = useState();
+  const [estimatedTime, setEstimatedTime] = useState("0");
 
   const [taskTypeList, setTaskTypeList] = useState([]);
 
@@ -79,8 +80,10 @@ const CreateNewTaskGroup = () => {
 
     await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId), {
       id: taskGroupId,
-      groupName: groupName,
+      name: groupName,
+      description: groupDescription,
       numberOfTasks: taskList.length,
+      canDelete: true,
     });
 
     //Add Tasks to Task Group
@@ -147,25 +150,23 @@ const CreateNewTaskGroup = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
-      <div className="mx-auto max-w-6xl space-y-6">
+      <div className="space-y-6">
         {/* Header */}
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <div className="flex items-center gap-2">
               <Link
-                className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                className="px-4 py-2 text-sm font-medium text-black-700 bg-black-50 border border-black-200 rounded-xl shadow-sm hover:bg-black-100 transition"
                 to={`/company/taskGroups`}
               >
                 ← Back to List
               </Link>
             </div>
-
             <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight mt-3">Create New Task Group</h2>
             <p className="text-sm text-slate-500 mt-1">Build a reusable group by adding tasks below.</p>
           </div>
-
           <button
-            className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+            className="px-4 py-2 text-sm font-medium text-black-700 bg-black-50 border border-black-200 rounded-xl shadow-sm hover:bg-black-100 transition"
             onClick={(e) => createNewTaskGroup(e)}
           >
             Create Task Group
@@ -179,7 +180,7 @@ const CreateNewTaskGroup = () => {
           </div>
 
           <div className="p-5">
-            <label className="block text-sm font-semibold text-slate-700">Group Name</label>
+            <label className="block text-sm font-semibold text-slate-700">Name</label>
             <input
               className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
               onChange={(e) => {
@@ -190,10 +191,21 @@ const CreateNewTaskGroup = () => {
               value={groupName}
             />
           </div>
+          <div className="p-5">
+            <label className="block text-sm font-semibold text-slate-700">Description</label>
+            <input
+              className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              onChange={(e) => {
+                setGroupDescription(e.target.value);
+              }}
+              type="text"
+              value={groupDescription}
+            />
+          </div>
         </div>
 
         {/* Task List Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="px-5 py-4 border-b border-slate-200 bg-slate-50 flex items-center justify-between">
             <div>
               <div className="text-sm font-semibold text-slate-700">Task List</div>
@@ -345,7 +357,7 @@ const CreateNewTaskGroup = () => {
 
               <button
                 onClick={(e) => AddTaskToGroup(e)}
-                className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition md:w-auto"
+                className="inline-flex items-center justify-center rounded-xl border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-600 hover:bg-blue-50 transition"
               >
                 Add
               </button>
@@ -355,7 +367,7 @@ const CreateNewTaskGroup = () => {
               onChange={(e) => {
                 setDescription(e.target.value);
               }}
-              className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+              className="w-full min-h-[120px] rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
               type="text"
               placeholder="Task description"
               value={description}
@@ -366,7 +378,7 @@ const CreateNewTaskGroup = () => {
         {/* Footer Action */}
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
           <button
-            className="w-full inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+            className="px-4 py-2 text-sm font-medium text-black-700 bg-black-50 border border-black-200 rounded-xl shadow-sm hover:bg-black-100 transition"
             onClick={(e) => createNewTaskGroup(e)}
           >
             Create New Task Group

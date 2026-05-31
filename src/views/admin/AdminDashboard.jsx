@@ -122,7 +122,7 @@ const AdminDashboard = () => {
 
         // jobs (unpaid/uninvoiced)
         const qJobs = query(
-          collection(db, 'companies', recentlySelectedCompany, 'jobs'),
+          collection(db, 'companies', recentlySelectedCompany, 'workOrders'),
           where('billingStatus', 'not-in', ['Paid', 'Invoiced'])
         );
         const jobsCountSnap = await getCountFromServer(qJobs);

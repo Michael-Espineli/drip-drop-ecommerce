@@ -50,29 +50,29 @@ const NewCompanyChat = () => {
             // Step 1: Create the chat document first
 
             const chatId = 'cha_' + uuidv4();
-            const newChatRef = doc(collection(db, 'chats',chatId));
+            const newChatRef = doc(db, 'chats', chatId);
             let fullName = dataBaseUser.firstName + " " + dataBaseUser.lastName
             const newChatData = {
-                id:chatId,
+                id: chatId,
                 participantIds: [user.uid, company.id],
                 participants: [
-                    { userName: fullName, id: uuidv4(),userId:user.uid, userImage:dataBaseUser.photoUrl },
-                    { userName: company.ownerName, id: uuidv4(), userId:company.ownerId, userImage: "" }
+                    { userName: fullName, id: uuidv4(), userId: user.uid, userImage: dataBaseUser.photoUrl },
+                    { userName: company.ownerName, id: uuidv4(), userId: company.ownerId, userImage: "" }
                 ],
                 userWhoHaveNotRead: [company.id],
                 companyName: company.name,
                 lastMessage: message.trim(),
                 mostRecentChat: serverTimestamp(),
             };
-            
+
             await setDoc(newChatRef, newChatData);
 
             // Step 2: Add the first message to the new chat
             const messageId = 'msg_' + uuidv4();
-            
-            const messagesColRef = doc(db,'messages',messageId);
+
+            const messagesColRef = doc(db, 'messages', messageId);
             await setDoc(messagesColRef, {
-                id:messageId,
+                id: messageId,
                 message: message.trim(),
                 chatId: newChatRef.id,
                 senderId: user.uid,
@@ -117,8 +117,8 @@ const NewCompanyChat = () => {
                                 className="flex-grow px-4 py-2 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 disabled={isSending}
                             />
-                            <button 
-                                type="submit" 
+                            <button
+                                type="submit"
                                 disabled={isSending || !message.trim()}
                                 className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
                             >

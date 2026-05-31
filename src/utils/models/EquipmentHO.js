@@ -1,5 +1,5 @@
-import {DripDropStoredImage} from "./DripDropStoredImage";
-import { format } from 'date-fns/format'; 
+import { DripDropStoredImage } from "./DripDropStoredImage";
+import { format } from 'date-fns/format';
 
 export class EquipmentHO {
   constructor({

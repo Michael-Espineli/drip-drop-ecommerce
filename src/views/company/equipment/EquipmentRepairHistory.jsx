@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useParams } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, orderBy, doc, deleteDoc } from "firebase/firestore";
+import { query, collection, getDocs, orderBy, where, doc, deleteDoc } from "firebase/firestore";
 import { RepairHistory } from '../../../utils/models/RepairHistory';
 import { format } from 'date-fns';
 
@@ -17,7 +17,11 @@ export default function EquipmentRepairHistory() {
         (async () => {
             if (recentlySelectedCompany && equipmentId) {
                 try {
-                    const q = query(collection(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'repairHistory'), orderBy('date', 'desc'));
+                    const q = query(
+                        collection(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory'),
+                        where('type', '==', 'Repair'),
+                        orderBy('date', 'desc')
+                    );
                     const querySnapshot = await getDocs(q);
                     const repairHistoryData = querySnapshot.docs.map(doc => RepairHistory.fromFirestore(doc));
                     setRepairHistory(repairHistoryData);
@@ -41,7 +45,7 @@ export default function EquipmentRepairHistory() {
     const handleDelete = async () => {
         if (itemToDelete) {
             try {
-                await deleteDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'repairHistory', itemToDelete));
+                await deleteDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'serviceHistory', itemToDelete));
                 setRepairHistory(repairHistory.filter(item => item.id !== itemToDelete));
                 closeDeleteModal();
             } catch (error) {
@@ -67,10 +71,10 @@ export default function EquipmentRepairHistory() {
                     <tbody>
                         {repairHistory?.map(item => (
                             <tr key={item.id} className="border-b border-slate-700 hover:bg-gray-100">
-                                <td className='px-4 py-2 border-b'>{format(item.date, 'PP')}</td>
+                                <td className='px-4 py-2 border-b'>{item.date ? format(item.date, 'PP') : '—'}</td>
                                 <td className='px-4 py-2 border-b'>{item.techName}</td>
-                                <td className='px-4 py-2 border-b'>{item.partsReplaced.join(', ')}</td>
-                                <td className='px-4 py-2 border-b'>{item.notes}</td>
+                                <td className='px-4 py-2 border-b'>{item.partIds?.length ? item.partIds.join(', ') : '—'}</td>
+                                <td className='px-4 py-2 border-b'>{item.description}</td>
                                 <td className='px-4 py-2 border-b'>
                                     <button onClick={() => openDeleteModal(item.id)} className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
                                         Delete

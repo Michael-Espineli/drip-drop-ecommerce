@@ -31,8 +31,8 @@ export class RepairRequest {
     this.status = status;
     this.description = description;
     this.jobIds = jobIds;
-    this.photoUrls = photoUrls.map(urlOrObject => 
-        urlOrObject instanceof DripDropStoredImage ? urlOrObject : new DripDropStoredImage(urlOrObject)
+    this.photoUrls = photoUrls.map(urlOrObject =>
+      urlOrObject instanceof DripDropStoredImage ? urlOrObject : new DripDropStoredImage(urlOrObject)
     );
     this.locationId = locationId;
     this.bodyOfWaterId = bodyOfWaterId;
@@ -58,7 +58,7 @@ export class RepairRequest {
       userId: this.userId // Added this line
     };
   }
-  
+
   static fromFirestore(snapshot, options) {
     const data = snapshot.data(options);
     const date = data.date ? data.date.toDate() : null;
@@ -75,7 +75,7 @@ export class RepairRequest {
       status: data.status,
       description: data.description,
       jobIds: data.jobIds,
-      photoUrls: data.photoUrls.map(image => image.toFirestore()),
+      photoUrls: (data.photoUrls || []),
       locationId: data.locationId,
       bodyOfWaterId: data.bodyOfWaterId,
       equipmentId: data.equipmentId,

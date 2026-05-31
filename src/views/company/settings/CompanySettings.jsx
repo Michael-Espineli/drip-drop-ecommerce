@@ -1,13 +1,13 @@
-import React, {useContext} from 'react';
+import React, { useContext } from 'react';
 import { Link } from 'react-router-dom';
-import { 
-    BuildingOffice2Icon, 
-    UsersIcon, 
-    CogIcon, 
-    EnvelopeIcon, 
-    BeakerIcon, 
-    ArchiveBoxIcon, 
-    CreditCardIcon, 
+import {
+    BuildingOffice2Icon,
+    UsersIcon,
+    CogIcon,
+    EnvelopeIcon,
+    BeakerIcon,
+    ArchiveBoxIcon,
+    CreditCardIcon,
     CurrencyDollarIcon,
     DocumentTextIcon
 } from '@heroicons/react/24/outline';
@@ -30,8 +30,8 @@ const SettingsLink = ({ to, icon, title, description }) => (
 );
 
 const CompanySettings = () => {
-      const {recentlySelectedCompany} = useContext(Context);
-    
+    const { recentlySelectedCompany } = useContext(Context);
+
     const settings = {
         general: [
             {
@@ -117,25 +117,25 @@ const CompanySettings = () => {
     };
     async function runFunction(e) {
         e.preventDefault()
-        try{
+        try {
             //Get Subscription Information From Stripe
             console.log('cancelStripeSubscription')
-    
+
             const functionName = httpsCallable(functions, 'updateCompanyReadingsSettings');
-            functionName({ 
+            functionName({
                 companyId: recentlySelectedCompany,
             })
-            .then((result) => {
-                console.log("[CompanySettings][runFunction]")
-                console.log(result)
-                // Handle the result from the function
-            })
-            .catch((error) => {
-                // Handle any errors
-                console.log("[CompanySettings][runFunction]")
-                console.error(error);
-            });
-        } catch(error){
+                .then((result) => {
+                    console.log("[CompanySettings][runFunction]")
+                    console.log(result)
+                    // Handle the result from the function
+                })
+                .catch((error) => {
+                    // Handle any errors
+                    console.log("[CompanySettings][runFunction]")
+                    console.error(error);
+                });
+        } catch (error) {
             console.log("[CompanySettings][runFunction]")
             console.error(error);
         }
@@ -144,7 +144,10 @@ const CompanySettings = () => {
     return (
         <div className='px-4 md:px-8 py-6 bg-gray-50 min-h-screen'>
             <div className="max-w-7xl mx-auto">
-                <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+                <div>
+                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+                    <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
+                </div>
 
                 {/* General Settings */}
                 <div className="mb-10">
@@ -178,17 +181,17 @@ const CompanySettings = () => {
                         {settings.stripe.map(item => <SettingsLink key={item.to} {...item} />)}
                     </div>
                 </div> */}
-                
+
 
                 {/* {process.env.NODE_ENV === 'development' && ( */}
-                    <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
+                <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
                     <h3 className="text-xl font-bold text-yellow-400">🚧 Development Only:Upload For Developers To Call Different Cloud Functions 🚧</h3>
                     <p className="text-yellow-300">This feature is for testing and will not be in the final product.</p>
                     {/* You can put any component or button here. For example: */}
-                    <button 
-                    onClick={(e) => runFunction(e)}
-                    className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#9C0D38] cursor-pointer rounded mt-3'>Run updateCompanyReadingsSettings</button>
-                    </div>
+                    <button
+                        onClick={(e) => runFunction(e)}
+                        className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#9C0D38] cursor-pointer rounded mt-3'>Run updateCompanyReadingsSettings</button>
+                </div>
                 {/* )} */}
             </div>
         </div>

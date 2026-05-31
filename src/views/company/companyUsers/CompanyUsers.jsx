@@ -5,6 +5,7 @@ import { db } from "../../../utils/config";
 import { useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
+import { Link } from 'react-router-dom';
 
 const UserCard = ({ user, onClick }) => {
     const getStatusClass = (status) => {
@@ -26,6 +27,11 @@ const UserCard = ({ user, onClick }) => {
                 <p><span className="font-semibold">Role:</span> {user.roleName || 'Not Assigned'}</p>
                 <p><span className="font-semibold">Type:</span> {user.workerType || 'N/A'}</p>
                 {user.linkedCompanyName && <p><span className="font-semibold">Linked To:</span> {user.linkedCompanyName}</p>}
+                {user.allowPersonalVehicle && (
+                    <p className="mt-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                        Personal vehicle allowed
+                    </p>
+                )}
             </div>
         </div>
     );
@@ -44,7 +50,7 @@ const CompanyUsers = () => {
 
     useEffect(() => {
         if (!recentlySelectedCompany) return;
-        
+
         const fetchUsers = async () => {
             setIsLoading(true);
             try {
@@ -84,22 +90,28 @@ const CompanyUsers = () => {
 
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-7xl mx-auto">
+            <div className="mx-auto">
                 <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
                     <div>
                         <h1 className="text-3xl font-bold text-gray-800">Company Users</h1>
                         <p className="text-gray-600 mt-1">Manage all users associated with your company.</p>
                     </div>
-                    <button
-                        onClick={() => navigate('/company/companyUsers/createNew')}
-                        className='mt-4 sm:mt-0 py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-all'>
-                        Create New User
-                    </button>
+
+                    <div className="flex space-x-4">
+                        <Link to="/company/invites/pending" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
+                            See Pending Invites
+                        </Link>
+                        <Link to="/company/companyUsers/createNew"
+                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                        >
+                            + Create New User
+                        </Link>
+                    </div>
                 </header>
 
                 <div className="bg-white p-4 rounded-xl shadow-lg mb-8">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <input 
+                        <input
                             type="text"
                             placeholder="Search by name..."
                             value={searchTerm}
@@ -117,7 +129,7 @@ const CompanyUsers = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {filteredUsers.length > 0 ? (
                             filteredUsers.map(user => (
-                                <UserCard key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/detail/${user.userId}`)} />
+                                <UserCard key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/${user.userId}`)} />
                             ))
                         ) : (
                             <div className="col-span-full text-center py-12 bg-white rounded-xl shadow-lg">
