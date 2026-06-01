@@ -58,9 +58,8 @@ export class BodyOfWater {
   static fromFirestore(snapshot, options) {
     const data = snapshot.data(options);
 
-    const lastFilled = data.lastFilled.toDate()
+    const lastFilled = data.lastFilled?.toDate ? data.lastFilled.toDate() : new Date();
     const lastFilledFormatted = format(lastFilled, 'MM / d / yyyy');
-    console.log(lastFilledFormatted)
     return new BodyOfWater({
       id: snapshot.id,
       name: data.name || "",
@@ -74,7 +73,7 @@ export class BodyOfWater {
       depth: data.depth || null,
       width: data.width || null,
       photoUrls: data.photoUrls ? data.photoUrls.map(url => new DripDropStoredImage(url)) : [],
-      lastFilled: data.lastFilled ? data.lastFilled.toDate() : new Date(),
+      lastFilled,
       lastFilledFormatted: lastFilledFormatted,
       label: data.name + ' ' + data.shape + ' ' + data.material,
       isActive: data.isActive || false
@@ -83,4 +82,3 @@ export class BodyOfWater {
 
 
 }
-

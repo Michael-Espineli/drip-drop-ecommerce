@@ -57,7 +57,7 @@ const AssociatedBusinessList = () => {
             <div className="max-w-7xl mx-auto">
                 <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Associated Businesses</h1>
+                        <h1 className="text-3xl font-bold text-gray-800">Businesses</h1>
                         <p className="text-gray-600 mt-1">A list of companies you work with.</p>
                     </div>
                     <button
@@ -82,7 +82,7 @@ const AssociatedBusinessList = () => {
                             ))
                         ) : (
                             <div className="col-span-full text-center py-16 bg-white rounded-2xl shadow-lg border">
-                                <h3 className="text-2xl font-semibold text-gray-700">No Associated Businesses Found</h3>
+                                <h3 className="text-2xl font-semibold text-gray-700">No Businesses Found</h3>
                                 <p className="text-gray-500 mt-3">Click "Search & Add" to build your network.</p>
                             </div>
                         )}

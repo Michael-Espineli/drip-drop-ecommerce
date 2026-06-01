@@ -4,6 +4,8 @@ import { db } from "../../../utils/config";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
 import { BodyOfWater } from "../../../utils/models/BodyOfWater";
+import { fetchBodyOfWaterHistory } from "../../../utils/bodyOfWaterHistory";
+import { format } from "date-fns";
 
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-blue-500 focus:border-blue-500";
@@ -30,6 +32,7 @@ const BodiesOfWaterDetails = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [edit, setEdit] = useState(false);
+  const [waterHistory, setWaterHistory] = useState([]);
 
   // Model fields state for editing
   const [name, setName] = useState("");
@@ -49,6 +52,13 @@ const BodiesOfWaterDetails = () => {
         if (docSnap.exists()) {
           const bowData = BodyOfWater.fromFirestore(docSnap);
           setBodyOfWater(bowData);
+
+          const history = await fetchBodyOfWaterHistory({
+            db,
+            companyId: recentlySelectedCompany,
+            bodyOfWaterId,
+          });
+          setWaterHistory(history);
 
           setName(bowData.name || "");
           setGallons(bowData.gallons || "");
@@ -182,6 +192,10 @@ const BodiesOfWaterDetails = () => {
                 <InfoCard label="Name" value={bodyOfWater.name} />
                 <InfoCard label="Gallons" value={bodyOfWater.gallons} />
                 <InfoCard label="Material" value={bodyOfWater.material} />
+                <InfoCard
+                  label="Last Filled"
+                  value={bodyOfWater.lastFilled ? format(bodyOfWater.lastFilled, "MMM d, yyyy") : "—"}
+                />
               </div>
 
               <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -232,6 +246,42 @@ const BodiesOfWaterDetails = () => {
                   </Field>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Water History</h3>
+              <p className="text-sm text-gray-500">Fill and empty events created from completed tasks.</p>
+            </div>
+          </div>
+
+          {waterHistory.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-gray-500">
+              No fill or empty history yet.
+            </div>
+          ) : (
+            <div className="divide-y divide-gray-200">
+              {waterHistory.map((item) => (
+                <div key={item.id} className="py-4 flex flex-col md:flex-row md:items-start md:justify-between gap-2">
+                  <div>
+                    <p className="font-semibold text-gray-900">{item.type}</p>
+                    <p className="text-sm text-gray-500">
+                      {item.date ? format(item.date, "MMM d, yyyy h:mm a") : "—"}
+                    </p>
+                    {item.description && (
+                      <p className="text-sm text-gray-600 mt-1">{item.description}</p>
+                    )}
+                  </div>
+
+                  <div className="text-sm text-gray-500 md:text-right">
+                    <p>{item.techName || "No technician recorded"}</p>
+                    {item.gallons && <p>{item.gallons} gallons</p>}
+                  </div>
+                </div>
+              ))}
             </div>
           )}
         </div>

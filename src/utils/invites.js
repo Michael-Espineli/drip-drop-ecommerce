@@ -1,6 +1,6 @@
-import { doc, writeBatch, updateDoc } from "firebase/firestore";
-import { db } from "./config";
-import { NavLink } from "react-router-dom";
+import { doc, updateDoc } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "./config";
 
 /**
  * Accepts a company invitation and performs all necessary database operations in a single batch.
@@ -12,53 +12,29 @@ export const acceptInvite = async (invite, userId, firstName, lastName, email) =
     if (!invite || !userId) {
         throw new Error("Invite and user information must be provided.");
     }
-    const userName = firstName + " " + lastName
-    const batch = writeBatch(db);
-    // 1. Create the companyUser document
-    const dataBaseUserRef = doc(db, "users", userId);
-    batch.set(dataBaseUserRef, {
-        id: userId,
-        email:email,
-        photoUrl: null,
-        dateCreated: new Date(),
-        firstName: firstName,
-        lastName: lastName,
-        accountType: "Company",
-        profileImagePath: null,
-        color: null,
-        bio: "",
-        exp:0
-    });
-    // 1. Create the companyUser document
-    const companyUserRef = doc(db, "companies", invite.companyId, "companyUsers", userId);
-    batch.set(companyUserRef, {
-        id: companyUserRef.id,
-        userId: userId,
-        userName: userName,
-        roleId: invite.roleId,
-        roleName: invite.roleName,
-        dateCreated: new Date(),
-        status: 'Active',
-        workerType: invite.workerType, 
+
+    const acceptTechInvite = httpsCallable(functions, "acceptTechInvite");
+    const result = await acceptTechInvite({
+        inviteId: invite.id,
+        userId,
+        profile: {
+            firstName: firstName || invite.firstName || "",
+            lastName: lastName || invite.lastName || "",
+            email: email || invite.email || "",
+            accountType: "Company",
+            photoUrl: null,
+            profileImagePath: null,
+            color: null,
+            bio: "",
+            exp: 0,
+        },
     });
 
-    // 2. Create the userAccess document
-    const userAccessRef = doc(db, "users", userId, "userAccess", invite.companyId);
-    batch.set(userAccessRef, {
-        id: invite.companyId,
-        companyId: invite.companyId,
-        companyName: invite.companyName,
-        roleId: invite.roleId,
-        roleName: invite.roleName,
-        dateCreated: new Date(),
-    });
+    const response = result.data;
 
-    // 3. Update the invite status
-    const inviteRef = doc(db, "invites", invite.id);
-    batch.update(inviteRef, { status: 'Accepted', acceptedAt: new Date() });
-
-    // Commit the batch
-    await batch.commit();
+    if (!response || response.status !== 200) {
+        throw new Error(response?.error || "Invite could not be accepted.");
+    }
 };
 
 /**

@@ -39,12 +39,32 @@ function pillClass(active) {
   ].join(" ");
 }
 
+const toDateSafe = (maybeTimestamp) => {
+  if (!maybeTimestamp) return null;
+  if (typeof maybeTimestamp.toDate === "function") return maybeTimestamp.toDate();
+  if (maybeTimestamp instanceof Date) return maybeTimestamp;
+  if (typeof maybeTimestamp === "number") {
+    const parsed = new Date(maybeTimestamp);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  return null;
+};
+
+const sourceLabel = (record) => {
+  if (record.addedBy) return record.addedBy;
+  if (record.sourceTaskId || record.taskId || record.serviceStopTaskId || record.jobTaskId) return "Auto";
+  return "Manual";
+};
+
+const isSystemGenerated = (record) => sourceLabel(record).toLowerCase() !== "manual";
+
 export default function EquipmentServiceHistory() {
   const { equipmentId } = useParams();
   const { recentlySelectedCompany } = useContext(Context);
 
   const [records, setRecords] = useState([]);
   const [filter, setFilter] = useState("all"); // all | maintenance | repair
+  const [sourceFilter, setSourceFilter] = useState("all"); // all | manual | auto
 
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [itemToDelete, setItemToDelete] = useState(null); // { id, source }
@@ -70,15 +90,6 @@ export default function EquipmentServiceHistory() {
 
         const serviceHistorySnap = await getDocs(serviceHistoryQ);
 
-        const toDateSafe = (maybeTimestamp) => {
-          // Firestore Timestamp has .toDate()
-          if (!maybeTimestamp) return null;
-          if (typeof maybeTimestamp.toDate === "function") return maybeTimestamp.toDate();
-          // If already a Date
-          if (maybeTimestamp instanceof Date) return maybeTimestamp;
-          return null;
-        };
-
         const mapDoc = (d, source) => {
           const data = d.data();
           return {
@@ -91,6 +102,10 @@ export default function EquipmentServiceHistory() {
             techId: data?.techId ?? "",
             techName: data?.techName ?? "",
             jobId: data?.jobId ?? "",
+            addedBy: data?.addedBy ?? "",
+            sourceTaskId: data?.sourceTaskId ?? data?.taskId ?? data?.serviceStopTaskId ?? data?.jobTaskId ?? "",
+            serviceStopId: data?.serviceStopId ?? "",
+            recurringServiceStopId: data?.recurringServiceStopId ?? "",
             partIds: Array.isArray(data?.partIds) ? data.partIds : [],
             source,
           };
@@ -117,12 +132,23 @@ export default function EquipmentServiceHistory() {
   }, [recentlySelectedCompany, equipmentId]);
 
   const filteredRecords = useMemo(() => {
-    if (filter === "all") return records;
-    return records.filter((r) => r.source === filter);
-  }, [records, filter]);
+    return records.filter((r) => {
+      const matchesType = filter === "all" || r.source === filter;
+      const matchesSource = sourceFilter === "all" || (sourceFilter === "auto" ? isSystemGenerated(r) : !isSystemGenerated(r));
+      return matchesType && matchesSource;
+    });
+  }, [records, filter, sourceFilter]);
 
-  const openDeleteModal = (id, source) => {
-    setItemToDelete({ id, source });
+  const stats = useMemo(() => ({
+    total: records.length,
+    maintenance: records.filter((r) => r.source === "maintenance").length,
+    repair: records.filter((r) => r.source === "repair").length,
+    auto: records.filter(isSystemGenerated).length,
+  }), [records]);
+
+  const openDeleteModal = (record) => {
+    if (isSystemGenerated(record)) return;
+    setItemToDelete({ id: record.id, source: record.source });
     setShowDeleteModal(true);
   };
 
@@ -195,6 +221,20 @@ export default function EquipmentServiceHistory() {
         </div>
       </div>
 
+      <div className="grid gap-3 sm:grid-cols-4 mb-5">
+        <HistoryStat label="Records" value={stats.total} />
+        <HistoryStat label="Maintenance" value={stats.maintenance} />
+        <HistoryStat label="Repairs" value={stats.repair} />
+        <HistoryStat label="Auto-Created" value={stats.auto} />
+      </div>
+
+      <div className="mb-5 flex flex-wrap items-center gap-2">
+        <span className="text-sm font-semibold text-slate-600">Source:</span>
+        <button className={pillClass(sourceFilter === "all")} onClick={() => setSourceFilter("all")}>All</button>
+        <button className={pillClass(sourceFilter === "manual")} onClick={() => setSourceFilter("manual")}>Manual</button>
+        <button className={pillClass(sourceFilter === "auto")} onClick={() => setSourceFilter("auto")}>Auto-created</button>
+      </div>
+
       <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
         <div className="relative overflow-x-auto">
           <table className="min-w-full">
@@ -203,8 +243,10 @@ export default function EquipmentServiceHistory() {
                 <th className="px-4 py-3">Date</th>
                 <th className="px-4 py-3">Category</th>
                 <th className="px-4 py-3">Type</th>
+                <th className="px-4 py-3">Source</th>
                 <th className="px-4 py-3">Tech</th>
                 <th className="px-4 py-3">Description</th>
+                <th className="px-4 py-3">Reference</th>
                 <th className="px-4 py-3">Parts</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -213,13 +255,15 @@ export default function EquipmentServiceHistory() {
             <tbody className="divide-y divide-slate-100">
               {filteredRecords?.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-6 text-slate-500" colSpan={7}>
+                  <td className="px-4 py-6 text-slate-500" colSpan={9}>
                     No history found for this filter.
                   </td>
                 </tr>
               ) : (
-                filteredRecords.map((item) => (
-                  <tr key={`${item.source}-${item.id}`} className="hover:bg-slate-50/70">
+                filteredRecords.map((item) => {
+                  const systemGenerated = isSystemGenerated(item);
+                  return (
+                  <tr key={`${item.source}-${item.id}`} className="hover:bg-slate-50/70 align-top">
                     <td className="px-4 py-3 text-sm text-slate-800">
                       {item.date ? format(item.date, "PP") : "—"}
                     </td>
@@ -241,6 +285,19 @@ export default function EquipmentServiceHistory() {
                       {item.type || "—"}
                     </td>
 
+                    <td className="px-4 py-3">
+                      <span
+                        className={[
+                          "inline-flex items-center px-2 py-1 rounded-full text-xs font-medium border",
+                          systemGenerated
+                            ? "bg-blue-50 text-blue-700 border-blue-100"
+                            : "bg-slate-50 text-slate-700 border-slate-200",
+                        ].join(" ")}
+                      >
+                        {sourceLabel(item)}
+                      </span>
+                    </td>
+
                     <td className="px-4 py-3 text-sm text-slate-700">
                       {item.techName || item.performedBy || "—"}
                     </td>
@@ -249,21 +306,28 @@ export default function EquipmentServiceHistory() {
                       {item.description || "—"}
                     </td>
 
+                    <td className="px-4 py-3 text-xs text-slate-600">
+                      <ReferenceLine label="Task" value={item.sourceTaskId} />
+                      <ReferenceLine label="Job" value={item.jobId} />
+                      <ReferenceLine label="Stop" value={item.serviceStopId} />
+                    </td>
+
                     <td className="px-4 py-3 text-sm text-slate-700">
                       {item.partIds?.length ? item.partIds.length : "—"}
                     </td>
 
                     <td className="px-4 py-3 text-right">
                       <button
-                        onClick={() => openDeleteModal(item.id, item.source)}
-                        className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-semibold
-                                   bg-rose-600 text-white hover:bg-rose-700 transition"
+                        onClick={() => openDeleteModal(item)}
+                        disabled={systemGenerated}
+                        title={systemGenerated ? "Auto-created history should be changed from the source task or job." : "Delete record"}
+                        className="inline-flex items-center justify-center px-3 py-1.5 rounded-lg text-sm font-semibold bg-rose-600 text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
                       >
-                        Delete
+                        {systemGenerated ? "Source Locked" : "Delete"}
                       </button>
                     </td>
                   </tr>
-                ))
+                )})
               )}
             </tbody>
           </table>
@@ -303,3 +367,18 @@ export default function EquipmentServiceHistory() {
     </div>
   );
 }
+
+const HistoryStat = ({ label, value }) => (
+  <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+    <p className="mt-2 text-2xl font-bold text-slate-900">{Number(value || 0).toLocaleString()}</p>
+  </div>
+);
+
+const ReferenceLine = ({ label, value }) => (
+  value ? (
+    <div className="mb-1">
+      <span className="font-semibold">{label}:</span> <span className="font-mono">{value}</span>
+    </div>
+  ) : null
+);

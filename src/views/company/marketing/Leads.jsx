@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext'; // Adjust path if necessary
@@ -22,9 +22,19 @@ export default function Leads() {
     const [leads, setLeads] = useState([]);
     const [loading, setLoading] = useState(true);
     const [stats, setStats] = useState({ pending: 0, inProgress: 0, completed: 0, cancelled: 0 });
+    const [searchTerm, setSearchTerm] = useState('');
+    const [statusFilter, setStatusFilter] = useState('All');
+    const [sourceFilter, setSourceFilter] = useState('All');
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
     const navigate = useNavigate();
+
+    const toDate = (value) => {
+        if (!value) return null;
+        if (typeof value?.toDate === 'function') return value.toDate();
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -53,7 +63,7 @@ export default function Leads() {
         const leadsQuery = query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId));
         const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
             const leadsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setLeads(leadsData.sort((a, b) => b.createdAt.toDate() - a.createdAt.toDate()));
+            setLeads(leadsData.sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0)));
             setLoading(false);
         }, err => {
             console.error("Error fetching leads:", err);
@@ -66,6 +76,33 @@ export default function Leads() {
         };
 
     }, [db, recentlySelectedCompany]);
+
+    const visibleLeads = useMemo(() => {
+        const term = searchTerm.trim().toLowerCase();
+
+        return leads.filter((lead) => {
+            const matchesSearch = !term || [
+                lead.homeownerName,
+                lead.homeownerEmail,
+                lead.homeownerPhone,
+                lead.customerName,
+                lead.customerId,
+                lead.homeownerId,
+                lead.serviceLocationId,
+                lead.homeownerserviceLocationId,
+                lead.serviceLocationAddress?.streetAddress,
+                lead.serviceLocationAddress?.city,
+                lead.status,
+                lead.source,
+                lead.id,
+            ].some((value) => String(value || '').toLowerCase().includes(term));
+            const matchesStatus = statusFilter === 'All' || lead.status === statusFilter;
+            const normalizedSource = lead.source === 'Manual' ? 'Manual' : 'Customer';
+            const matchesSource = sourceFilter === 'All' || normalizedSource === sourceFilter;
+
+            return matchesSearch && matchesStatus && matchesSource;
+        });
+    }, [leads, searchTerm, sourceFilter, statusFilter]);
 
     const renderStatus = (status) => {
         const colors = {
@@ -81,6 +118,28 @@ export default function Leads() {
         return source === 'Manual'
             ? <span className="px-2 py-1 text-xs font-semibold rounded-full bg-indigo-200 text-indigo-800">Manual</span>
             : <span className="px-2 py-1 text-xs font-semibold rounded-full bg-teal-200 text-teal-800">Customer</span>;
+    };
+
+    const renderLinkStatus = (lead) => {
+        if (lead.customerId) {
+            return (
+                <div>
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Customer linked</span>
+                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || lead.customerId}</div>
+                </div>
+            );
+        }
+
+        if (lead.homeownerId) {
+            return (
+                <div>
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-teal-100 text-teal-800">Client request</span>
+                    <div className="mt-1 text-xs text-gray-500">{lead.homeownerId}</div>
+                </div>
+            );
+        }
+
+        return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">Unlinked</span>;
     };
 
     return (
@@ -109,15 +168,40 @@ export default function Leads() {
                 <StatCard title="Cancelled (30d)" count={stats.cancelled} color="bg-red-100" icon={<svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.36 6.64a9 9 0 11-12.73 0M12 9v4m0 4h.01" /></svg>} />
             </div>
 
+            <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1fr]">
+                    <input
+                        type="search"
+                        value={searchTerm}
+                        onChange={(event) => setSearchTerm(event.target.value)}
+                        placeholder="Search homeowner, email, phone, address..."
+                        className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                    />
+                    <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <option value="All">All statuses</option>
+                        <option value="Pending">Pending</option>
+                        <option value="In Progress">In Progress</option>
+                        <option value="Completed">Completed</option>
+                        <option value="Cancelled">Cancelled</option>
+                    </select>
+                    <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <option value="All">All sources</option>
+                        <option value="Customer">Customer</option>
+                        <option value="Manual">Manual</option>
+                    </select>
+                </div>
+                <p className="mt-3 text-sm text-gray-500">{visibleLeads.length} visible lead(s)</p>
+            </div>
+
             <div className="bg-white shadow-lg rounded-2xl overflow-hidden">
                 {loading ? (
                     <div className="flex justify-center items-center h-64">
                         <ClipLoader size={50} color={"#123abc"} loading={loading} />
                     </div>
-                ) : leads.length === 0 ? (
+                ) : visibleLeads.length === 0 ? (
                     <div className="text-center p-12">
                         <h3 className="text-lg font-medium text-gray-900">No leads yet</h3>
-                        <p className="mt-2 text-sm text-gray-500">When a homeowner requests a service, it will appear here.</p>
+                        <p className="mt-2 text-sm text-gray-500">When a homeowner requests a service, or filters match, it will appear here.</p>
                     </div>
                 ) : (
                     <div className="overflow-x-auto">
@@ -129,10 +213,11 @@ export default function Leads() {
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer Link</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
-                                {leads.map(lead => (
+                                {visibleLeads.map(lead => (
                                     <tr key={lead.id} className="hover:bg-gray-50"
                                         onClick={() => navigate(`/company/leads/${lead.id}`)}
                                     >
@@ -141,10 +226,11 @@ export default function Leads() {
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{lead.serviceLocationAddress.streetAddress}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                                            {lead.createdAt?.toDate().toLocaleDateString() || 'N/A'}
+                                            {toDate(lead.createdAt)?.toLocaleDateString() || 'N/A'}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderStatus(lead.status)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead.source)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap">{renderLinkStatus(lead)}</td>
                                     </tr>
                                 ))}
                             </tbody>

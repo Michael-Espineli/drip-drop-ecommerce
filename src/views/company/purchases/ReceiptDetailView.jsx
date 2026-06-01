@@ -8,7 +8,9 @@ import {
     getDoc,
     where,
     updateDoc,
-    deleteDoc,
+    writeBatch,
+    arrayUnion,
+    arrayRemove,
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../../../utils/config";
@@ -34,6 +36,7 @@ const ReceiptDetailView = () => {
         costRaw: 0,
         costAfterTaxRaw: 0,
         date: "",
+        dateRaw: null,
         invoiceNum: "",
         numberOfItems: "",
         pdfUrlList: [],
@@ -46,6 +49,7 @@ const ReceiptDetailView = () => {
 
     const [editForm, setEditForm] = useState({
         invoiceNum: "",
+        date: "",
         numberOfItems: "",
         storeName: "",
         techName: "",
@@ -70,6 +74,7 @@ const ReceiptDetailView = () => {
                 const formattedDate = data.date?.toDate
                     ? format(data.date.toDate(), "MM / d / yyyy")
                     : "";
+                const dateRaw = data.date?.toDate ? data.date.toDate() : data.date || null;
 
                 const receiptData = {
                     id: data.id || docSnap.id || "",
@@ -78,6 +83,7 @@ const ReceiptDetailView = () => {
                     costRaw: data.cost || 0,
                     costAfterTaxRaw: data.costAfterTax || 0,
                     date: formattedDate,
+                    dateRaw,
                     invoiceNum: data.invoiceNum || "",
                     numberOfItems: data.numberOfItems || 0,
                     pdfUrlList: data.pdfUrlList || [],
@@ -92,6 +98,7 @@ const ReceiptDetailView = () => {
 
                 setEditForm({
                     invoiceNum: data.invoiceNum || "",
+                    date: dateRaw ? format(dateRaw, "yyyy-MM-dd") : "",
                     numberOfItems: data.numberOfItems || 0,
                     storeName: data.storeName || "",
                     techName: data.techName || data.tech || "",
@@ -158,6 +165,7 @@ const ReceiptDetailView = () => {
     const editJob = () => {
         setEditForm({
             invoiceNum: receipt.invoiceNum || "",
+            date: receipt.dateRaw ? format(receipt.dateRaw, "yyyy-MM-dd") : "",
             numberOfItems: receipt.numberOfItems || 0,
             storeName: receipt.storeName || "",
             techName: receipt.techName || "",
@@ -171,6 +179,7 @@ const ReceiptDetailView = () => {
         setEdit(false);
         setEditForm({
             invoiceNum: receipt.invoiceNum || "",
+            date: receipt.dateRaw ? format(receipt.dateRaw, "yyyy-MM-dd") : "",
             numberOfItems: receipt.numberOfItems || 0,
             storeName: receipt.storeName || "",
             techName: receipt.techName || "",
@@ -184,9 +193,11 @@ const ReceiptDetailView = () => {
             setUpdating(true);
 
             const docRef = doc(db, "companies", recentlySelectedCompany, "receipts", receiptId);
+            const parsedDate = editForm.date ? new Date(`${editForm.date}T00:00:00`) : null;
 
             const updatePayload = {
                 invoiceNum: editForm.invoiceNum || "",
+                ...(parsedDate ? { date: parsedDate } : {}),
                 numberOfItems: parseInt(editForm.numberOfItems || 0, 10),
                 storeName: editForm.storeName || "",
                 techName: editForm.techName || "",
@@ -195,7 +206,25 @@ const ReceiptDetailView = () => {
                 costAfterTax: Math.round((parseFloat(editForm.costAfterTax || 0) || 0) * 100),
             };
 
-            await updateDoc(docRef, updatePayload);
+            const linkedPurchasesQuery = query(
+                collection(db, "companies", recentlySelectedCompany, "purchasedItems"),
+                where("receiptId", "==", receiptId)
+            );
+            const linkedPurchasesSnap = await getDocs(linkedPurchasesQuery);
+            const batch = writeBatch(db);
+
+            batch.update(docRef, updatePayload);
+            linkedPurchasesSnap.docs.forEach((purchaseDoc) => {
+                batch.update(purchaseDoc.ref, {
+                    invoiceNum: updatePayload.invoiceNum,
+                    ...(parsedDate ? { date: parsedDate } : {}),
+                    venderName: updatePayload.storeName,
+                    vendorName: updatePayload.storeName,
+                    techName: updatePayload.techName,
+                });
+            });
+
+            await batch.commit();
 
             setReceipt((prev) => ({
                 ...prev,
@@ -204,7 +233,19 @@ const ReceiptDetailView = () => {
                 costAfterTaxRaw: updatePayload.costAfterTax,
                 cost: formatCurrency(updatePayload.cost / 100),
                 costAfterTax: formatCurrency(updatePayload.costAfterTax / 100),
+                dateRaw: parsedDate || prev.dateRaw,
+                date: parsedDate ? format(parsedDate, "MM / d / yyyy") : prev.date,
             }));
+
+            setPurchaseList((prev) =>
+                prev.map((item) => ({
+                    ...item,
+                    invoiceNum: updatePayload.invoiceNum,
+                    date: parsedDate ? format(parsedDate, "MM / d / yyyy") : item.date,
+                    venderName: updatePayload.storeName,
+                    techName: updatePayload.techName,
+                }))
+            );
 
             setEdit(false);
         } catch (error) {
@@ -216,14 +257,26 @@ const ReceiptDetailView = () => {
     };
 
     const deleteJob = async () => {
-        const confirmed = window.confirm("Are you sure you want to delete this receipt?");
+        const confirmed = window.confirm("Delete this receipt and all purchased items attached to it?");
         if (!confirmed) return;
 
         try {
             setUpdating(true);
 
             const docRef = doc(db, "companies", recentlySelectedCompany, "receipts", receiptId);
-            await deleteDoc(docRef);
+            const linkedPurchasesQuery = query(
+                collection(db, "companies", recentlySelectedCompany, "purchasedItems"),
+                where("receiptId", "==", receiptId)
+            );
+            const linkedPurchasesSnap = await getDocs(linkedPurchasesQuery);
+            const batch = writeBatch(db);
+
+            linkedPurchasesSnap.docs.forEach((purchaseDoc) => {
+                batch.delete(purchaseDoc.ref);
+            });
+            batch.delete(docRef);
+
+            await batch.commit();
 
             navigate("/company/purchased-items");
         } catch (error) {
@@ -260,16 +313,14 @@ const ReceiptDetailView = () => {
                 uploadedUrls.push(downloadURL);
             }
 
-            const updatedPdfUrlList = [...(receipt.pdfUrlList || []), ...uploadedUrls];
-
             const docRef = doc(db, "companies", recentlySelectedCompany, "receipts", receiptId);
             await updateDoc(docRef, {
-                pdfUrlList: updatedPdfUrlList,
+                pdfUrlList: arrayUnion(...uploadedUrls),
             });
 
             setReceipt((prev) => ({
                 ...prev,
-                pdfUrlList: updatedPdfUrlList,
+                pdfUrlList: [...(prev.pdfUrlList || []), ...uploadedUrls],
             }));
         } catch (error) {
             console.log(error);
@@ -277,6 +328,29 @@ const ReceiptDetailView = () => {
         } finally {
             setUploadingFiles(false);
             e.target.value = "";
+        }
+    };
+
+    const removeUploadedFile = async (url) => {
+        const confirmed = window.confirm("Remove this receipt file from the receipt?");
+        if (!confirmed) return;
+
+        try {
+            setUpdating(true);
+            const docRef = doc(db, "companies", recentlySelectedCompany, "receipts", receiptId);
+            await updateDoc(docRef, {
+                pdfUrlList: arrayRemove(url),
+            });
+
+            setReceipt((prev) => ({
+                ...prev,
+                pdfUrlList: (prev.pdfUrlList || []).filter((existingUrl) => existingUrl !== url),
+            }));
+        } catch (error) {
+            console.log(error);
+            console.log("Receipt Detail View Remove File");
+        } finally {
+            setUpdating(false);
         }
     };
 
@@ -357,7 +431,18 @@ const ReceiptDetailView = () => {
 
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Date</p>
-                                    <p>{receipt.date || "—"}</p>
+                                    {edit ? (
+                                        <input
+                                            type="date"
+                                            value={editForm.date}
+                                            onChange={(e) =>
+                                                handleEditFieldChange("date", e.target.value)
+                                            }
+                                            className="w-full p-2 border border-gray-300 rounded-lg"
+                                        />
+                                    ) : (
+                                        <p>{receipt.date || "—"}</p>
+                                    )}
                                 </div>
 
                                 <div>
@@ -509,7 +594,7 @@ const ReceiptDetailView = () => {
                                     disabled={uploadingFiles}
                                     className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition disabled:opacity-50"
                                 >
-                                    {uploadingFiles ? "Uploading..." : "Add Files"}
+                                    {uploadingFiles ? "Uploading..." : "Add Photo/File"}
                                 </button>
 
                                 <input
@@ -517,6 +602,7 @@ const ReceiptDetailView = () => {
                                     type="file"
                                     multiple
                                     className="hidden"
+                                    accept="image/*,.pdf"
                                     onChange={handleAddFiles}
                                 />
                             </div>
@@ -524,15 +610,26 @@ const ReceiptDetailView = () => {
                             {receipt.pdfUrlList && receipt.pdfUrlList.length > 0 ? (
                                 <div className="space-y-3">
                                     {receipt.pdfUrlList.map((url, index) => (
-                                        <a
+                                        <div
                                             key={index}
-                                            href={url}
-                                            target="_blank"
-                                            rel="noreferrer"
-                                            className="block p-3 border border-gray-200 rounded-lg text-blue-600 hover:bg-gray-50"
+                                            className="flex items-center justify-between gap-3 rounded-lg border border-gray-200 p-3"
                                         >
-                                            Receipt File {index + 1}
-                                        </a>
+                                            <a
+                                                href={url}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="text-blue-600 hover:text-blue-800"
+                                            >
+                                                Receipt File {index + 1}
+                                            </a>
+                                            <button
+                                                type="button"
+                                                onClick={() => removeUploadedFile(url)}
+                                                className="rounded-md bg-red-50 px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+                                            >
+                                                Remove
+                                            </button>
+                                        </div>
                                     ))}
                                 </div>
                             ) : (

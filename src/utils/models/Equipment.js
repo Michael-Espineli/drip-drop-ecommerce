@@ -59,7 +59,7 @@ export class Equipment {
   toFirestore() {
     return {
       bodyOfWaterId: this.bodyOfWaterId,
-      category: this.category,
+      type: this.type,
       typeId: this.typeId,
       cleanFilterPressure: this.cleanFilterPressure,
       currentPressure: this.currentPressure,
@@ -87,11 +87,19 @@ export class Equipment {
 
   static fromFirestore(snapshot, options) {
     const data = snapshot.data(options);
+    const rawServiceFrequency = data.serviceFrequency;
+    const rawServiceFrequencyEvery = data.serviceFrequencyEvery;
+    const legacyFrequencyUnits = {
+      Days: "Day",
+      Weeks: "Week",
+      Months: "Month",
+      Years: "Year",
+    };
 
     return new Equipment({
       id: snapshot.id,
       bodyOfWaterId: data.bodyOfWaterId || "",
-      type: data.type || "",
+      type: data.type || data.category || "",
       typeId: data.typeId || "",
       cleanFilterPressure: data.cleanFilterPressure || 0,
       currentPressure: data.currentPressure || 0,
@@ -105,12 +113,22 @@ export class Equipment {
       modelId: data.modelId || "",
       name: data.name || "",
       needsService: data.needsService || false,
-      isActive: data.isActive || false,
+      isActive: data.isActive ?? data.active ?? false,
       nextServiceDate: data.nextServiceDate ? data.nextServiceDate.toDate() : null,
       notes: data.notes || "",
       photoUrls: data.photoUrls ? data.photoUrls.map(url => new DripDropStoredImage(url)) : [],
-      serviceFrequency: data.serviceFrequency || "",
-      serviceFrequencyEvery: data.serviceFrequencyEvery || "",
+      serviceFrequency:
+        typeof rawServiceFrequency === "number"
+          ? rawServiceFrequency
+          : typeof rawServiceFrequencyEvery === "number"
+            ? rawServiceFrequencyEvery
+            : rawServiceFrequency || "",
+      serviceFrequencyEvery:
+        typeof rawServiceFrequencyEvery === "string"
+          ? (legacyFrequencyUnits[rawServiceFrequencyEvery] || rawServiceFrequencyEvery)
+          : typeof rawServiceFrequency === "string"
+            ? (legacyFrequencyUnits[rawServiceFrequency] || rawServiceFrequency)
+            : "",
       serviceLocationId: data.serviceLocationId || "",
       status: data.status || "",
       verified: data.verified || false,

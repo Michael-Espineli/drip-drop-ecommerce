@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { collection, getDocs, query, where, writeBatch, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, writeBatch, doc, getDoc, updateDoc, setDoc } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
@@ -44,7 +44,11 @@ const RouteBuilder = () => {
   const [editingTemplate, setEditingTemplate] = useState(state?.templateToEdit || null);
   const [description, setDescription] = useState(editingTemplate?.description || '');
   const [selectedDay, setSelectedDay] = useState(
-    editingTemplate ? { value: editingTemplate.day, label: editingTemplate.day } : null
+    editingTemplate
+      ? { value: editingTemplate.day, label: editingTemplate.day }
+      : state?.defaultDay
+        ? { value: state.defaultDay, label: state.defaultDay }
+        : null
   );
   const [selectedTechnician, setSelectedTechnician] = useState(null);
   const [routeStops, setRouteStops] = useState([]);
@@ -127,6 +131,63 @@ const RouteBuilder = () => {
     return recurringServiceStop.id;
   };
 
+  const getNextRecurringServiceStopInternalId = async () => {
+    const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
+    const snap = await getDoc(ref);
+    const currentCount = snap.exists() && typeof snap.data().increment === "number" ? snap.data().increment : 0;
+    const nextCount = currentCount + 1;
+    if (snap.exists()) {
+      await updateDoc(ref, { increment: nextCount });
+    } else {
+      await setDoc(ref, { category: "recurringServiceStops", increment: nextCount }, { merge: true });
+    }
+    return `RRS_${nextCount}`;
+  };
+
+  const createRecurringServiceStopForRouteStop = async (stop) => {
+    const recurringServiceStop = {
+      id: `comp_rss_${uuidv4()}`,
+      internalId: await getNextRecurringServiceStopInternalId(),
+      type: stop.type ?? "",
+      typeId: stop.typeId ?? "",
+      typeImage: stop.typeImage ?? "",
+      customerName: stop.customerName,
+      customerId: stop.customerId,
+      address: stop.address,
+      tech: selectedTechnician.label,
+      techId: selectedTechnician.value,
+      dateCreated: new Date(),
+      startDate: new Date(),
+      endDate: null,
+      noEndDate: true,
+      frequency: stop.frequency ?? "Weekly",
+      day: selectedDay.value,
+      description,
+      lastCreated: new Date(),
+      serviceLocationId: stop.serviceLocationId || stop.id,
+      estimatedTime: stop.estimatedTime ?? null,
+      otherCompany: stop.otherCompany ?? null,
+      laborContractId: stop.laborContractId ?? null,
+      contractedCompanyId: stop.contractedCompanyId ?? null,
+      mainCompanyId: stop.mainCompanyId ?? null,
+    };
+
+    return createFirstRecurringServiceStop(recentlySelectedCompany, recurringServiceStop);
+  };
+
+  const buildRouteOrderItem = async (stop, index) => {
+    const recurringServiceStopId = stop.recurringServiceStopId || await createRecurringServiceStopForRouteStop(stop);
+
+    return {
+      id: stop.routeOrderId || uuidv4(),
+      order: index + 1,
+      recurringServiceStopId,
+      customerId: stop.customerId,
+      customerName: stop.customerName,
+      locationId: stop.serviceLocationId || stop.id
+    };
+  };
+
   // Fetch initial data (technicians and all potential stops)
   useEffect(() => {
     if (!recentlySelectedCompany) return;
@@ -149,9 +210,20 @@ const RouteBuilder = () => {
           setSelectedTechnician(tech || null);
           const orderedStops = (editingTemplate.order || [])
             .sort((a, b) => a.order - b.order)
-            .map(orderedStop => stopList.find(c => c.id === orderedStop.locationId))
+            .map(orderedStop => {
+              const serviceLocation = stopList.find(c => c.id === orderedStop.locationId);
+              if (!serviceLocation) return null;
+              return {
+                ...serviceLocation,
+                routeOrderId: orderedStop.id,
+                recurringServiceStopId: orderedStop.recurringServiceStopId,
+              };
+            })
             .filter(Boolean);
           setRouteStops(orderedStops);
+        } else if (state?.defaultTechnicianId) {
+          const tech = techList.find(t => t.value === state.defaultTechnicianId);
+          setSelectedTechnician(tech || null);
         }
       })
       .catch(() => toast.error("Failed to fetch initial data."))
@@ -179,7 +251,15 @@ const RouteBuilder = () => {
           setDescription(existing.description);
           const ordered = (existing.order || [])
             .sort((a, b) => a.order - b.order)
-            .map(os => allStops.find(c => c.id === os.locationId))
+            .map(os => {
+              const serviceLocation = allStops.find(c => c.id === os.locationId);
+              if (!serviceLocation) return null;
+              return {
+                ...serviceLocation,
+                routeOrderId: os.id,
+                recurringServiceStopId: os.recurringServiceStopId,
+              };
+            })
             .filter(Boolean);
           setRouteStops(ordered);
         } else {
@@ -244,14 +324,10 @@ const RouteBuilder = () => {
           });
         }
 
-        const newRouteOrder = routeStops.map((stop, index) => ({
-          id: stop.id,
-          order: index + 1,
-          recurringServiceStopId: stop.recurringServiceStopId ?? null,
-          customerId: stop.customerId,
-          customerName: stop.customerName,
-          locationId: stop.id
-        }));
+        const newRouteOrder = [];
+        for (let i = 0; i < routeStops.length; i++) {
+          newRouteOrder.push(await buildRouteOrderItem(routeStops[i], i));
+        }
 
         const templateData = {
           id: routeId,
@@ -286,73 +362,7 @@ const RouteBuilder = () => {
 
       for (let i = 0; i < routeStops.length; i++) {
         const stop = routeStops[i];
-
-        // Build RecurringServiceStop payload expected by your Firebase function.
-        // NOTE: startDate/endDate/noEndDate/frequency are set to safe defaults.
-        // If you have these in state, swap them in here.
-
-        //Get Internal ID
-
-        let recurringServiceStopCount = 0;
-
-        const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
-        const snap = await getDoc(ref);
-
-        if (snap.exists()) {
-          const data = snap.data();
-          recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
-        }
-        console.log("");
-        console.log(
-          `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
-        );
-
-        const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
-        await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
-
-        console.log("");
-        console.log(
-          `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
-        );
-        const internalId = "RRS_" + String(recurringServiceStopCount)
-        const recurringServiceStop = {
-          id: `comp_rss_${uuidv4()}`,
-          internalId: internalId,
-          type: stop.type ?? "",
-          typeId: stop.typeId ?? "",
-          typeImage: stop.typeImage ?? "",
-          customerName: stop.customerName,
-          customerId: stop.customerId,
-          address: stop.address,
-          tech: selectedTechnician.label,
-          techId: selectedTechnician.value,
-          dateCreated: new Date(),
-          startDate: new Date(),
-          endDate: null,
-          noEndDate: true,
-          // IMPORTANT: set this to what your backend expects (examples: "weekly", "WEEKLY", etc.)
-          frequency: stop.frequency ?? "Weekly",
-          day: selectedDay.value,
-          description: description,
-          lastCreated: new Date(),
-          serviceLocationId: stop.id,
-          estimatedTime: stop.estimatedTime ?? null,
-          otherCompany: stop.otherCompany ?? null,
-          laborContractId: stop.laborContractId ?? null,
-          contractedCompanyId: stop.contractedCompanyId ?? null,
-          mainCompanyId: stop.mainCompanyId ?? null,
-        };
-
-        const rssId = await createFirstRecurringServiceStop(recentlySelectedCompany, recurringServiceStop);
-
-        binder.push({
-          id: uuidv4(),
-          order: i + 1,
-          recurringServiceStopId: rssId,
-          customerId: stop.customerId,
-          customerName: stop.customerName,
-          locationId: stop.id
-        });
+        binder.push(await buildRouteOrderItem(stop, i));
       }
 
       const templateData = {

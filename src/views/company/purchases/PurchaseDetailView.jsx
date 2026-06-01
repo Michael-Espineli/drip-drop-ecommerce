@@ -303,6 +303,11 @@ const PurchaseDetailView = () => {
     };
 
     const deleteJob = async () => {
+        if (purchase.receiptId) {
+            window.alert("This purchased item is attached to a receipt. Delete the whole receipt or mark the item as returned.");
+            return;
+        }
+
         const confirmed = window.confirm(
             "Are you sure you want to delete this purchased item?"
         );
@@ -320,7 +325,7 @@ const PurchaseDetailView = () => {
             );
 
             await deleteDoc(docRef);
-            navigate("/company/purchasedItems");
+            navigate("/company/purchased-items");
         } catch (error) {
             console.log(error);
             console.log("Purchase Detail View Delete");
@@ -646,7 +651,8 @@ const PurchaseDetailView = () => {
                             </button>
                             <button
                                 onClick={deleteJob}
-                                disabled={updating}
+                                disabled={updating || Boolean(purchase.receiptId)}
+                                title={purchase.receiptId ? "Receipt-backed purchased items can only be deleted by deleting the whole receipt." : "Delete purchased item"}
                                 className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
                             >
                                 Delete

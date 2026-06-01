@@ -74,6 +74,9 @@ const AddLead = () => {
                 creatorName: dataBaseUser.userName,
                 customerId: '', //comp
                 customerName: '', //comp
+                serviceLocationId: '', //comp
+                bodyOfWaterId: '', //comp
+                equipmentIds: [], //comp
                 homeownerName: formData.homeownerName,
                 homeownerEmail: formData.homeownerEmail || "",
                 homeownerPhone: formData.homeownerPhone || "",

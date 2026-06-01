@@ -112,8 +112,8 @@ const TaskGroups = lazy(() => import("../../views/company/settings/TaskGroups/Ta
 const CreateNewTaskGroup = lazy(() => import("../../views/company/settings/TaskGroups/CreateNewTaskGroup"))
 const TaskGroupDetails = lazy(() => import("../../views/company/settings/TaskGroups/TaskGroupDetails"))
 
-const Venders = lazy(() => import("../../views/company/venders/Venders"))
-const CreateNewVender = lazy(() => import("../../views/company/venders/CreateNewVenders"))
+const Vendors = lazy(() => import("../../views/company/venders/Venders"))
+const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
 
@@ -148,11 +148,13 @@ const Estimates = lazy(() => import('../../views/company/marketing/Estimates'));
 const ScheduleEstimate = lazy(() => import('../../views/company/marketing/ScheduleEstimate'));
 
 const Sales = lazy(() => import('../../views/company/monies/Sales'));
+const Payroll = lazy(() => import("../../views/company/payroll/Payroll"));
 
 const Reviews = lazy(() => import('../../views/company/reviews/Reviews'));
 
 const TermsTemplates = lazy(() => import("../../views/company/settings/TermsTemplates"));
 const TermsTemplateDetail = lazy(() => import("../../views/company/settings/TermsTemplateDetail"));
+const JobTemplates = lazy(() => import("../../views/company/settings/JobTemplates"));
 
 const PendingInvites = lazy(() => import("../../views/company/invites/CompanyPendingInvites"));
 const AcceptedInvites = lazy(() => import("../../views/company/invites/CompanyAcceptedInvites"));
@@ -410,6 +412,27 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/purchasedItems',
+        element: <PurchaseListView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/purchasedItems/createNew',
+        element: <CreateNewPurchase />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/purchasedItems/detail/:purchaseId',
+        element: <PurchaseDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/receipts/detail/:receiptId',
         element: <ReceiptDetailView />,
         ability: ['Admin', 'Seller'],
@@ -455,14 +478,14 @@ export const sellerRoutes = [
     ,
     {
         path: '/company/vendors',
-        element: <Venders />,
+        element: <Vendors />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
     ,
     {
         path: '/company/vendors/create-new',
-        element: <CreateNewVender />,
+        element: <CreateNewVendor />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -584,6 +607,12 @@ export const sellerRoutes = [
         element: <TermsTemplateDetail />,
         role: 'company',
         name: 'Terms Templates'
+    },
+    {
+        path: '/company/settings/job-templates',
+        element: <JobTemplates />,
+        role: 'company',
+        name: 'Job Templates'
     },
 
     {
@@ -804,6 +833,13 @@ export const sellerRoutes = [
     {
         path: '/company/workLogs/:workLogId',
         element: <WorkLogDetails />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/payroll',
+        element: <Payroll />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }

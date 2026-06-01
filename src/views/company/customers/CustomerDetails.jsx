@@ -8,6 +8,7 @@ import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
 import { RepairRequest } from '../../../utils/models/RepairRequest';
+import { loadCustomerTimeline } from '../../../utils/customerTimeline';
 // Reusable Components
 const TabButton = ({ text, active, onClick }) => (
     <button
@@ -44,6 +45,51 @@ const StatChip = ({ children }) => (
         {children}
     </span>
 );
+
+const timelineTypeStyles = {
+    serviceStop: {
+        dot: 'bg-blue-600',
+        chip: 'bg-blue-50 text-blue-700 border-blue-100',
+    },
+    chemistry: {
+        dot: 'bg-cyan-600',
+        chip: 'bg-cyan-50 text-cyan-700 border-cyan-100',
+    },
+    equipmentMaintenance: {
+        dot: 'bg-amber-500',
+        chip: 'bg-amber-50 text-amber-700 border-amber-100',
+    },
+    equipmentRepair: {
+        dot: 'bg-red-500',
+        chip: 'bg-red-50 text-red-700 border-red-100',
+    },
+    waterFill: {
+        dot: 'bg-indigo-500',
+        chip: 'bg-indigo-50 text-indigo-700 border-indigo-100',
+    },
+    waterEmpty: {
+        dot: 'bg-orange-500',
+        chip: 'bg-orange-50 text-orange-700 border-orange-100',
+    },
+    workOrder: {
+        dot: 'bg-violet-500',
+        chip: 'bg-violet-50 text-violet-700 border-violet-100',
+    },
+    note: {
+        dot: 'bg-emerald-500',
+        chip: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    },
+};
+
+const timelineFilters = [
+    { id: 'all', label: 'All', types: [] },
+    { id: 'service', label: 'Service', types: ['serviceStop'] },
+    { id: 'jobs', label: 'Jobs', types: ['workOrder'] },
+    { id: 'notes', label: 'Notes', types: ['note'] },
+    { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
+    { id: 'equipment', label: 'Equipment', types: ['equipmentMaintenance', 'equipmentRepair'] },
+    { id: 'water', label: 'Water', types: ['waterFill', 'waterEmpty'] },
+];
 
 // Profile Tab
 const ProfileTab = ({ customer }) => {
@@ -958,55 +1004,119 @@ const OperationsTab = ({ customer }) => {
 
 // History Tab
 const HistoryTab = ({ customer }) => {
-    const [contracts, setContracts] = useState([]);
+    const [timeline, setTimeline] = useState([]);
+    const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
+    const selectedFilter = timelineFilters.find((filter) => filter.id === activeTimelineFilter) || timelineFilters[0];
+    const visibleTimeline = selectedFilter.id === 'all'
+        ? timeline
+        : timeline.filter((event) => selectedFilter.types.includes(event.type));
 
     useEffect(() => {
-        const fetchContracts = async () => {
+        const fetchTimeline = async () => {
             setLoading(true);
             try {
-                const q = query(collection(db, 'contracts'), where("receiverId", "==", customer.userId || customer.id));
-                const snapshot = await getDocs(q);
-                setContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                const events = await loadCustomerTimeline({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    customerId: customer.id,
+                });
+                setTimeline(events);
             } catch (error) {
-                toast.error("Failed to fetch contracts.");
+                console.error(error);
+                toast.error("Failed to fetch customer timeline.");
             } finally {
                 setLoading(false);
             }
         };
         if (customer && recentlySelectedCompany) {
-            fetchContracts();
+            fetchTimeline();
         }
     }, [customer, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/contracts/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
-            {loading ? <ClipLoader size={30} /> : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="border-b">
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Rate</th>
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Date Sent</th>
-                                <th className="py-2 px-4"></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                            {contracts.map(c => (
-                                <tr key={c.id} className="hover:bg-slate-50">
-                                    <td className="py-3 px-4"><span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">{c.status}</span></td>
-                                    <td className="py-3 px-4">${c.rate.toFixed(2)}</td>
-                                    <td className="py-3 px-4">{c.dateSent ? format(c.dateSent.toDate(), 'PPP') : 'N/A'}</td>
-                                    <td className="py-3 px-4 text-right"><Link to={`/company/contract/detail/${c.id}`} className="font-semibold text-blue-600 hover:underline">View</Link></td>
-                                </tr>
-                            ))}
-                            {contracts.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-500">No contracts found.</td></tr>}
-                        </tbody>
-                    </table>
+        <InfoCard
+            title="Customer Timeline"
+            actions={
+                !loading && timeline.length > 0 ? (
+                    <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+                        {timelineFilters.map((filter) => (
+                            <button
+                                key={filter.id}
+                                type="button"
+                                onClick={() => setActiveTimelineFilter(filter.id)}
+                                className={[
+                                    "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+                                    activeTimelineFilter === filter.id
+                                        ? "bg-white text-slate-900 shadow-sm"
+                                        : "text-slate-600 hover:text-slate-900",
+                                ].join(" ")}
+                            >
+                                {filter.label}
+                            </button>
+                        ))}
+                    </div>
+                ) : null
+            }
+        >
+            {loading ? (
+                <div className="flex justify-center py-8">
+                    <ClipLoader size={30} />
                 </div>
+            ) : timeline.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                    No service, job, note, chemistry, equipment, or water history found yet.
+                </div>
+            ) : visibleTimeline.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                    No {selectedFilter.label.toLowerCase()} timeline events found yet.
+                </div>
+            ) : (
+                <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
+                    {visibleTimeline.map((event) => {
+                        const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
+                        const content = (
+                            <div className="relative flex gap-4">
+                                <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
+                                <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-semibold text-slate-900">{event.title}</p>
+                                            <p className="mt-1 text-xs font-medium text-slate-500">
+                                                {format(event.date, 'PPP p')}
+                                            </p>
+                                        </div>
+                                        <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                                            {event.label}
+                                        </span>
+                                    </div>
+
+                                    {event.subtitle && (
+                                        <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
+                                    )}
+
+                                    {event.detail && (
+                                        <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
+                                    )}
+                                </div>
+                            </div>
+                        );
+
+                        return (
+                            <li key={event.id}>
+                                {event.target ? (
+                                    <Link to={event.target} className="block hover:opacity-95 transition">
+                                        {content}
+                                    </Link>
+                                ) : (
+                                    content
+                                )}
+                            </li>
+                        );
+                    })}
+                </ol>
             )}
         </InfoCard>
     );

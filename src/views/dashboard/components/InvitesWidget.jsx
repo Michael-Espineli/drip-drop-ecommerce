@@ -20,8 +20,9 @@ const InvitesWidget = () => {
             const counts = { pending: 0, accepted: 0, rejected: 0 };
             snapshot.forEach(doc => {
                 const data = doc.data();
-                if (data.status in counts) {
-                    counts[data.status]++;
+                const normalizedStatus = String(data.status || '').toLowerCase();
+                if (normalizedStatus in counts) {
+                    counts[normalizedStatus]++;
                 }
             });
             setInviteCounts(counts);

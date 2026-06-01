@@ -56,7 +56,7 @@ const Sales = () => {
     }
 
     return (
-        <div className="container mx-auto p-6 bg-gray-50 min-h-screen">
+        <div className=" p-6 bg-gray-50 min-h-screen">
             <h1 className="text-3xl font-bold mb-6 text-gray-900">Sales Dashboard</h1>
 
             {/* Stats Grid */}

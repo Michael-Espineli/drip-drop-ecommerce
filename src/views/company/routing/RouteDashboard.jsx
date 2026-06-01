@@ -618,6 +618,10 @@ const RouteDashboard = () => {
     const [selectedRouteId, setSelectedRouteId] = useState('');
     const [isSeedingDemoRoute, setIsSeedingDemoRoute] = useState(false);
     const [vehicleUpdatingRouteId, setVehicleUpdatingRouteId] = useState('');
+    const [selectedStopIds, setSelectedStopIds] = useState([]);
+    const [moveDate, setMoveDate] = useState(new Date());
+    const [moveTechId, setMoveTechId] = useState('');
+    const [isMovingStops, setIsMovingStops] = useState(false);
     const [mapOverlays, setMapOverlays] = useState({
         stops: true,
         techTrail: true,
@@ -875,11 +879,98 @@ const RouteDashboard = () => {
             .sort((a, b) => a.startTimeDate - b.startTimeDate)
     ), [activeRouteLogs, selectedRouteId]);
 
+    useEffect(() => {
+        setSelectedStopIds([]);
+    }, [selectedRouteId]);
+
     const toggleMapOverlay = (overlayName) => {
         setMapOverlays(previous => ({
             ...previous,
             [overlayName]: !previous[overlayName],
         }));
+    };
+
+    const toggleSelectedStop = (stop) => {
+        const { end } = getStopTiming(stop);
+        if (end) {
+            toast.error('Finished stops cannot be moved from the active route manager.');
+            return;
+        }
+
+        setSelectedStopIds(currentIds => (
+            currentIds.includes(stop.id)
+                ? currentIds.filter(id => id !== stop.id)
+                : [...currentIds, stop.id]
+        ));
+    };
+
+    const moveSelectedStops = async () => {
+        if (!recentlySelectedCompany || !selectedRoute || selectedStopIds.length === 0) return;
+
+        const destinationTech = technicians.find(tech => tech.userId === moveTechId);
+        if (!destinationTech) {
+            toast.error('Select a destination technician.');
+            return;
+        }
+
+        setIsMovingStops(true);
+
+        try {
+            const nextServiceDate = new Date(moveDate);
+            nextServiceDate.setHours(0, 0, 0, 0);
+            const selectedIdSet = new Set(selectedStopIds);
+            const batch = writeBatch(db);
+
+            selectedStopIds.forEach(stopId => {
+                batch.update(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', stopId), {
+                    serviceDate: Timestamp.fromDate(nextServiceDate),
+                    techId: destinationTech.userId,
+                    tech: destinationTech.userName,
+                    updatedAt: Timestamp.fromDate(new Date()),
+                });
+            });
+
+            const remainingRouteStopIds = (selectedRoute.serviceStopsIds || []).filter(stopId => !selectedIdSet.has(stopId));
+            const remainingStops = selectedRouteStops.filter(stop => !selectedIdSet.has(stop.id));
+            const remainingFinishedStops = remainingStops.filter(stop => {
+                const { start, end } = getStopTiming(stop);
+                return start && end;
+            }).length;
+            const remainingInProgressStops = remainingStops.filter(stop => {
+                const { start, end } = getStopTiming(stop);
+                return start && !end;
+            }).length;
+            const nextStatus = remainingRouteStopIds.length === 0
+                ? 'Did Not Start'
+                : remainingFinishedStops === remainingRouteStopIds.length
+                    ? 'Finished'
+                    : remainingInProgressStops > 0
+                        ? 'In Progress'
+                        : 'Did Not Start';
+
+            batch.update(doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', selectedRoute.id), {
+                serviceStopsIds: remainingRouteStopIds,
+                order: Array.isArray(selectedRoute.order)
+                    ? selectedRoute.order
+                        .filter(item => !selectedIdSet.has(item.serviceStopId || item.id))
+                        .map((item, index) => ({ ...item, order: index + 1 }))
+                    : [],
+                totalStops: remainingRouteStopIds.length,
+                finishedStops: remainingFinishedStops,
+                status: nextStatus,
+                updatedAt: Timestamp.fromDate(new Date()),
+            });
+
+            await batch.commit();
+            toast.success('Selected stops moved.');
+            setSelectedStopIds([]);
+            await fetchData(serviceDate);
+        } catch (error) {
+            console.error('Error moving selected stops:', error);
+            toast.error('Failed to move selected stops.');
+        } finally {
+            setIsMovingStops(false);
+        }
     };
 
     const updateRouteVehicle = async (route, selectedValue) => {
@@ -1122,6 +1213,26 @@ const RouteDashboard = () => {
                                     now={now}
                                 />
                             )}
+
+                            {selectedRoute && (
+                                <ActiveRouteDetailPanel
+                                    route={selectedRoute}
+                                    stops={selectedRouteStops}
+                                    locations={selectedRouteLocations}
+                                    areaEstimates={selectedRouteAreaEstimates}
+                                    routeLogs={selectedRouteLogs}
+                                    technicians={technicians}
+                                    selectedStopIds={selectedStopIds}
+                                    moveDate={moveDate}
+                                    moveTechId={moveTechId}
+                                    isMovingStops={isMovingStops}
+                                    onToggleStop={toggleSelectedStop}
+                                    onMoveDateChange={setMoveDate}
+                                    onMoveTechChange={setMoveTechId}
+                                    onMoveSelectedStops={moveSelectedStops}
+                                    onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                                />
+                            )}
                         </section>
 
                         <section className="bg-white p-6 rounded-2xl shadow-lg">
@@ -1156,6 +1267,180 @@ const RouteDashboard = () => {
         </div>
     );
 };
+
+const ActiveRouteDetailPanel = ({
+    route,
+    stops,
+    locations,
+    areaEstimates,
+    routeLogs,
+    technicians,
+    selectedStopIds,
+    moveDate,
+    moveTechId,
+    isMovingStops,
+    onToggleStop,
+    onMoveDateChange,
+    onMoveTechChange,
+    onMoveSelectedStops,
+    onOpenStop,
+}) => {
+    const expectedStopCount = route.serviceStopsIds?.length || 0;
+    const hasStopMismatch = expectedStopCount !== stops.length;
+    const latestLocation = locations[locations.length - 1] || null;
+    const selectedCount = selectedStopIds.length;
+    const unfinishedStops = stops.filter(stop => !getStopTiming(stop).end);
+
+    return (
+        <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h3 className="text-lg font-bold text-gray-800">Active Route Detail</h3>
+                    <p className="text-sm text-gray-500">
+                        Stops, logs, latest location, and manager actions for {route.techName || 'this route'}.
+                    </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <DetailPill label="Stops" value={`${route.finishedStops || 0}/${route.totalStops || expectedStopCount}`} />
+                    <DetailPill label="Logs" value={routeLogs.length} />
+                    <DetailPill label="GPS" value={locations.length} />
+                    <DetailPill label="Areas" value={areaEstimates.length} />
+                </div>
+            </div>
+
+            {hasStopMismatch && (
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-semibold text-amber-800">
+                    Route stop count mismatch. Route has {expectedStopCount} ID(s), but {stops.length} stop(s) loaded.
+                </div>
+            )}
+
+            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+                <div className="rounded-lg border border-gray-200">
+                    <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3">
+                        <div>
+                            <p className="font-semibold text-gray-800">Route Stops</p>
+                            <p className="text-xs text-gray-500">{unfinishedStops.length} unfinished stop(s) can be moved.</p>
+                        </div>
+                        <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                            {selectedCount} selected
+                        </span>
+                    </div>
+                    <div className="divide-y divide-gray-100">
+                        {stops.length ? stops.map((stop, index) => {
+                            const status = getStopDisplayStatus(stop);
+                            const { end } = getStopTiming(stop);
+                            const isFinished = Boolean(end);
+                            const isSelected = selectedStopIds.includes(stop.id);
+
+                            return (
+                                <div key={stop.id} className="flex items-center gap-3 px-4 py-3">
+                                    <button
+                                        type="button"
+                                        onClick={() => onToggleStop(stop)}
+                                        disabled={isFinished}
+                                        className={`h-8 w-8 rounded-full border text-sm font-bold ${
+                                            isSelected
+                                                ? 'border-blue-600 bg-blue-600 text-white'
+                                                : isFinished
+                                                    ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                                    : 'border-gray-300 bg-white text-gray-600 hover:border-blue-400'
+                                        }`}
+                                        title={isFinished ? 'Finished stops cannot be moved' : 'Select stop'}
+                                    >
+                                        {isSelected ? '✓' : index + 1}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => onOpenStop(stop)}
+                                        className="min-w-0 flex-1 text-left"
+                                    >
+                                        <p className="truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</p>
+                                        <p className="truncate text-sm text-gray-500">{stop.address?.streetAddress || 'No address'}</p>
+                                    </button>
+                                    <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${status.className}`}>
+                                        {status.label}
+                                    </span>
+                                </div>
+                            );
+                        }) : (
+                            <div className="px-4 py-6 text-sm text-gray-500">No stops loaded for this route.</div>
+                        )}
+                    </div>
+                </div>
+
+                <div className="space-y-4">
+                    <div className="rounded-lg border border-gray-200 p-4">
+                        <p className="font-semibold text-gray-800">Latest Location</p>
+                        {latestLocation ? (
+                            <div className="mt-2 space-y-1 text-sm text-gray-600">
+                                <p>{latestLocation.userName || route.techName || 'Technician'}</p>
+                                <p>{latestLocation.timeDate ? `${format(latestLocation.timeDate, 'MMM d, yyyy')} at ${formatTimeValue(latestLocation.timeDate)}` : 'No timestamp'}</p>
+                                <p className="font-mono text-xs text-gray-500">{latestLocation.latitude}, {latestLocation.longitude}</p>
+                            </div>
+                        ) : (
+                            <p className="mt-2 text-sm text-gray-500">No GPS breadcrumbs loaded.</p>
+                        )}
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 p-4">
+                        <p className="font-semibold text-gray-800">Manager Actions</p>
+                        <p className="mt-1 text-sm text-gray-500">Move selected unfinished stops to another date or technician.</p>
+                        <div className="mt-3 space-y-3">
+                            <DatePicker
+                                selected={moveDate}
+                                onChange={onMoveDateChange}
+                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                            />
+                            <select
+                                value={moveTechId}
+                                onChange={(event) => onMoveTechChange(event.target.value)}
+                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                            >
+                                <option value="">Select technician</option>
+                                {technicians.map(tech => (
+                                    <option key={tech.userId || tech.docId} value={tech.userId}>
+                                        {tech.userName}
+                                    </option>
+                                ))}
+                            </select>
+                            <button
+                                type="button"
+                                onClick={onMoveSelectedStops}
+                                disabled={!selectedCount || !moveTechId || isMovingStops}
+                                className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {isMovingStops ? 'Moving...' : `Move ${selectedCount || ''} Selected Stop${selectedCount === 1 ? '' : 's'}`}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 p-4">
+                        <p className="font-semibold text-gray-800">Route Logs</p>
+                        <div className="mt-2 max-h-48 space-y-2 overflow-y-auto">
+                            {routeLogs.length ? routeLogs.map(log => (
+                                <div key={log.id} className="rounded-lg bg-gray-50 px-3 py-2 text-sm">
+                                    <p className="font-semibold text-gray-800">{log.type || 'Route Log'}</p>
+                                    <p className="text-xs text-gray-500">
+                                        {formatTimeValue(log.startTimeDate)} - {log.endTimeDate ? formatTimeValue(log.endTimeDate) : 'Now'}
+                                    </p>
+                                </div>
+                            )) : (
+                                <p className="text-sm text-gray-500">No route logs loaded.</p>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const DetailPill = ({ label, value }) => (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+        <div className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</div>
+        <div className="text-sm font-bold text-gray-900">{value}</div>
+    </div>
+);
 
 const RouteMapMetric = ({ label, value, tone }) => {
     const toneClasses = {

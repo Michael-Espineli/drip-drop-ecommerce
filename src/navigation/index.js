@@ -13,6 +13,7 @@ export const getNav = (accountType) => {
     const categoryOrder = [
         'NA', // For items without a category
         'Marketing',
+        'Finance',
         'Operations',
         'Physical Locations',
         'Routing',

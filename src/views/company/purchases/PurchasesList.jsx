@@ -937,7 +937,7 @@ const PurchasesList = () => {
             <div className='py-2'>
                 <Link 
                 className='py-1 px-2 yellow-bg rounded-md text-[#ffffff]'
-                to={`/company/purchasedItems/createNew`}
+                to={`/company/purchased-items/createNew`}
                 >Create New</Link>
             </div>
             <div className='w-full light-blue-grey-bg p-4 rounded-md text-[#ffffff]'>
@@ -1032,7 +1032,7 @@ const PurchasesList = () => {
                                     <th className='py-3 px-4'>Total</th>
                                     <th className='py-3 px-4'>Billable</th>
                                     <th className='py-3 px-4'>Customer</th>
-                                    <th className='py-3 px-4 sm:invisible md:visible lg:visible'>Vender Name</th>
+                                    <th className='py-3 px-4 sm:invisible md:visible lg:visible'>Vendor Name</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1040,14 +1040,14 @@ const PurchasesList = () => {
                                 purchaseList?.map(purchase => (
                                     <tr key={purchase.id}>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/receipts/detail/${purchase.receiptId}`}>{purchase.invoiceNum}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.date}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.techName}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.name}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.price}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.quantityString}</Link></td>
-                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.total}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.date}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.techName}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.name}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.price}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.quantityString}</Link></td>
+                                        <td className='py-3 px-4 font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.total}</Link></td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                            <Link to={`/company/purchasedItems/detail/${purchase.id}`}>
+                                            <Link to={`/company/purchased-items/detail/${purchase.id}`}>
                                                 {
                                                     purchase.billable ? <div>
                                                     {
@@ -1058,13 +1058,13 @@ const PurchasesList = () => {
                                             </Link>
                                         </td>
                                         <td className='py-3 px-4 font-medium whitespace-nonwrap'>
-                                            <Link to={`/company/purchasedItems/detail/${purchase.id}`}>
+                                            <Link to={`/company/purchased-items/detail/${purchase.id}`}>
                                                 {
                                                     purchase.billable ? <p className='py-3 px-4 font-medium whitespace-nonwrap'>{purchase.customerName}</p>:<p></p>
                                                 }
                                             </Link>
                                         </td>
-                                        <td className='py-3 px-4 sm:invisible md:visible lg:visible font-medium whitespace-nonwrap'><Link to={`/company/purchasedItems/detail/${purchase.id}`}>{purchase.venderName}</Link></td>
+                                        <td className='py-3 px-4 sm:invisible md:visible lg:visible font-medium whitespace-nonwrap'><Link to={`/company/purchased-items/detail/${purchase.id}`}>{purchase.venderName}</Link></td>
                                     </tr>
                                 ))
                             }

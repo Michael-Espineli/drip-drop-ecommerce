@@ -4,8 +4,9 @@ import { doc, setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
+import { VENDOR_RECORDS_COLLECTION, VENDOR_SETTINGS_DOC } from "../../../utils/vendors";
 
-const CreateNewVenders = () => {
+const CreateNewVendor = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const navigate = useNavigate();
 
@@ -22,7 +23,7 @@ const CreateNewVenders = () => {
 
     const [billingNotes, setBillingNotes] = useState("");
 
-    async function createNewVender(e) {
+    async function createNewVendor(e) {
         e.preventDefault();
 
         if (!name.trim()) {
@@ -38,10 +39,10 @@ const CreateNewVenders = () => {
         try {
             setIsLoading(true);
 
-            const venderId = `com_ven_${uuidv4()}`;
+            const vendorId = `com_ven_${uuidv4()}`;
 
-            const vender = {
-                id: venderId,
+            const vendor = {
+                id: vendorId,
                 name: name.trim(),
                 email: email.trim() || "",
                 phoneNumber: phoneNumber.trim() || "",
@@ -56,13 +57,13 @@ const CreateNewVenders = () => {
             };
 
             await setDoc(
-                doc(db, "companies", recentlySelectedCompany, "settings", "vendors", "vendor", venderId),
-                vender
+                doc(db, "companies", recentlySelectedCompany, "settings", VENDOR_SETTINGS_DOC, VENDOR_RECORDS_COLLECTION, vendorId),
+                vendor
             );
 
-            navigate("/company/settings/vendors");
+            navigate("/company/vendors");
         } catch (error) {
-            console.error("Error creating vender:", error);
+            console.error("Error creating vendor:", error);
             alert("Failed to create vendor. Please try again.");
         } finally {
             setIsLoading(false);
@@ -75,7 +76,7 @@ const CreateNewVenders = () => {
                 <div className="flex justify-between items-center mb-6">
                     <h2 className="text-3xl font-bold text-gray-800">Create New Vendor</h2>
                     <Link
-                        to="/company/settings/venders"
+                        to="/company/vendors"
                         className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
                     >
                         Back
@@ -87,7 +88,7 @@ const CreateNewVenders = () => {
                         <div className="bg-white p-6 rounded-xl shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Vendor Details</h3>
 
-                            <form onSubmit={createNewVender} className="space-y-6">
+                            <form onSubmit={createNewVendor} className="space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div className="md:col-span-2">
                                         <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -262,4 +263,4 @@ const CreateNewVenders = () => {
     );
 };
 
-export default CreateNewVenders;
+export default CreateNewVendor;

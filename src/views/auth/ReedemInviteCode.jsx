@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useContext } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getFirestore, doc, getDoc } from "firebase/firestore";
@@ -29,7 +29,9 @@ export default function RedeemInviteCode() {
             const inviteRef = doc(db, "invites", inviteCode.trim());
             const inviteSnap = await getDoc(inviteRef);
 
-            if (inviteSnap.exists() && inviteSnap.data().status === 'Pending') {
+            const inviteStatus = inviteSnap.exists() ? String(inviteSnap.data().status || '').toLowerCase() : '';
+
+            if (inviteSnap.exists() && inviteStatus === 'pending') {
                 const inviteData = { id: inviteSnap.id, ...inviteSnap.data() };
                 setInvite(inviteData);
                 toast.success('Invite code is valid!');
@@ -62,9 +64,7 @@ export default function RedeemInviteCode() {
         try {
             const userCredential = await createUserWithEmailAndPassword(auth, invite.email, password);
             const newUser = userCredential.user;
-            const newUserName = `${invite.firstName} ${invite.lastName}`;
-            
-            await acceptInvite(invite, newUser.uid, invite.firstName, invite.lastName, invite.lastName);
+            await acceptInvite(invite, newUser.uid, invite.firstName, invite.lastName, invite.email);
             toast.success('Account created and invite accepted!');
             navigate('/company/dashboard');
         } catch (err) {
@@ -83,8 +83,7 @@ export default function RedeemInviteCode() {
 
         setLoading(true);
         try {
-            const existingUserName = user.displayName || `${invite.firstName} ${invite.lastName}`;
-            await acceptInvite(invite, user.uid, invite.firstName, invite.firstName, invite.email);
+            await acceptInvite(invite, user.uid, invite.firstName, invite.lastName, invite.email);
             toast.success('Invite accepted successfully!');
             navigate('/company/dashboard');
         } catch (err) {

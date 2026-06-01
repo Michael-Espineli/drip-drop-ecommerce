@@ -1,134 +1,252 @@
-
-import React, { useState, useEffect, useContext, useMemo } from "react";
-import { query, collection, getDocs } from "firebase/firestore";
-import { db } from "../../../utils/config";
+import React, { useContext, useEffect, useMemo, useState } from "react";
+import { collection, getDocs, query } from "firebase/firestore";
+import { useNavigate } from "react-router-dom";
+import Select from "react-select";
+import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
-import { useNavigate } from 'react-router-dom';
-import Select from 'react-select';
-import toast from 'react-hot-toast';
+import { db } from "../../../utils/config";
 
-const RouteTemplateCard = ({ template, onEdit }) => (
-    <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-200 hover:shadow-xl transition-shadow">
-        <div className="flex justify-between items-start mb-4">
-            <h3 className="font-bold text-lg text-gray-800 flex-grow pr-4">{template.description}</h3>
-            <button 
-                onClick={() => onEdit(template)} 
-                className='bg-blue-100 text-blue-800 font-semibold py-1 px-4 rounded-lg hover:bg-blue-200 text-sm transition-colors'>
-                Edit
-            </button>
+const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+const stopCount = (route) => (Array.isArray(route?.order) ? route.order.length : 0);
+
+const routeKey = (day, techId) => `${day}::${techId}`;
+
+const routeTitle = (route, tech, day) => route?.description || `${tech.label} ${day} Route`;
+
+const RouteRow = ({ day, tech, route, onCreate, onEdit }) => {
+  const orderedStops = Array.isArray(route?.order)
+    ? [...route.order].sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
+    : [];
+
+  return (
+    <div className="grid gap-3 border-t border-slate-100 px-4 py-3 md:grid-cols-[220px_1fr_auto] md:items-center">
+      <div>
+        <p className="font-semibold text-slate-900">{tech.label}</p>
+        <p className="text-xs text-slate-500">{tech.workerType || tech.roleName || "Technician"}</p>
+      </div>
+
+      {route ? (
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold text-slate-800">{routeTitle(route, tech, day)}</p>
+            <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">{stopCount(route)} stop(s)</span>
+          </div>
+          {orderedStops.length ? (
+            <p className="mt-1 line-clamp-1 text-sm text-slate-500">
+              {orderedStops.map((stop) => stop.customerName || stop.locationName || stop.recurringServiceStopId).filter(Boolean).join(" -> ")}
+            </p>
+          ) : (
+            <p className="mt-1 text-sm text-slate-500">No ordered stops on this route yet.</p>
+          )}
         </div>
-        <div className="space-y-3 text-sm">
-            <div className="flex items-center">
-                <span className="font-semibold text-gray-500 w-24">Technician:</span>
-                <span className="text-gray-800 font-medium">{template.tech}</span>
-            </div>
-            <div className="flex items-center">
-                <span className="font-semibold text-gray-500 w-24">Day of Week:</span>
-                <span className="text-gray-800 font-medium">{template.day}</span>
-            </div>
-            <div className="flex items-center">
-                <span className="font-semibold text-gray-500 w-24">Stops:</span>
-                <span className="text-gray-800 font-medium">{template.order?.length || 0}</span>
-            </div>
-        </div>
+      ) : (
+        <p className="text-sm text-slate-500">No recurring route template for this technician and day.</p>
+      )}
+
+      <div className="flex justify-start md:justify-end">
+        <button
+          type="button"
+          onClick={() => (route ? onEdit(route) : onCreate(day, tech))}
+          className={route
+            ? "rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+            : "rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"}
+        >
+          {route ? "Edit" : "Add"}
+        </button>
+      </div>
     </div>
-);
+  );
+};
+
+const DaySection = ({ day, technicians, routesByDayTech, onCreate, onEdit }) => {
+  const routesForDay = technicians
+    .map((tech) => routesByDayTech.get(routeKey(day, tech.value)))
+    .filter(Boolean);
+  const totalStops = routesForDay.reduce((total, route) => total + stopCount(route), 0);
+
+  return (
+    <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 bg-slate-50 px-4 py-3">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">{day}</h2>
+          <p className="text-sm text-slate-500">{routesForDay.length} route(s), {totalStops} stop(s)</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onCreate(day)}
+          className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white"
+        >
+          Add Route
+        </button>
+      </div>
+
+      {technicians.length ? (
+        technicians.map((tech) => (
+          <RouteRow
+            key={`${day}-${tech.value}`}
+            day={day}
+            tech={tech}
+            route={routesByDayTech.get(routeKey(day, tech.value))}
+            onCreate={onCreate}
+            onEdit={onEdit}
+          />
+        ))
+      ) : (
+        <div className="border-t border-slate-100 px-4 py-6 text-sm text-slate-500">No active company users found.</div>
+      )}
+    </section>
+  );
+};
 
 const RouteManagement = () => {
-    const { recentlySelectedCompany } = useContext(Context);
-    const navigate = useNavigate();
-    
-    const [allTemplates, setAllTemplates] = useState([]);
-    const [technicians, setTechnicians] = useState([]);
-    const [isLoading, setIsLoading] = useState(true);
+  const { recentlySelectedCompany } = useContext(Context);
+  const navigate = useNavigate();
+  const [allRoutes, setAllRoutes] = useState([]);
+  const [technicians, setTechnicians] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [dayFilter, setDayFilter] = useState(null);
+  const [techFilter, setTechFilter] = useState(null);
 
-    // Filtering state
-    const [dayFilter, setDayFilter] = useState(null);
-    const [techFilter, setTechFilter] = useState(null);
+  const dayOptions = daysOfWeek.map((day) => ({ value: day, label: day }));
 
-    const dayOptions = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"].map(d => ({ value: d, label: d }));
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setAllRoutes([]);
+      setTechnicians([]);
+      setIsLoading(false);
+      return;
+    }
 
-    useEffect(() => {
-        if (!recentlySelectedCompany) return;
+    const fetchData = async () => {
+      setIsLoading(true);
+      try {
+        const routesRef = collection(db, "companies", recentlySelectedCompany, "recurringRoutes");
+        const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
+        const [routesSnapshot, usersSnapshot] = await Promise.all([getDocs(query(routesRef)), getDocs(query(usersRef))]);
 
-        const fetchData = async () => {
-            setIsLoading(true);
-            try {
-                const routesQuery = query(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'));
-                const routesSnapshot = await getDocs(routesQuery);
-                const templates = routesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setAllTemplates(templates);
-
-                const techQuery = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
-                const techSnapshot = await getDocs(techQuery);
-                const techList = techSnapshot.docs.map(doc => ({ value: doc.data().userId, label: doc.data().userName }));
-                setTechnicians(techList);
-
-            } catch (error) {
-                console.error("Error fetching route templates: ", error);
-                toast.error("Failed to load route templates.");
-            } finally {
-                setIsLoading(false);
-            }
-        };
-
-        fetchData();
-    }, [recentlySelectedCompany]);
-
-    const filteredTemplates = useMemo(() => {
-        return allTemplates.filter(template => {
-            const dayMatch = !dayFilter || template.day === dayFilter.value;
-            const techMatch = !techFilter || template.techId === techFilter.value;
-            return dayMatch && techMatch;
-        });
-    }, [allTemplates, dayFilter, techFilter]);
-
-    const handleEdit = (template) => {
-        navigate('/company/route-builder', { state: { templateToEdit: template } });
+        setAllRoutes(routesSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
+        setTechnicians(
+          usersSnapshot.docs
+            .map((docSnap) => ({ id: docSnap.id, value: docSnap.data().userId || docSnap.id, label: docSnap.data().userName || docSnap.id, ...docSnap.data() }))
+            .filter((user) => String(user.status || "Active").toLowerCase() === "active")
+            .sort((a, b) => a.label.localeCompare(b.label))
+        );
+      } catch (error) {
+        console.error("Error fetching route templates:", error);
+        toast.error("Failed to load route templates.");
+      } finally {
+        setIsLoading(false);
+      }
     };
 
-    return (
-        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-7xl mx-auto">
-                <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
-                    <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Route Templates</h1>
-                        <p className="text-gray-600 mt-1">Manage and organize your recurring route templates.</p>
-                    </div>
-                    <button
-                        onClick={() => navigate('/company/route-builder')}
-                        className='mt-4 sm:mt-0 py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition-all'>
-                        Create New Template
-                    </button>
-                </header>
+    fetchData();
+  }, [recentlySelectedCompany]);
 
-                <div className="bg-white p-4 rounded-2xl shadow-lg mb-8">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <h3 className="md:col-span-1 font-semibold text-gray-700 my-auto">Filter templates:</h3>
-                        <Select options={dayOptions} value={dayFilter} onChange={setDayFilter} placeholder="Filter by day..." isClearable />
-                        <Select options={technicians} value={techFilter} onChange={setTechFilter} placeholder="Filter by technician..." isLoading={isLoading} isClearable />
-                    </div>
-                </div>
+  const visibleDays = useMemo(
+    () => (dayFilter ? daysOfWeek.filter((day) => day === dayFilter.value) : daysOfWeek),
+    [dayFilter]
+  );
 
-                {isLoading ? (
-                    <div className="text-center py-10"><p className="text-gray-500">Loading templates...</p></div>
-                ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                        {filteredTemplates.length > 0 ? (
-                            filteredTemplates.map(template => (
-                                <RouteTemplateCard key={template.id} template={template} onEdit={handleEdit} />
-                            ))
-                        ) : (
-                            <div className="col-span-full text-center py-12 bg-white rounded-2xl shadow-lg">
-                                <h3 className="text-xl font-semibold text-gray-700">No Route Templates Found</h3>
-                                <p className="text-gray-500 mt-2">Get started by creating a new template or adjust your filters.</p>
-                            </div>
-                        )}
-                    </div>
-                )}
-            </div>
+  const visibleTechnicians = useMemo(
+    () => (techFilter ? technicians.filter((tech) => tech.value === techFilter.value) : technicians),
+    [technicians, techFilter]
+  );
+
+  const visibleRoutes = useMemo(
+    () =>
+      allRoutes.filter((route) => {
+        const dayMatch = !dayFilter || route.day === dayFilter.value;
+        const techMatch = !techFilter || route.techId === techFilter.value;
+        return dayMatch && techMatch;
+      }),
+    [allRoutes, dayFilter, techFilter]
+  );
+
+  const routesByDayTech = useMemo(() => {
+    const nextRoutes = new Map();
+    allRoutes.forEach((route) => {
+      if (route.day && route.techId) {
+        nextRoutes.set(routeKey(route.day, route.techId), route);
+      }
+    });
+    return nextRoutes;
+  }, [allRoutes]);
+
+  const totalStops = visibleRoutes.reduce((total, route) => total + stopCount(route), 0);
+
+  const handleCreate = (day, tech = null) => {
+    navigate("/company/route-builder", {
+      state: {
+        defaultDay: day,
+        defaultTechnicianId: tech?.value || "",
+      },
+    });
+  };
+
+  const handleEdit = (route) => {
+    navigate("/company/route-builder", { state: { templateToEdit: route } });
+  };
+
+  return (
+    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
+      <div className="mx-auto max-w-7xl">
+        <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-slate-900">Route Management</h1>
+            <p className="mt-1 text-slate-600">Recurring routes organized by day and technician.</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => handleCreate(null)}
+            className="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+          >
+            Create Route
+          </button>
+        </header>
+
+        <div className="mb-6 grid gap-4 md:grid-cols-3">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Routes</p>
+            <p className="mt-2 text-2xl font-bold text-slate-900">{visibleRoutes.length}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Stops</p>
+            <p className="mt-2 text-2xl font-bold text-slate-900">{totalStops}</p>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Technicians</p>
+            <p className="mt-2 text-2xl font-bold text-slate-900">{visibleTechnicians.length}</p>
+          </div>
         </div>
-    );
+
+        <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-4 md:grid-cols-[180px_1fr_1fr] md:items-center">
+            <h2 className="font-semibold text-slate-800">Filters</h2>
+            <Select options={dayOptions} value={dayFilter} onChange={setDayFilter} placeholder="Filter by day..." isClearable />
+            <Select options={technicians} value={techFilter} onChange={setTechFilter} placeholder="Filter by technician..." isLoading={isLoading} isClearable />
+          </div>
+        </div>
+
+        {isLoading ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-10 text-center text-slate-500">Loading routes...</div>
+        ) : (
+          <div className="space-y-4">
+            {visibleDays.map((day) => (
+              <DaySection
+                key={day}
+                day={day}
+                technicians={visibleTechnicians}
+                routesByDayTech={routesByDayTech}
+                onCreate={handleCreate}
+                onEdit={handleEdit}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 export default RouteManagement;

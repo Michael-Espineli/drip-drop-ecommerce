@@ -41,7 +41,7 @@ export function AuthContext({ children }) {
                     const q = query(
                         invitesRef,
                         where("email", "==", currentUser.email),
-                        where("status", "==", "Pending")
+                        where("status", "in", ["pending", "Pending"])
                     );
                     const inviteSnapshot = await getDocs(q);
                     if (!inviteSnapshot.empty) {

@@ -130,7 +130,7 @@ const CreateNewOneTimeLaborContract = () => {
                     
                     <div className="border-b border-gray-200 pb-6">
                         <h2 className="text-xl font-bold text-gray-800 mb-4">Recipient</h2>
-                         <label className="block text-sm font-medium text-gray-700 mb-1">Select an Associated Business</label>
+                         <label className="block text-sm font-medium text-gray-700 mb-1">Select a Business</label>
                         <select
                             onChange={handleRecipientChange}
                             defaultValue=""

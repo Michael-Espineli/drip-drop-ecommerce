@@ -89,6 +89,7 @@ exports.updateCompanyHistory = callableGeneral.updateCompanyHistory;
 exports.createCompanyAdminNotes = callableGeneral.createCompanyAdminNotes;
 exports.deleteUser = callableGeneral.deleteUser;
 exports.acceptTechInvite = callableGeneral.acceptTechInvite;
+exports.migrateLegacyVendorsToCanonical = callableGeneral.migrateLegacyVendorsToCanonical;
 exports.acceptLinkedInvite = callableGeneral.acceptLinkedInvite;
 exports.updateCompanyReadingsSettings = callableGeneral.updateCompanyReadingsSettings;
 exports.updateServiceStopDayPermanently = callableGeneral.updateServiceStopDayPermanently;

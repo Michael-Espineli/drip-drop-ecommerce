@@ -1605,12 +1605,31 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     console.log("Finished Creating Company User")
 
     //Create Company Settings
-    //WO
+    //Pay Statements
     const PayStatementsIncrement = { category: "payStatements", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("payStatements").set(PayStatementsIncrement);
-    //WO
+    //Pay Line Items
     const PayLineItemsIncrement = { category: "payLineItems", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("payLineItems").set(PayLineItemsIncrement);
+    //Payroll Settings
+    const CompanyPaySettings = {
+      companyId: companyId,
+      payMode: "productionOnly",
+      routePaySource: "serviceStopAndCompletedTasks",
+      taskPaySource: "technicianRateThenTaskContractedRate",
+      hourlyPaySource: "none",
+      allowMultipleWorkTypesPerStop: true,
+      defaultStackBehavior: "stackable",
+      allowTechnicianRateOverrides: true,
+      allowManualPayAdjustments: false,
+      payCommercialAsSeparateWorkType: true,
+      paySpaAsSeparateWorkType: true,
+      payPerBodyOfWater: true,
+      commercialMultiBodyPayStyle: "basePlusAdditionalBodyRate",
+      lockPayAfterApproval: true,
+      recalculateUnapprovedPayWhenRatesChange: true
+    }
+    await getFirestore().collection("companies").doc(companyId).collection("paySettings").doc("main").set(CompanyPaySettings);
     //WO
     const WOIncrement = { category: "workOrders", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("workOrders").set(WOIncrement);
@@ -1627,18 +1646,18 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     const RountIncrement = { category: "recurringServiceStops", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("recurringServiceStops").set(RountIncrement);
 
-    //Vender
-    const StoreIncrement = { category: "venders", increment: 0 }
-    await getFirestore().collection("companies").doc(companyId).collection("settings").doc("venders").set(StoreIncrement);
+    // Vendor
+    const StoreIncrement = { category: "vendors", increment: 0 }
+    await getFirestore().collection("companies").doc(companyId).collection("settings").doc("vendors").set(StoreIncrement);
 
     //To Do
     const ToDoIncrement = { category: "toDos", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("toDos").set(ToDoIncrement);
     console.log("Finished Creating Company Settings")
 
-    //Create Inital Work Order, Readings, and Dosages
-    //Inital Work Order Templates
-    //"companies/\(companyId)/settings/workOrders/workOrders"
+    // Create initial work-order settings, readings, and dosages.
+    // Reusable job templates live at companies/{companyId}/jobTemplates.
+    // Internal work-order identifiers/increments live under settings/workOrders.
 
     //Initial Service Stops 
     // "companies/\(companyId)/settings/serviceStops/serviceStops"
@@ -2184,102 +2203,263 @@ exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
 });
 
 exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
-
-
   try {
-    let inviteId = data.data.inviteId
-    let userId = data.data.userId
-    console.log(inviteId)
-    console.log(userId)
-    const invite = null
-    // Get invite 
-    await getFirestore()
-      .collection("invites")
-      .doc(inviteId)
-      .get().then((doc) => {
-        if (doc.exists) {
-          console.log("Settings data:", doc.data());
-          invite = doc.data()
-        } else {
-          // doc.data() will be undefined in this case
-          console.log("No Service Stop Setting Docuement");
-        }
-      }).catch((error) => {
-        console.log("Error getting document:", error);
-      });
+    const payload = data?.data ?? data ?? {};
+    const inviteId = payload.inviteId;
+    const requestedUserId = payload.userId;
+    const authUserId = context.auth?.uid;
+    const userId = requestedUserId || authUserId;
+    const profile = payload.profile || {};
 
-
-    //Check If invite exists
-    if (invite) {
-
-      //Check if invite is pending
-      if (invite.status != "pending") {
-
-        return {
-          status: 500,
-          error: "Invite Already Accepted"
-        };
-
-      } else {
-
-        // Handle Invite set Up 
-        // Create New CompanyUser
-        const companyUserId = 'com_cu_' + uuidv4()
-        const fullName = invite.firstName + " " + invite.lastName
-        let companyUser = {
-          id: companyUserId,
-          userId: userId,
-          userName: fullName,
-          roleId: invite.roleId,
-          roleName: invite.roleName,
-          dateCreated: new Date(),
-          status: "Active",
-          workerType: "Employee",
-          linkedCompanyId: null,
-          linkedCompanyName: null,
-        }
-
-        await getFirestore()
-          .collection("companies").doc(invite.companyId).collection("companyUsers").doc(id)
-          .set(companyUser);
-
-
-        // Create New UserAccess
-        const userAccessId = 'use_us_' + uuidv4()
-        let userAccess = {
-          id: userAccessId,
-          companyId: invite.companyId,
-          companyName: invite.companyName,
-          roleId: invite.roleId,
-          roleName: invite.roleName,
-          dateCreated: new Date(),
-        }
-
-        await getFirestore()
-          .collection("companies").doc(userId).collection("userAccess").doc(id)
-          .set(userAccess);
-
-      }
-    } else {
+    if (!authUserId) {
       return {
-        status: 500,
+        status: 401,
+        error: "You must be signed in to accept an invite"
+      };
+    }
+
+    if (!inviteId || !userId) {
+      return {
+        status: 400,
+        error: "Missing inviteId or userId"
+      };
+    }
+
+    if (authUserId !== userId) {
+      return {
+        status: 403,
+        error: "Authenticated user does not match invite user"
+      };
+    }
+
+    const db = getFirestore();
+    const inviteRef = db.collection("invites").doc(inviteId);
+    const inviteSnap = await inviteRef.get();
+
+    if (!inviteSnap.exists) {
+      return {
+        status: 404,
         error: "No Invite Found"
       };
-
     }
+
+    const invite = inviteSnap.data();
+    const status = String(invite.status || "").toLowerCase();
+
+    if (status !== "pending") {
+      return {
+        status: 409,
+        error: "Invite Already Accepted"
+      };
+    }
+
+    if (invite.userId && invite.userId !== userId) {
+      return {
+        status: 403,
+        error: "Invite is assigned to a different user"
+      };
+    }
+
+    const authEmail = context.auth?.token?.email?.toLowerCase();
+    const inviteEmail = invite.email?.toLowerCase();
+
+    if (authEmail && inviteEmail && authEmail !== inviteEmail) {
+      return {
+        status: 403,
+        error: "Authenticated email does not match invite email"
+      };
+    }
+
+    const acceptedStatus = invite.status === "Pending" ? "Accepted" : "accepted";
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const fullName = `${profile.firstName || invite.firstName || ""} ${profile.lastName || invite.lastName || ""}`.trim();
+    const workerType = invite.workerType || "Employee";
+    const batch = db.batch();
+
+    if (profile.email || invite.email) {
+      const userRef = db.collection("users").doc(userId);
+      batch.set(userRef, {
+        id: userId,
+        email: profile.email || invite.email,
+        firstName: profile.firstName || invite.firstName || "",
+        lastName: profile.lastName || invite.lastName || "",
+        accountType: profile.accountType || "Company",
+        photoUrl: profile.photoUrl || null,
+        profileImagePath: profile.profileImagePath || null,
+        color: profile.color || null,
+        bio: profile.bio || "",
+        exp: profile.exp || 0,
+        dateCreated: now,
+      }, { merge: true });
+    }
+
+    const companyUserRef = db
+      .collection("companies")
+      .doc(invite.companyId)
+      .collection("companyUsers")
+      .doc(userId);
+
+    batch.set(companyUserRef, {
+      id: userId,
+      userId: userId,
+      userName: fullName || invite.email || userId,
+      roleId: invite.roleId,
+      roleName: invite.roleName,
+      dateCreated: now,
+      status: "Active",
+      workerType: workerType,
+      linkedCompanyId: invite.linkedCompanyId || null,
+      linkedCompanyName: invite.linkedCompanyName || null,
+    }, { merge: true });
+
+    const userAccessRef = db
+      .collection("users")
+      .doc(userId)
+      .collection("userAccess")
+      .doc(invite.companyId);
+
+    batch.set(userAccessRef, {
+      id: invite.companyId,
+      companyId: invite.companyId,
+      companyName: invite.companyName,
+      roleId: invite.roleId,
+      roleName: invite.roleName,
+      dateCreated: now,
+    }, { merge: true });
+
+    batch.update(inviteRef, {
+      status: acceptedStatus,
+      userId: userId,
+      acceptedAt: now,
+    });
+
+    await batch.commit();
+
     return {
       status: 200,
-      account: "Successfully Sent"
+      inviteId: inviteId,
+      userId: userId,
+      companyId: invite.companyId,
+      account: "Successfully Accepted"
     };
   } catch (error) {
     console.error(
-      "An error occurred when calling the Create New Recurring Service Stop API",
+      "An error occurred when calling the Accept Tech Invite API",
       error
     );
     return {
       status: 500,
       error: error.message
     };
+  }
+});
+
+exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, context) => {
+  try {
+    const payload = data?.data ?? data ?? {};
+    const companyId = payload.companyId;
+    const dryRun = Boolean(payload.dryRun);
+    const deleteLegacy = Boolean(payload.deleteLegacy);
+    const authUserId = context.auth?.uid;
+
+    if (!authUserId) {
+      return { status: 401, error: "You must be signed in to migrate vendors." };
+    }
+
+    if (!companyId) {
+      return { status: 400, error: "Missing companyId." };
+    }
+
+    const db = getFirestore();
+    const userSnap = await db.collection("users").doc(authUserId).get();
+    const userData = userSnap.exists ? userSnap.data() : {};
+    const isCompanyUser = userData.accountType === "Company" && userData.recentlySelectedCompany === companyId;
+    const isAdmin = userData.accountType === "Admin";
+
+    if (!isCompanyUser && !isAdmin) {
+      return { status: 403, error: "You do not have permission to migrate this company's vendors." };
+    }
+
+    const legacyRef = db.collection("companies").doc(companyId).collection("settings").doc("venders").collection("vender");
+    const canonicalRef = db.collection("companies").doc(companyId).collection("settings").doc("vendors").collection("vendor");
+    const legacySnap = await legacyRef.get();
+
+    let copied = 0;
+    let skipped = 0;
+    let deleted = 0;
+    const preview = [];
+    let batch = db.batch();
+    let writes = 0;
+
+    const commitIfNeeded = async (force = false) => {
+      if (!dryRun && writes > 0 && (force || writes >= 400)) {
+        await batch.commit();
+        batch = db.batch();
+        writes = 0;
+      }
+    };
+
+    for (const legacyDoc of legacySnap.docs) {
+      const legacyData = legacyDoc.data();
+      const canonicalId = legacyData.id || legacyDoc.id;
+      const canonicalDocRef = canonicalRef.doc(canonicalId);
+      const canonicalSnap = await canonicalDocRef.get();
+
+      if (canonicalSnap.exists) {
+        skipped += 1;
+        continue;
+      }
+
+      const nextVendor = {
+        ...legacyData,
+        id: canonicalId,
+        migratedFromLegacyVendorPath: true,
+        legacyVendorDocId: legacyDoc.id,
+        migratedAt: new Date(),
+        migratedByUserId: authUserId,
+      };
+
+      copied += 1;
+      if (preview.length < 20) {
+        preview.push({ id: canonicalId, name: nextVendor.name || "" });
+      }
+
+      if (!dryRun) {
+        batch.set(canonicalDocRef, nextVendor, { merge: true });
+        writes += 1;
+
+        if (deleteLegacy) {
+          batch.delete(legacyDoc.ref);
+          writes += 1;
+          deleted += 1;
+        }
+
+        await commitIfNeeded();
+      }
+    }
+
+    await commitIfNeeded(true);
+
+    if (!dryRun) {
+      await db.collection("companies").doc(companyId).collection("settings").doc("vendors").set({
+        category: "vendors",
+        migratedFromLegacyVendorsAt: new Date(),
+        migratedFromLegacyVendorsByUserId: authUserId,
+      }, { merge: true });
+    }
+
+    return {
+      status: 200,
+      copied,
+      skipped,
+      deleted,
+      dryRun,
+      deleteLegacy,
+      preview,
+    };
+  } catch (error) {
+    console.error("Error migrating legacy vendors:", error);
+    return { status: 500, error: error.message || "Could not migrate vendors." };
   }
 });
 

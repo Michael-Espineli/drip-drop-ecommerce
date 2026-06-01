@@ -6,6 +6,7 @@ import {
     collection,
     getDocs,
     query,
+    where,
     addDoc,
     updateDoc,
     arrayUnion,
@@ -15,6 +16,7 @@ import { Context } from "../../../context/AuthContext";
 import { ServiceStop } from "../../../utils/models/ServiceStop";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
+import { recordBodyOfWaterTaskHistory } from "../../../utils/bodyOfWaterHistory";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -36,6 +38,7 @@ const ServiceStopDetails = () => {
 
     const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
+    const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [loading, setLoading] = useState(true);
 
     const [showAddTask, setShowAddTask] = useState(false);
@@ -96,6 +99,27 @@ const ServiceStopDetails = () => {
                         ...doc.data(),
                     }));
                     setTaskList(tasks);
+
+                    if (stopData.serviceLocationId) {
+                        const bodyOfWaterQuery = query(
+                            collection(
+                                db,
+                                "companies",
+                                recentlySelectedCompany,
+                                "bodiesOfWater"
+                            ),
+                            where("serviceLocationId", "==", stopData.serviceLocationId)
+                        );
+                        const bodyOfWaterSnapshot = await getDocs(bodyOfWaterQuery);
+                        setBodiesOfWater(
+                            bodyOfWaterSnapshot.docs.map((doc) => ({
+                                id: doc.id,
+                                ...doc.data(),
+                            }))
+                        );
+                    } else {
+                        setBodiesOfWater([]);
+                    }
 
                     setNewTask((prev) => ({
                         ...prev,
@@ -198,6 +222,11 @@ const ServiceStopDetails = () => {
             return;
         }
 
+        if (["Fill Water", "Empty Water"].includes(newTask.type) && !newTask.bodyOfWaterId) {
+            toast.error("Select a body of water for this task");
+            return;
+        }
+
         try {
             setSavingTask(true);
 
@@ -254,6 +283,15 @@ const ServiceStopDetails = () => {
                 ...serviceStopTaskPayload,
             };
 
+            if (createdTask.status === "Finished") {
+                await recordBodyOfWaterTaskHistory({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    task: createdTask,
+                    serviceStop,
+                });
+            }
+
             if (
                 newTask.addToRecurringServiceStop &&
                 serviceStop.recurringServiceStopId
@@ -265,6 +303,7 @@ const ServiceStopDetails = () => {
                     contractedRate: Number(newTask.contractedRate || 0),
                     estimatedTime: Number(newTask.estimatedTime || 0),
                     status: newTask.status || "Not Finished",
+                    bodyOfWaterId: newTask.bodyOfWaterId || "",
                 };
 
                 const rssRef = doc(
@@ -290,6 +329,59 @@ const ServiceStopDetails = () => {
             toast.error("Failed to add task");
         } finally {
             setSavingTask(false);
+        }
+    };
+
+    const markTaskFinished = async (task) => {
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !task?.id) return;
+
+        try {
+            const taskRef = doc(
+                db,
+                "companies",
+                recentlySelectedCompany,
+                "serviceStops",
+                serviceStopId,
+                "tasks",
+                task.id
+            );
+
+            await updateDoc(taskRef, { status: "Finished" });
+
+            const finishedTask = { ...task, status: "Finished" };
+
+            if (serviceStop.jobId && task.jobTaskId) {
+                await updateDoc(
+                    doc(
+                        db,
+                        "companies",
+                        recentlySelectedCompany,
+                        "workOrders",
+                        serviceStop.jobId,
+                        "tasks",
+                        task.jobTaskId
+                    ),
+                    { status: "Finished" }
+                );
+            }
+
+            await recordBodyOfWaterTaskHistory({
+                db,
+                companyId: recentlySelectedCompany,
+                task: finishedTask,
+                serviceStop,
+            });
+
+            setTaskList((prev) =>
+                prev.map((item) =>
+                    item.id === task.id ? finishedTask : item
+                )
+            );
+
+            toast.success("Task marked finished");
+        } catch (error) {
+            console.error(error);
+            toast.error("Failed to finish task");
         }
     };
 
@@ -507,6 +599,26 @@ const ServiceStopDetails = () => {
                                             </select>
                                         </div>
 
+                                        {["Fill Water", "Empty Water"].includes(newTask.type) && (
+                                            <div>
+                                                <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                    Body of Water
+                                                </label>
+                                                <select
+                                                    value={newTask.bodyOfWaterId}
+                                                    onChange={(e) => handleTaskFieldChange("bodyOfWaterId", e.target.value)}
+                                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                >
+                                                    <option value="">Select body of water</option>
+                                                    {bodiesOfWater.map((body) => (
+                                                        <option key={body.id} value={body.id}>
+                                                            {body.name || body.id}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+
                                         <div>
                                             <label className="block text-sm font-semibold text-gray-600 mb-1">
                                                 Contracted Rate (cents)
@@ -655,6 +767,18 @@ const ServiceStopDetails = () => {
                                                     {task.status || "—"}
                                                 </span>
                                             </div>
+
+                                            {task.status !== "Finished" && (
+                                                <div className="mt-3">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => markTaskFinished(task)}
+                                                        className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 transition"
+                                                    >
+                                                        Mark Finished
+                                                    </button>
+                                                </div>
+                                            )}
 
                                             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
                                                 <div className="rounded-lg bg-gray-50 px-3 py-2">

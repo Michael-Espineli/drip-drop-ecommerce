@@ -23,7 +23,7 @@ const CreateNewEquipment = () => {
     const [customModel, setCustomModel] = useState('');
     const [dateInstalled, setDateInstalled] = useState(new Date().toISOString().split('T')[0]);
     const [cleanFilterPressure, setCleanFilterPressure] = useState('');
-    const [serviceFrequency, setServiceFrequency] = useState('Months');
+    const [serviceFrequency, setServiceFrequency] = useState('Month');
     const [serviceFrequencyEvery, setServiceFrequencyEvery] = useState(6);
     const [notes, setNotes] = useState('');
 
@@ -160,9 +160,9 @@ const CreateNewEquipment = () => {
                 model: (model && model.value === 'Other') ? customModel : (model && model.label) || '',
                 modelId: (model && model.id) || '',
                 dateInstalled: new Date(dateInstalled),
-                cleanFilterPressure,
-                serviceFrequency,
-                serviceFrequencyEvery: Number(serviceFrequencyEvery),
+                cleanFilterPressure: cleanFilterPressure === '' ? null : Number(cleanFilterPressure),
+                serviceFrequency: serviceFrequencyEvery === '' ? null : Number(serviceFrequencyEvery),
+                serviceFrequencyEvery: serviceFrequency,
                 notes,
                 customerId: selectedCustomer?.value || '',
                 customerName: selectedCustomer?.label || '',
@@ -170,10 +170,10 @@ const CreateNewEquipment = () => {
                 bodyOfWaterId: selectedBodyOfWater?.value || '',
                 lastServiceDate: null,
                 nextServiceDate: null,
-                active: true,
+                isActive: true,
                 needsService: false,
                 status: 'Operational',
-                currentPressure: ''
+                currentPressure: null
             };
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
             navigate(`/company/equipment/detail/${equipmentId}`);
@@ -268,10 +268,10 @@ const CreateNewEquipment = () => {
                             <div className='flex gap-4'>
                                 <input type="number" value={serviceFrequencyEvery} onChange={e => setServiceFrequencyEvery(e.target.value)} className="w-1/3 p-2 border border-gray-300 rounded-lg" />
                                 <select value={serviceFrequency} onChange={e => setServiceFrequency(e.target.value)} className="w-2/3 p-2 border border-gray-300 rounded-lg bg-white">
-                                    <option>Days</option>
-                                    <option>Weeks</option>
-                                    <option>Months</option>
-                                    <option>Years</option>
+                                    <option value="Day">Days</option>
+                                    <option value="Week">Weeks</option>
+                                    <option value="Month">Months</option>
+                                    <option value="Year">Years</option>
                                 </select>
                             </div>
                         </div>

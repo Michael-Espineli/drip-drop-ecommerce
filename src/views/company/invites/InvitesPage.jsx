@@ -20,7 +20,8 @@ const InvitesPage = ({ status: initialStatus }) => {
         console.log("Status: ", status)
 
         const invitesRef = collection(db, 'invites');
-        const q = query(invitesRef, where('email', '==', user.email), where('status', '==', status));
+        const statusVariants = [status, status.charAt(0).toUpperCase() + status.slice(1)];
+        const q = query(invitesRef, where('email', '==', user.email), where('status', 'in', statusVariants));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const newInvites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -39,11 +40,15 @@ const InvitesPage = ({ status: initialStatus }) => {
     const handleInviteAction = async (inviteId, newStatus) => {
         const inviteRef = doc(db, 'invites', inviteId);
         try {
-            await updateDoc(inviteRef, { status: newStatus });
             if (newStatus === 'accepted') {
                 const acceptTechInvite = httpsCallable(functions, 'acceptTechInvite');
                 const result = await acceptTechInvite({ inviteId: inviteId, userId: user.uid });
-                console.log("result: ", result)
+                if (result.data?.status !== 200) {
+                    throw new Error(result.data?.error || 'Invite could not be accepted.');
+                }
+                console.log("result: ", result);
+            } else {
+                await updateDoc(inviteRef, { status: newStatus });
             }
         } catch (error) {
             console.error('Error updating invite status:', error);

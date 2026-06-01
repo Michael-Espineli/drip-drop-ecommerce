@@ -98,6 +98,7 @@ const CreateCustomerFromLead = () => {
         const customerId = 'com_cus_' + uuidv4();
         const serviceLocationId = 'com_sl_' + uuidv4();
         const bodyOfWaterId = 'com_bow_' + uuidv4();
+        const equipmentIds = [];
 
         const finalBillingAddress = useDifferentBillingAddress ? billingAddress : lead.serviceLocationAddress;
 
@@ -139,6 +140,7 @@ const CreateCustomerFromLead = () => {
                         for (const equip of equipmentData) {
                             if (equip.name) { // Only add if name is present
                                 const equipmentId = 'com_equip_' + uuidv4();
+                                equipmentIds.push(equipmentId);
                                 await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
                                     id: equipmentId, customerId, serviceLocationId, bodyOfWaterId, companyId: recentlySelectedCompany, ...equip
                                 });
@@ -150,7 +152,13 @@ const CreateCustomerFromLead = () => {
 
             // 5. Update Lead
             const fullName = formData.firstName + " " + formData.lastName
-            await updateDoc(doc(db, 'homeownerServiceRequests', leadId), { customerId, customerName: fullName });
+            await updateDoc(doc(db, 'homeownerServiceRequests', leadId), {
+                customerId,
+                customerName: fullName,
+                serviceLocationId: addServiceLocation ? serviceLocationId : '',
+                bodyOfWaterId: addServiceLocation && addBodyOfWater ? bodyOfWaterId : '',
+                equipmentIds,
+            });
             //6. Update lead to add customerId and customerName
 
             toast.success('Successfully converted lead to customer!', { id: toastId });

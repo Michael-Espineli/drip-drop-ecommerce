@@ -55,9 +55,10 @@ export const allNav = [
     { id: 80, title: 'Messages', icon: <MdEmail />, role: 'Company', path: '/company/messages', category: 'NA' },
 
     // Marketing
-    { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Marketing' },
+    { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Finance' },
     { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing' },
     { id: 66, title: 'Estimates', icon: <IoIosPricetags />, role: 'Company', path: '/company/estimates', category: 'Marketing' },
+    { id: 65, title: 'Vendors', icon: <FaStore />, role: 'Company', path: '/company/vendors', category: 'Marketing' },
     { id: 67, title: 'Recurring Contracts', icon: <AiOutlineFileText />, role: 'Company', path: '/company/recurring-contracts', category: 'Marketing' },
     { id: 68, title: 'Contracts', icon: <AiOutlineFileText />, role: 'Company', path: '/company/contracts', category: 'Marketing' },
     { id: 90, title: 'Public Page', icon: <FaStore />, role: 'Company', path: '/company/public-profile', category: 'Marketing' },
@@ -70,7 +71,7 @@ export const allNav = [
     { id: 32, title: 'Fleet', icon: <FaTruck />, role: 'Company', path: '/company/fleet', category: 'Operations' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations' },
     { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },
-    { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Operations' },
+    { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Finance' },
 
     // Routing
     { id: 50, title: 'Route Dashboard', icon: <FaRegMap />, role: 'Company', path: '/company/route-dashboard', category: 'Routing' },
@@ -82,14 +83,15 @@ export const allNav = [
     // Users
     { id: 111, title: 'User Dashboard', icon: <AiOutlineDashboard />, role: 'Company', path: '/company/user-dashboard', category: 'Users' },
     { id: 112, title: 'Company Users', icon: <AiOutlineTeam />, role: 'Company', path: '/company/companyUsers', category: 'Users' },
-    { id: 113, title: 'Associated Business', icon: <FaRegHandshake />, role: 'Company', path: '/company/associatedBusiness', category: 'Users' },
+    { id: 113, title: 'Businesses', icon: <FaRegHandshake />, role: 'Company', path: '/company/associatedBusiness', category: 'Users' },
     //Build out with Update 2.1
     // { id: 114, title: 'Recurring Labor Contracts', icon: <FaFileContract />, role: 'Company', path: '/company/recurringLaborContracts', category: 'Users' },
     // { id: 115, title: 'One Time Labor Contracts', icon: <FaRegFileAlt />, role: 'Company', path: '/company/laborContracts', category: 'Users' },
     { id: 116, title: 'Work Logs', icon: <AiOutlineException />, role: 'Company', path: '/company/workLogs', category: 'Users' },
+    { id: 117, title: 'Payroll', icon: <MdPayment />, role: 'Company', path: '/company/payroll', category: 'Finance' },
 
     // Settings
-    // { id: 102, title: 'Reports', icon: <BiSolidReport />, role: 'Company', path: '/company/reports', category: 'Settings' },
+    { id: 102, title: 'Reports', icon: <BiSolidReport />, role: 'Company', path: '/company/reports', category: 'Settings' },
     { id: 100, title: 'Settings', icon: <FaGear />, role: 'Company', path: '/company/Settings', category: 'Settings' },
 
     // --- Client Routes ---

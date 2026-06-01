@@ -336,15 +336,15 @@ const CompanyUserDashboard = () => {
               </div>
             </SectionCard>
 
-            {/* Associated Business */}
+            {/* Businesses */}
             <SectionCard
-              title="Associated Business"
+              title="Businesses"
               actions={
                 <Link
-                  to="/company/customers"
+                  to="/company/associatedBusiness"
                   className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
                 >
-                  Open Customers
+                  Open Businesses
                 </Link>
               }
             >
@@ -367,7 +367,7 @@ const CompanyUserDashboard = () => {
                     </div>
 
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                      Hook this section to whatever you consider “associated business” for a user:
+                      Hook this section to whatever you consider “businesses” for a user:
                       <ul className="mt-2 list-disc pl-5 space-y-1">
                         <li>Customers assigned to the user</li>
                         <li>Service locations managed by the user</li>

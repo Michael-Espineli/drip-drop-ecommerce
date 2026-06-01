@@ -1,10 +1,8 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { collection, query, where, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Link, useLocation } from 'react-router-dom';
-import { getFunctions, httpsCallable } from "firebase/functions";
-const functions = getFunctions();
 
 const CompanyInvitesPage = ({ status: initialStatus }) => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -20,7 +18,8 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
         console.log("Status: ", status)
 
         const invitesRef = collection(db, 'invites');
-        const q = query(invitesRef, where('companyId', '==', recentlySelectedCompany), where('status', '==', status));
+        const statusVariants = [status, status.charAt(0).toUpperCase() + status.slice(1)];
+        const q = query(invitesRef, where('companyId', '==', recentlySelectedCompany), where('status', 'in', statusVariants));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const newInvites = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -37,7 +36,6 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
     }, [recentlySelectedCompany, status]);
 
     const handleInviteAction = async (inviteId, newStatus) => {
-        const inviteRef = doc(db, 'invites', inviteId);
         try {
             //Update or Delete 
 

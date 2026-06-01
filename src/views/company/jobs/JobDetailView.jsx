@@ -25,6 +25,7 @@ import {
   estimatePlannedServiceStopPayRange,
   formatPayRate,
 } from "../../../utils/payroll/payEstimate";
+import { recordBodyOfWaterTaskHistory } from "../../../utils/bodyOfWaterHistory";
 
 /** 
  * JobDetailView
@@ -720,6 +721,24 @@ const JobDetailView = () => {
             : job.billingStatus,
       });
 
+      await Promise.all(
+        (taskList || []).map(async (task) => {
+          if (!task?.id) return;
+
+          await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", task.id),
+            { status: "Finished" }
+          );
+
+          await recordBodyOfWaterTaskHistory({
+            db,
+            companyId: recentlySelectedCompany,
+            task: { ...task, status: "Finished" },
+            jobId,
+          });
+        })
+      );
+
       setJob((prev) => ({
         ...prev,
         operationStatus: "Finished",
@@ -728,6 +747,7 @@ const JobDetailView = () => {
             ? "In Progress"
             : prev.billingStatus,
       }));
+      setTaskList((prev) => prev.map((task) => ({ ...task, status: "Finished" })));
 
       setSelectedOperationStatus({
         value: "Finished",
@@ -1045,7 +1065,7 @@ const JobDetailView = () => {
 
         const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
         const tasksSnap = await getDocs(tasksRef);
-        const tasks = tasksSnap.docs.map((d) => d.data());
+        const tasks = tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setTaskList(tasks);
 
         const itemsRef = query(
@@ -1552,7 +1572,7 @@ const JobDetailView = () => {
 
       const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
       const tasksSnap = await getDocs(tasksRef);
-      const tasks = tasksSnap.docs.map((d) => d.data());
+      const tasks = tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setTaskList(tasks);
 
       await loadJobWorkflowData({
@@ -1611,7 +1631,7 @@ const JobDetailView = () => {
 
       const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
       const tasksSnap = await getDocs(tasksRef);
-      const tasks = tasksSnap.docs.map((d) => d.data());
+      const tasks = tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setTaskList(tasks);
 
       await loadJobWorkflowData({

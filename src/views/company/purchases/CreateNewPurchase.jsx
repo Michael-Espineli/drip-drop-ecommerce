@@ -8,6 +8,7 @@ import 'react-datepicker/dist/react-datepicker.css';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
+import { fetchCompanyVendors } from '../../../utils/vendors';
 
 const CreateNewPurchase = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -163,24 +164,8 @@ const CreateNewPurchase = () => {
                     setGenericItemList(prev => [...prev, genericItem]);
                 });
 
-                let qv = query(collection(db, 'companies', recentlySelectedCompany, 'settings', 'vendors', 'vendor'));
-                const querySnapshotv = await getDocs(qv);
-                setVenderList([]);
-                querySnapshotv.forEach((docSnap) => {
-                    const venderData = docSnap.data();
-                    const venderObj = {
-                        id: venderData.id,
-                        name: venderData.name,
-                        email: venderData.email,
-                        phoneNumber: venderData.phoneNumber,
-                        streetAddress: venderData.address?.streetAddress,
-                        city: venderData.address?.city,
-                        state: venderData.address?.state,
-                        zip: venderData.address?.zip,
-                        label: venderData.name
-                    };
-                    setVenderList(prev => [...prev, venderObj]);
-                });
+                const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
+                setVenderList(vendors);
             } catch (error) {
                 console.log('Error');
                 console.log(error);
@@ -237,6 +222,7 @@ const CreateNewPurchase = () => {
                 description: selectedGenericItem.description,
                 totalCost: totalCost.toFixed(2),
                 category: selectedGenericItem.category,
+                billingRate: selectedGenericItem.billingRate || 0,
             };
 
             setPurchaseItemList(prev => [...prev, newItem]);
@@ -265,7 +251,7 @@ const CreateNewPurchase = () => {
 
                 cost = cost + parseFloat(item.totalCost);
                 let price = Math.floor(parseFloat(item.rate * 100));
-                let priceBillable = Math.floor(parseFloat(item.billable * 100));
+                let priceBillable = Math.floor(parseFloat(item.billingRate || 0));
 
                 purchaseItemIds.push(item.id);
                 let purchaseItem = {
@@ -335,7 +321,7 @@ const CreateNewPurchase = () => {
 
                 cost = cost + parseFloat(item.totalCost);
                 let price = Math.floor(parseFloat(item.rate * 100));
-                let priceBillable = Math.floor(parseFloat(item.billable * 100));
+                let priceBillable = Math.floor(parseFloat(item.billingRate || 0));
 
                 purchaseItemIds.push(item.id);
                 let purchaseItem = {
@@ -548,7 +534,7 @@ const CreateNewPurchase = () => {
                     <div>
 
                         <Link
-                            to="/company/purchasedItems"
+                            to="/company/purchased-items"
                             className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                         >
                             &larr; Back to Purchased Items

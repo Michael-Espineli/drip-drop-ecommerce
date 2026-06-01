@@ -61,6 +61,12 @@ const CompanySettings = () => {
                 description: 'Manage templates for recurring job tasks.'
             },
             {
+                to: '/company/settings/job-templates',
+                icon: <DocumentTextIcon className="w-6 h-6" />,
+                title: 'Job Templates',
+                description: 'Review reusable job templates shared with iOS.'
+            },
+            {
                 to: '/Company/EmailConfiguration',
                 icon: <EnvelopeIcon className="w-6 h-6" />,
                 title: 'Email Configuration',

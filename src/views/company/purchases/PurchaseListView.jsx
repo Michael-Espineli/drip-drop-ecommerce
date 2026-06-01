@@ -1,60 +1,82 @@
-import React, { useState, useEffect, useContext, useRef } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
 import { collection, query, where, orderBy, getDocs, limit, startAfter } from 'firebase/firestore';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { Link, useNavigate } from 'react-router-dom';
 import { PurchasedItem } from '../../../utils/models/PurchasedItem';
-import PurchasesCardView from './PurchasesCardView';
-import { CompanyUser } from '../../../utils/models/CompanyUser';
-import { format, isBefore, isEqual, startOfToday } from "date-fns";
+import { format } from "date-fns";
 import * as XLSX from "xlsx";
-const PurchaseListView = () => {
-  // This component is a conversion of a SwiftUI View.
 
+const purchaseFilters = [
+  { value: "all", label: "All" },
+  { value: "billable", label: "Billable" },
+  { value: "nonBillable", label: "Non Billable" },
+  { value: "billableAndNotInvoiced", label: "Billable And Not Invoiced" },
+  { value: "billableAndInvoiced", label: "Billable And Invoiced" },
+];
+
+const purchaseSorts = [
+  { value: "purchaseDateFirst", label: "Recent" },
+  { value: "purchaseDateLast", label: "Oldest" },
+  { value: "priceHigh", label: "Price High" },
+  { value: "priceLow", label: "Price Low" },
+];
+
+const startOfDay = (date) => {
+  const nextDate = new Date(date);
+  nextDate.setHours(0, 0, 0, 0);
+  return nextDate;
+};
+
+const endOfDay = (date) => {
+  const nextDate = new Date(date);
+  nextDate.setHours(23, 59, 59, 999);
+  return nextDate;
+};
+
+const moneyFromCents = (value) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+  }).format(Number(value || 0) / 100);
+
+const purchaseSearchText = (item) =>
+  [
+    item.id,
+    item.customerName,
+    item.sku,
+    item.name,
+    item.invoiceNum,
+    item.techName,
+    item.venderName,
+    item.jobId,
+    item.receiptId,
+    item.notes,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+const PurchaseListView = () => {
   const navigate = useNavigate();
 
-  // SwiftUI State variables will be managed using React's useState hook.
-  const [showEditView, setShowEditView] = useState(false);
-  const [showDetailsView, setShowDetailsView] = useState(false);
-  const [selected, setSelected] = useState(null); // Equivalent to PurchasedItem.ID?
   const [purchasedItems, setPurchasedItems] = useState([]);
-  // Note: sortOrder [KeyPathComparator(\PurchasedItem.invoiceNum, order: .reverse)] needs a React equivalent,
-  const [selectedFilters, setSelectedFilters] = useState(['isBillable', 'isNotInvoiced']);
   const [showFilterModal, setShowFilterModal] = useState(false);
-  // possibly managing the sort order logic within the component or a hook.
-  const [sortOrder, setSortOrder] = useState([{ key: 'invoiceNum', order: 'desc' }]);
-  const [serviceStopDetail, setServiceStopDetail] = useState(null); // Equivalent to PurchasedItem?
-  // Note: workOrderTemplate:JobTemplate needs a React equivalent for JobTemplate
-  const [workOrderTemplate, setWorkOrderTemplate] = useState({ id: '', name: 'sum', type: 'all' });
-  // Initialize dates to the beginning and end of the current month
-  const now = new Date();
-  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const [startViewingDate, setStartViewingDate] = useState(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)); // 30 days ago
-  const [endViewingDate, setEndViewingDate] = useState(new Date(Date.now() + 1 * 24 * 60 * 60 * 1000)); // 1 day from now
-  const [selection, setSelection] = useState(null); // Equivalent to PurchasedItem.ID?
-  const [purchaseFilterOption, setPurchaseFilterOption] = useState('billableAndNotInvoiced'); // Placeholder enum
-  const [purchaseSortOption, setPurchaseSortOption] = useState('purchaseDateFirst'); // Placeholder enum
+  const [startViewingDate, setStartViewingDate] = useState(() => startOfDay(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)));
+  const [endViewingDate, setEndViewingDate] = useState(() => endOfDay(new Date()));
+  const [purchaseFilterOption, setPurchaseFilterOption] = useState('billableAndNotInvoiced');
+  const [purchaseSortOption, setPurchaseSortOption] = useState('purchaseDateFirst');
   const [techIds, setTechIds] = useState([]);
-  const [showSummary, setShowSummary] = useState(false);
-
   const [companyUsers, setCompanyUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filteredItems, setFilteredItems] = useState([]);
   const [error, setError] = useState(null);
-  // State for pagination
-  const [currentPage, setCurrentPage] = useState(1);
   const [lastDocument, setLastDocument] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const fileInputRef = useRef(null);
 
-  // Get companyId from context (assuming Context is correctly imported and provided)
-  // Get companyId from context (assuming Context is correctly imported and provided)
-  const { recentlySelectedCompany } = useContext(Context); // Make sure Context is imported
-
-  // Define Data Models (JavaScript equivalents)
-  // Moved to src/utils/models/CompanyUser.js
+  const { recentlySelectedCompany } = useContext(Context);
 
   // Effect to fetch company users
   useEffect(() => {
@@ -82,77 +104,89 @@ const PurchaseListView = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentlySelectedCompany]);
 
-  // Effect to filter purchased items based on search term
   useEffect(() => {
-    if (searchTerm === '') {
+    const lowerCaseSearchTerm = searchTerm.trim().toLowerCase();
+
+    if (!lowerCaseSearchTerm) {
       setFilteredItems(purchasedItems);
     } else {
-      const lowerCaseSearchTerm = searchTerm.toLowerCase();
-      setFilteredItems(purchasedItems.filter(item => item.name.toLowerCase().includes(lowerCaseSearchTerm) || (item.invoiceNum && item.invoiceNum.toLowerCase().includes(lowerCaseSearchTerm))));
+      setFilteredItems(
+        purchasedItems.filter((item) =>
+          purchaseSearchText(item).includes(lowerCaseSearchTerm)
+        )
+      );
     }
-  }, [purchasedItems, searchTerm]); // Re-filter when purchasedItems or searchTerm changes
+  }, [purchasedItems, searchTerm]);
+
+  const buildPurchaseQuery = (itemsRef, afterDoc = null) => {
+    const constraints = [
+      where("date", ">=", startOfDay(startViewingDate)),
+      where("date", "<=", endOfDay(endViewingDate)),
+    ];
+
+    const eligibleTechIds = techIds.filter(Boolean).slice(0, 30);
+    if (eligibleTechIds.length > 0) {
+      constraints.push(where("techId", "in", eligibleTechIds));
+    }
+
+    switch (purchaseFilterOption) {
+      case "billable":
+        constraints.push(where("billable", "==", true));
+        break;
+      case "nonBillable":
+        constraints.push(where("billable", "==", false));
+        break;
+      case "billableAndNotInvoiced":
+        constraints.push(where("billable", "==", true), where("invoiced", "==", false));
+        break;
+      case "billableAndInvoiced":
+        constraints.push(where("billable", "==", true), where("invoiced", "==", true));
+        break;
+      default:
+        break;
+    }
+
+    if (purchaseSortOption === "purchaseDateLast") {
+      constraints.push(orderBy("date", "asc"));
+    } else if (purchaseSortOption === "priceHigh") {
+      constraints.push(orderBy("date", "desc"), orderBy("price", "desc"));
+    } else if (purchaseSortOption === "priceLow") {
+      constraints.push(orderBy("date", "desc"), orderBy("price", "asc"));
+    } else {
+      constraints.push(orderBy("date", "desc"));
+    }
+
+    if (afterDoc) {
+      constraints.push(startAfter(afterDoc));
+    }
+
+    constraints.push(limit(25));
+    return query(itemsRef, ...constraints);
+  };
 
   // Effect to fetch purchased items based on filters, dates, and selected company/techs
   useEffect(() => {
     const fetchPurchasedItems = async () => {
-      if (!recentlySelectedCompany || techIds.length === 0 || !startViewingDate || !endViewingDate) {
-        setPurchasedItems([]); // Clear items if dependencies are not met
+      if (!recentlySelectedCompany || !startViewingDate || !endViewingDate) {
+        setPurchasedItems([]);
         return;
       }
       setLoading(true);
       setError(null);
       try {
         const itemsRef = collection(db, `companies/${recentlySelectedCompany}/purchasedItems`);
-        // Construct query based on Swift code logic
-        console.log("startViewingDate: ", startViewingDate)
-        console.log("endViewingDate: ", endViewingDate)
-        console.log("techIds: ", techIds)
-
-        let q = query(
-          itemsRef,
-          where("date", ">=", startViewingDate), // Using Date objects directly
-          // Add filters based on selectedFilters
-          // ...selectedFilter
-          //   switch (filter) {
-          //     case 'isInvoiced':
-          //       console.log("isInv oiced: ")
-          //       return where("invoiced", "==", true);
-          //     case 'isNotInvoiced':
-          //       console.log("isNotInvoiced: ")
-          //       return where("invoiced", "==", false);
-          //     case 'isBillable':
-          //       console.log("isBillable: ")
-          //       return where("billable", "==", true);
-          //     case 'isNotBillable':
-          //       console.log("isNotBillable: ")
-          //       return where("billable", "==", false);
-          //     default:
-          //       console.log("null: ")
-          //       return null; // Should not happen with current options
-          //   }
-          // }).filter(filter => filter !== null), // Filter out any null returnss.map(filter => {
-
-          where("date", "<=", endViewingDate), // Using Date objects directly
-          where("techId", "in", techIds),
-          // Ordering by price, descending (priceHigh = true) - need to manage this state
-          orderBy("date", "desc"),
-          // Limit to 25 items for pagination
-          limit(25)
-        );
-
-        const querySnapshot = await getDocs(q);
+        const querySnapshot = await getDocs(buildPurchaseQuery(itemsRef));
         const itemsData = querySnapshot.docs.map(doc => PurchasedItem.fromFirestore(doc));
 
-        // Set the last document for pagination
         if (querySnapshot.docs.length > 0) {
           setLastDocument(querySnapshot.docs[querySnapshot.docs.length - 1]);
+        } else {
+          setLastDocument(null);
         }
-        setHasMore(querySnapshot.docs.length === 25); // Check if there might be more items
+        setHasMore(querySnapshot.docs.length === 25);
         setPurchasedItems(itemsData);
       } catch (err) {
         console.error("Error fetching purchased items:", err);
-        console.error("");
-        console.error("Error fetching purchased items");
         setError("Failed to load purchased items.");
       } finally {
         setLoading(false);
@@ -161,34 +195,24 @@ const PurchaseListView = () => {
 
     fetchPurchasedItems();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recentlySelectedCompany, techIds, startViewingDate, endViewingDate, selectedFilters]);
+  }, [recentlySelectedCompany, techIds, startViewingDate, endViewingDate, purchaseFilterOption, purchaseSortOption]);
 
   // Function to fetch more purchased items (pagination)
   const fetchMorePurchasedItems = async () => {
-    if (!recentlySelectedCompany || techIds.length === 0 || !startViewingDate || !endViewingDate || !lastDocument) {
+    if (!recentlySelectedCompany || !startViewingDate || !endViewingDate || !lastDocument) {
       return;
     }
     setLoading(true);
     setError(null);
     try {
-      const itemsRef = collection(db, `companies/${recentlySelectedCompany}/purchased-items`);
-      let q = query(
-        itemsRef,
-        where("date", ">=", startViewingDate),
-        where("date", "<=", endViewingDate),
-        where("techId", "in", techIds),
-        orderBy("price", "desc"),
-        limit(25)
-      );
-
-      const querySnapshot = await getDocs(q);
+      const itemsRef = collection(db, `companies/${recentlySelectedCompany}/purchasedItems`);
+      const querySnapshot = await getDocs(buildPurchaseQuery(itemsRef, lastDocument));
       const newItemsData = querySnapshot.docs.map(doc => PurchasedItem.fromFirestore(doc));
 
-      // Append new items to the existing list
       setPurchasedItems(prevItems => [...prevItems, ...newItemsData]);
 
       setLastDocument(querySnapshot.docs.length > 0 ? querySnapshot.docs[querySnapshot.docs.length - 1] : null);
-      setHasMore(querySnapshot.docs.length === 25); // Check if there might be more items
+      setHasMore(querySnapshot.docs.length === 25);
     } catch (err) {
       console.error("Error fetching more purchased items:", err);
       setError("Failed to load more purchased items.");
@@ -241,44 +265,11 @@ const PurchaseListView = () => {
       alert("Excel export failed. Check console for details.");
     }
   };
-  // SwiftUI EnvironmentObjects (like navigationManager, masterDataManager, dataService)
-  // will need to be handled using React Context, Redux, or prop drilling,
-  // depending on your project's state management strategy.
-
-  // SwiftUI ViewModels (purchaseVM, receiptViewModel, settingsViewModel, techVM)
-  // will be integrated here, likely by calling functions that perform the data
-  // operations using your JavaScript data service.
-
-  // SwiftUI .task and .onChange modifiers will be translated into React's useEffect hook
-  // to handle side effects and respond to state changes.
-
-  // The main body of the SwiftUI view (the ZStack containing list and icons)
-  // will be translated into JSX elements.
-
-  // SwiftUI's ScrollView, ForEach, NavigationLink, and Button will be converted
-  // to equivalent React elements or components.
-
-  // Modifiers like TextFieldModifier, PlusIconModifer, etc., will be
-  // implemented using CSS classes, styled components, or inline styles.
-
-  // Placeholder functions for SwiftUI methods that cannot be directly translated
-
-  // SwiftUI State variables for icon interactions
-  const [showFilerOptions, setShowFilerOptions] = useState(false);
-  const [showAddNew, setShowAddNew] = useState(false);
-  const [showSearch, setShowSearch] = useState(false);
-  // or require custom implementation will be created here.
-
-  // Example placeholder function:
-  // const handleReload = () => { ... };
-
-  // Function to format date as MM/DD/YY
   const shortDate = (date) => {
     if (!date) return '';
-    // Check if date is a Firebase Timestamp
     let jsDate = date;
-    if (date.toDate) { // Check if it's a Firestore Timestamp
-      jsDate = date.toDate(); // Convert to JavaScript Date object
+    if (date.toDate) {
+      jsDate = date.toDate();
     }
     const month = (jsDate.getMonth() + 1).toString().padStart(2, '0');
     const day = jsDate.getDate().toString().padStart(2, '0');
@@ -286,11 +277,35 @@ const PurchaseListView = () => {
     return `${month}/${day}/${year}`;
   };
 
+  const summary = useMemo(() => {
+    const activeItems = filteredItems.filter((item) => !item.returned);
+    const billableItems = activeItems.filter((item) => item.billable);
+    const invoicedItems = billableItems.filter((item) => item.invoiced);
+    const needsInvoiceItems = billableItems.filter((item) => !item.invoiced);
+    const nonBillableItems = activeItems.filter((item) => !item.billable);
+    const totalSpentCents = activeItems.reduce((total, item) => total + Number(item.totalAfterTax || 0), 0);
+    const billableCostCents = billableItems.reduce((total, item) => total + Number(item.totalAfterTax || 0), 0);
+    const billablePriceCents = billableItems.reduce((total, item) => {
+      const billingRate = Number(item.billingRate || 0);
+      return total + (billingRate > 0 ? billingRate * Number(item.quantity || 0) : Number(item.totalAfterTax || 0));
+    }, 0);
+
+    return {
+      activeCount: activeItems.length,
+      totalSpentCents,
+      billableCount: billableItems.length,
+      nonBillableCount: nonBillableItems.length,
+      invoicedCount: invoicedItems.length,
+      needsInvoiceCount: needsInvoiceItems.length,
+      billableCostCents,
+      billablePriceCents,
+    };
+  }, [filteredItems]);
+
   const handleFileChange = (event) => {
     const file = event.target.files[0];
     if (file) {
       console.log('Selected file:', file);
-      // Here you would trigger the PDF processing logic
     }
   };
 
@@ -298,136 +313,99 @@ const PurchaseListView = () => {
     fileInputRef.current.click();
   };
 
-  const handleApplyFilters = (newOperationFilters, newBillingFilters) => {
-    fetchMorePurchasedItems()
-    setShowFilterModal(false);
+  const toggleTech = (userId) => {
+    setTechIds((currentTechIds) =>
+      currentTechIds.includes(userId)
+        ? currentTechIds.filter((id) => id !== userId)
+        : [...currentTechIds, userId]
+    );
   };
-  const FilterModal = ({ onClose, applyFilters }) => {
-    // const [tempOperationFilters, setTempOperationFilters] = useState(operationStatusFilter);
-    // const [tempBillingFilters, setTempBillingFilters] = useState(billingStatusFilter);
 
-    const handleOperationChange = (status) => {
-      // setTempOperationFilters(prev =>
-      //   prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
-      // );
-    };
+  const FilterModal = () => (
+    <div className="fixed inset-0 z-50 bg-gray-900/40 p-4">
+      <div className="mx-auto mt-16 max-w-2xl rounded-lg border border-gray-200 bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Filter & Sort</h3>
+            <p className="text-sm text-gray-500">Match the iOS purchase filters and date controls.</p>
+          </div>
+          <button className="rounded-md px-3 py-1 text-sm font-semibold text-gray-600 hover:bg-gray-100" onClick={() => setShowFilterModal(false)}>
+            Close
+          </button>
+        </div>
 
-    const handleBillingChange = (status) => {
-      // setTempBillingFilters(prev =>
-      //   prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
-      // );
-    };
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-semibold text-gray-700">
+            Start Date
+            <input
+              type="date"
+              value={format(startViewingDate, "yyyy-MM-dd")}
+              onChange={(event) => setStartViewingDate(startOfDay(new Date(`${event.target.value}T00:00:00`)))}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            End Date
+            <input
+              type="date"
+              value={format(endViewingDate, "yyyy-MM-dd")}
+              onChange={(event) => setEndViewingDate(endOfDay(new Date(`${event.target.value}T00:00:00`)))}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            Filter
+            <select
+              value={purchaseFilterOption}
+              onChange={(event) => setPurchaseFilterOption(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            >
+              {purchaseFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>{filter.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            Sort
+            <select
+              value={purchaseSortOption}
+              onChange={(event) => setPurchaseSortOption(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            >
+              {purchaseSorts.map((sort) => (
+                <option key={sort.value} value={sort.value}>{sort.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
-    return (
-      <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full" id="my-modal">
-        <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-          <div className="mt-3 text-center">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Filter Options</h3>
-            <p className="text-sm text-gray-500">Select your filter preferences.</p>
-
-            <div className="mt-2 px-7 py-3">
-              {/* Date Pickers */}
-              <div className="date-pickers-container flex space-x-4 mt-2"> {/* Equivalent to HStack */}
-
-                <div className="flex flex-col">
-                  <label htmlFor="startDate">Start Date:</label> {/* Equivalent to Text("Start Date:") */}
-                  <input
-                    type="date"
-                    id="startDate"
-                    value={startViewingDate.toISOString().split('T')[0]}
-                    onChange={(e) => setStartViewingDate(new Date(e.target.value))}
-                    className="border p-1 rounded"
-                  />
-                </div>
-
-                <div className="flex flex-col"> {/* Equivalent to VStack */}
-                  <label htmlFor="endDate">End Date:</label>
-                  <input
-                    type="date"
-                    id="endDate"
-                    value={endViewingDate.toISOString().split('T')[0]}
-                    onChange={(e) => setEndViewingDate(new Date(e.target.value))}
-                    className="border p-1 rounded"
-                  />
-                </div>
-              </div>
-              <div className="flex flex-col items-start space-y-2">
-                {/* Filter options */}
-                <label className="inline-flex items-center">
-                  <input
-                    type="checkbox"
-                    className="form-checkbox"
-                    value="isInvoiced"
-                    checked={selectedFilters.includes('isInvoiced')}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedFilters([...selectedFilters, 'isInvoiced']);
-                      } else {
-                        setSelectedFilters(selectedFilters.filter(filter => filter !== 'isInvoiced'));
-                      }
-                    }}
-                  />
-                  <span className="ml-2 text-gray-700">Is Invoiced</span>
-                </label>
-                <label className="inline-flex items-center">
-                  <input
-                    type="checkbox"
-                    className="form-checkbox"
-                    value="isNotInvoiced"
-                    checked={selectedFilters.includes('isNotInvoiced')}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedFilters([...selectedFilters, 'isNotInvoiced']);
-                      } else {
-                        setSelectedFilters(selectedFilters.filter(filter => filter !== 'isNotInvoiced'));
-                      }
-                    }}
-
-                  />
-                  <span className="ml-2 text-gray-700">Is Not Invoiced</span>
-                </label>
-                <label className="inline-flex items-center">
-                  <input
-                    type="checkbox"
-                    className="form-checkbox"
-                    value="isBillable"
-                    checked={selectedFilters.includes('isBillable')}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedFilters([...selectedFilters, 'isBillable']);
-                      } else {
-                        setSelectedFilters(selectedFilters.filter(filter => filter !== 'isBillable'));
-                      }
-                    }}
-                  />
-                  <span className="ml-2 text-gray-700">Is Billable</span>
-                </label>
-                <label className="inline-flex items-center">
-                  <input
-                    type="checkbox"
-                    className="form-checkbox"
-                    value="isNotBillable"
-                    checked={selectedFilters.includes('isNotBillable')}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedFilters([...selectedFilters, 'isNotBillable']);
-                      } else {
-                        setSelectedFilters(selectedFilters.filter(filter => filter !== 'isNotBillable'));
-                      }
-                    }}
-                  />
-                  <span className="ml-2 text-gray-700">Is Not Billable</span>
-                </label>
-              </div>
-            </div>
-            <div className="items-center px-4 py-3">
-              <button id="close-modal" className="px-4 py-2 bg-gray-800 text-white text-base font-medium rounded-md w-full shadow-sm hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-gray-300" onClick={() => setShowFilterModal(false)}>Close</button>
-            </div>
+        <div className="mt-5">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold text-gray-700">Technicians</h4>
+            <button
+              type="button"
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+              onClick={() => setTechIds(companyUsers.map((user) => user.userId).filter(Boolean))}
+            >
+              Select all
+            </button>
+          </div>
+          <div className="mt-2 grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
+            {companyUsers.map((user) => (
+              <label key={user.id} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={techIds.includes(user.userId)}
+                  onChange={() => toggleTech(user.userId)}
+                />
+                {user.userName || user.name || user.email || user.userId}
+              </label>
+            ))}
           </div>
         </div>
       </div>
-    );
-  };
+    </div>
+  );
 
   return (
     <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
@@ -447,7 +425,7 @@ const PurchaseListView = () => {
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full sm:w-2/5 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
               type="text"
-              placeholder="Search by customer, ID, or description..."
+              placeholder="Search customer, SKU, invoice, tech, vendor, job, or receipt..."
             />
             <button onClick={handleUploadClick}
               className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
@@ -465,6 +443,28 @@ const PurchaseListView = () => {
             >
               Filter & Sort
             </button>
+          </div>
+          <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Total Spent</p>
+              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.totalSpentCents)}</p>
+              <p className="text-sm text-gray-500">{summary.activeCount} active item(s)</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Billable Cost</p>
+              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.billableCostCents)}</p>
+              <p className="text-sm text-gray-500">{summary.billableCount} billable item(s)</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Billable Price</p>
+              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.billablePriceCents)}</p>
+              <p className="text-sm text-gray-500">Uses billing rate when set</p>
+            </div>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Invoice Status</p>
+              <p className="mt-1 text-xl font-bold text-gray-900">{summary.needsInvoiceCount}</p>
+              <p className="text-sm text-gray-500">{summary.invoicedCount} invoiced, {summary.nonBillableCount} non-billable</p>
+            </div>
           </div>
           <div className="purchase-list-section mt-4">
             {loading && <p>Loading...</p>}
@@ -498,7 +498,7 @@ const PurchaseListView = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.invoiceNum || 'N/A'}
-                        </td>{/* Handle cases where invoiceNum might be null/undefined */}
+                        </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {shortDate(item.date)}
                         </td>
@@ -523,7 +523,7 @@ const PurchaseListView = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {
-                            (item.jobId != "") && <h1>Job</h1>
+                            item.jobId ? <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700">Job</span> : null
                           }
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
@@ -533,11 +533,11 @@ const PurchaseListView = () => {
                           {
                             item.billable && <>
                               {
-                                item.invoiced ? <h1 className="rounded-md green-bg px-2 items-center white-fg">
+                                item.invoiced ? <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800">
                                   Invoiced
-                                </h1> : <h1 className="rounded-md red-bg px-2 items-center white-fg">
+                                </span> : <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800">
                                   Needs invoice
-                                </h1>
+                                </span>
                               }
                             </>
                           }
@@ -547,11 +547,16 @@ const PurchaseListView = () => {
                   </tbody>
                 </table>
               )}
+              {!loading && !error && filteredItems.length === 0 ? (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center text-gray-500">
+                  No purchases match the current filters.
+                </div>
+              ) : null}
             </div>
           </div>
         </div>
       </div>
-      <div className="mt-6 flex justify-end p-2">
+      <div className="mt-6 flex flex-wrap justify-end gap-2 p-2">
         <Link to={'/company/items'}
           className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
         >
@@ -564,8 +569,17 @@ const PurchaseListView = () => {
         >
           Download Excel
         </button>
+        {hasMore ? (
+          <button
+            type="button"
+            onClick={fetchMorePurchasedItems}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl shadow-sm hover:bg-slate-50 transition"
+          >
+            Load More
+          </button>
+        ) : null}
       </div>
-      {showFilterModal && <FilterModal onClose={() => setShowFilterModal(false)} applyFilters={handleApplyFilters} />}
+      {showFilterModal && <FilterModal />}
     </div>
   );
 };

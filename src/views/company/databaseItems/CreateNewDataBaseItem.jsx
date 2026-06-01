@@ -1,9 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import { Link } from "react-router-dom";
 import {
-  query,
-  collection,
-  getDocs,
   doc,
   setDoc,
 } from "firebase/firestore";
@@ -12,6 +9,7 @@ import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
+import { fetchCompanyVendors } from "../../../utils/vendors";
 
 const CreateNewDataBaseItem = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
@@ -98,31 +96,19 @@ const CreateNewDataBaseItem = () => {
 
   useEffect(() => {
     (async () => {
-      try {
-        //Venders
-        let qv = query(collection(db, "companies", recentlySelectedCompany, "settings", "venders", "vender"));
-        const querySnapshotv = await getDocs(qv);
+      if (!recentlySelectedCompany) {
         setVenderList([]);
-        querySnapshotv.forEach((doc) => {
-          const venderData = doc.data();
-          const vender = {
-            id: venderData.id,
-            name: venderData.name,
-            email: venderData.email,
-            phoneNumber: venderData.phoneNumber,
-            streetAddress: venderData.address.streetAddress,
-            city: venderData.address.city,
-            state: venderData.address.state,
-            zip: venderData.address.zip,
-            label: venderData.name,
-          };
-          setVenderList((venderList) => [...venderList, vender]);
-        });
+        return;
+      }
+
+      try {
+        const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
+        setVenderList(vendors);
       } catch (error) {
-        console.log("Error");
+        console.log("Error loading vendors", error);
       }
     })();
-  }, []);
+  }, [recentlySelectedCompany]);
 
   async function editItem(e) {
     e.preventDefault();
