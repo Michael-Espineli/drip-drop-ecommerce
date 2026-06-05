@@ -1,9 +1,12 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, getDocs, updateDoc } from 'firebase/firestore';
+import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, updateDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { getTermDescription } from '../../../utils/models/TermsTemplate';
+import { getTerms, getTermsTemplates } from '../../../utils/terms/termsTemplateFirestore';
 
 const TermsTemplateModal = ({ isOpen, onClose, onSelectTemplate }) => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -14,13 +17,9 @@ const TermsTemplateModal = ({ isOpen, onClose, onSelectTemplate }) => {
     useEffect(() => {
         if (isOpen && recentlySelectedCompany) {
             setLoading(true);
-            const templatesRef = collection(db, 'companies', recentlySelectedCompany, 'settings', 'termsTemplates', 'termsTemplates');
-            getDocs(templatesRef)
-                .then(snapshot => {
-                    const templatesData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setTemplates(templatesData);
-                })
-                .catch(err => toast.error('Failed to load templates.'))
+            getTermsTemplates(recentlySelectedCompany)
+                .then(setTemplates)
+                .catch(() => toast.error('Failed to load templates.'))
                 .finally(() => setLoading(false));
         }
     }, [isOpen, recentlySelectedCompany, db]);
@@ -55,6 +54,7 @@ export default function CreateEstimate() {
     const { leadId } = useParams();
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
     const [lead, setLead] = useState(null);
@@ -138,16 +138,17 @@ export default function CreateEstimate() {
     const removeTerm = index => setFormData(prev => ({ ...prev, terms: formData.terms.filter((_, i) => i !== index) }));
 
     const onSelectTemplate = async (template) => {
-        const clausesRef = collection(db, 'companies', recentlySelectedCompany, 'settings', 'termsTemplates', 'termsTemplates', template.id, 'clauses');
-        const clausesSnap = await getDocs(clausesRef);
-        const clauses = clausesSnap.docs.map(doc => ({ description: doc.data().text }));
-        const newTerms = [{ description: template.content }, ...clauses].filter(t => t.description && t.description.trim() !== '');
+        const templateTerms = await getTerms(recentlySelectedCompany, template.id);
+        const terms = templateTerms.map(term => ({ description: getTermDescription(term) }));
+        const newTerms = [{ description: template.content }, ...terms].filter(t => t.description && t.description.trim() !== '');
         setFormData(prev => ({ ...prev, terms: newTerms.length > 0 ? newTerms : [{ description: '' }] }));
         setIsModalOpen(false);
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!requirePermission("622", "respond to estimates")) return;
+
         if (isSubmitting || !lead) return;
         setIsSubmitting(true);
         const toastId = toast.loading('Creating estimate...');

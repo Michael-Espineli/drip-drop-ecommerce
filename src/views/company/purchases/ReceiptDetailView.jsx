@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef } from "react";
+import React, { useState, useEffect, useContext, useMemo, useRef } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import {
     query,
@@ -35,6 +35,8 @@ const ReceiptDetailView = () => {
         costAfterTax: "",
         costRaw: 0,
         costAfterTaxRaw: 0,
+        tax: "",
+        taxRaw: 0,
         date: "",
         dateRaw: null,
         invoiceNum: "",
@@ -82,6 +84,8 @@ const ReceiptDetailView = () => {
                     costAfterTax: formatCurrency((data.costAfterTax || 0) / 100),
                     costRaw: data.cost || 0,
                     costAfterTaxRaw: data.costAfterTax || 0,
+                    tax: formatCurrency((data.tax || Math.max((data.costAfterTax || 0) - (data.cost || 0), 0)) / 100),
+                    taxRaw: data.tax || Math.max((data.costAfterTax || 0) - (data.cost || 0), 0),
                     date: formattedDate,
                     dateRaw,
                     invoiceNum: data.invoiceNum || "",
@@ -155,6 +159,21 @@ const ReceiptDetailView = () => {
         }).format(number || 0);
     }
 
+    const itemSummary = useMemo(() => {
+        const subtotal = purchaseList.reduce((total, item) => total + Number(item.total || 0), 0);
+        const storedSubtotal = Number(receipt.costRaw || 0) / 100;
+        const storedTax = Number(receipt.taxRaw || Math.max((receipt.costAfterTaxRaw || 0) - (receipt.costRaw || 0), 0)) / 100;
+        const storedTotal = Number(receipt.costAfterTaxRaw || 0) / 100;
+
+        return {
+            subtotal,
+            storedSubtotal,
+            storedTax,
+            storedTotal,
+            subtotalDifference: storedSubtotal - subtotal,
+        };
+    }, [purchaseList, receipt.costAfterTaxRaw, receipt.costRaw, receipt.taxRaw]);
+
     const handleEditFieldChange = (field, value) => {
         setEditForm((prev) => ({
             ...prev,
@@ -194,6 +213,8 @@ const ReceiptDetailView = () => {
 
             const docRef = doc(db, "companies", recentlySelectedCompany, "receipts", receiptId);
             const parsedDate = editForm.date ? new Date(`${editForm.date}T00:00:00`) : null;
+            const costCents = Math.round((parseFloat(editForm.cost || 0) || 0) * 100);
+            const costAfterTaxCents = Math.round((parseFloat(editForm.costAfterTax || 0) || 0) * 100);
 
             const updatePayload = {
                 invoiceNum: editForm.invoiceNum || "",
@@ -202,8 +223,9 @@ const ReceiptDetailView = () => {
                 storeName: editForm.storeName || "",
                 techName: editForm.techName || "",
                 tech: editForm.techName || "",
-                cost: Math.round((parseFloat(editForm.cost || 0) || 0) * 100),
-                costAfterTax: Math.round((parseFloat(editForm.costAfterTax || 0) || 0) * 100),
+                cost: costCents,
+                costAfterTax: costAfterTaxCents,
+                tax: Math.max(costAfterTaxCents - costCents, 0),
             };
 
             const linkedPurchasesQuery = query(
@@ -231,8 +253,10 @@ const ReceiptDetailView = () => {
                 ...updatePayload,
                 costRaw: updatePayload.cost,
                 costAfterTaxRaw: updatePayload.costAfterTax,
+                taxRaw: updatePayload.tax,
                 cost: formatCurrency(updatePayload.cost / 100),
                 costAfterTax: formatCurrency(updatePayload.costAfterTax / 100),
+                tax: formatCurrency(updatePayload.tax / 100),
                 dateRaw: parsedDate || prev.dateRaw,
                 date: parsedDate ? format(parsedDate, "MM / d / yyyy") : prev.date,
             }));
@@ -409,8 +433,8 @@ const ReceiptDetailView = () => {
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Receipt ID</p>
-                                    <p>{receipt.id || "—"}</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Receipt Reference</p>
+                                    <p>{receipt.invoiceNum || "Receipt"}</p>
                                 </div>
 
                                 <div>
@@ -661,12 +685,26 @@ const ReceiptDetailView = () => {
                                     <span>{receipt.numberOfItems || 0}</span>
                                 </div>
                                 <div className="flex justify-between border-t pt-3">
-                                    <span>Subtotal:</span>
+                                    <span>Receipt Subtotal:</span>
                                     <span>{receipt.cost || formatCurrency(0)}</span>
                                 </div>
+                                <div className="flex justify-between">
+                                    <span>Receipt Tax:</span>
+                                    <span>{formatCurrency(itemSummary.storedTax)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Item Subtotal:</span>
+                                    <span>{formatCurrency(itemSummary.subtotal)}</span>
+                                </div>
+                                {Math.abs(itemSummary.subtotalDifference) >= 0.01 && (
+                                    <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                        Receipt subtotal differs from linked item subtotal by{" "}
+                                        {formatCurrency(itemSummary.subtotalDifference)}.
+                                    </div>
+                                )}
                                 <div className="flex justify-between font-bold text-lg text-gray-800 border-t pt-3">
-                                    <span>Total:</span>
-                                    <span>{receipt.costAfterTax || formatCurrency(0)}</span>
+                                    <span>Receipt Total:</span>
+                                    <span>{formatCurrency(itemSummary.storedTotal)}</span>
                                 </div>
                             </div>
                         </div>

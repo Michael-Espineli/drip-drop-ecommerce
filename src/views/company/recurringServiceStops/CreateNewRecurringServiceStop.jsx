@@ -1,23 +1,50 @@
 
-import React, { useState, useEffect, useContext } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { collection, query, getDocs, where, doc, updateDoc, getDoc } from 'firebase/firestore';
+import React, { useState, useEffect, useContext, useMemo } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { collection, query, getDocs, where, doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { db } from '../../../utils/config';
 import { Context } from "../../../context/AuthContext";
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
+import { salesCollectionNames } from '../../../utils/models/Sales';
 import Select from 'react-select';
 import DatePicker from "react-datepicker";
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import 'react-datepicker/dist/react-datepicker.css';
+import {
+    debugServiceStopTypeWrite,
+    resolveServiceStopTypeFields,
+    SERVICE_STOP_TYPE_USE_CASES,
+    suggestCompanyServiceStopType,
+} from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 
 const functions = getFunctions();
+
+const firestoreValueToDate = (value) => {
+    if (!value) return null;
+    if (typeof value.toDate === "function") return value.toDate();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const cadenceToFrequencyOption = (cadence = "") => {
+    const normalized = String(cadence).toLowerCase();
+    if (normalized.includes("day")) return { value: "Daily", label: "Daily" };
+    if (normalized.includes("bi") || normalized.includes("2 week")) return { value: "Bi-Weekly", label: "Bi-Weekly" };
+    if (normalized.includes("month")) return { value: "Monthly", label: "Monthly" };
+    return { value: "Weekly", label: "Weekly" };
+};
 
 const CreateNewRecurringServiceStop = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { customerId } = useParams(); // Capture customerId from URL
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
+    const agreementId = searchParams.get("agreementId") || "";
+    const billingSubscriptionId = searchParams.get("billingSubscriptionId") || "";
+    const requestedServiceLocationId = searchParams.get("serviceLocationId") || "";
+    const returnTo = searchParams.get("returnTo") || "";
 
     // Form State
     const [customer, setCustomer] = useState(null);
@@ -29,11 +56,13 @@ const CreateNewRecurringServiceStop = () => {
     const [endDate, setEndDate] = useState(null);
     const [noEndDate, setNoEndDate] = useState(true);
     const [description, setDescription] = useState("");
+    const [selectedServiceStopType, setSelectedServiceStopType] = useState(null);
 
     // Select List Options
     const [customerList, setCustomerList] = useState([]);
     const [serviceLocationList, setServiceLocationList] = useState([]);
     const [techList, setTechList] = useState([]);
+    const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
 
     const dayOptions = [
@@ -52,6 +81,19 @@ const CreateNewRecurringServiceStop = () => {
         { value: "Bi-Weekly", label: "Bi-Weekly" },
         { value: "Monthly", label: "Monthly" },
     ];
+
+    const serviceStopTypeOptions = useMemo(
+        () =>
+            companyServiceStopTypes
+                .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+                .map((type) => ({
+                    ...type,
+                    value: type.id,
+                    label: type.name || "Unnamed Service Stop Type",
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label)),
+        [companyServiceStopTypes]
+    );
 
     // =============================
     // iOS helper -> React helper
@@ -135,18 +177,76 @@ const CreateNewRecurringServiceStop = () => {
                 // Fetch Technicians
                 const techQuery = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
                 const techSnapshot = await getDocs(techQuery);
-                const techs = techSnapshot.docs.map(doc => ({ ...doc.data(), value: doc.id, label: doc.data().userName }));
+                const techs = techSnapshot.docs.map(doc => {
+                    const data = doc.data();
+                    return {
+                        ...data,
+                        id: data.userId || data.id || doc.id,
+                        value: data.userId || data.id || doc.id,
+                        label: data.userName || data.name || "Technician",
+                    };
+                });
                 setTechList(techs);
 
-                // If customerId is provided in URL, pre-select customer and load their service locations
-                if (customerId && customerId !== 'NA') {
-                    const selectedCustomer = customers.find(c => c.id === customerId);
+                const serviceStopTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'));
+                setCompanyServiceStopTypes(serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+
+                let preselectedCustomerId = customerId && customerId !== 'NA' ? customerId : '';
+                const descriptionParts = [];
+
+                if (agreementId) {
+                    const agreementSnap = await getDoc(doc(db, salesCollectionNames.agreements, agreementId));
+                    if (agreementSnap.exists()) {
+                        const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
+                        if (agreement.companyId === recentlySelectedCompany) {
+                            preselectedCustomerId = preselectedCustomerId || agreement.customerId || '';
+                            descriptionParts.push(`Service agreement: ${agreement.title || "linked agreement"}`);
+                            if (agreement.serviceCadence || agreement.rateType) {
+                                setFrequency(cadenceToFrequencyOption(agreement.serviceCadence || agreement.rateType));
+                            }
+                            const agreementStartDate = firestoreValueToDate(agreement.startDate);
+                            if (agreementStartDate) setStartDate(agreementStartDate);
+                        }
+                    }
+                }
+
+                if (billingSubscriptionId) {
+                    const subscriptionSnap = await getDoc(doc(db, salesCollectionNames.billingSubscriptions, billingSubscriptionId));
+                    if (subscriptionSnap.exists()) {
+                        const subscription = { id: subscriptionSnap.id, ...subscriptionSnap.data() };
+                        if (subscription.companyId === recentlySelectedCompany) {
+                            preselectedCustomerId = preselectedCustomerId || subscription.customerId || '';
+                            if (!descriptionParts.length) {
+                                descriptionParts.push("Billing subscription: linked subscription");
+                            }
+                            if (subscription.serviceCadence || subscription.interval) {
+                                setFrequency(cadenceToFrequencyOption(subscription.serviceCadence || subscription.interval));
+                            }
+                            const subscriptionStartDate = firestoreValueToDate(subscription.currentPeriodStart);
+                            if (subscriptionStartDate) setStartDate(subscriptionStartDate);
+                        }
+                    }
+                }
+
+                if (descriptionParts.length) {
+                    setDescription((current) => current || descriptionParts.join("\n"));
+                }
+
+                // If customerId is provided in URL or sales context, pre-select customer and load their service locations
+                if (preselectedCustomerId) {
+                    const selectedCustomer = customers.find(c => c.id === preselectedCustomerId);
                     if (selectedCustomer) {
                         setCustomer(selectedCustomer);
-                        const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', customerId));
+                        const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', preselectedCustomerId));
                         const locSnapshot = await getDocs(locQuery);
                         const locations = locSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
-                        setServiceLocationList(locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress })));
+                        const locationOptions = locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress }));
+                        setServiceLocationList(locationOptions);
+                        setServiceLocation(
+                            locationOptions.find((loc) => loc.id === requestedServiceLocationId) ||
+                            locationOptions[0] ||
+                            null
+                        );
                     }
                 }
             } catch (error) {
@@ -158,7 +258,20 @@ const CreateNewRecurringServiceStop = () => {
         };
 
         fetchData();
-    }, [recentlySelectedCompany, customerId]);
+    }, [recentlySelectedCompany, customerId, agreementId, billingSubscriptionId, requestedServiceLocationId]);
+
+    useEffect(() => {
+        if (selectedServiceStopType || !serviceStopTypeOptions.length) return;
+
+        const suggestedType = suggestCompanyServiceStopType(
+            serviceStopTypeOptions,
+            SERVICE_STOP_TYPE_USE_CASES.recurringRoute
+        );
+
+        if (suggestedType) {
+            setSelectedServiceStopType(suggestedType);
+        }
+    }, [selectedServiceStopType, serviceStopTypeOptions]);
 
     const handleCustomerChange = async (selectedCustomer) => {
         setCustomer(selectedCustomer);
@@ -168,9 +281,10 @@ const CreateNewRecurringServiceStop = () => {
             const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', selectedCustomer.id));
             const locSnapshot = await getDocs(locQuery);
             const locations = locSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
-            setServiceLocationList(locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress })));
-            if (locations.length > 0) {
-                setServiceLocation(locations[0])
+            const locationOptions = locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress }));
+            setServiceLocationList(locationOptions);
+            if (locationOptions.length > 0) {
+                setServiceLocation(locationOptions[0])
             }
         }
     };
@@ -204,17 +318,25 @@ const CreateNewRecurringServiceStop = () => {
         );
         const stopId = `com_rss_${uuidv4()}`;
         const internalId = "RSS" + String(recurringServiceStopCount)
+        const resolvedTypeFields = resolveServiceStopTypeFields({
+            companyServiceStopTypes,
+            selectedType: selectedServiceStopType,
+            fallbackName: "Recurring Service Stop",
+            useCase: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+            context: "CreateNewRecurringServiceStop.createNewStop",
+        });
         const newRSSData = {
             id: stopId,
             internalId: internalId,
-            type: "",
-            typeId: "",
-            typeImage: "",
+            type: resolvedTypeFields.type,
+            typeId: resolvedTypeFields.typeId,
+            typeImage: resolvedTypeFields.typeImage,
+            serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
             customerName: `${customer.firstName} ${customer.lastName}`,
             customerId: customer.id,
             address: serviceLocation.address,
-            tech: tech.userName,
-            techId: tech.id,
+            tech: tech.userName || tech.label,
+            techId: tech.userId || tech.value || tech.id,
             dateCreated: new Date(),
             startDate,
             endDate: noEndDate ? null : endDate,
@@ -233,18 +355,62 @@ const CreateNewRecurringServiceStop = () => {
         };
 
 
+        let toastId;
+
         try {
-            toast.loading('Creating new recurring service stop...');
+            toastId = toast.loading('Creating new recurring service stop...');
+            debugServiceStopTypeWrite({
+                context: "CreateNewRecurringServiceStop.createNewStop",
+                payload: newRSSData,
+            });
             const rssId = await createFirstRecurringServiceStop(recentlySelectedCompany, newRSSData);
+            const setupUpdate = {
+                operationsSetupStatus: "recurringServiceStopCreated",
+                recurringServiceStopId: rssId,
+                recurringServiceStopCreatedAt: serverTimestamp(),
+                operationsSetupUpdatedAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            };
+            const setupWrites = [];
+
+            if (agreementId || billingSubscriptionId) {
+                setupWrites.push(updateDoc(doc(db, "companies", recentlySelectedCompany, "recurringServiceStop", rssId), {
+                    salesAgreementId: agreementId,
+                    salesBillingSubscriptionId: billingSubscriptionId,
+                    updatedAt: serverTimestamp(),
+                }));
+            }
+
+            if (agreementId) {
+                setupWrites.push(updateDoc(doc(db, salesCollectionNames.agreements, agreementId), {
+                    ...setupUpdate,
+                    billingFlowNextAction: "monitorBilling",
+                    billingFlowUpdatedAt: serverTimestamp(),
+                }));
+            }
+
+            if (billingSubscriptionId) {
+                setupWrites.push(updateDoc(doc(db, salesCollectionNames.billingSubscriptions, billingSubscriptionId), {
+                    ...setupUpdate,
+                    nextAction: "monitorBilling",
+                }));
+            }
+
+            if (setupWrites.length) {
+                await Promise.all(setupWrites);
+            }
 
 
             console.log(rssId)
-            toast.success('Successfully created recurring stop!', { id: internalId });
-            // navigate(`/company/recurringServiceStop/details/${rssId}`);
+            toast.success('Successfully created recurring stop!', { id: toastId });
+            const destination = returnTo && returnTo.startsWith("/company/")
+                ? returnTo
+                : `/company/recurringServiceStop/details/${rssId}`;
+            navigate(destination);
 
         } catch (error) {
             console.error("Error creating new stop: ", error);
-            toast.error('Failed to create stop. Please try again.', { id: internalId });
+            toast.error('Failed to create stop. Please try again.', { id: toastId || internalId });
         }
     };
 
@@ -252,8 +418,8 @@ const CreateNewRecurringServiceStop = () => {
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="max-w-4xl mx-auto bg-white p-8 rounded-2xl shadow-lg">
                 <div>
-                    <h1 className='text-3xl font-bold text-gray-800 mb-6'>Create New Recurring Service Stop</h1>
-                    <p className="text-gray-600 mt-1">Create a new recurring service stop for a customer.</p>
+                    <h1 className='text-3xl font-bold text-gray-800 mb-6'>Add New Recurring Service Stop</h1>
+                    <p className="text-gray-600 mt-1">Assign the customer, route schedule, technician, and service stop type.</p>
                 </div>
 
                 <form onSubmit={createNewStop} className="space-y-6">
@@ -261,6 +427,7 @@ const CreateNewRecurringServiceStop = () => {
                         <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
                         <SelectField label="Service Location" value={serviceLocation} options={serviceLocationList} onChange={setServiceLocation} placeholder="Select a Service Location" isDisabled={!customer} />
                         <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
+                        <SelectField label="Service Stop Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Service Stop Type" />
                         <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
                         <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />
 
@@ -289,7 +456,7 @@ const CreateNewRecurringServiceStop = () => {
 
                     <div className="flex justify-end pt-4 space-x-4">
                         <button type="button" onClick={() => navigate('/company/recurringServiceStop')} className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition'>Cancel</button>
-                        <button type="submit" className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>Create Stop</button>
+                        <button type="submit" className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>Add Stop</button>
                     </div>
                 </form>
             </div>

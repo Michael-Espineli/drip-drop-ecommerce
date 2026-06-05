@@ -4,14 +4,17 @@ import {
   doc,
   getDoc,
   deleteDoc,
+  updateDoc,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const DataBaseItemDetailView = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
 
   const navigate = useNavigate();
   const { id } = useParams();
@@ -27,8 +30,9 @@ const DataBaseItemDetailView = () => {
   const [description, setDescription] = useState("");
   const [itemName, setItemName] = useState("");
   const [size, setSize] = useState("");
-  const [billingRate, setBillingRate] = useState("");
+  const [sellPrice, setSellPrice] = useState("");
   const [sku, setSku] = useState("");
+  const [tracking, setTracking] = useState("");
 
   useEffect(() => {
     (async () => {
@@ -37,14 +41,14 @@ const DataBaseItemDetailView = () => {
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const itemData = docSnap.data();
-          const dateUpdated = itemData.dateUpdated.toDate();
+          const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
           const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
 
-          let rateDouble = itemData.rate / 100;
+          let rateDouble = Number(itemData.rate || 0) / 100;
           let formattedRateUSD = formatCurrency(rateDouble);
 
-          let billingRateDouble = itemData.billingRate / 100;
-          let formattedBillingRateUSD = formatCurrency(billingRateDouble);
+          let sellPriceDouble = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
+          let formattedSellPriceUSD = formatCurrency(sellPriceDouble);
 
           setPurchase((purchase) => ({
             ...purchase,
@@ -57,7 +61,7 @@ const DataBaseItemDetailView = () => {
             id: itemData.id,
             name: itemData.name,
             rateFormatted: formattedRateUSD,
-            rate: itemData.rate / 100,
+            rate: Number(itemData.rate || 0) / 100,
             size: itemData.size,
             sku: itemData.sku,
             storeName: itemData.storeName,
@@ -65,7 +69,11 @@ const DataBaseItemDetailView = () => {
             timesPurchased: itemData.timesPurchased,
             venderId: itemData.venderId,
             label: itemData.name + " " + itemData.rate + " " + itemData.sku,
-            billingRate: formattedBillingRateUSD,
+            sellPrice: formattedSellPriceUSD,
+            sellPriceRaw: sellPriceDouble,
+            billingRate: formattedSellPriceUSD,
+            billingRateRaw: sellPriceDouble,
+            tracking: itemData.tracking || "",
           }));
         } else {
           console.log("No such document!");
@@ -78,6 +86,8 @@ const DataBaseItemDetailView = () => {
 
   async function editItem(e) {
     e.preventDefault();
+    if (!requirePermission("854", "update database items")) return;
+
     try {
       setEdit(true);
       setRate(purchase.rate);
@@ -87,7 +97,9 @@ const DataBaseItemDetailView = () => {
       setDescription(purchase.description);
       setItemName(purchase.name);
       setSize(purchase.size);
-      setBillingRate(purchase.billingRate);
+      setSellPrice(purchase.sellPriceRaw ?? purchase.billingRateRaw ?? 0);
+      setSku(purchase.sku);
+      setTracking(purchase.tracking || "");
     } catch (error) {
       console.log(error);
     }
@@ -95,6 +107,8 @@ const DataBaseItemDetailView = () => {
 
   async function deleteItem(e) {
     e.preventDefault();
+    if (!requirePermission("856", "delete database items")) return;
+
     try {
       await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id));
       navigate("/company/items");
@@ -114,9 +128,38 @@ const DataBaseItemDetailView = () => {
 
   async function saveEdit(e) {
     e.preventDefault();
+    if (!requirePermission("854", "update database items")) return;
+
     try {
+      const updatedItem = {
+        UOM: uom,
+        category,
+        color,
+        dateUpdated: new Date(),
+        description,
+        name: itemName,
+        rate: Math.round(Number(rate || 0) * 100),
+        size,
+        sku,
+        subCategory: subcategory,
+        sellPrice: Math.round(Number(sellPrice || 0) * 100),
+        billingRate: Math.round(Number(sellPrice || 0) * 100),
+        tracking,
+      };
+
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), updatedItem);
+      setPurchase((current) => ({
+        ...current,
+        ...updatedItem,
+        rate: Number(rate || 0),
+        rateFormatted: formatCurrency(Number(rate || 0)),
+        sellPrice: formatCurrency(Number(sellPrice || 0)),
+        sellPriceRaw: Number(sellPrice || 0),
+        billingRate: formatCurrency(Number(sellPrice || 0)),
+        billingRateRaw: Number(sellPrice || 0),
+        dateUpdated: format(updatedItem.dateUpdated, "MM / d / yyyy"),
+      }));
       setEdit(false);
-      //Update Rate
     } catch (error) {
       console.log(error);
     }
@@ -143,14 +186,16 @@ const DataBaseItemDetailView = () => {
               &larr; Back to Items
             </Link>
           ) : (
-            <button
-              onClick={(e) => {
-                deleteItem(e);
-              }}
-              className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-            >
-              Delete
-            </button>
+            can("856") && (
+              <button
+                onClick={(e) => {
+                  deleteItem(e);
+                }}
+                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
+              >
+                Delete
+              </button>
+            )
           )}
 
           {edit ? (
@@ -163,14 +208,16 @@ const DataBaseItemDetailView = () => {
               Cancel
             </button>
           ) : (
-            <button
-              onClick={(e) => {
-                editItem(e);
-              }}
-              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-            >
-              Edit
-            </button>
+            can("854") && (
+              <button
+                onClick={(e) => {
+                  editItem(e);
+                }}
+                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+              >
+                Edit
+              </button>
+            )
           )}
         </div>
 
@@ -221,15 +268,15 @@ const DataBaseItemDetailView = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold text-slate-700">Billing Rate</label>
+                  <label className="block text-sm font-semibold text-slate-700">Sell Price</label>
                   <input
                     className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
                     onChange={(e) => {
-                      setBillingRate(e.target.value);
+                      setSellPrice(e.target.value);
                     }}
                     type="text"
-                    placeholder="Billing Rate"
-                    value={billingRate}
+                    placeholder="Sell Price"
+                    value={sellPrice}
                   />
                 </div>
               </div>
@@ -329,6 +376,19 @@ const DataBaseItemDetailView = () => {
                 />
               </div>
 
+              <div>
+                <label className="block text-sm font-semibold text-slate-700">Tracking</label>
+                <input
+                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  onChange={(e) => {
+                    setTracking(e.target.value);
+                  }}
+                  type="text"
+                  placeholder="tracking"
+                  value={tracking}
+                />
+              </div>
+
               <button
                 onClick={(e) => {
                   saveEdit(e);
@@ -357,8 +417,8 @@ const DataBaseItemDetailView = () => {
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Rate</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.billingRate || "--"}</div>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sell Price</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.sellPrice || purchase.billingRate || "--"}</div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
@@ -392,6 +452,7 @@ const DataBaseItemDetailView = () => {
                 <div className="mt-2 text-sm text-slate-700 space-y-1">
                   <div>Store Name - {purchase.storeName || "--"}</div>
                   <div>Times Purchased - {purchase.timesPurchased ?? "--"}</div>
+                  <div>Tracking - {purchase.tracking || "--"}</div>
                 </div>
               </div>
             </div>

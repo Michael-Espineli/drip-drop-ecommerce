@@ -38,6 +38,26 @@ service cloud.firestore {
         );
     }
 
+    function emailMatchesSignedInUser(data) {
+      return signedIn()
+        && request.auth.token.email is string
+        && (
+          (data.email is string && data.email == request.auth.token.email)
+          || (data.customerEmail is string && data.customerEmail == request.auth.token.email)
+          || (data.billingEmail is string && data.billingEmail == request.auth.token.email)
+        );
+    }
+
+    function canReadSalesRecord(data) {
+      return isPersonalOrCompanyData(data) || emailMatchesSignedInUser(data);
+    }
+
+    function canCompanyWriteSalesRecord(data) {
+      return signedIn()
+        && data.companyId is string
+        && hasCompanyAccess(data.companyId);
+    }
+
     function chatParticipant(data) {
       return signedIn()
         && data.participantIds is list
@@ -150,6 +170,41 @@ service cloud.firestore {
     match /invoices/{invoiceId} {
       allow read, update, delete: if isPersonalOrCompanyData(resource.data);
       allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /salesAgreements/{agreementId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+    }
+
+    match /salesBillingProfiles/{billingProfileId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+    }
+
+    match /salesBillingSubscriptions/{billingSubscriptionId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+    }
+
+    match /salesInvoices/{invoiceId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+    }
+
+    match /salesPayments/{paymentId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
+    }
+
+    match /salesPaymentEvents/{paymentEventId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create, update, delete: if false;
     }
 
     match /subscriptions/{subscriptionId} {

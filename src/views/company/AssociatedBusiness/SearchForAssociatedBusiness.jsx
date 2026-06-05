@@ -11,7 +11,7 @@ const SearchResultCard = ({ business, onAssociate, isAlreadyAssociated, isPendin
     <div className="bg-white p-5 rounded-xl shadow-lg border border-gray-200 flex justify-between items-center">
         <div>
             <h4 className="font-bold text-lg text-gray-800">{business.name}</h4>
-            <p className="text-sm text-gray-500">ID: {business.id}</p>
+            <p className="text-sm text-gray-500">Business profile</p>
         </div>
         <button 
             onClick={() => onAssociate(business)}

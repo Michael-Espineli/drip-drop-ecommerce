@@ -1,4 +1,4 @@
-import { collection, getDocs, query } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query } from "firebase/firestore";
 
 export const VENDOR_SETTINGS_DOC = "vendors";
 export const VENDOR_RECORDS_COLLECTION = "vendor";
@@ -19,6 +19,10 @@ const normalizeVendor = (docSnap, source) => {
     city: address.city || "",
     state: address.state || "",
     zip: address.zip || "",
+    address,
+    billingNotes: data.billingNotes || "",
+    dateCreated: data.dateCreated || data.createdAt || null,
+    updatedAt: data.updatedAt || null,
     label: name,
     source,
   };
@@ -65,4 +69,25 @@ export const fetchCompanyVendors = async (db, companyId, options = {}) => {
   }
 
   return [...vendorsById.values()].sort((a, b) => a.name.localeCompare(b.name));
+};
+
+export const fetchCompanyVendor = async (db, companyId, vendorId, options = {}) => {
+  if (!companyId || !vendorId) return null;
+
+  const includeLegacy = options.includeLegacy !== false;
+  const paths = [
+    { source: "canonical", path: vendorCollectionPath(companyId) },
+    ...(includeLegacy ? [{ source: "legacy", path: legacyVendorCollectionPath(companyId) }] : []),
+  ];
+
+  for (const { source, path } of paths) {
+    try {
+      const snapshot = await getDoc(doc(db, ...path, vendorId));
+      if (snapshot.exists()) return normalizeVendor(snapshot, source);
+    } catch (error) {
+      console.warn(`Unable to load ${source} vendor record.`, error);
+    }
+  }
+
+  return null;
 };

@@ -120,7 +120,7 @@ const EditServiceRequest = () => {
                             <option value="" disabled>Select a location</option>
                             {userLocations.map(loc => (
                                 <option key={loc.id} value={loc.id}>
-                                    {loc.name || `Unnamed Location (ID: ${loc.id})`}
+                                    {loc.name || loc.address?.streetAddress || "Unnamed Location"}
                                 </option>
                             ))}
                         </select>

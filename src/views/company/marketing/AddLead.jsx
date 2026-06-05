@@ -46,11 +46,22 @@ const AddLead = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSubmitting || !user) return;
+        if (!recentlySelectedCompany) {
+            toast.error('Please select a company before adding a lead.');
+            return;
+        }
         if (!formData.homeownerName || !formData.serviceDescription || !formData.serviceName) return;
 
         setIsSubmitting(true);
         const toastId = toast.loading('Adding new lead...');
         const leadId = "hosr_" + uuidv4();
+        const creatorName =
+            dataBaseUser?.userName ||
+            dataBaseUser?.displayName ||
+            dataBaseUser?.name ||
+            user?.displayName ||
+            user?.email ||
+            "";
 
         try {
             await setDoc(doc(db, 'homeownerServiceRequests', leadId), {
@@ -67,11 +78,11 @@ const AddLead = () => {
                     city: formData.city || "",
                     state: formData.state || "",
                     zip: formData.zip || "",
-                    latitude: formData.latitude || null,
-                    longitude: formData.longitude || null,
+                    latitude: formData.latitude ?? null,
+                    longitude: formData.longitude ?? null,
                 },
-                creatorId: user.uid,
-                creatorName: dataBaseUser.userName,
+                creatorId: user.uid || "",
+                creatorName,
                 customerId: '', //comp
                 customerName: '', //comp
                 serviceLocationId: '', //comp

@@ -37,7 +37,8 @@ const CustomerHistory = lazy(() => import("../../views/company/customers/Custome
 const ReadingsAndDosagesHistory = lazy(() => import("../../views/company/customers/ReadingsAndDosagesHistory"))
 
 
-const RouteDashboard = lazy(() => import("../../views/company/routing/RouteDashboard"))
+const RouteDashboard = lazy(() => import("../../views/company/routing/RouteOverviewDashboard"))
+const DailyRouteBoard = lazy(() => import("../../views/company/routing/RouteDashboard"))
 const RouteManagement = lazy(() => import("../../views/company/routing/RouteManagement"))
 const RouteBuilder = lazy(() => import("../../views/company/routing/RouteBuilder"))
 
@@ -62,6 +63,7 @@ const RecurringContractDetailView = lazy(() => import("../../views/company/contr
 const PurchaseListView = lazy(() => import("../../views/company/purchases/PurchaseListView"))
 const CreateNewPurchase = lazy(() => import("../../views/company/purchases/CreateNewPurchase"))
 const PurchaseDetailView = lazy(() => import("../../views/company/purchases/PurchaseDetailView"))
+const AlphaWaterReceiptImport = lazy(() => import("../../views/company/purchases/AlphaWaterReceiptImport"))
 
 const ShoppingListView = lazy(() => import("../../views/company/shoppingList/ShoppingListListView"))
 const CreateNewShoppingList = lazy(() => import("../../views/company/shoppingList/ShoppingListCreateView"))
@@ -72,6 +74,7 @@ const CreateNewDataBaseItem = lazy(() => import("../../views/company/databaseIte
 const DataBaseItems = lazy(() => import("../../views/company/databaseItems/DataBaseItems"))
 const DataBaseItemBulkUpload = lazy(() => import("../../views/company/databaseItems/DataBaseItemBulkUpload"))
 
+const ReceiptListView = lazy(() => import("../../views/company/purchases/ReceiptListView"))
 const ReceiptDetailView = lazy(() => import("../../views/company/purchases/ReceiptDetailView"))
 
 const ServiceLocations = lazy(() => import("../../views/company/serviceLocations/ServiceLocations"))
@@ -100,14 +103,6 @@ const CompanyUsers = lazy(() => import("../../views/company/companyUsers/Company
 const CompanyUserDetails = lazy(() => import("../../views/company/companyUsers/CompanyUserDetails"))
 const CreateNewCompanyUser = lazy(() => import("../../views/company/companyUsers/CreateNewCompanyUser"))
 
-const RecurringLaborContracts = lazy(() => import("../../views/company/laborContracts/LaborContracts"))
-const RecurringLaborContractDetails = lazy(() => import("../../views/company/laborContracts/RecurringLaborContractDetails"))
-const CreateNewLaborContract = lazy(() => import("../../views/company/laborContracts/CreateNewLaborContract"))
-
-const OneTimeLaborContracts = lazy(() => import("../../views/company/oneTimeLaborContracts/OneTimeLaborContracts"))
-const CreateNewOneTimeLaborContract = lazy(() => import("../../views/company/oneTimeLaborContracts/CreateNewOneTimeLaborContract"))
-const LaborContractDetails = lazy(() => import("../../views/company/oneTimeLaborContracts/LaborContractDetails"))
-
 const TaskGroups = lazy(() => import("../../views/company/settings/TaskGroups/TaskGroups"))
 const CreateNewTaskGroup = lazy(() => import("../../views/company/settings/TaskGroups/CreateNewTaskGroup"))
 const TaskGroupDetails = lazy(() => import("../../views/company/settings/TaskGroups/TaskGroupDetails"))
@@ -120,6 +115,7 @@ const Reports = lazy(() => import("../../views/company/reports/Reports"))
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
 const CompanySettings = lazy(() => import("../../views/company/settings/CompanySettings"))
+const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySetupGuide"))
 
 const EmailConfiguration = lazy(() => import("../../views/company/settings/EmailConfiguration/EmailConfiguration"))
 const ReadingsAndDosages = lazy(() => import("../../views/company/settings/ReadingsAndDosages/ReadingsAndDosages"))
@@ -147,7 +143,15 @@ const CreateEstimate = lazy(() => import('../../views/company/marketing/CreateEs
 const Estimates = lazy(() => import('../../views/company/marketing/Estimates'));
 const ScheduleEstimate = lazy(() => import('../../views/company/marketing/ScheduleEstimate'));
 
-const Sales = lazy(() => import('../../views/company/monies/Sales'));
+const Sales = lazy(() => import('../../views/company/sales/Sales'));
+const SalesCatalogItems = lazy(() => import('../../views/company/sales/SalesCatalogItems'));
+const SalesAgreements = lazy(() => import('../../views/company/sales/SalesAgreements'));
+const CreateSalesAgreement = lazy(() => import('../../views/company/sales/CreateSalesAgreement'));
+const SalesAgreementDetail = lazy(() => import('../../views/company/sales/SalesAgreementDetail'));
+const SalesFinanceBoard = lazy(() => import('../../views/company/sales/SalesFinanceBoard'));
+const SalesBillingSubscriptionDetail = lazy(() => import('../../views/company/sales/SalesBillingSubscriptionDetail'));
+const CreateSalesInvoice = lazy(() => import('../../views/company/sales/CreateSalesInvoice'));
+const SalesInvoiceDetail = lazy(() => import('../../views/company/sales/SalesInvoiceDetail'));
 const Payroll = lazy(() => import("../../views/company/payroll/Payroll"));
 
 const Reviews = lazy(() => import('../../views/company/reviews/Reviews'));
@@ -165,6 +169,11 @@ export const sellerRoutes = [
     {
         path: '/company/settings',
         element: <CompanySettings />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
+        path: '/company/setup-guide',
+        element: <CompanySetupGuide />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, { //Basic Pages 
@@ -405,6 +414,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/purchased-items/alpha-water-import',
+        element: <AlphaWaterReceiptImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/purchased-items/detail/:purchaseId',
         element: <PurchaseDetailView />,
         ability: ['Admin', 'Seller'],
@@ -426,8 +442,22 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/purchasedItems/alpha-water-import',
+        element: <AlphaWaterReceiptImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/purchasedItems/detail/:purchaseId',
         element: <PurchaseDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/receipts',
+        element: <ReceiptListView />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -485,6 +515,13 @@ export const sellerRoutes = [
     ,
     {
         path: '/company/vendors/create-new',
+        element: <CreateNewVendor />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/vendors/detail/:vendorId',
         element: <CreateNewVendor />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
@@ -731,6 +768,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/route-day-management',
+        element: <DailyRouteBoard />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/route-builder',
         element: <RouteBuilder />,
         ability: ['Admin', 'Seller'],
@@ -801,28 +845,6 @@ export const sellerRoutes = [
         role: 'Company'
     }
     ,
-
-    {
-        path: '/company/recurringLaborContracts',
-        element: <RecurringLaborContracts />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
-    {
-        path: '/company/recurringLaborContracts/:laborContractId',
-        element: <RecurringLaborContractDetails />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
-    {
-        path: '/company/recurringLaborContracts/createNew',
-        element: <CreateNewLaborContract />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
     {
         path: '/company/workLogs',
         element: <WorkLogs />,
@@ -841,7 +863,16 @@ export const sellerRoutes = [
         path: '/company/payroll',
         element: <Payroll />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        featureFlagId: 'feature_flag_006',
+    }
+    ,
+    {
+        path: '/company/payroll/setup',
+        element: <Payroll mode="setup" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        featureFlagId: 'feature_flag_006',
     }
     ,
     {
@@ -889,27 +920,6 @@ export const sellerRoutes = [
     {
         path: '/company/bodiesOfWater/createNew/:customerId/:serviceLocationId',
         element: <CreateBodyOfWater />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
-    {
-        path: '/company/laborContracts',
-        element: <OneTimeLaborContracts />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
-    {
-        path: '/company/laborContracts/createNew/:jobId',
-        element: <CreateNewOneTimeLaborContract />,
-        ability: ['Admin', 'Seller'],
-        role: 'Company'
-    }
-    ,
-    {
-        path: '/company/laborContracts/details/:laborContractId',
-        element: <LaborContractDetails />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -1003,9 +1013,60 @@ export const sellerRoutes = [
         element: <ScheduleEstimate />,
         role: 'Company',
     }, {
-        path: '/Company/sales',
+        path: '/company/sales',
         element: <Sales />,
         role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/catalog-items',
+        element: <SalesCatalogItems />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/invoices',
+        element: <SalesFinanceBoard defaultView="invoices" />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/invoices/new',
+        element: <CreateSalesInvoice />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/invoices/:invoiceId',
+        element: <SalesInvoiceDetail />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/payments',
+        element: <SalesFinanceBoard defaultView="payments" />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/subscriptions',
+        element: <SalesFinanceBoard defaultView="subscriptions" />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/subscriptions/:billingSubscriptionId',
+        element: <SalesBillingSubscriptionDetail />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/agreements',
+        element: <SalesAgreements />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/agreements/new',
+        element: <CreateSalesAgreement />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/agreements/:agreementId',
+        element: <SalesAgreementDetail />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/reviews/:companyId',
         element: <Reviews />,

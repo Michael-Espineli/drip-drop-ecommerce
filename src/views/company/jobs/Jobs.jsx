@@ -11,13 +11,45 @@ import { Context } from "../../../context/AuthContext";
 import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+
+const OPERATIONS_QUICK_OPERATION_STATUSES = [
+    "Estimate Pending",
+    "Unscheduled",
+    "Scheduled",
+    "Waiting for Parts",
+    "In Progress"
+];
+
+const OPERATIONS_QUICK_BILLING_STATUSES = [
+    "Draft",
+    "Estimate",
+    "Accepted",
+    "In Progress"
+];
+
+const BILLING_QUICK_OPERATION_STATUSES = ["Finished"];
+
+const BILLING_QUICK_BILLING_STATUSES = [
+    "Draft",
+    "Estimate",
+    "Accepted",
+    "In Progress",
+    "Expired"
+];
+
+const statusMatches = (value, status) => {
+    return String(value || "").trim().toLowerCase() === status.toLowerCase();
+};
 
 const Jobs = () => {
     const [jobs, setJobs] = useState([]);
+    const [allJobs, setAllJobs] = useState([]);
     const [jobTemplates, setJobTemplates] = useState([]);
     const [commentCounts, setCommentCounts] = useState({});
 
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
     const [searchTerm, setSearchTerm] = useState("");
@@ -28,18 +60,11 @@ const Jobs = () => {
 
     // Filter and Sort States
     const [operationStatusFilter, setOperationStatusFilter] = useState([
-        "Estimate Pending",
-        "Unscheduled",
-        "Scheduled",
-        "Waiting for Parts",
-        "In Progress"
+        ...OPERATIONS_QUICK_OPERATION_STATUSES
     ]);
 
     const [billingStatusFilter, setBillingStatusFilter] = useState([
-        "Draft",
-        "Estimate",
-        "Accepted",
-        "In Progress"
+        ...OPERATIONS_QUICK_BILLING_STATUSES
     ]);
 
     const [sortBy, setSortBy] = useState("dateCreated-desc");
@@ -107,6 +132,25 @@ const Jobs = () => {
         billingStatusFilter,
         sortBy
     ]);
+
+    useEffect(() => {
+        const fetchAllJobs = async () => {
+            if (!recentlySelectedCompany) return;
+
+            try {
+                const querySnapshot = await getDocs(
+                    collection(db, "companies", recentlySelectedCompany, "workOrders")
+                );
+                const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+                setAllJobs(jobsList);
+            } catch (error) {
+                console.error("Error fetching job summary data: ", error);
+                setAllJobs([]);
+            }
+        };
+
+        fetchAllJobs();
+    }, [recentlySelectedCompany]);
 
     useEffect(() => {
         const fetchCommentCounts = async () => {
@@ -188,6 +232,7 @@ const Jobs = () => {
     };
 
     const openCreateOptions = () => {
+        if (!requirePermission("22", "create jobs")) return;
         setShowCreateOptionsModal(true);
     };
 
@@ -220,6 +265,32 @@ const Jobs = () => {
         setShowFilterModal(false);
     };
 
+    const applyOperationsQuickFilter = () => {
+        setOperationStatusFilter([...OPERATIONS_QUICK_OPERATION_STATUSES]);
+        setBillingStatusFilter([...OPERATIONS_QUICK_BILLING_STATUSES]);
+    };
+
+    const applyBillingQuickFilter = () => {
+        setOperationStatusFilter([...BILLING_QUICK_OPERATION_STATUSES]);
+        setBillingStatusFilter([...BILLING_QUICK_BILLING_STATUSES]);
+    };
+
+    const activeQuickFilter = useMemo(() => {
+        const sameSet = (left, right) => (
+            left.length === right.length && left.every((item) => right.includes(item))
+        );
+
+        if (sameSet(operationStatusFilter, OPERATIONS_QUICK_OPERATION_STATUSES) && sameSet(billingStatusFilter, OPERATIONS_QUICK_BILLING_STATUSES)) {
+            return "operations";
+        }
+
+        if (sameSet(operationStatusFilter, BILLING_QUICK_OPERATION_STATUSES) && sameSet(billingStatusFilter, BILLING_QUICK_BILLING_STATUSES)) {
+            return "billing";
+        }
+
+        return "custom";
+    }, [billingStatusFilter, operationStatusFilter]);
+
     const uniqueJobsCount = useMemo(() => {
         const ids = new Set(
             (jobs || [])
@@ -229,6 +300,39 @@ const Jobs = () => {
 
         return ids.size;
     }, [jobs]);
+
+    const jobSummary = useMemo(() => {
+        const summaryJobs = allJobs.length > 0 ? allJobs : jobs;
+        const actionableJobIds = new Set();
+
+        const draftBillingCount = summaryJobs.filter((job) => {
+            const isMatch = statusMatches(job.billingStatus, "Draft");
+            if (isMatch) actionableJobIds.add(job.id);
+            return isMatch;
+        }).length;
+
+        const acceptedBillingCount = summaryJobs.filter((job) => {
+            const isMatch = statusMatches(job.billingStatus, "Accepted");
+            if (isMatch) actionableJobIds.add(job.id);
+            return isMatch;
+        }).length;
+
+        const unscheduledOperationCount = summaryJobs.filter((job) => {
+            const isMatch = statusMatches(job.operationStatus, "Unscheduled");
+            if (isMatch) actionableJobIds.add(job.id);
+            return isMatch;
+        }).length;
+
+        return {
+            totalRateCents: summaryJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
+            visibleRateCents: jobs.reduce((total, job) => total + Number(job.rate || 0), 0),
+            totalJobsCount: summaryJobs.length,
+            actionableJobsCount: actionableJobIds.size,
+            draftBillingCount,
+            acceptedBillingCount,
+            unscheduledOperationCount,
+        };
+    }, [allJobs, jobs]);
 
     const getStatusClass = (status) => {
         switch (status) {
@@ -265,6 +369,26 @@ const Jobs = () => {
     const formatTemplateMoney = (template) => {
         const rate = Number(template.defaultRateCents || template.rate || 0);
         return moneyFromCents(rate);
+    };
+
+    const JobMetricCard = ({ label, value, detail, tone = "slate" }) => {
+        const toneClasses = {
+            slate: "border-slate-200 bg-white text-slate-950",
+            blue: "border-blue-200 bg-blue-50 text-blue-950",
+            amber: "border-amber-200 bg-amber-50 text-amber-950",
+            red: "border-red-200 bg-red-50 text-red-950",
+            green: "border-green-200 bg-green-50 text-green-950",
+        };
+
+        return (
+            <div className={`rounded-lg border p-4 shadow-sm ${toneClasses[tone] || toneClasses.slate}`}>
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
+                <p className="mt-2 text-2xl font-bold leading-tight">{value}</p>
+                {detail && (
+                    <p className="mt-1 text-sm text-slate-600">{detail}</p>
+                )}
+            </div>
+        );
     };
 
     const FilterModal = ({ onClose, applyFilters }) => {
@@ -544,16 +668,80 @@ const Jobs = () => {
                         </div>
                     </div>
 
-                    <button
-                        type="button"
-                        onClick={openCreateOptions}
-                        className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-                    >
-                        Create Job
-                    </button>
+                    {can("22") && (
+                        <button
+                            type="button"
+                            onClick={openCreateOptions}
+                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                        >
+                            Create Job
+                        </button>
+                    )}
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5 mb-6">
+                    <JobMetricCard
+                        label="Total Rate"
+                        value={moneyFromCents(jobSummary.totalRateCents)}
+                        detail={`${jobSummary.totalJobsCount} total jobs`}
+                    />
+
+                    <JobMetricCard
+                        label="Shown Rate"
+                        value={moneyFromCents(jobSummary.visibleRateCents)}
+                        detail={`${jobs.length} jobs in this view`}
+                        tone="blue"
+                    />
+
+                    <JobMetricCard
+                        label="Actionable Jobs"
+                        value={jobSummary.actionableJobsCount}
+                        detail="Draft, accepted, or unscheduled"
+                        tone="amber"
+                    />
+
+                    <JobMetricCard
+                        label="Draft Billing"
+                        value={jobSummary.draftBillingCount}
+                        detail="Needs estimate or billing work"
+                        tone="red"
+                    />
+
+                    <JobMetricCard
+                        label="Accepted / Unscheduled"
+                        value={`${jobSummary.acceptedBillingCount} / ${jobSummary.unscheduledOperationCount}`}
+                        detail="Needs billing or operations follow-up"
+                        tone="green"
+                    />
                 </div>
 
                 <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div className="mb-4 flex flex-wrap gap-2">
+                        <button
+                            type="button"
+                            onClick={applyOperationsQuickFilter}
+                            className={[
+                                "rounded-md px-4 py-2 text-sm font-semibold transition",
+                                activeQuickFilter === "operations"
+                                    ? "bg-blue-600 text-white shadow-sm"
+                                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                            ].join(" ")}
+                        >
+                            Operations
+                        </button>
+                        <button
+                            type="button"
+                            onClick={applyBillingQuickFilter}
+                            className={[
+                                "rounded-md px-4 py-2 text-sm font-semibold transition",
+                                activeQuickFilter === "billing"
+                                    ? "bg-blue-600 text-white shadow-sm"
+                                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                            ].join(" ")}
+                        >
+                            Billing: Finished Not Invoiced
+                        </button>
+                    </div>
                     <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
                         <input
                             value={searchTerm}
@@ -575,7 +763,7 @@ const Jobs = () => {
                         <table className="min-w-full bg-white">
                             <thead className="bg-gray-100">
                                 <tr>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Id</th>
+                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Job</th>
                                     <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Date Created</th>
                                     <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Customer</th>
                                     <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Type</th>
@@ -595,13 +783,15 @@ const Jobs = () => {
                                                 Create a blank job or start from a template.
                                             </p>
 
-                                            <button
-                                                type="button"
-                                                onClick={openCreateOptions}
-                                                className="mt-4 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-                                            >
-                                                Create First Job
-                                            </button>
+                                            {can("22") && (
+                                                <button
+                                                    type="button"
+                                                    onClick={openCreateOptions}
+                                                    className="mt-4 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                                                >
+                                                    Create First Job
+                                                </button>
+                                            )}
                                         </td>
                                     </tr>
                                 ) : (

@@ -73,7 +73,7 @@ const SubscriptionTable = ({ subscriptions }) => {
             <table className="min-w-full bg-white border border-gray-200 rounded-lg overflow-hidden">
                 <thead className="bg-gray-50">
                     <tr>
-                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Subscription ID</th>
+                        <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Subscription</th>
                         <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Name</th>
                         <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Interval</th>
                         <th className="px-4 py-3 border-b text-left text-sm font-semibold text-gray-700">Amount</th>
@@ -82,7 +82,7 @@ const SubscriptionTable = ({ subscriptions }) => {
                 <tbody>
                     {subscriptions.map((subscription) => (
                         <tr key={subscription.id} className="hover:bg-gray-50">
-                            <td className="px-4 py-3 border-b text-sm text-gray-800">{subscription.id}</td>
+                            <td className="px-4 py-3 border-b text-sm text-gray-800">{subscription?.plan?.nickname || subscription?.plan?.nickName || 'Stripe subscription'}</td>
                             <td className="px-4 py-3 border-b text-sm text-gray-800">
                                 {subscription?.plan?.nickname || subscription?.plan?.nickName || 'N/A'}
                             </td>

@@ -13,6 +13,11 @@ const CompanyDetailView = lazy(() => import("../../views/admin/company/CompanyDe
 
 const UniversalEquipment = lazy(() => import("../../views/admin/universalEquipment/UniversalEquipment"))
 const DripDropWorkflowArchitectureDocsPage = lazy(() => import("../../views/admin/documentation/DripDropWorkflowArchitectureDocsPage"))
+const FeatureFlags = lazy(() => import("../../views/admin/featureFlags/FeatureFlags"))
+const Complaints = lazy(() => import("../../views/admin/complaints/Complaints"))
+const DeactivatedSellers = lazy(() => import("../../views/admin/sellers/DeactivatedSellers"))
+const SellerRequests = lazy(() => import("../../views/admin/sellers/SellerRequests"))
+const LiveChat = lazy(() => import("../../views/admin/liveChat/LiveChat"))
 export const adminRoutes = [
     {
         path: '/admin/dashboard',
@@ -40,25 +45,25 @@ export const adminRoutes = [
     ,
     {
         path: '/admin/dashboard/payment-request',
-        element: <Home />,
+        element: <Complaints />,
         role: 'Admin'
     }
     ,
     {
         path: '/admin/dashboard/deactive-sellers',
-        element: <Home />,
+        element: <DeactivatedSellers />,
         role: 'Admin'
     }
     ,
     {
         path: '/admin/dashboard/sellers-request',
-        element: <Home />,
+        element: <SellerRequests />,
         role: 'Admin'
     }
     ,
     {
         path: '/admin/dashboard/chat-seller',
-        element: <Home />,
+        element: <LiveChat />,
         role: 'Admin'
     }
     ,
@@ -95,6 +100,12 @@ export const adminRoutes = [
     {
         path: '/admin/universal-equipment',
         element: <UniversalEquipment />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/feature-flags',
+        element: <FeatureFlags />,
         role: 'Admin'
     }
     ,

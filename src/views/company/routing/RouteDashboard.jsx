@@ -9,6 +9,8 @@ import toast from 'react-hot-toast';
 import "react-datepicker/dist/react-datepicker.css";
 import { v4 as uuidv4 } from "uuid";
 
+const ALL_ROUTES_OPTION = '__all_active_routes__';
+
 const getDateValue = (value) => {
     if (!value) return null;
 
@@ -827,11 +829,15 @@ const RouteDashboard = () => {
 
         setActiveRoutes(syncedRoutes);
         setSelectedRouteId(previousRouteId => {
+            if (previousRouteId === ALL_ROUTES_OPTION) {
+                return ALL_ROUTES_OPTION;
+            }
+
             if (syncedRoutes.some(route => route.id === previousRouteId)) {
                 return previousRouteId;
             }
 
-            return syncedRoutes[0]?.id || '';
+            return syncedRoutes.length > 0 ? ALL_ROUTES_OPTION : '';
         });
 
         return syncedRoutes;
@@ -841,17 +847,74 @@ const RouteDashboard = () => {
         fetchData(serviceDate);
     }, [serviceDate, fetchData]);
 
+    const isAllRoutesSelected = selectedRouteId === ALL_ROUTES_OPTION;
+
     const selectedRoute = useMemo(
-        () => activeRoutes.find(route => route.id === selectedRouteId) || null,
-        [activeRoutes, selectedRouteId]
+        () => isAllRoutesSelected ? null : activeRoutes.find(route => route.id === selectedRouteId) || null,
+        [activeRoutes, isAllRoutesSelected, selectedRouteId]
     );
 
+    const allRouteStops = useMemo(() => {
+        const stopsWithRoute = [];
+        const includedStopIds = new Set();
+
+        activeRoutes.forEach(route => {
+            getOrderedRouteStops(route, serviceStops).forEach((stop, index) => {
+                if (includedStopIds.has(stop.id)) return;
+
+                includedStopIds.add(stop.id);
+                stopsWithRoute.push({
+                    ...stop,
+                    routeId: route.id,
+                    routeName: route.name,
+                    routeTechId: route.techId,
+                    routeTechName: route.techName,
+                    routeStopIndex: index + 1,
+                });
+            });
+        });
+
+        serviceStops.forEach(stop => {
+            if (includedStopIds.has(stop.id)) return;
+
+            const techRoute = activeRoutes.find(route => (
+                route.techId === stop.techId ||
+                route.techName === stop.tech ||
+                route.serviceStopsIds?.includes(stop.id)
+            ));
+
+            includedStopIds.add(stop.id);
+            stopsWithRoute.push({
+                ...stop,
+                routeId: techRoute?.id || '',
+                routeName: techRoute?.name || '',
+                routeTechId: techRoute?.techId || stop.techId || '',
+                routeTechName: techRoute?.techName || stop.tech || 'Unassigned',
+                routeStopIndex: null,
+            });
+        });
+
+        return stopsWithRoute.sort((a, b) => {
+            const techCompare = String(a.routeTechName || a.tech || '').localeCompare(String(b.routeTechName || b.tech || ''));
+            if (techCompare !== 0) return techCompare;
+
+            const aIndex = a.routeStopIndex ?? Number.MAX_SAFE_INTEGER;
+            const bIndex = b.routeStopIndex ?? Number.MAX_SAFE_INTEGER;
+            if (aIndex !== bIndex) return aIndex - bIndex;
+
+            const aTime = getDateValue(a.serviceDate)?.getTime() || 0;
+            const bTime = getDateValue(b.serviceDate)?.getTime() || 0;
+            return aTime - bTime;
+        });
+    }, [activeRoutes, serviceStops]);
+
     const selectedRouteStops = useMemo(
-        () => getOrderedRouteStops(selectedRoute, serviceStops),
-        [selectedRoute, serviceStops]
+        () => isAllRoutesSelected ? allRouteStops : getOrderedRouteStops(selectedRoute, serviceStops),
+        [allRouteStops, isAllRoutesSelected, selectedRoute, serviceStops]
     );
 
     const selectedRouteLocations = useMemo(() => (
+        isAllRoutesSelected ? [] :
         activeRouteLocations
             .filter(location => location.activeRouteId === selectedRouteId || location.routeId === selectedRouteId)
             .map(location => ({
@@ -860,7 +923,7 @@ const RouteDashboard = () => {
             }))
             .filter(location => getRouteLocationCoordinate(location) && location.timeDate)
             .sort((a, b) => a.timeDate - b.timeDate)
-    ), [activeRouteLocations, selectedRouteId]);
+    ), [activeRouteLocations, isAllRoutesSelected, selectedRouteId]);
 
     const selectedRouteAreaEstimates = useMemo(
         () => buildAreaEstimates(selectedRouteLocations, selectedRouteStops),
@@ -868,6 +931,7 @@ const RouteDashboard = () => {
     );
 
     const selectedRouteLogs = useMemo(() => (
+        isAllRoutesSelected ? [] :
         activeRouteLogs
             .filter(log => log.activeRouteId === selectedRouteId || log.routeId === selectedRouteId)
             .map(log => ({
@@ -877,7 +941,7 @@ const RouteDashboard = () => {
             }))
             .filter(log => log.startTimeDate)
             .sort((a, b) => a.startTimeDate - b.startTimeDate)
-    ), [activeRouteLogs, selectedRouteId]);
+    ), [activeRouteLogs, isAllRoutesSelected, selectedRouteId]);
 
     useEffect(() => {
         setSelectedStopIds([]);
@@ -1094,11 +1158,11 @@ const RouteDashboard = () => {
 
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-screen-2xl mx-auto">
+            <div className=" mx-auto">
                 <header className="flex justify-between items-center mb-6">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Route Dashboard</h1>
-                        <p className="text-gray-500">Manage your daily routes and technicians</p>
+                        <h1 className="text-3xl font-bold text-gray-800">Daily Route Board</h1>
+                        <p className="text-gray-500">Manage today's routes, stops, technician locations, and route activity.</p>
                     </div>
                     <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
                         {process.env.NODE_ENV !== 'production' && (
@@ -1130,7 +1194,9 @@ const RouteDashboard = () => {
                                 <div>
                                     <h2 className="text-xl font-bold text-gray-800">Daily Route Map</h2>
                                     <p className="text-sm text-gray-500">
-                                        Stops, technician trail, and time areas mirror the iOS active route sheet.
+                                        {isAllRoutesSelected
+                                            ? 'All technician service stops for the selected day. Trails and time areas are hidden in this view.'
+                                            : 'Stops, technician trail, and time areas mirror the iOS active route sheet.'}
                                     </p>
                                 </div>
 
@@ -1142,19 +1208,43 @@ const RouteDashboard = () => {
                                 >
                                     {activeRoutes.length === 0 ? (
                                         <option value="">No active routes</option>
-                                    ) : activeRoutes.map(route => (
-                                        <option key={route.id} value={route.id}>
-                                            {route.techName || route.name || 'Route'}
-                                        </option>
-                                    ))}
+                                    ) : (
+                                        <>
+                                            <option value={ALL_ROUTES_OPTION}>All technicians</option>
+                                            {activeRoutes.map(route => (
+                                                <option key={route.id} value={route.id}>
+                                                    {route.techName || route.name || 'Route'}
+                                                </option>
+                                            ))}
+                                        </>
+                                    )}
                                 </select>
                             </div>
 
                             <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
-                                <RouteMapMetric label="Stops" value={selectedRouteStops.length} tone="blue" />
-                                <RouteMapMetric label="Trail Points" value={selectedRouteLocations.length} tone="orange" />
-                                <RouteMapMetric label="Time Areas" value={selectedRouteAreaEstimates.length} tone="purple" />
-                                <RouteMapMetric label="Route Logs" value={selectedRouteLogs.length} tone="emerald" />
+                                <RouteMapMetric
+                                    label={isAllRoutesSelected ? 'Total Stops' : 'Stops'}
+                                    value={selectedRouteStops.length}
+                                    tone="blue"
+                                />
+                                <RouteMapMetric
+                                    label={isAllRoutesSelected ? 'Technicians' : 'Trail Points'}
+                                    value={isAllRoutesSelected ? activeRoutes.length : selectedRouteLocations.length}
+                                    tone="orange"
+                                />
+                                <RouteMapMetric
+                                    label={isAllRoutesSelected ? 'Finished' : 'Time Areas'}
+                                    value={isAllRoutesSelected ? selectedRouteStops.filter(stop => getStopTiming(stop).end).length : selectedRouteAreaEstimates.length}
+                                    tone="purple"
+                                />
+                                <RouteMapMetric
+                                    label={isAllRoutesSelected ? 'In Progress' : 'Route Logs'}
+                                    value={isAllRoutesSelected ? selectedRouteStops.filter(stop => {
+                                        const { start, end } = getStopTiming(stop);
+                                        return start && !end;
+                                    }).length : selectedRouteLogs.length}
+                                    tone="emerald"
+                                />
                             </div>
 
                             {selectedRoute && (
@@ -1167,44 +1257,59 @@ const RouteDashboard = () => {
                                 </div>
                             )}
 
-                            <div className="mb-4 flex flex-wrap gap-2">
-                                <OverlayButton
-                                    label="Stops"
-                                    colorClass="blue"
-                                    isOn={mapOverlays.stops}
-                                    onClick={() => toggleMapOverlay('stops')}
-                                />
-                                <OverlayButton
-                                    label="Tech trail"
-                                    colorClass="orange"
-                                    isOn={mapOverlays.techTrail}
-                                    onClick={() => toggleMapOverlay('techTrail')}
-                                />
-                                <OverlayButton
-                                    label="Time areas"
-                                    colorClass="purple"
-                                    isOn={mapOverlays.timeAreas}
-                                    onClick={() => toggleMapOverlay('timeAreas')}
-                                />
-                            </div>
+                            {isAllRoutesSelected ? (
+                                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+                                    Showing service stops only across all technicians.
+                                </div>
+                            ) : (
+                                <div className="mb-4 flex flex-wrap gap-2">
+                                    <OverlayButton
+                                        label="Stops"
+                                        colorClass="blue"
+                                        isOn={mapOverlays.stops}
+                                        onClick={() => toggleMapOverlay('stops')}
+                                    />
+                                    <OverlayButton
+                                        label="Tech trail"
+                                        colorClass="orange"
+                                        isOn={mapOverlays.techTrail}
+                                        onClick={() => toggleMapOverlay('techTrail')}
+                                    />
+                                    <OverlayButton
+                                        label="Time areas"
+                                        colorClass="purple"
+                                        isOn={mapOverlays.timeAreas}
+                                        onClick={() => toggleMapOverlay('timeAreas')}
+                                    />
+                                </div>
+                            )}
 
                             <div className="w-full h-96 md:h-[500px] rounded-lg overflow-hidden border border-gray-200">
-                                {selectedRoute && (selectedRouteStops.length > 0 || selectedRouteLocations.length > 0) ? (
+                                {(isAllRoutesSelected || selectedRoute) && (selectedRouteStops.length > 0 || selectedRouteLocations.length > 0) ? (
                                     <RouteActivityMap
                                         route={selectedRoute}
                                         stops={selectedRouteStops}
                                         routeLocations={selectedRouteLocations}
                                         areaEstimates={selectedRouteAreaEstimates}
-                                        overlays={mapOverlays}
+                                        overlays={isAllRoutesSelected ? { stops: true, techTrail: false, timeAreas: false } : mapOverlays}
+                                        showTechnicianLabels={isAllRoutesSelected}
                                     />
                                 ) : (
                                     <div className='flex justify-center items-center h-full bg-gray-100'>
-                                        <p className='text-gray-500'>No map data for this route.</p>
+                                        <p className='text-gray-500'>
+                                            {isAllRoutesSelected ? 'No service stop map data for this date.' : 'No map data for this route.'}
+                                        </p>
                                     </div>
                                 )}
                             </div>
 
-                            {selectedRoute && (
+                            {isAllRoutesSelected ? (
+                                <AllRoutesStopPanel
+                                    routes={activeRoutes}
+                                    stops={selectedRouteStops}
+                                    onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                                />
+                            ) : selectedRoute && (
                                 <RouteProgressTimeline
                                     route={selectedRoute}
                                     stops={selectedRouteStops}
@@ -1214,7 +1319,7 @@ const RouteDashboard = () => {
                                 />
                             )}
 
-                            {selectedRoute && (
+                            {!isAllRoutesSelected && selectedRoute && (
                                 <ActiveRouteDetailPanel
                                     route={selectedRoute}
                                     stops={selectedRouteStops}
@@ -1262,6 +1367,95 @@ const RouteDashboard = () => {
                             <ServiceStopTable stops={serviceStops} navigate={navigate} now={now} />
                         </section>
                     </main>
+                )}
+            </div>
+        </div>
+    );
+};
+
+const AllRoutesStopPanel = ({ routes, stops, onOpenStop }) => {
+    const groupedStops = useMemo(() => {
+        const groupsByTech = stops.reduce((groups, stop) => {
+            const techKey = stop.routeTechId || stop.techId || stop.routeTechName || stop.tech || 'unassigned';
+            const existingGroup = groups.get(techKey) || {
+                techKey,
+                techName: stop.routeTechName || stop.tech || 'Unassigned',
+                routeName: stop.routeName || '',
+                stops: [],
+            };
+
+            existingGroup.stops.push(stop);
+            groups.set(techKey, existingGroup);
+            return groups;
+        }, new Map());
+
+        return Array.from(groupsByTech.values()).sort((a, b) => a.techName.localeCompare(b.techName));
+    }, [stops]);
+
+    return (
+        <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
+            <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                    <h3 className="text-lg font-bold text-gray-800">All Technician Stops</h3>
+                    <p className="text-sm text-gray-500">
+                        Stop-only view for {routes.length} technician route{routes.length === 1 ? '' : 's'} on this date.
+                    </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                    <DetailPill label="Stops" value={stops.length} />
+                    <DetailPill label="Technicians" value={groupedStops.length} />
+                    <DetailPill label="Finished" value={stops.filter(stop => getStopTiming(stop).end).length} />
+                </div>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2">
+                {groupedStops.length ? groupedStops.map(group => {
+                    const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
+
+                    return (
+                        <div key={group.techKey} className="rounded-lg border border-gray-200">
+                            <div className="flex items-start justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
+                                <div>
+                                    <p className="font-semibold text-gray-900">{group.techName}</p>
+                                    <p className="text-xs text-gray-500">{group.routeName || 'Daily route'}</p>
+                                </div>
+                                <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                                    {finishedCount}/{group.stops.length}
+                                </span>
+                            </div>
+
+                            <div className="divide-y divide-gray-100">
+                                {group.stops.map((stop, index) => {
+                                    const status = getStopDisplayStatus(stop);
+                                    const routeIndex = stop.routeStopIndex || index + 1;
+
+                                    return (
+                                        <button
+                                            key={stop.id}
+                                            type="button"
+                                            onClick={() => onOpenStop(stop)}
+                                            className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                                        >
+                                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700">
+                                                {routeIndex}
+                                            </span>
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
+                                                <span className="block truncate text-sm text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
+                                            </span>
+                                            <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${status.className}`}>
+                                                {status.label}
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    );
+                }) : (
+                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500">
+                        No service stops loaded for this date.
+                    </div>
                 )}
             </div>
         </div>
@@ -1338,13 +1532,12 @@ const ActiveRouteDetailPanel = ({
                                         type="button"
                                         onClick={() => onToggleStop(stop)}
                                         disabled={isFinished}
-                                        className={`h-8 w-8 rounded-full border text-sm font-bold ${
-                                            isSelected
+                                        className={`h-8 w-8 rounded-full border text-sm font-bold ${isSelected
                                                 ? 'border-blue-600 bg-blue-600 text-white'
                                                 : isFinished
                                                     ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
                                                     : 'border-gray-300 bg-white text-gray-600 hover:border-blue-400'
-                                        }`}
+                                            }`}
                                         title={isFinished ? 'Finished stops cannot be moved' : 'Select stop'}
                                     >
                                         {isSelected ? '✓' : index + 1}
@@ -1469,11 +1662,10 @@ const OverlayButton = ({ label, colorClass, isOn, onClick }) => {
         <button
             type="button"
             onClick={onClick}
-            className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition ${
-                isOn
+            className={`rounded-full border px-3 py-1.5 text-sm font-semibold transition ${isOn
                     ? activeClasses[colorClass]
                     : 'border-gray-200 bg-gray-50 text-gray-500 hover:bg-gray-100'
-            }`}
+                }`}
         >
             {isOn ? label : `Hide ${label}`}
         </button>
@@ -1638,7 +1830,20 @@ const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) 
     );
 };
 
-const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlays }) => {
+const technicianStopLabel = (stop, fallbackIndex) => {
+    const techName = stop.routeTechName || stop.tech || 'Unassigned';
+    const initials = techName
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0]?.toUpperCase())
+        .join('') || 'U';
+    const stopNumber = stop.routeStopIndex || fallbackIndex + 1;
+
+    return `${initials}-${stopNumber}`;
+};
+
+const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlays, showTechnicianLabels = false }) => {
     const mapRef = useRef(null);
 
     useEffect(() => {
@@ -1779,16 +1984,18 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
                     : status === 'In Progress'
                         ? '#2563eb'
                         : '#ca8a04';
+                const markerLabel = showTechnicianLabels ? technicianStopLabel(stop, index) : index + 1;
 
                 addCircleMarker({
                     position,
-                    label: index + 1,
+                    label: markerLabel,
                     title: stop.customerName || `Stop ${index + 1}`,
                     fillColor,
-                    scale: 14,
+                    scale: showTechnicianLabels ? 16 : 14,
                     infoContent: `
                         <div style="font-family: Arial, sans-serif; padding: 6px;">
-                            <p style="font-weight: 700; margin: 0 0 4px 0;">Stop ${index + 1}: ${escapeHtml(stop.customerName || 'Service Stop')}</p>
+                            <p style="font-weight: 700; margin: 0 0 4px 0;">${escapeHtml(showTechnicianLabels ? markerLabel : `Stop ${index + 1}`)}: ${escapeHtml(stop.customerName || 'Service Stop')}</p>
+                            ${showTechnicianLabels ? `<p style="margin: 0 0 4px 0;">Technician: ${escapeHtml(stop.routeTechName || stop.tech || 'Unassigned')}</p>` : ''}
                             <p style="margin: 0 0 4px 0;">${escapeHtml(stop.address?.streetAddress || 'No address')}</p>
                             <p style="margin: 0;">Status: ${escapeHtml(status)}</p>
                         </div>
@@ -1885,7 +2092,7 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
             overlaysToClear.forEach(overlay => overlay.setMap(null));
             infoWindow.close();
         };
-    }, [route, stops, routeLocations, areaEstimates, overlays]);
+    }, [route, stops, routeLocations, areaEstimates, overlays, showTechnicianLabels]);
 
     return <div ref={mapRef} className="h-full min-h-[400px] w-full" />;
 };

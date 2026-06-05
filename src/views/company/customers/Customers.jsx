@@ -6,6 +6,7 @@ import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
 import { Equipment } from '../../../utils/models/Equipment';
 import { ClipLoader } from 'react-spinners';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const UpgradeBanner = ({ remaining, onUpgrade }) => (
     <div className={`p-4 mb-6 rounded-2xl shadow-lg ${remaining <= 0 ? 'bg-red-100 border-red-500' : 'bg-yellow-100 border-yellow-500'} border-l-4`}>
@@ -30,6 +31,7 @@ const UpgradeBanner = ({ remaining, onUpgrade }) => (
 export default function Customers() {
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can } = useCompanyPermissions();
     const [allCustomers, setAllCustomers] = useState([]);
     const [filteredCustomers, setFilteredCustomers] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
@@ -141,14 +143,18 @@ export default function Customers() {
 
                     </div>
                     <div className="flex space-x-4">
-                        <Link to="/company/customers/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
-                            Upload Bulk
-                        </Link>
-                        <Link to="/company/customers/createNew"
-                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-                        >
-                            + Create New
-                        </Link>
+                        {can("12") && (
+                            <>
+                                <Link to="/company/customers/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
+                                    Upload Bulk
+                                </Link>
+                                <Link to="/company/customers/createNew"
+                                    className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                                >
+                                    + Create New
+                                </Link>
+                            </>
+                        )}
                         <button onClick={updateCustomerAndLocations} className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition">
                             Update Equipment
                         </button>

@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, query, where, addDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, query, where, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
@@ -119,13 +119,17 @@ const NewRequest = () => {
                 creatorName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName,
                 customerId: '', //comp
                 customerName: '', //comp
+                customerUserId: user.uid,
                 homeownerName: dataBaseUser.firstName + ' ' + dataBaseUser.lastName, //shared
-                homeownerEmail: '', //shared
-                homeownerPhone: '', //shared
+                homeownerEmail: dataBaseUser.email || user.email || '', //shared
+                homeownerPhone: dataBaseUser.phoneNumber || dataBaseUser.phone || '', //shared
                 homeownerId: user.uid, //homeowner
                 homeownerServiceLocationId: selectedLocation, //homeowner
                 homeownerBodyOfWaterId: selectedBodyOfWater || "", //homeowner
                 homeownerEquipmentId: selectedEquipment || "", //homeowner
+                relationshipId: '',
+                customerCompanyRelationshipId: '',
+                requestType,
             });
 
             navigate('/client/service-requests');
@@ -167,7 +171,7 @@ const NewRequest = () => {
                             <option value="" disabled>Select a location</option>
                             {userLocations.map(loc => (
                                 <option key={loc.id} value={loc.id}>
-                                    {loc.address.streetAddress || `Unnamed Location (ID: ${loc.id})`}
+                                    {loc.address.streetAddress || loc.name || "Unnamed Location"}
                                 </option>
                             ))}
                         </select>
@@ -188,7 +192,7 @@ const NewRequest = () => {
                                 <option value="">Select a pool or spa</option>
                                 {bodiesOfWater.map(bow => (
                                     <option key={bow.id} value={bow.id}>
-                                        {bow.name || `Unnamed (ID: ${bow.id})`}
+                                        {bow.name || "Unnamed Body of Water"}
                                     </option>
                                 ))}
                             </select>

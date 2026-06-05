@@ -3,9 +3,15 @@ import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { query, collection, getDocs } from "firebase/firestore";
 import { Link, useNavigate } from "react-router-dom";
-import { Equipment } from "../../../utils/models/Equipment";
+import { Equipment, displayEquipmentStatus, normalizeEquipmentStatus } from "../../../utils/models/Equipment";
 import { format, isBefore, isEqual, startOfToday } from "date-fns";
 import * as XLSX from "xlsx";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+  BriefcaseIcon,
+  PencilSquareIcon,
+  WrenchScrewdriverIcon,
+} from "@heroicons/react/24/outline";
 
 const TopFilterButton = ({ label, count, active, onClick }) => (
   <button
@@ -31,9 +37,32 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
   </button>
 );
 
+const ActionButton = ({ label, icon: Icon, tone = "blue", onClick }) => {
+  const toneClasses =
+    tone === "amber"
+      ? "text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100"
+      : tone === "green"
+        ? "text-green-700 bg-green-50 border-green-200 hover:bg-green-100"
+        : "text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={label}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition ${toneClasses}`}
+    >
+      <Icon className="h-4 w-4" />
+      <span className="hidden xl:inline">{label}</span>
+    </button>
+  );
+};
+
 export default function EquipmentList() {
   const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
+  const { can } = useCompanyPermissions();
 
   const [equipmentList, setEquipmentList] = useState([]);
   const [filteredEquipmentList, setFilteredEquipmentList] = useState([]);
@@ -91,7 +120,7 @@ export default function EquipmentList() {
   // -----------------------------
   // Helpers (status + date logic)
   // -----------------------------
-  const norm = (v) => (v ?? "").toString().trim().toLowerCase();
+  const norm = normalizeEquipmentStatus;
 
   const dateIsDue = (d) => {
     if (!d) return false;
@@ -109,16 +138,14 @@ export default function EquipmentList() {
     if (!eq) return false;
     const status = norm(eq.status);
     const statusSaysMaintenance =
-      status === "needs maintenance" ||
       status === "needsmaintenance" ||
       status === "maintenance" ||
-      status === "needs service" ||
       status === "needsservice";
 
     return statusSaysMaintenance || dateIsDue(eq.nextServiceDate);
   };
 
-  const isNeedsRepair = (eq) => norm(eq?.status) === "needs repair";
+  const isNeedsRepair = (eq) => norm(eq?.status) === "needsrepair";
   const isNonOperational = (eq) => norm(eq?.status) === "nonoperational";
 
   // Counts for top buttons
@@ -206,10 +233,46 @@ export default function EquipmentList() {
     if (maintenanceFlag) return "bg-red-100 text-red-800";
     const s = norm(status);
     if (s === "operational") return "bg-green-100 text-green-800";
-    if (s === "needs maintenance" || s === "maintenance" || s === "needs service") return "bg-yellow-100 text-yellow-800";
-    if (s === "needs repair") return "bg-orange-100 text-orange-800";
+    if (s === "needsmaintenance" || s === "maintenance" || s === "needsservice") return "bg-yellow-100 text-yellow-800";
+    if (s === "needsrepair") return "bg-orange-100 text-orange-800";
     if (s === "nonoperational") return "bg-gray-200 text-gray-800";
     return "bg-gray-100 text-gray-800";
+  };
+
+  const getEquipmentDisplayName = (equipment) =>
+    [
+      equipment?.name,
+      equipment?.make,
+      equipment?.model,
+    ].filter(Boolean).join(" ") || equipment?.type || "Equipment";
+
+  const buildEquipmentContext = (equipment, jobIntent = "") => ({
+    jobIntent,
+    equipmentId: equipment?.id || "",
+    equipmentName: getEquipmentDisplayName(equipment),
+    customerId: equipment?.customerId || "",
+    customerName: equipment?.customerName || "",
+    serviceLocationId: equipment?.serviceLocationId || "",
+    bodyOfWaterId: equipment?.bodyOfWaterId || "",
+    type: equipment?.type || "",
+    make: equipment?.make || "",
+    model: equipment?.model || "",
+    name: equipment?.name || "",
+  });
+
+  const openEquipmentAction = (equipment, equipmentAction) => {
+    navigate(`/company/equipment/detail/${equipment.id}`, {
+      state: { equipmentAction },
+    });
+  };
+
+  const createEquipmentJob = (equipment, jobIntent) => {
+    navigate("/company/jobs/createNew", {
+      state: {
+        equipmentContext: buildEquipmentContext(equipment, jobIntent),
+        jobIntent,
+      },
+    });
   };
 
   // -----------------------------
@@ -221,14 +284,13 @@ export default function EquipmentList() {
         const maintenanceFlag = isNeedsMaintenance(eq);
 
         return {
-          "Equipment ID": eq?.id || "",
-          "Customer ID": eq?.customerId || "",
+          Equipment: eq?.name || eq?.model || eq?.type || "Equipment",
           "Customer Name": eq?.customerName || "",
           Name: eq?.name || "",
           Make: eq?.make || "",
           Model: eq?.model || "",
           Type: eq?.type || "",
-          Status: maintenanceFlag ? "Needs Maintenance" : (eq?.status || ""),
+          Status: maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(eq?.status || ""),
           "Needs Service (bool)": eq?.needsService ?? "",
           "Last Service Date": eq?.lastServiceDate ? format(eq.lastServiceDate, "yyyy-MM-dd") : "",
           "Next Service Date": eq?.nextServiceDate ? format(eq.nextServiceDate, "yyyy-MM-dd") : "",
@@ -270,12 +332,14 @@ export default function EquipmentList() {
             </div>
           </div>
 
-          <Link
-            to={"/company/equipment/createNew"}
-            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-          >
-            Create New
-          </Link>
+          {can("62") && (
+            <Link
+              to={"/company/equipment/createNew"}
+              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+            >
+              Create New
+            </Link>
+          )}
         </div>
 
         {/* TOP FILTER BUTTONS */}
@@ -366,6 +430,7 @@ export default function EquipmentList() {
                     </th>
                   ))}
                   <th className="p-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
+                  <th className="p-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Quick Actions</th>
                 </tr>
               </thead>
 
@@ -374,44 +439,91 @@ export default function EquipmentList() {
                   const maintenanceFlag = isNeedsMaintenance(equipment);
 
                   return (
-                    <tr key={equipment.id} className="hover:bg-gray-50 transition-colors"
-                      onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
-                      <td className="p-4 whitespace-nowrap">
+                    <tr key={equipment.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="p-4 whitespace-nowrap"
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         {equipment.customerName}
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="p-4 whitespace-nowrap text-gray-700"
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         {equipment.make}
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="p-4 whitespace-nowrap text-gray-700"
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         {equipment.model}
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="p-4 whitespace-nowrap text-gray-700"
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         {equipment.type}
                       </td>
 
                       <td
                         className={`p-4 whitespace-nowrap ${dateIsDue(equipment.nextServiceDate) ? "text-red-600 font-semibold" : "text-gray-700"
                           }`}
-                      >
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)}>
                         {equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
                       </td>
 
-                      <td className="p-4 whitespace-nowrap">
+                      <td className="p-4 whitespace-nowrap"
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         <span
                           className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(
                             equipment.status,
                             maintenanceFlag
                           )}`}
                         >
-                          {maintenanceFlag ? "Needs Maintenance" : equipment.status}
+                          {maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(equipment.status)}
                         </span>
                       </td>
 
-                      <td className="p-4 whitespace-nowrap max-w-xs truncate text-gray-700" title={equipment.notes}>
+                      <td className="p-4 whitespace-nowrap max-w-xs truncate text-gray-700" title={equipment.notes}
+                        onClick={() => navigate(`/company/equipment/detail/${equipment.id}`)} >
                         {equipment.notes}
+                      </td>
+
+                      <td className="p-4 min-w-[320px]" onClick={(event) => event.stopPropagation()}>
+                        <div className="flex flex-wrap gap-2">
+                          {can("64") && (
+                            <>
+                              <ActionButton
+                                label="Make/Model"
+                                icon={PencilSquareIcon}
+                                onClick={() => openEquipmentAction(equipment, "editMakeModel")}
+                              />
+                              <ActionButton
+                                label="Record Maintenance"
+                                icon={WrenchScrewdriverIcon}
+                                tone="green"
+                                onClick={() => openEquipmentAction(equipment, "recordMaintenance")}
+                              />
+                              <ActionButton
+                                label="Record Repair"
+                                icon={WrenchScrewdriverIcon}
+                                tone="amber"
+                                onClick={() => openEquipmentAction(equipment, "recordRepair")}
+                              />
+                            </>
+                          )}
+                          {can("22") && (
+                            <>
+                              <ActionButton
+                                label="Maintenance Job"
+                                icon={BriefcaseIcon}
+                                tone="green"
+                                onClick={() => createEquipmentJob(equipment, "maintenance")}
+                              />
+                              <ActionButton
+                                label="Repair Job"
+                                icon={BriefcaseIcon}
+                                tone="amber"
+                                onClick={() => createEquipmentJob(equipment, "repair")}
+                              />
+                            </>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -419,7 +531,7 @@ export default function EquipmentList() {
 
                 {filteredEquipmentList.length === 0 && (
                   <tr>
-                    <td colSpan={7} className="p-10 text-center text-gray-500">
+                    <td colSpan={8} className="p-10 text-center text-gray-500">
                       No equipment found for the selected filters.
                     </td>
                   </tr>

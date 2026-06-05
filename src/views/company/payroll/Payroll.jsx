@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { collection, doc, getDoc, getDocs, query, updateDoc, where, writeBatch } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { Link } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
@@ -28,6 +29,20 @@ const isoDate = (date) => date.toISOString().slice(0, 10);
 const isoDateTime = (value) => {
   const date = dateFromValue(value);
   return date ? date.toISOString() : "";
+};
+
+const debugDateTime = (value) => isoDateTime(value) || "-";
+
+const serializeForDebug = (value) => {
+  if (value?.toDate) return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(serializeForDebug);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, nestedValue]) => [key, serializeForDebug(nestedValue)])
+    );
+  }
+  return value;
 };
 
 const csvCell = (value) => {
@@ -68,6 +83,15 @@ const StatusPill = ({ status }) => (
   </span>
 );
 
+const DetailField = ({ label, value, accent }) => (
+  <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+    <p className={`mt-1 break-words text-sm font-semibold ${accent ? "text-blue-700" : "text-slate-900"}`}>
+      {value === null || value === undefined || value === "" ? "-" : String(value)}
+    </p>
+  </div>
+);
+
 const emptyPaymentForm = () => ({
   paidDate: isoDate(new Date()),
   paymentMode: "manual",
@@ -77,7 +101,102 @@ const emptyPaymentForm = () => ({
   paidNotes: "",
 });
 
-const Payroll = () => {
+const defaultPaySettings = (companyId) => ({
+  companyId,
+  payMode: "productionOnly",
+  routePaySource: "serviceStopAndCompletedTasks",
+  taskPaySource: "technicianRateThenTaskContractedRate",
+  hourlyPaySource: "none",
+  allowMultipleWorkTypesPerStop: true,
+  defaultStackBehavior: "stackable",
+  allowTechnicianRateOverrides: true,
+  allowManualPayAdjustments: false,
+  payCommercialAsSeparateWorkType: true,
+  paySpaAsSeparateWorkType: true,
+  payPerBodyOfWater: true,
+  commercialMultiBodyPayStyle: "basePlusAdditionalBodyRate",
+  lockPayAfterApproval: true,
+  recalculateUnapprovedPayWhenRatesChange: true,
+});
+
+const hourlyPaySettings = (companyId) => ({
+  ...defaultPaySettings(companyId),
+  payMode: "hourlyOnly",
+  routePaySource: "none",
+  taskPaySource: "none",
+  hourlyPaySource: "activeRouteDuration",
+  allowMultipleWorkTypesPerStop: false,
+  payCommercialAsSeparateWorkType: false,
+  paySpaAsSeparateWorkType: false,
+  payPerBodyOfWater: false,
+  commercialMultiBodyPayStyle: "singleCommercialRate",
+});
+
+const hybridPaySettings = (companyId) => ({
+  ...defaultPaySettings(companyId),
+  payMode: "hybrid",
+  hourlyPaySource: "activeRouteDuration",
+});
+
+const normalizePaySettingsForIos = (settings = {}, companyId = "") => {
+  const normalized = {
+    ...defaultPaySettings(companyId),
+    ...settings,
+    companyId,
+  };
+
+  if (normalized.hourlyPaySource === "activeRouteLog") {
+    normalized.hourlyPaySource = "activeRouteLogs";
+  }
+
+  return normalized;
+};
+
+const emptyRateForm = () => ({
+  technicianId: "",
+  workTypeId: "",
+  payBasis: "serviceStop",
+  rateType: "flatPerStop",
+  amount: "",
+  effectiveStartDate: isoDate(new Date()),
+  status: "active",
+  reason: "",
+});
+
+const rateTypeOptions = ["flatPerStop", "flatPerTask", "hourly", "perBodyOfWater", "perServiceLocation", "percentage", "manual"];
+const payBasisOptions = ["serviceStop", "serviceStopTask", "technicianHourly", "manualAdjustment"];
+const payModeOptions = ["productionOnly", "hourlyOnly", "hybrid"];
+const routePaySourceOptions = ["serviceStop", "completedTasks", "serviceStopAndCompletedTasks", "hourlyServiceStopDuration", "hourlyTaskActualTime", "none"];
+const taskPaySourceOptions = ["technicianRate", "taskContractedRate", "technicianRateThenTaskContractedRate", "taskContractedRateThenTechnicianRate", "hourlyActualTime", "hourlyEstimatedTime", "none"];
+const hourlyPaySourceOptions = ["activeRouteDuration", "activeRouteLogs", "serviceStopDuration", "taskActualTime", "none"];
+const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
+const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
+const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
+
+const dollarsToCents = (value) => {
+  const amount = Number(value || 0);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
+};
+
+const displayWorkTitle = (item) =>
+  item.taskName ||
+  item.workTypeName ||
+  item.serviceStopTypeName ||
+  item.displayTitle ||
+  "Payroll Line";
+
+const rateTypeLabel = (item) => {
+  const isMissingRate =
+    item?.calculationStatus === "needsReview" &&
+    !item?.rateId &&
+    !item?.technicianRateId &&
+    Number(item?.rateAmountCents || 0) === 0;
+
+  return isMissingRate ? "Missing Rate" : statusLabel(item?.rateType);
+};
+
+const Payroll = ({ mode = "payroll" }) => {
+  const isSetupMode = mode === "setup";
   const { recentlySelectedCompany, user } = useContext(Context);
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
@@ -88,8 +207,14 @@ const Payroll = () => {
   const [lineItems, setLineItems] = useState([]);
   const [statements, setStatements] = useState([]);
   const [payrollBatches, setPayrollBatches] = useState([]);
-  const [paySettings, setPaySettings] = useState(null);
-  const [activeTab, setActiveTab] = useState("lineItems");
+  const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
+  const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
+  const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
+  const [companyUsers, setCompanyUsers] = useState([]);
+  const [technicianRates, setTechnicianRates] = useState([]);
+  const [rateForm, setRateForm] = useState(emptyRateForm);
+  const [editingRateId, setEditingRateId] = useState("");
+  const [activeTab, setActiveTab] = useState(isSetupMode ? "overview" : "lineItems");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -97,13 +222,29 @@ const Payroll = () => {
   const [savingAction, setSavingAction] = useState("");
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
+  const [detailLineItem, setDetailLineItem] = useState(null);
+
+  useEffect(() => {
+    setActiveTab((currentTab) => {
+      const setupTabs = ["overview", "stopPay", "rates", "settings"];
+      const payrollTabs = ["lineItems", "statements", "batches"];
+      const allowedTabs = isSetupMode ? setupTabs : payrollTabs;
+      return allowedTabs.includes(currentTab) ? currentTab : allowedTabs[0];
+    });
+  }, [isSetupMode]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setLineItems([]);
       setStatements([]);
       setPayrollBatches([]);
-      setPaySettings(null);
+      setSettingsForm(defaultPaySettings(""));
+      setCompanyServiceStopTypes([]);
+      setCompanyWorkTypes([]);
+      setCompanyUsers([]);
+      setTechnicianRates([]);
+      setRateForm(emptyRateForm());
+      setEditingRateId("");
       return;
     }
 
@@ -125,12 +266,29 @@ const Payroll = () => {
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
         const batchesRef = collection(db, "companies", recentlySelectedCompany, "payrollBatches");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
+        const serviceStopTypesRef = collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes");
+        const workTypesRef = collection(db, "companies", recentlySelectedCompany, "companyWorkTypes");
+        const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
+        const technicianRatesRef = collection(db, "companies", recentlySelectedCompany, "technicianRates");
 
-        const [lineItemsSnap, statementsSnap, batchesSnap, settingsSnap] = await Promise.all([
+        const [
+          lineItemsSnap,
+          statementsSnap,
+          batchesSnap,
+          settingsSnap,
+          serviceStopTypesSnap,
+          workTypesSnap,
+          companyUsersSnap,
+          technicianRatesSnap,
+        ] = await Promise.all([
           getDocs(lineItemsQuery),
           getDocs(statementsRef),
           getDocs(batchesRef),
           getDoc(settingsRef),
+          getDocs(serviceStopTypesRef),
+          getDocs(workTypesRef),
+          getDocs(companyUsersRef),
+          getDocs(technicianRatesRef),
         ]);
 
         const nextLineItems = lineItemsSnap.docs
@@ -160,7 +318,31 @@ const Payroll = () => {
         setLineItems(nextLineItems);
         setStatements(nextStatements);
         setPayrollBatches(nextBatches);
-        setPaySettings(settingsSnap.exists() ? settingsSnap.data() : null);
+        const nextPaySettings = normalizePaySettingsForIos(
+          settingsSnap.exists() ? settingsSnap.data() : {},
+          recentlySelectedCompany
+        );
+        setSettingsForm(nextPaySettings);
+        setCompanyServiceStopTypes(
+          serviceStopTypesSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+        );
+        setCompanyWorkTypes(
+          workTypesSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+        );
+        setCompanyUsers(
+          companyUsersSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a, b) => String(a.userName || a.name || "").localeCompare(String(b.userName || b.name || "")))
+        );
+        setTechnicianRates(
+          technicianRatesSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0))
+        );
       } catch (err) {
         console.error("Error loading payroll:", err);
         setError("Could not load payroll data.");
@@ -224,6 +406,158 @@ const Payroll = () => {
 
   const updateLocalBatch = (payload) => {
     setPayrollBatches((items) => [payload, ...items.filter((item) => item.id !== payload.id)]);
+  };
+
+  const workerName = (technicianId) => {
+    const worker = companyUsers.find((item) => item.userId === technicianId || item.id === technicianId);
+    return worker?.userName || worker?.name || worker?.displayName || technicianId || "-";
+  };
+
+  const workTypeName = (workTypeId) => {
+    const workType = companyWorkTypes.find((item) => item.id === workTypeId);
+    return workType?.name || (workTypeId ? workTypeId : "General");
+  };
+
+  const serviceStopTypeWorkTypeNames = (type) => {
+    const ids = Array.isArray(type.defaultWorkTypeIds) ? type.defaultWorkTypeIds : [];
+    if (ids.length === 0) return "No default work types";
+    return ids.map(workTypeName).join(", ");
+  };
+
+  const savePaySettings = async (event) => {
+    event.preventDefault();
+    if (!recentlySelectedCompany) return;
+    const actionKey = "save-pay-settings";
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const payload = {
+        ...normalizePaySettingsForIos(settingsForm, recentlySelectedCompany),
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main"), payload, { merge: true });
+      setSettingsForm(payload);
+      setActionNotice("Payroll settings saved.");
+    } catch (err) {
+      console.error("Error saving payroll settings:", err);
+      setActionFailure("Could not save payroll settings.");
+    } finally {
+      setSavingAction("");
+    }
+  };
+
+  const applyPaySettingsPreset = (presetName) => {
+    const presetSettings = {
+      production: defaultPaySettings(recentlySelectedCompany || ""),
+      hourly: hourlyPaySettings(recentlySelectedCompany || ""),
+      hybrid: hybridPaySettings(recentlySelectedCompany || ""),
+    }[presetName];
+
+    if (!presetSettings) return;
+    setSettingsForm((form) => ({
+      ...form,
+      ...presetSettings,
+      companyId: recentlySelectedCompany || form.companyId || "",
+    }));
+  };
+
+  const saveServiceStopTypeWorkTypes = async (serviceStopTypeId, selectedIds) => {
+    if (!recentlySelectedCompany || !serviceStopTypeId) return;
+    const actionKey = `save-stop-type-${serviceStopTypeId}`;
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const cleanIds = [...new Set((selectedIds || []).filter(Boolean))];
+      const payload = {
+        defaultWorkTypeIds: cleanIds,
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopTypeId), payload);
+      setCompanyServiceStopTypes((types) =>
+        types.map((type) => (type.id === serviceStopTypeId ? { ...type, ...payload } : type))
+      );
+      setActionNotice("Service stop type payroll mapping saved.");
+    } catch (err) {
+      console.error("Error saving service stop type work types:", err);
+      setActionFailure("Could not save that service stop type mapping.");
+    } finally {
+      setSavingAction("");
+    }
+  };
+
+  const editTechnicianRate = (rate) => {
+    setEditingRateId(rate.id);
+    setRateForm({
+      technicianId: rate.technicianId || "",
+      workTypeId: rate.workTypeId || "",
+      payBasis: rate.payBasis || "serviceStop",
+      rateType: rate.rateType || "flatPerStop",
+      amount: String(Number(rate.amountCents || 0) / 100),
+      effectiveStartDate: isoDate(dateFromValue(rate.effectiveStartDate) || new Date()),
+      status: rate.status || "active",
+      reason: rate.reason || "",
+    });
+  };
+
+  const resetRateForm = () => {
+    setEditingRateId("");
+    setRateForm(emptyRateForm());
+  };
+
+  const saveTechnicianRate = async (event) => {
+    event.preventDefault();
+    if (!recentlySelectedCompany) return;
+    if (!rateForm.technicianId) {
+      setActionFailure("Select a technician before saving a rate.");
+      return;
+    }
+    if (rateForm.payBasis !== "technicianHourly" && !rateForm.workTypeId) {
+      setActionFailure("Select a work type for non-hourly technician rates.");
+      return;
+    }
+
+    const actionKey = "save-technician-rate";
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const rateId = editingRateId || `comp_tech_rate_${uuidv4()}`;
+      const payload = {
+        id: rateId,
+        companyId: recentlySelectedCompany,
+        technicianId: rateForm.technicianId,
+        payBasis: rateForm.payBasis,
+        workTypeId: rateForm.payBasis === "technicianHourly" ? null : rateForm.workTypeId,
+        amountCents: dollarsToCents(rateForm.amount),
+        rateType: rateForm.rateType,
+        effectiveStartDate: new Date(`${rateForm.effectiveStartDate || isoDate(new Date())}T12:00:00`),
+        effectiveEndDate: null,
+        status: rateForm.status,
+        reason: rateForm.reason.trim() || null,
+        ratePlanId: technicianRates.find((rate) => rate.id === editingRateId)?.ratePlanId || "web_manual_rate_plan",
+        createdAt: technicianRates.find((rate) => rate.id === editingRateId)?.createdAt || new Date(),
+        createdByUserId: technicianRates.find((rate) => rate.id === editingRateId)?.createdByUserId || currentUserId,
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "technicianRates", rateId), payload, { merge: true });
+      setTechnicianRates((rates) =>
+        [payload, ...rates.filter((rate) => rate.id !== rateId)].sort(
+          (a, b) => (dateFromValue(b.effectiveStartDate)?.getTime() || 0) - (dateFromValue(a.effectiveStartDate)?.getTime() || 0)
+        )
+      );
+      resetRateForm();
+      setActionNotice("Technician rate saved.");
+    } catch (err) {
+      console.error("Error saving technician rate:", err);
+      setActionFailure("Could not save technician rate.");
+    } finally {
+      setSavingAction("");
+    }
   };
 
   const lineItemsForBatch = (batch) => {
@@ -666,6 +1000,10 @@ const Payroll = () => {
     }
   };
 
+  const closeDetailModal = () => {
+    setDetailLineItem(null);
+  };
+
   const renderLineItems = () => {
     if (summary.activeItems.length === 0) {
       return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll line items found for this date range.</div>;
@@ -696,8 +1034,8 @@ const Payroll = () => {
                   <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(item.completedDate)}</td>
                   <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">{item.technicianName || "Worker"}</td>
                   <td className="px-4 py-3 text-slate-700">
-                    <div className="font-medium">{item.displayTitle || item.workTypeName || "Payroll Line"}</div>
-                    <div className="text-xs text-slate-500">{statusLabel(item.rateType)} · {Number(item.quantity || 0)} {item.quantityUnit || "each"}</div>
+                    <div className="font-medium">{displayWorkTitle(item)}</div>
+                    <div className="text-xs text-slate-500">{rateTypeLabel(item)} · {Number(item.quantity || 0)} {item.quantityUnit || "each"}</div>
                     {item.paymentReference ? <div className="mt-1 text-xs text-slate-500">Ref: {item.paymentReference}</div> : null}
                   </td>
                   <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
@@ -705,6 +1043,13 @@ const Payroll = () => {
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
                   <td className="whitespace-nowrap px-4 py-3">
                     <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDetailLineItem(item)}
+                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                      >
+                        Inspect
+                      </button>
                       <button
                         type="button"
                         onClick={() => approveLineItem(item)}
@@ -810,7 +1155,7 @@ const Payroll = () => {
             <div key={batch.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-lg font-bold text-slate-900">{batch.batchReference || batch.id}</p>
+                  <p className="text-lg font-bold text-slate-900">{batch.batchReference || "Payroll batch"}</p>
                   <p className="text-sm text-slate-500">{shortDate(batch.startDate)} - {shortDate(batch.endDate)}</p>
                   {batch.externalReferenceId ? <p className="mt-1 text-xs text-slate-500">{batch.externalReferenceId}</p> : null}
                 </div>
@@ -859,60 +1204,433 @@ const Payroll = () => {
   };
 
   const renderSettings = () => (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-bold text-slate-900">Payroll Settings</h2>
-      {paySettings ? (
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
-          <Setting label="Pay mode" value={statusLabel(paySettings.payMode)} />
-          <Setting label="Route pay source" value={statusLabel(paySettings.routePaySource)} />
-          <Setting label="Task pay source" value={statusLabel(paySettings.taskPaySource)} />
-          <Setting label="Hourly pay source" value={statusLabel(paySettings.hourlyPaySource)} />
-          <Setting label="Manual adjustments" value={paySettings.allowManualPayAdjustments ? "Allowed" : "Not allowed"} />
-          <Setting label="Lock after approval" value={paySettings.lockPayAfterApproval ? "Yes" : "No"} />
+    <form onSubmit={savePaySettings} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h2 className="text-lg font-bold text-slate-900">Payroll Settings</h2>
+          <p className="mt-1 text-sm text-slate-500">These fields mirror the iOS CompanyPaySettings document.</p>
         </div>
-      ) : (
-        <p className="mt-4 text-sm text-slate-500">No payroll settings have been saved for this company yet.</p>
-      )}
-    </div>
+        <button
+          type="submit"
+          disabled={savingAction === "save-pay-settings"}
+          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {savingAction === "save-pay-settings" ? "Saving" : "Save Settings"}
+        </button>
+      </div>
+
+      <div className="mt-5 rounded-lg border border-blue-100 bg-blue-50 p-4">
+        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Quick Setup</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => applyPaySettingsPreset("production")}
+            className="rounded-md bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-100"
+          >
+            Production Pay Defaults
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPaySettingsPreset("hourly")}
+            className="rounded-md bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-100"
+          >
+            Hourly Pay Defaults
+          </button>
+          <button
+            type="button"
+            onClick={() => applyPaySettingsPreset("hybrid")}
+            className="rounded-md bg-white px-3 py-2 text-sm font-semibold text-blue-700 shadow-sm hover:bg-blue-100"
+          >
+            Hybrid Pay Defaults
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <label className="text-sm font-semibold text-slate-700">
+          Pay mode
+          <select
+            value={settingsForm.payMode || "productionOnly"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, payMode: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {payModeOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Route pay source
+          <select
+            value={settingsForm.routePaySource || "serviceStopAndCompletedTasks"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, routePaySource: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {routePaySourceOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Task pay source
+          <select
+            value={settingsForm.taskPaySource || "technicianRateThenTaskContractedRate"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, taskPaySource: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {taskPaySourceOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Hourly pay source
+          <select
+            value={settingsForm.hourlyPaySource || "none"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, hourlyPaySource: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {hourlyPaySourceOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Default stacking
+          <select
+            value={settingsForm.defaultStackBehavior || "stackable"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, defaultStackBehavior: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {stackBehaviorOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+        <label className="text-sm font-semibold text-slate-700">
+          Commercial Multi-BOW style
+          <select
+            value={settingsForm.commercialMultiBodyPayStyle || "basePlusAdditionalBodyRate"}
+            onChange={(event) => setSettingsForm((form) => ({ ...form, commercialMultiBodyPayStyle: event.target.value }))}
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          >
+            {commercialMultiBodyPayStyleOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+          </select>
+        </label>
+      </div>
+
+      <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {[
+          ["allowMultipleWorkTypesPerStop", "Multiple work types per stop"],
+          ["allowTechnicianRateOverrides", "Technician rate overrides"],
+          ["allowManualPayAdjustments", "Manual pay adjustments"],
+          ["payCommercialAsSeparateWorkType", "Commercial separate work type"],
+          ["paySpaAsSeparateWorkType", "Spa separate work type"],
+          ["payPerBodyOfWater", "Pay per body of water"],
+          ["lockPayAfterApproval", "Lock after approval"],
+          ["recalculateUnapprovedPayWhenRatesChange", "Recalculate unapproved pay"],
+        ].map(([key, label]) => (
+          <label key={key} className="flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+            <span>{label}</span>
+            <input
+              type="checkbox"
+              checked={Boolean(settingsForm[key])}
+              onChange={(event) => setSettingsForm((form) => ({ ...form, [key]: event.target.checked }))}
+              className="h-4 w-4"
+            />
+          </label>
+        ))}
+      </div>
+    </form>
   );
+
+  const renderSetupOverview = () => {
+    const flowSteps = [
+      {
+        title: "Schedule Stop",
+        subtitle: "Route, job, or recurring stop",
+        example: "Example: weekly pool route",
+      },
+      {
+        title: "Pick Stop Type",
+        subtitle: "What kind of work is being scheduled",
+        example: "Example: Weekly Route",
+      },
+      {
+        title: "Pays As",
+        subtitle: "Payroll work created from that stop",
+        example: "Example: Route",
+      },
+      {
+        title: "Technician Rate",
+        subtitle: "Worker-specific pay for that work",
+        example: "Example: Michael · $80",
+      },
+      {
+        title: "Payroll Line",
+        subtitle: "Review, approve, batch, and mark paid",
+        example: "Example: calculated line item",
+      },
+    ];
+
+    return (
+      <div className="grid gap-5">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
+            <h2 className="text-lg font-bold text-slate-900">Payroll Setup Flow</h2>
+            <p className="text-sm text-slate-500">One scheduled stop becomes one or more payroll lines through this path.</p>
+          </div>
+          <div className="mt-5 grid gap-3 lg:grid-cols-5">
+            {flowSteps.map((step, index) => (
+              <div key={step.title} className="relative rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-600 text-sm font-bold text-white">{index + 1}</div>
+                <h3 className="mt-3 text-sm font-bold text-slate-900">{step.title}</h3>
+                <p className="mt-1 text-xs text-slate-600">{step.subtitle}</p>
+                <p className="mt-3 rounded-md bg-white px-2 py-1 text-xs font-semibold text-slate-700">{step.example}</p>
+                {index < flowSteps.length - 1 ? (
+                  <div className="absolute -right-2 top-1/2 hidden h-4 w-4 -translate-y-1/2 rotate-45 border-r-2 border-t-2 border-blue-300 lg:block" />
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="grid gap-4 lg:grid-cols-3">
+          <button
+            type="button"
+            onClick={() => setActiveTab("stopPay")}
+            className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
+          >
+            <h3 className="text-base font-bold text-slate-900">Stop Pay Setup</h3>
+            <p className="mt-2 text-sm text-slate-600">Choose which payroll work types each scheduled service stop type creates.</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("rates")}
+            className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
+          >
+            <h3 className="text-base font-bold text-slate-900">Technician Rates</h3>
+            <p className="mt-2 text-sm text-slate-600">Set each technician's amount for each payroll work type.</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("settings")}
+            className="rounded-lg border border-slate-200 bg-white p-5 text-left shadow-sm hover:border-blue-300 hover:bg-blue-50"
+          >
+            <h3 className="text-base font-bold text-slate-900">Pay Rules</h3>
+            <p className="mt-2 text-sm text-slate-600">Control approval behavior, route pay source, task pay source, and recalculation.</p>
+          </button>
+        </section>
+      </div>
+    );
+  };
+
+  const renderStopPaySetup = () => (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
+          <h2 className="text-lg font-bold text-slate-900">Stop Pay Setup</h2>
+          <p className="text-sm text-slate-500">Connect each scheduled service stop type to the payroll work it should create.</p>
+        </div>
+        <div className="mt-4 grid gap-4">
+          {companyServiceStopTypes.length === 0 ? (
+            <p className="text-sm text-slate-500">No service stop types found.</p>
+          ) : companyServiceStopTypes.map((type) => {
+            const selectedIds = new Set(Array.isArray(type.defaultWorkTypeIds) ? type.defaultWorkTypeIds : []);
+            return (
+              <div key={type.id} className="rounded-lg border border-slate-200 p-4">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div>
+                    <h3 className="font-bold text-slate-900">{type.name || "Service stop type"}</h3>
+                    <p className="mt-1 text-sm text-slate-500">{serviceStopTypeWorkTypeNames(type)}</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => saveServiceStopTypeWorkTypes(type.id, [...selectedIds])}
+                    disabled={savingAction === `save-stop-type-${type.id}`}
+                    className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {savingAction === `save-stop-type-${type.id}` ? "Saving" : "Save Mapping"}
+                  </button>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {companyWorkTypes.map((workType) => (
+                    <label key={workType.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        defaultChecked={selectedIds.has(workType.id)}
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            selectedIds.add(workType.id);
+                          } else {
+                            selectedIds.delete(workType.id);
+                          }
+                        }}
+                      />
+                      <span>{workType.name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+  );
+
+  const renderTechnicianRates = () => (
+      <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
+          <h2 className="text-lg font-bold text-slate-900">Technician Rates</h2>
+          <p className="text-sm text-slate-500">Create or update the rate rows used by iOS PayEngine and web estimates.</p>
+        </div>
+        <form onSubmit={saveTechnicianRate} className="mt-4 grid gap-4 lg:grid-cols-6">
+          <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
+            Technician
+            <select value={rateForm.technicianId} onChange={(event) => setRateForm((form) => ({ ...form, technicianId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">Select technician</option>
+              {companyUsers.map((worker) => <option key={worker.id} value={worker.userId || worker.id}>{worker.userName || worker.name || "Technician"}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700 lg:col-span-2">
+            Work type
+            <select value={rateForm.workTypeId} onChange={(event) => setRateForm((form) => ({ ...form, workTypeId: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              <option value="">General / hourly</option>
+              {companyWorkTypes.map((workType) => <option key={workType.id} value={workType.id}>{workType.name}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Pay basis
+            <select value={rateForm.payBasis} onChange={(event) => setRateForm((form) => ({ ...form, payBasis: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              {payBasisOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Rate type
+            <select value={rateForm.rateType} onChange={(event) => setRateForm((form) => ({ ...form, rateType: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              {rateTypeOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Amount
+            <input type="number" step="0.01" value={rateForm.amount} onChange={(event) => setRateForm((form) => ({ ...form, amount: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Effective
+            <input type="date" value={rateForm.effectiveStartDate} onChange={(event) => setRateForm((form) => ({ ...form, effectiveStartDate: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </label>
+          <label className="text-sm font-semibold text-slate-700">
+            Status
+            <select value={rateForm.status} onChange={(event) => setRateForm((form) => ({ ...form, status: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+              {rateStatusOptions.map((option) => <option key={option} value={option}>{statusLabel(option)}</option>)}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-slate-700 lg:col-span-3">
+            Notes
+            <input type="text" value={rateForm.reason} onChange={(event) => setRateForm((form) => ({ ...form, reason: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          </label>
+          <div className="flex items-end gap-2 lg:col-span-2">
+            <button type="submit" disabled={savingAction === "save-technician-rate"} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50">
+              {savingAction === "save-technician-rate" ? "Saving" : editingRateId ? "Update Rate" : "Add Rate"}
+            </button>
+            {editingRateId ? (
+              <button type="button" onClick={resetRateForm} className="rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        </form>
+
+        <div className="mt-5 overflow-x-auto rounded-lg border border-slate-200">
+          <table className="min-w-full divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-4 py-3">Technician</th>
+                <th className="px-4 py-3">Work Type</th>
+                <th className="px-4 py-3">Basis</th>
+                <th className="px-4 py-3">Rate</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {technicianRates.length === 0 ? (
+                <tr><td colSpan={6} className="px-4 py-6 text-center text-slate-500">No technician rates found.</td></tr>
+              ) : technicianRates.map((rate) => (
+                <tr key={rate.id}>
+                  <td className="px-4 py-3 font-semibold text-slate-900">{workerName(rate.technicianId)}</td>
+                  <td className="px-4 py-3 text-slate-700">{workTypeName(rate.workTypeId)}</td>
+                  <td className="px-4 py-3 text-slate-600">{statusLabel(rate.payBasis)}</td>
+                  <td className="px-4 py-3 text-slate-700">{moneyFromCents(rate.amountCents)} · {statusLabel(rate.rateType)}</td>
+                  <td className="px-4 py-3"><StatusPill status={rate.status} /></td>
+                  <td className="px-4 py-3 text-right">
+                    <button type="button" onClick={() => editTechnicianRate(rate)} className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                      Edit
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+  );
+
+  const tabItems = isSetupMode
+    ? [
+      ["overview", "Overview"],
+      ["stopPay", "Stop Pay Setup"],
+      ["rates", "Technician Rates"],
+      ["settings", "Pay Rules"],
+    ]
+    : [
+      ["lineItems", "Line Items"],
+      ["statements", "Statements"],
+      ["batches", "Batches"],
+    ];
 
   return (
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-7xl">
         <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Payroll</h1>
-            <p className="mt-1 text-slate-600">Review internal technician pay lines, statements, and payroll settings.</p>
+            <h1 className="text-3xl font-bold text-slate-900">{isSetupMode ? "Payroll Setup" : "Payroll"}</h1>
+            <p className="mt-1 text-slate-600">
+              {isSetupMode
+                ? "Configure how scheduled work turns into technician pay."
+                : "Review, approve, batch, export, and mark technician pay as paid."}
+            </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-            <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
-            <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
-            <button
-              type="button"
-              onClick={createPayrollBatch}
-              disabled={summary.approvedUnpaidItems.length === 0 || savingAction === "create-payroll-batch"}
-              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          {isSetupMode ? (
+            <Link
+              to="/company/payroll"
+              className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
             >
-              {savingAction === "create-payroll-batch" ? "Creating" : "Create Batch"}
-            </button>
-          </div>
+              Open Payroll
+            </Link>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto_auto]">
+              <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+              <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+              <Link
+                to="/company/payroll/setup"
+                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Payroll Setup
+              </Link>
+              <button
+                type="button"
+                onClick={createPayrollBatch}
+                disabled={summary.approvedUnpaidItems.length === 0 || savingAction === "create-payroll-batch"}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingAction === "create-payroll-batch" ? "Creating" : "Create Batch"}
+              </button>
+            </div>
+          )}
         </header>
 
-        <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard title="Payroll total" value={moneyFromCents(summary.totalCents)} subtitle={`${summary.activeItems.length} active line item(s)`} />
-          <StatCard title="Needs review" value={summary.needsReview} subtitle="Line items requiring attention" />
-          <StatCard title="Approved" value={summary.approved} subtitle="Approved line items" />
-          <StatCard title="Ready to batch" value={moneyFromCents(summary.approvedUnpaidCents)} subtitle={`${summary.approvedUnpaidItems.length} approved unpaid line(s)`} />
-          <StatCard title="Paid" value={summary.paid} subtitle="Marked paid internally" />
-        </div>
+        {!isSetupMode ? (
+          <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+            <StatCard title="Payroll total" value={moneyFromCents(summary.totalCents)} subtitle={`${summary.activeItems.length} active line item(s)`} />
+            <StatCard title="Needs review" value={summary.needsReview} subtitle="Line items requiring attention" />
+            <StatCard title="Approved" value={summary.approved} subtitle="Approved line items" />
+            <StatCard title="Ready to batch" value={moneyFromCents(summary.approvedUnpaidCents)} subtitle={`${summary.approvedUnpaidItems.length} approved unpaid line(s)`} />
+            <StatCard title="Paid" value={summary.paid} subtitle="Marked paid internally" />
+          </div>
+        ) : null}
 
         <div className="mb-5 flex flex-wrap gap-2">
-          {[
-            ["lineItems", "Line Items"],
-            ["statements", "Statements"],
-            ["batches", "Batches"],
-            ["settings", "Settings"],
-          ].map(([tab, label]) => (
+          {tabItems.map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -929,10 +1647,13 @@ const Payroll = () => {
         {actionError ? <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{actionError}</div> : null}
         {loading ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Loading payroll...</div> : null}
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
-        {!loading && !error && activeTab === "lineItems" ? renderLineItems() : null}
-        {!loading && !error && activeTab === "statements" ? renderStatements() : null}
-        {!loading && !error && activeTab === "batches" ? renderBatches() : null}
-        {!loading && !error && activeTab === "settings" ? renderSettings() : null}
+        {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
+        {!loading && !error && !isSetupMode && activeTab === "statements" ? renderStatements() : null}
+        {!loading && !error && !isSetupMode && activeTab === "batches" ? renderBatches() : null}
+        {!loading && !error && isSetupMode && activeTab === "overview" ? renderSetupOverview() : null}
+        {!loading && !error && isSetupMode && activeTab === "stopPay" ? renderStopPaySetup() : null}
+        {!loading && !error && isSetupMode && activeTab === "rates" ? renderTechnicianRates() : null}
+        {!loading && !error && isSetupMode && activeTab === "settings" ? renderSettings() : null}
       </div>
       {paymentModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
@@ -945,7 +1666,7 @@ const Payroll = () => {
                     ? paymentModal.target.statementReference || paymentModal.target.technicianName || "Pay statement"
                     : paymentModal.targetType === "batch"
                       ? paymentModal.target.batchReference || paymentModal.target.id || "Payroll batch"
-                      : paymentModal.target.displayTitle || paymentModal.target.workTypeName || "Payroll line item"}
+                      : displayWorkTitle(paymentModal.target)}
                 </p>
               </div>
               <button type="button" onClick={closePaymentModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
@@ -1037,15 +1758,93 @@ const Payroll = () => {
           </form>
         </div>
       ) : null}
+      {detailLineItem ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <div className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-xl">
+            <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Payroll Line Detail</h2>
+                <p className="mt-1 text-sm text-slate-500">{detailLineItem.displayTitle || detailLineItem.workTypeName || "Payroll line"}</p>
+              </div>
+              <button
+                type="button"
+                onClick={closeDetailModal}
+                className="rounded-md px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-5">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <DetailField label="Status" value={detailLineItem.calculationStatus} accent />
+                <DetailField label="Total" value={moneyFromCents(detailLineItem.totalAmountCents)} accent />
+                <DetailField label="Completed" value={debugDateTime(detailLineItem.completedDate)} />
+                <DetailField label="Source" value={detailLineItem.source} />
+                <DetailField label="Technician" value={detailLineItem.technicianName || (detailLineItem.technicianId ? "Assigned technician" : "")} accent />
+                <DetailField label="Worker Type" value={detailLineItem.workerType} />
+                <DetailField label="Company" value={detailLineItem.companyName || (detailLineItem.companyId || recentlySelectedCompany ? "Selected company" : "")} />
+                <DetailField label="Service Stop" value={detailLineItem.serviceStopInternalId || (detailLineItem.serviceStopId ? "Service stop" : "")} accent />
+                <DetailField label="Service Stop Type" value={detailLineItem.serviceStopTypeName} />
+                <DetailField label="Job" value={detailLineItem.jobInternalId || (detailLineItem.jobId ? "Job" : "")} />
+                <DetailField label="Task" value={detailLineItem.displayTitle || detailLineItem.workTypeName || (detailLineItem.serviceStopTaskId || detailLineItem.taskId ? "Task" : "")} />
+                <DetailField label="Work Type" value={detailLineItem.workTypeName || (detailLineItem.workTypeId ? "General" : "")} accent />
+                <DetailField label="Pay Basis" value={detailLineItem.payBasis} accent />
+                <DetailField label="Rate Type" value={rateTypeLabel(detailLineItem)} />
+                <DetailField label="Rate Amount" value={moneyFromCents(detailLineItem.rateAmountCents)} />
+                <DetailField label="Quantity" value={`${Number(detailLineItem.quantity || 0)} ${detailLineItem.quantityUnit || ""}`.trim()} />
+                <DetailField label="Rate" value={rateTypeLabel(detailLineItem) || (detailLineItem.rateId || detailLineItem.technicianRateId ? "Rate" : "")} />
+                <DetailField label="Pay Statement" value={detailLineItem.payStatementReference || (detailLineItem.payStatementId ? "Payroll statement" : "")} />
+                <DetailField label="Export Batch" value={detailLineItem.exportBatchReference || (detailLineItem.exportBatchId ? "Export batch" : "")} />
+                <DetailField label="Payment Ref" value={detailLineItem.paymentReference || detailLineItem.externalReferenceId} />
+              </div>
+
+              <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Context</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <p><span className="font-semibold">Title:</span> {detailLineItem.displayTitle || detailLineItem.workTypeName || "-"}</p>
+                    <p><span className="font-semibold">Customer:</span> {detailLineItem.customerName || "-"}</p>
+                    <p><span className="font-semibold">Address:</span> {detailLineItem.serviceLocationAddress || "-"}</p>
+                    <p><span className="font-semibold">Created:</span> {debugDateTime(detailLineItem.createdAt)}</p>
+                    <p><span className="font-semibold">Updated:</span> {debugDateTime(detailLineItem.updatedAt)}</p>
+                    <p><span className="font-semibold">Approved:</span> {debugDateTime(detailLineItem.approvedAt)}</p>
+                    <p><span className="font-semibold">Paid:</span> {debugDateTime(detailLineItem.paidAt)}</p>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Debug Notes</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <p><span className="font-semibold">Calculation notes:</span> {detailLineItem.calculationNotes || detailLineItem.notes || "-"}</p>
+                    <p><span className="font-semibold">Void reason:</span> {detailLineItem.voidReason || "-"}</p>
+                    <p><span className="font-semibold">Payment notes:</span> {detailLineItem.paidNotes || "-"}</p>
+                    <p><span className="font-semibold">Raw status:</span> {detailLineItem.status || "-"}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 rounded-lg border border-slate-200 bg-slate-950 p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-200">Raw Firestore Data</h3>
+                  <button
+                    type="button"
+                    onClick={() => navigator.clipboard?.writeText(JSON.stringify(serializeForDebug(detailLineItem), null, 2))}
+                    className="rounded-md bg-white/10 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/20"
+                  >
+                    Copy JSON
+                  </button>
+                </div>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-words text-xs leading-5 text-slate-100">
+                  {JSON.stringify(serializeForDebug(detailLineItem), null, 2)}
+                </pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };
-
-const Setting = ({ label, value }) => (
-  <div className="rounded-lg bg-slate-50 p-3">
-    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-    <p className="mt-1 font-semibold text-slate-900">{value || "-"}</p>
-  </div>
-);
 
 export default Payroll;

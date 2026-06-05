@@ -6,27 +6,38 @@ import {
     BuildingStorefrontIcon,
     WrenchScrewdriverIcon,
     DocumentTextIcon,
-    CalendarDaysIcon,
     PlusCircleIcon,
     ExclamationTriangleIcon,
-    HomeModernIcon
+    HomeModernIcon,
+    CreditCardIcon
 } from '@heroicons/react/24/outline';
 import { collection, query, where, onSnapshot, orderBy, limit } from 'firebase/firestore';
 import { db } from '../../utils/config';
+import { SalesAgreementStatus, SalesInvoiceStatus, salesCollectionNames } from '../../utils/models/Sales';
+import {
+    REPAIR_REQUEST_STATUS,
+    displayRepairRequestStatus,
+    normalizeRepairRequestStatus,
+} from '../../utils/models/RepairRequest';
 
-const ActionCard = ({ to, icon, title, description, buttonText, buttonClass }) => (
-    <div className="bg-white rounded-xl shadow-lg p-6 flex flex-col items-center text-center transition-transform transform hover:-translate-y-1">
-        <div className="mb-4">{icon}</div>
-        <h3 className="text-xl font-bold text-gray-800 mb-2">{title}</h3>
-        <p className="text-gray-600 mb-6 flex-grow">{description}</p>
-        <Link
-            to={to}
-            className={`w-full text-white font-semibold py-2 px-4 rounded-lg transition-colors ${buttonClass}`}
-        >
-            {buttonText}
-        </Link>
-    </div>
-);
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+});
+
+const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
+
+const normalizeSalesStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const invoiceBalanceCents = (invoice) => {
+    if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) return Number(invoice.amountDueCents) || 0;
+
+    const total = Number(invoice.totalAmountCents || invoice.totalCents) || 0;
+    const paid = Number(invoice.amountPaidCents) || 0;
+    const writtenOff = Number(invoice.writeOffAmountCents) || 0;
+
+    return Math.max(total - paid - writtenOff, 0);
+};
 
 const MyPoolSnapshot = () => {
     const { user } = useContext(Context);
@@ -117,7 +128,11 @@ const RepairRequestsWidget = () => {
         const q = query(
             requestsRef,
             where('userId', '==', user.uid),
-            where('status', 'in', ['pending', 'in progress']),
+            where('status', 'in', [
+                REPAIR_REQUEST_STATUS.UNRESOLVED,
+                REPAIR_REQUEST_STATUS.LEGACY_PENDING,
+                'Pending',
+            ]),
             orderBy('createdAt', 'desc'),
             limit(3)
         );
@@ -152,7 +167,7 @@ const RepairRequestsWidget = () => {
                         {requests.map(req => (
                             <li key={req.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
                                 <p className="text-gray-700 font-medium truncate">{req.description}</p>
-                                <span className="text-sm font-semibold text-yellow-600 bg-yellow-100 px-2 py-1 rounded-full">{req.status}</span>
+                                <span className="text-sm font-semibold text-yellow-600 bg-yellow-100 px-2 py-1 rounded-full">{displayRepairRequestStatus(req.status)}</span>
                             </li>
                         ))}
                     </ul>
@@ -170,9 +185,9 @@ const RepairRequestsWidget = () => {
     );
 };
 
-const ContractsWidget = () => {
+const ServiceAgreementsWidget = () => {
     const { user } = useContext(Context);
-    const [contracts, setContracts] = useState([]);
+    const [agreements, setAgreements] = useState([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -180,11 +195,15 @@ const ContractsWidget = () => {
             setLoading(false);
             return;
         }
-        const contractsRef = collection(db, 'contracts');
-        const q = query(contractsRef, where('clientId', '==', user.uid), where('status', '==', 'active'), limit(3));
+        const agreementsRef = collection(db, salesCollectionNames.agreements);
+        const q = query(
+            agreementsRef,
+            where('customerUserId', '==', user.uid),
+            limit(3)
+        );
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedContracts = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setContracts(fetchedContracts);
+            const fetchedAgreements = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setAgreements(fetchedAgreements);
             setLoading(false);
         }, () => setLoading(false));
 
@@ -203,27 +222,133 @@ const ContractsWidget = () => {
         <div className="bg-white rounded-xl shadow-lg p-6 flex flex-col h-full">
             <div className="flex items-center mb-4">
                 <DocumentTextIcon className="w-8 h-8 text-indigo-500 mr-3" />
-                <h3 className="text-xl font-bold text-gray-800">Active Contracts</h3>
+                <h3 className="text-xl font-bold text-gray-800">Service Agreements</h3>
             </div>
             <div className="flex-grow">
-                {loading ? renderSkeleton() : contracts.length > 0 ? (
+                {loading ? renderSkeleton() : agreements.length > 0 ? (
                     <ul className="space-y-3">
-                        {contracts.map(con => (
-                            <li key={con.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                                <p className="text-gray-700 font-medium truncate">{con.companyName}</p>
-                                <span className="text-sm font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">{con.status}</span>
+                        {agreements.map(agreement => (
+                            <li key={agreement.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
+                                <p className="text-gray-700 font-medium truncate">{agreement.companyName || agreement.title || 'Service Agreement'}</p>
+                                <span className="text-sm font-semibold text-green-600 bg-green-100 px-2 py-1 rounded-full">
+                                    {agreement.status || SalesAgreementStatus.draft}
+                                </span>
                             </li>
                         ))}
                     </ul>
                 ) : (
                     <div className="text-center flex flex-col items-center justify-center h-full">
                         <BuildingStorefrontIcon className="w-16 h-16 text-gray-300 mb-2" />
-                        <p className="text-gray-500">You have no active contracts.</p>
+                        <p className="text-gray-500">You have no service agreements yet.</p>
                     </div>
                 )}
             </div>
-            <Link to={contracts.length > 0 ? "/client/contracts" : "/client/companies"} className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition-colors">
-                {contracts.length > 0 ? 'View All Contracts' : 'Browse Companies'}
+            <Link to={agreements.length > 0 ? "/client/service-agreements" : "/client/companies"} className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                {agreements.length > 0 ? 'View Agreements' : 'Browse Companies'}
+            </Link>
+        </div>
+    );
+};
+
+const BillingWidget = () => {
+    const { user } = useContext(Context);
+    const [invoices, setInvoices] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        if (!user?.uid) {
+            setLoading(false);
+            return undefined;
+        }
+
+        const invoiceMap = new Map();
+        let firstSnapshotsRemaining = user.email ? 2 : 1;
+
+        const publish = (snapshot) => {
+            snapshot.docs.forEach(doc => {
+                invoiceMap.set(doc.id, { id: doc.id, ...doc.data() });
+            });
+
+            const fetchedInvoices = Array.from(invoiceMap.values()).sort((left, right) => {
+                const rightMillis = right.updatedAt?.toMillis?.() || right.createdAt?.toMillis?.() || 0;
+                const leftMillis = left.updatedAt?.toMillis?.() || left.createdAt?.toMillis?.() || 0;
+                return rightMillis - leftMillis;
+            });
+
+            setInvoices(fetchedInvoices.slice(0, 3));
+            firstSnapshotsRemaining -= 1;
+            if (firstSnapshotsRemaining <= 0) setLoading(false);
+        };
+
+        const invoicesRef = collection(db, salesCollectionNames.invoices);
+        const unsubscribes = [
+            onSnapshot(
+                query(invoicesRef, where('customerUserId', '==', user.uid)),
+                publish,
+                () => setLoading(false)
+            ),
+        ];
+
+        if (user.email) {
+            unsubscribes.push(
+                onSnapshot(
+                    query(invoicesRef, where('email', '==', user.email)),
+                    publish,
+                    () => setLoading(false)
+                )
+            );
+        }
+
+        return () => unsubscribes.forEach(unsubscribe => unsubscribe());
+    }, [user]);
+
+    const openInvoices = invoices.filter(invoice => (
+        invoiceBalanceCents(invoice) > 0 &&
+        !['paid', 'void', 'uncollectible'].includes(normalizeSalesStatus(invoice.status))
+    ));
+    const openBalanceCents = openInvoices.reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0);
+
+    const renderSkeleton = () => (
+        <div className="space-y-3 animate-pulse">
+            <div className="h-6 bg-gray-200 rounded w-3/4"></div>
+            <div className="h-6 bg-gray-200 rounded w-1/2"></div>
+            <div className="h-10 bg-gray-200 rounded-lg mt-4"></div>
+        </div>
+    );
+
+    return (
+        <div className="bg-white rounded-xl shadow-lg p-6 flex flex-col h-full">
+            <div className="flex items-center mb-4">
+                <CreditCardIcon className="w-8 h-8 text-emerald-500 mr-3" />
+                <h3 className="text-xl font-bold text-gray-800">Billing</h3>
+            </div>
+            <div className="flex-grow">
+                {loading ? renderSkeleton() : invoices.length > 0 ? (
+                    <div>
+                        <div className="mb-4 rounded-lg bg-emerald-50 p-3">
+                            <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Open Balance</p>
+                            <p className="mt-1 text-2xl font-bold text-emerald-900">{formatCurrency(openBalanceCents)}</p>
+                        </div>
+                        <ul className="space-y-3">
+                            {invoices.map(invoice => (
+                                <li key={invoice.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
+                                    <p className="text-gray-700 font-medium truncate">{invoice.invoiceNumber || invoice.companyName || 'Invoice'}</p>
+                                    <span className="text-sm font-semibold text-slate-600 bg-slate-100 px-2 py-1 rounded-full">
+                                        {invoice.status || SalesInvoiceStatus.draft}
+                                    </span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                ) : (
+                    <div className="text-center flex flex-col items-center justify-center h-full">
+                        <CreditCardIcon className="w-16 h-16 text-gray-300 mb-2" />
+                        <p className="text-gray-500">No billing records yet.</p>
+                    </div>
+                )}
+            </div>
+            <Link to="/client/billing" className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                View Billing
             </Link>
         </div>
     );
@@ -277,10 +402,11 @@ const ServiceRequestsWidget = () => {
                         {requests.map(req => (
                             <li key={req.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
                                 <p className="text-gray-700 font-medium truncate">{req.companyName}</p>
-                                <span className={`text-sm font-semibold px-2 py-1 rounded-full ${req.status === 'pending' ? 'text-yellow-600 bg-yellow-100' :
-                                        req.status === 'approved' ? 'text-green-600 bg-green-100' :
-                                            'text-red-600 bg-red-100'
-                                    }`}>{req.status}</span>
+                                <span className={`text-sm font-semibold px-2 py-1 rounded-full ${
+                                    normalizeRepairRequestStatus(req.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)
+                                        ? 'text-green-600 bg-green-100'
+                                        : 'text-yellow-600 bg-yellow-100'
+                                }`}>{displayRepairRequestStatus(req.status)}</span>
                             </li>
                         ))}
                     </ul>
@@ -324,9 +450,10 @@ const ClientDashboard = () => {
                 </div>
 
                 {/* Mid Widgets Section */}
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-12">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mb-12">
                     <RepairRequestsWidget />
-                    <ContractsWidget />
+                    <ServiceAgreementsWidget />
+                    <BillingWidget />
                     <ServiceRequestsWidget />
                 </div>
             </div>

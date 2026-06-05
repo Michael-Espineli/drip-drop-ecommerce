@@ -3,9 +3,11 @@ import { useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
 import { collection, addDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const CreateBodyOfWater = () => {
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
     const [name, setName] = useState('');
@@ -18,6 +20,8 @@ const CreateBodyOfWater = () => {
 
     const handleCreate = async (e) => {
         e.preventDefault();
+        if (!requirePermission("52", "create bodies of water")) return;
+
         if (!recentlySelectedCompany) {
             setError('No company selected. Please select a company before creating a body of water.');
             return;

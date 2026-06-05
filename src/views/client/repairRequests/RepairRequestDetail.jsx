@@ -5,6 +5,7 @@ import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
 import { Context } from '../../../context/AuthContext';
 import { DripDropStoredImage } from '../../../utils/models/DripDropStoredImage';
+import { REPAIR_REQUEST_STATUS, displayRepairRequestStatus, normalizeRepairRequestStatus } from '../../../utils/models/RepairRequest';
 
 const RepairRequestDetail = () => {
     const { user } = useContext(Context);
@@ -102,11 +103,8 @@ const RepairRequestDetail = () => {
                             </div>
                             <div>
                                 <h3 className="font-semibold text-lg text-gray-700 mb-2">Request Status</h3>
-                                <span className={`px-3 py-1 rounded-full text-sm font-semibold ${request.status === 'pending' ? 'bg-yellow-200 text-yellow-800' :
-                                        request.status === 'in-progress' ? 'bg-blue-200 text-blue-800' :
-                                            'bg-green-200 text-green-800'
-                                    }`}>
-                                    {request.status}
+                                <span className={`px-3 py-1 rounded-full text-sm font-semibold ${repairRequestStatusClass(request.status)}`}>
+                                    {displayRepairRequestStatus(request.status)}
                                 </span>
                             </div>
                             {location && (
@@ -150,6 +148,28 @@ const RepairRequestDetail = () => {
             </div>
         </div>
     );
+};
+
+const repairRequestStatusClass = (status) => {
+    const value = normalizeRepairRequestStatus(status);
+
+    if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)) {
+        return 'bg-gray-200 text-gray-800';
+    }
+
+    if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)) {
+        return 'bg-green-200 text-green-800';
+    }
+
+    if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED) || value === 'canceled') {
+        return 'bg-red-200 text-red-800';
+    }
+
+    if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS) || value === REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS_SLUG) {
+        return 'bg-blue-200 text-blue-800';
+    }
+
+    return 'bg-yellow-200 text-yellow-800';
 };
 
 export default RepairRequestDetail;

@@ -1,15 +1,17 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-    addDoc,
     collection,
+    doc,
     getDocs,
     orderBy,
     query,
+    setDoc,
     Timestamp,
     where,
 } from "firebase/firestore";
 import Select from "react-select";
+import { v4 as uuidv4 } from "uuid";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 
@@ -87,6 +89,8 @@ const ShoppingListCreateView = () => {
 
         jobId: "",
         jobName: "",
+        serviceLocationId: "",
+        serviceLocationName: "",
 
         customerId: "",
         customerName: "",
@@ -163,6 +167,10 @@ const ShoppingListCreateView = () => {
                 return {
                     id: data.id || docSnap.id,
                     name,
+                    customerId: data.customerId || "",
+                    customerName: data.customerName || "",
+                    serviceLocationId: data.serviceLocationId || "",
+                    serviceLocationName: data.serviceLocationName || "",
                     label: name,
                     value: data.id || docSnap.id,
                 };
@@ -217,6 +225,9 @@ const ShoppingListCreateView = () => {
                     description: data.description || "",
                     genericItemId: data.genericItemId || "",
                     dbItemId: data.id || docSnap.id,
+                    rate: Number(data.rate || 0),
+                    sellPrice: Number(data.sellPrice || 0),
+                    cost: Number(data.cost || data.rate || 0),
                     label: name,
                     value: data.id || docSnap.id,
                 };
@@ -247,6 +258,8 @@ const ShoppingListCreateView = () => {
             category: value,
             jobId: "",
             jobName: "",
+            serviceLocationId: "",
+            serviceLocationName: "",
             customerId: "",
             customerName: "",
             userId: "",
@@ -264,13 +277,13 @@ const ShoppingListCreateView = () => {
             subCategory: value,
         };
 
-        if (value === "Custom") {
+        if (value === "Data Base") {
+            nextData.name = "";
+            nextData.description = "";
+        } else {
             nextData.dbItemId = "";
             nextData.genericItemId = "";
             setSelectedDbItem(null);
-        } else {
-            nextData.name = "";
-            nextData.description = "";
         }
 
         setFormData(nextData);
@@ -309,6 +322,10 @@ const ShoppingListCreateView = () => {
             ...prev,
             jobId: option?.id || "",
             jobName: option?.name || "",
+            customerId: option?.customerId || "",
+            customerName: option?.customerName || "",
+            serviceLocationId: option?.serviceLocationId || "",
+            serviceLocationName: option?.serviceLocationName || "",
         }));
     };
 
@@ -323,14 +340,14 @@ const ShoppingListCreateView = () => {
         }));
     };
 
-    const requiresCustomDetails = formData.subCategory === "Custom";
-    const requiresDbItem = formData.subCategory !== "Custom";
+    const requiresDbItem = formData.subCategory === "Data Base";
+    const requiresManualDetails = !requiresDbItem;
 
     const canSave = useMemo(() => {
         const hasPurchaser = formData.purchaserName.trim() !== "";
-        const hasName = requiresCustomDetails
-            ? formData.name.trim() !== ""
-            : formData.dbItemId.trim() !== "";
+        const hasName = requiresDbItem
+            ? formData.dbItemId.trim() !== ""
+            : formData.name.trim() !== "";
 
         const hasCategoryTarget =
             (formData.category === "Personal" && formData.userId.trim() !== "") ||
@@ -338,7 +355,7 @@ const ShoppingListCreateView = () => {
             (formData.category === "Job" && formData.jobId.trim() !== "");
 
         return hasPurchaser && hasName && hasCategoryTarget;
-    }, [formData, requiresCustomDetails]);
+    }, [formData, requiresDbItem]);
 
     const handleCreate = async (e) => {
         e.preventDefault();
@@ -347,41 +364,75 @@ const ShoppingListCreateView = () => {
 
         try {
             setSaving(true);
+            const id = "comp_shop_" + uuidv4();
+            const qty = Number(formData.quantity || 0);
+            const plannedUnitCostCents = requiresDbItem
+                ? Number(selectedDbItem?.rate || selectedDbItem?.cost || 0)
+                : 0;
+            const plannedUnitPriceCents = requiresDbItem
+                ? Number(selectedDbItem?.sellPrice || selectedDbItem?.rate || selectedDbItem?.cost || 0)
+                : 0;
+            const plannedTotalCostCents = Math.round(plannedUnitCostCents * qty);
+            const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * qty);
+            const prepKeys = Array.from(
+                new Set(
+                    [
+                        formData.userId ? `user:${formData.userId}` : "",
+                        formData.jobId ? `job:${formData.jobId}` : "",
+                        formData.customerId ? `customer:${formData.customerId}` : "",
+                        formData.serviceLocationId ? `serviceLocation:${formData.serviceLocationId}` : "",
+                    ].filter(Boolean)
+                )
+            );
 
             const payload = {
-                id: "",
+                id,
                 category: formData.category,
                 subCategory: formData.subCategory,
                 status: formData.status,
                 purchaserId: formData.purchaserId || "",
                 purchaserName: formData.purchaserName || "",
                 genericItemId: formData.genericItemId || "",
-                name: formData.name || "",
+                name: requiresDbItem ? selectedDbItem?.name || formData.name || "" : formData.name || "",
                 description: formData.description || "",
                 datePurchased: formData.datePurchased
                     ? Timestamp.fromDate(new Date(formData.datePurchased))
                     : null,
                 quantity: formData.quantity || "",
                 jobId: formData.category === "Job" ? formData.jobId || "" : "",
-                customerId:
-                    formData.category === "Customer" ? formData.customerId || "" : "",
-                customerName:
-                    formData.category === "Customer" ? formData.customerName || "" : "",
+                jobName: formData.category === "Job" ? formData.jobName || "" : "",
+                customerId: formData.category === "Personal" ? "" : formData.customerId || "",
+                customerName: formData.category === "Personal" ? "" : formData.customerName || "",
                 userId: formData.category === "Personal" ? formData.userId || "" : "",
                 userName:
                     formData.category === "Personal" ? formData.userName || "" : "",
                 dbItemId: requiresDbItem ? formData.dbItemId || "" : "",
+                dbItemName: requiresDbItem ? selectedDbItem?.name || formData.name || "" : "",
                 purchasedItem: formData.purchasedItem || "",
                 invoiced: !!formData.invoiced,
+                serviceLocationId: formData.serviceLocationId || "",
+                serviceLocationName: formData.serviceLocationName || "",
+                prepKeys,
+                needsAction: formData.status !== "Installed",
+                actionDate: Timestamp.now(),
+                assignedTechIds: [],
+                plannedUnitCostCents,
+                plannedUnitPriceCents,
+                plannedTotalCostCents,
+                plannedTotalPriceCents,
+                itemId: requiresDbItem ? formData.dbItemId || "" : "",
+                itemType: formData.subCategory,
+                cost: plannedUnitCostCents,
+                price: plannedUnitPriceCents,
                 createdAt: Timestamp.now(),
             };
 
-            const docRef = await addDoc(
-                collection(db, "companies", recentlySelectedCompany, "shoppingListItems"),
+            await setDoc(
+                doc(db, "companies", recentlySelectedCompany, "shoppingList", id),
                 payload
             );
 
-            navigate(`/company/shopping-list/detail/${docRef.id}`);
+            navigate(`/company/shopping-list/detail/${id}`);
         } catch (error) {
             console.log("Error creating shopping list item");
             console.log(error);
@@ -523,7 +574,7 @@ const ShoppingListCreateView = () => {
                                 </div>
                             )}
 
-                            {requiresCustomDetails && (
+                            {requiresManualDetails && (
                                 <div className="mt-4 grid grid-cols-1 gap-4">
                                     <div>
                                         <label className="block text-sm font-semibold text-gray-500 mb-2">

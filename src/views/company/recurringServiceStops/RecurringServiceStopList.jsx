@@ -121,8 +121,8 @@ const RecurringServiceStopList = () => {
     }
 
     return (
-        <div className='min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8'>
-            <div className="mx-auto max-w-7xl">
+        <div className='min-h-screen bg-slate-50 px-3 py-5 sm:px-4 lg:px-5'>
+            <div className="w-full">
                 <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <h2 className="text-3xl font-bold text-slate-900">Recurring Service Stops</h2>
@@ -177,7 +177,7 @@ const RecurringServiceStopList = () => {
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                                    <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Stop</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Customer</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
                                     <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Assigned Tech</th>
@@ -195,7 +195,6 @@ const RecurringServiceStopList = () => {
                                     <tr key={stop.id} onClick={() => handleRowClick(stop.id)} className="hover:bg-gray-50 cursor-pointer">
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="text-sm font-semibold text-slate-900">{stop.internalId || "—"}</div>
-                                            <div className="text-xs text-slate-400">{stop.id}</div>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="text-sm font-medium text-gray-900">{stop.customerName}</div>

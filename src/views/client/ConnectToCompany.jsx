@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
-import { doc, updateDoc, getDoc, getDocs, collection, query, where, limit, orderBy } from 'firebase/firestore';
+import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
 import { db } from '../../utils/config';
 import { Context } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
@@ -26,7 +26,7 @@ const ConnectToCompany = () => {
 
   const [status, setStatus] = useState('Connecting your account...');
   const [loading, setLoading] = useState(true);
-  const [hasAccount, setHasAccount] = useState(true);
+  const [hasAccount, setHasAccount] = useState(false);
 
   useEffect(() => {
     const companyId = searchParams.get('companyId');
@@ -40,12 +40,14 @@ const ConnectToCompany = () => {
     if (!user) {
       toast.error('You must be logged in to connect an account.');
       setStatus('Error: You must be logged in.');
+      setLoading(false);
       return;
     }
 
     if (!companyId || !customerId) {
       toast.error('Invalid or incomplete connection link.');
       setStatus('Error: Missing company or customer information in the link.');
+      setLoading(false);
       return;
     }
     const fetchCustomer = async () => {
@@ -56,11 +58,10 @@ const ConnectToCompany = () => {
         if (docSnap.exists()) {
           const customerData = docSnap.data();
           setCustomer({ id: docSnap.id, ...customerData });
-          if (customerData.linkedCustomerIds.count == 0) {
-            setHasAccount(true)
-          } else {
-            setHasAccount(false)
-          }
+          const linkedCustomerIds = Array.isArray(customerData.linkedCustomerIds)
+            ? customerData.linkedCustomerIds
+            : [];
+          setHasAccount(linkedCustomerIds.length > 0 && !linkedCustomerIds.includes(user.uid));
         } else {
           toast.error('Customer not found.');
         }
@@ -149,20 +150,20 @@ const ConnectToCompany = () => {
     e.preventDefault()
     try {
       const functionName = httpsCallable(functions, 'createHomeOwnerCustomerBasedOnCompany');
-      functionName({
+      const result = await functionName({
         companyId: companyId,
         companyName: company.name,
         customerId: customerId,
-        homeownerId: user.uid
-      })
-        .then((result) => {
-          console.log(result)
-          // Handle the result from the function
-        })
-        .catch((error) => {
-          // Handle any errors
-          console.error(error);
-        });
+        homeownerId: user.uid,
+        email: user.email || ''
+      });
+
+      const response = result.data || {};
+      if (response.status !== 200) {
+        throw new Error(response.error || 'Could not link this customer account.');
+      }
+
+      console.log(response)
       toast.success('Successfully connected your account!');
       setStatus('Success! Your account has been linked.');
 
@@ -171,15 +172,17 @@ const ConnectToCompany = () => {
 
     } catch (error) {
       console.error("Failed to connect account:", error);
-      toast.error('An error occurred while linking your account.');
-      setStatus(`Error: Could not link your account. Please contact support if the problem persists.`);
+      toast.error(error.message || 'An error occurred while linking your account.');
+      setStatus(error.message || `Error: Could not link your account. Please contact support if the problem persists.`);
     }
   };
 
   if (loading) {
-    return <div className="flex justify-center items-center h-screen">Loading ...</div>;
+    return <div className="flex justify-center items-center h-screen">{status || 'Loading ...'}</div>;
   } else if (hasAccount) {
-    return <div className="flex justify-center items-center h-screen">Account already linked</div>;
+    return <div className="flex justify-center items-center h-screen">Account already linked to another homeowner account.</div>;
+  } else if (status.startsWith('Error:')) {
+    return <div className="flex justify-center items-center h-screen">{status}</div>;
   } else {
     return (
       <div className="min-h-screen bg-gray-100 flex items-center justify-center px-4">
@@ -248,7 +251,7 @@ const ConnectToCompany = () => {
                     key={location.id}
                     className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-sm text-gray-900"
                   >
-                    {location.address.streetAddress}
+                    {location.address?.streetAddress || location.name || 'Unnamed Location'}
                   </div>
                 ))}
               </div>

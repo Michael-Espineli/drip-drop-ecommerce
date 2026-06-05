@@ -1,9 +1,14 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc } from 'firebase/firestore';
+import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, getDocs } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
+import {
+    debugServiceStopTypeWrite,
+    resolveServiceStopTypeFields,
+    SERVICE_STOP_TYPE_USE_CASES,
+} from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 
 export default function ScheduleEstimate() {
     const { leadId } = useParams();
@@ -22,6 +27,7 @@ export default function ScheduleEstimate() {
     });
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [companyName, setCompanyName] = useState('');
+    const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
 
     useEffect(() => {
         if (!leadId || !recentlySelectedCompany) {
@@ -51,6 +57,8 @@ export default function ScheduleEstimate() {
 
                     setLead(enhancedLead);
                     setFormData(prev => ({ ...prev, description: enhancedLead.serviceDescription || '' }));
+                    const serviceStopTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'));
+                    setCompanyServiceStopTypes(serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 } else {
                     toast.error("Lead not found.");
                     navigate('/company/leads');
@@ -101,7 +109,13 @@ export default function ScheduleEstimate() {
         serviceDateTime.setHours(hour, minute, 0, 0);
 
         try {
-            await addDoc(collection(db, 'serviceStops'), {
+            const resolvedTypeFields = resolveServiceStopTypeFields({
+                companyServiceStopTypes,
+                fallbackName: 'Estimate',
+                useCase: SERVICE_STOP_TYPE_USE_CASES.estimate,
+                context: 'ScheduleEstimate.handleSubmit',
+            });
+            const serviceStopPayload = {
                 internalId: '',
                 companyId: recentlySelectedCompany,
                 companyName: companyName,
@@ -119,9 +133,10 @@ export default function ScheduleEstimate() {
                 recurringServiceStopId: '',
                 description: description,
                 serviceLocationId: lead.serviceLocationId,
-                typeId: '',
-                type: 'Estimate',
-                typeImage: '',
+                typeId: resolvedTypeFields.typeId,
+                type: resolvedTypeFields.type,
+                typeImage: resolvedTypeFields.typeImage,
+                serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
                 jobId: '',
                 jobName: '',
                 operationStatus: 'Scheduled',
@@ -135,7 +150,13 @@ export default function ScheduleEstimate() {
                 mainCompanyId: '',
                 isInvoiced: false,
                 leadId: lead.id
+            };
+
+            debugServiceStopTypeWrite({
+                context: 'ScheduleEstimate.handleSubmit',
+                payload: serviceStopPayload,
             });
+            await addDoc(collection(db, 'companies', recentlySelectedCompany, 'serviceStops'), serviceStopPayload);
 
             toast.success('Estimate scheduled successfully!', { id: toastId });
             navigate(`/company/leads/${lead.id}`);

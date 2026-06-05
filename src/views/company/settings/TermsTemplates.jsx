@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { getFirestore, collection, doc, setDoc, getDocs, deleteDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
-import { PlusIcon, PencilIcon, TrashIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
-import { v4 as uuidv4 } from 'uuid';
-import { useNavigate } from 'react-router-dom';
+import { PlusIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import { Link, useNavigate } from 'react-router-dom';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { TermsTemplate } from '../../../utils/models/TermsTemplate';
+import { listenTermsTemplates, saveTermsTemplate } from '../../../utils/terms/termsTemplateFirestore';
+import FeatureInfoButton from '../../../components/FeatureInfoButton';
 
 const TermsTemplates = () => {
-    const db = getFirestore();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
     const [templates, setTemplates] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -16,19 +18,30 @@ const TermsTemplates = () => {
     const [currentTemplate, setCurrentTemplate] = useState({ name: '', description: '', content: '' });
 
     useEffect(() => {
-        if (!recentlySelectedCompany) return;
-        const fetchTemplates = async () => {
-            setIsLoading(true);
-            const templatesRef = collection(db, 'companies', recentlySelectedCompany, 'termsTemplates');
-            const querySnapshot = await getDocs(templatesRef);
-            const templatesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-            setTemplates(templatesList);
+        if (!recentlySelectedCompany) {
+            setTemplates([]);
             setIsLoading(false);
-        };
-        fetchTemplates();
-    }, [db, recentlySelectedCompany]);
+            return undefined;
+        }
+
+        setIsLoading(true);
+        return listenTermsTemplates(
+            recentlySelectedCompany,
+            (templatesList) => {
+                setTemplates(templatesList);
+                setIsLoading(false);
+            },
+            (error) => {
+                console.error("Error fetching templates: ", error);
+                toast.error("Failed to load terms templates.");
+                setIsLoading(false);
+            }
+        );
+    }, [recentlySelectedCompany]);
 
     const handleOpenModal = () => {
+        if (!requirePermission("882", "create terms templates")) return;
+
         setCurrentTemplate({ name: '', description: '', content: '' });
         setIsModalOpen(true);
     };
@@ -40,21 +53,19 @@ const TermsTemplates = () => {
 
     const handleSave = async (e) => {
         e.preventDefault();
+        if (!requirePermission("882", "create terms templates")) return;
+
         if (!currentTemplate.name) {
             toast.error('Template name is required.');
             return;
         }
 
-        const id = uuidv4();
-        const docRef = doc(db, 'companies', recentlySelectedCompany, 'termsTemplates', id);
-        
         try {
-            const newTemplate = { ...currentTemplate, id };
-            await setDoc(docRef, newTemplate);
+            const newTemplate = new TermsTemplate(currentTemplate);
+            await saveTermsTemplate(recentlySelectedCompany, newTemplate);
             toast.success(`Template created successfully!`);
-            setTemplates(prev => [...prev, newTemplate]);
             handleCloseModal();
-            navigate(`/company/settings/terms-templates/${id}`);
+            navigate(`/company/settings/terms-templates/${newTemplate.id}`);
         } catch (error) {
             console.error("Error saving template: ", error);
             toast.error('Failed to save template.');
@@ -65,13 +76,30 @@ const TermsTemplates = () => {
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
                 <div className="flex justify-between items-center mb-8">
-                    <h1 className="text-3xl font-bold text-gray-900">Terms Templates</h1>
-                    <button 
-                        onClick={handleOpenModal}
-                        className="inline-flex items-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg shadow-sm hover:bg-blue-700">
-                        <PlusIcon className="h-5 w-5 mr-2" />
-                        New Template
-                    </button>
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <h1 className="text-3xl font-bold text-gray-900">Terms Templates</h1>
+                            <FeatureInfoButton title="How Terms Templates Work" align="left">
+                                <p>
+                                    Terms templates are saved under this company at
+                                    {' '}<span className="font-semibold">companies/{'{companyId}'}/termsTemplates</span>.
+                                    Each pool company can keep its own residential, commercial, weekly, twice-weekly, or custom service terms.
+                                </p>
+                                <p>
+                                    When a service agreement or estimate is drafted, the selected template can seed the agreement terms,
+                                    then the company can adjust the final wording for that customer.
+                                </p>
+                            </FeatureInfoButton>
+                        </div>
+                    </div>
+                    {can("882") && (
+                        <button 
+                            onClick={handleOpenModal}
+                            className="inline-flex items-center px-4 py-2 bg-blue-600 text-white font-medium rounded-lg shadow-sm hover:bg-blue-700">
+                            <PlusIcon className="h-5 w-5 mr-2" />
+                            New Template
+                        </button>
+                    )}
                 </div>
 
                 {isLoading ? (
@@ -86,7 +114,7 @@ const TermsTemplates = () => {
                         <ul className="divide-y divide-gray-200">
                             {templates.map(template => (
                                 <li key={template.id}>
-                                    <a href={`/company/settings/terms-templates/${template.id}`} className="block hover:bg-gray-50">
+                                    <Link to={`/company/settings/terms-templates/${template.id}`} className="block hover:bg-gray-50">
                                         <div className="px-4 py-4 sm:px-6 flex items-center justify-between">
                                             <div className="truncate">
                                                 <p className="font-medium text-blue-600 truncate">{template.name}</p>
@@ -96,7 +124,7 @@ const TermsTemplates = () => {
                                                 <ChevronRightIcon className="h-5 w-5 text-gray-400" />
                                             </div>
                                         </div>
-                                    </a>
+                                    </Link>
                                 </li>
                             ))}
                         </ul>

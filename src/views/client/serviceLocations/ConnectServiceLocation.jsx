@@ -1,21 +1,17 @@
 import React, { useState, useContext, useEffect } from "react";
 import { Link, useParams } from 'react-router-dom';
-import Chart from 'react-apexcharts';
 import { db } from "../../../utils/config";
-import { query, collection, getDocs, limit, doc, startAt, getDoc, where } from "firebase/firestore";
+import { query, collection, getDocs, doc, getDoc, where } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
+import { getFunctions, httpsCallable } from 'firebase/functions';
 
-import DatePicker from "react-datepicker";
 import 'react-datepicker/dist/react-datepicker.css'
-import Select from 'react-select';
-import {v4 as uuidv4} from 'uuid';
 import toast from 'react-hot-toast';
 
-import { ServiceLocation } from '../../../utils/models/ServiceLocation';
-import { BodyOfWater } from '../../../utils/models/BodyOfWater';
+const functions = getFunctions();
 
 const ConnectServiceLocation = () => {
-    const {user} = useContext(Context);
+    const { user } = useContext(Context);
 
     const { linkedInviteId } = useParams();
     const [ newLinkedInviteId, setNewLinkedInviteId] = useState('');
@@ -96,7 +92,6 @@ const ConnectServiceLocation = () => {
                         //Get Location information 
                         let q = query(collection(db, 'companies',companyId,'serviceLocations'),where('customerId','==',customerId));
                         const querySnapshot = await getDocs(q);       
-                        let count = 1   
                         setLocationList([])      
                         querySnapshot.forEach((doc) => {
                             const companyData = doc.data()
@@ -104,7 +99,6 @@ const ConnectServiceLocation = () => {
                                 id:companyData.id,
                                 address:companyData.address.streetAddress + ' ' + companyData.address.city + ' ' + companyData.address.state + ' ' + companyData.address.zip,
                             }
-                            count = count + 1
                             setLocationList(companies => [...companies, company]); 
                         });
                     } else {
@@ -116,11 +110,11 @@ const ConnectServiceLocation = () => {
                 console.log(error)
             }
         })();
-    },[])
+    },[linkedInviteId])
 
     async function searchForLinkedInvite(e) {
         e.preventDefault()
-        if (newLinkedInviteId!=''){
+        if (newLinkedInviteId !== ''){
             const inviteRef = doc(db, "linkedInvite",newLinkedInviteId);
             const inviteDoc = await getDoc(inviteRef);
             if (inviteDoc.exists()) {
@@ -172,7 +166,6 @@ const ConnectServiceLocation = () => {
                 //Get Location information 
                 let q = query(collection(db, 'companies',companyId,'serviceLocations'),where('customerId','==',customerId));
                 const querySnapshot = await getDocs(q);       
-                let count = 1   
                 setLocationList([])      
                 querySnapshot.forEach((doc) => {
                     const companyData = doc.data()
@@ -180,7 +173,6 @@ const ConnectServiceLocation = () => {
                         id:companyData.id,
                         address:companyData.address.streetAddress + ' ' + companyData.address.city + ' ' + companyData.address.state + ' ' + companyData.address.zip,
                     }
-                    count = count + 1
                     setLocationList(companies => [...companies, company]); 
                 });
             } else {
@@ -191,8 +183,33 @@ const ConnectServiceLocation = () => {
     async function acceptLinkedInvite(e) {
         e.preventDefault()
         if (invite.id!==''){
+            try {
+                if (!user?.uid) {
+                    throw new Error('You must be signed in to accept this invite.');
+                }
 
-            toast.success('Successfully Added Customer Locations To Account')
+                const acceptInvite = httpsCallable(functions, 'acceptLinkedInvite');
+                const result = await acceptInvite({
+                    linkedInviteId: invite.id,
+                    companyId: invite.companyId,
+                    customerId: invite.customerId,
+                    homeownerId: user.uid,
+                    email: user.email || ''
+                });
+                const response = result.data || {};
+                if (response.status !== 200) {
+                    throw new Error(response.error || 'Could not accept linked invite.');
+                }
+
+                setInvite((prevInvite) => ({
+                    ...prevInvite,
+                    accepted: true
+                }));
+                toast.success('Successfully added customer locations to account')
+            } catch (error) {
+                console.error(error);
+                toast.error(error.message || 'Could not accept linked invite');
+            }
         }
     }
     return (

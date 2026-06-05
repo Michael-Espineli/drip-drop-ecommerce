@@ -5,9 +5,11 @@ import { query, collection, getDocs, orderBy } from "firebase/firestore";
 import { Link } from "react-router-dom";
 import "react-datepicker/dist/react-datepicker.css";
 import { format } from "date-fns";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const DatabaseItems = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { can } = useCompanyPermissions();
 
   const [genericItemList, setGenericItemList] = useState([]);
 
@@ -23,17 +25,17 @@ const DatabaseItems = () => {
         setGenericItemList([]);
         genericItemQuerySnapshot.forEach((doc) => {
           const itemData = doc.data();
-          const dateUpdated = itemData.dateUpdated.toDate();
+          const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
           const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
 
-          let rateDouble = itemData.rate / 100;
+          let rateDouble = Number(itemData.rate || 0) / 100;
           let formattedRateUSD = formatCurrency(rateDouble);
 
-          let billingRateDouble = itemData.billingRate / 100;
-          let formattedBillingRateUSD = formatCurrency(billingRateDouble);
+          let sellPriceDouble = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
+          let formattedSellPriceUSD = formatCurrency(sellPriceDouble);
 
           const genericItem = {
-            UOM: itemData.id,
+            UOM: itemData.UOM || "",
             billable: itemData.billable,
             category: itemData.category,
             color: itemData.color,
@@ -49,7 +51,9 @@ const DatabaseItems = () => {
             timesPurchased: itemData.timesPurchased,
             venderId: itemData.venderId,
             label: itemData.name + " " + itemData.rate + " " + itemData.sku,
-            billingRate: formattedBillingRateUSD,
+            sellPrice: formattedSellPriceUSD,
+            billingRate: formattedSellPriceUSD,
+            tracking: itemData.tracking || "",
           };
           setGenericItemList((genericItemList) => [...genericItemList, genericItem]);
         });
@@ -77,15 +81,19 @@ const DatabaseItems = () => {
             <p className="text-sm text-slate-500 mt-1">Browse and manage your company catalog.</p>
           </div>
           <div className="flex space-x-4">
+            {can("852") && (
             <Link to="/company/items/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
                 Upload Bulk
             </Link>
-            <Link
-              className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700"
-              to={`/company/items/createNew`}
-            >
-              Create New
-            </Link>
+            )}
+            {can("852") && (
+              <Link
+                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700"
+                to={`/company/items/createNew`}
+              >
+                Create New
+              </Link>
+            )}
           </div>
         </div>
 
@@ -130,6 +138,7 @@ const DatabaseItems = () => {
                   <th className="px-5 py-3 border-b border-slate-200">Name</th>
                   <th className="px-5 py-3 border-b border-slate-200">Description</th>
                   <th className="px-5 py-3 border-b border-slate-200">Rate</th>
+                  <th className="px-5 py-3 border-b border-slate-200">Sell Price</th>
                   <th className="px-5 py-3 border-b border-slate-200">SKU</th>
                 </tr>
               </thead>
@@ -173,6 +182,16 @@ const DatabaseItems = () => {
                         className="block w-full h-full"
                         style={{ display: "block", width: "100%", height: "100%" }}
                       >
+                        {item.sellPrice}
+                      </Link>
+                    </td>
+
+                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
+                      <Link
+                        to={`/company/items/detail/${item.id}`}
+                        className="block w-full h-full"
+                        style={{ display: "block", width: "100%", height: "100%" }}
+                      >
                         {item.sku}
                       </Link>
                     </td>
@@ -181,7 +200,7 @@ const DatabaseItems = () => {
 
                 {genericItemList.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="px-6 py-12 text-center">
+                    <td colSpan={5} className="px-6 py-12 text-center">
                       <div className="mx-auto max-w-sm">
                         <div className="text-sm font-semibold text-slate-800">No database items found</div>
                         <div className="text-sm text-slate-500 mt-1">

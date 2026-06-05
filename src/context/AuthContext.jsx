@@ -1,7 +1,8 @@
-import { createContext, useState, useEffect } from "react";
+import { createContext, useState, useEffect, useCallback } from "react";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from "../utils/config";
-import { getDoc, doc, getDocs, where, query, collection } from "firebase/firestore";
+import { getDoc, doc, getDocs, where, query, collection, onSnapshot } from "firebase/firestore";
+import { roleHasCompanyPermission } from "../utils/companyPermissionAccess";
 
 export const Context = createContext();
 
@@ -23,12 +24,20 @@ export function AuthContext({ children }) {
 
     // Role Information
     const [role, setRole] = useState(null);
+    const [companyUserAccess, setCompanyUserAccess] = useState(null);
+    const [companyRole, setCompanyRole] = useState(null);
+    const [companyRoleLoading, setCompanyRoleLoading] = useState(false);
+    const [companyRoleLoaded, setCompanyRoleLoaded] = useState(false);
 
     // Subscription Information
     const [companySubscription, setCompanySubscription] = useState(null);
 
     // Invite Information
     const [pendingInvite, setPendingInvite] = useState(null);
+
+    // Feature Flags
+    const [featureFlags, setFeatureFlags] = useState({});
+    const [featureFlagsLoaded, setFeatureFlagsLoaded] = useState(false);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -77,6 +86,8 @@ export function AuthContext({ children }) {
                                     setStripeId(companyDoc.data().stripeConnectedAccountId)
                                 }
                             }
+                        } else {
+                            setRecentlySelectedCompany(null);
                         }
                     } else {
                         console.log("No DB User Found on Auth Context");
@@ -95,13 +106,147 @@ export function AuthContext({ children }) {
                 setPhotoUrl(null);
                 setRecentlySelectedCompany(null);
                 setRecentlySelectedCompanyName(null);
+                setStripeConnectedAccountId(null);
+                setStripeId(null);
+                setCompanyUserAccess(null);
+                setCompanyRole(null);
+                setCompanyRoleLoading(false);
+                setCompanyRoleLoaded(false);
+                setCompanySubscription(null);
                 setPendingInvite(null);
+                setFeatureFlags({});
+                setFeatureFlagsLoaded(false);
             }
             setLoading(false);
         });
 
         return () => unsubscribe();
     }, [auth]);
+
+    useEffect(() => {
+        if (!user) {
+            setFeatureFlags({});
+            setFeatureFlagsLoaded(false);
+            return undefined;
+        }
+
+        setFeatureFlagsLoaded(false);
+
+        const unsubscribe = onSnapshot(
+            collection(db, "featureFlags"),
+            (snapshot) => {
+                const nextFeatureFlags = snapshot.docs.reduce((acc, flagDoc) => {
+                    acc[flagDoc.id] = {
+                        id: flagDoc.id,
+                        ...flagDoc.data(),
+                    };
+
+                    return acc;
+                }, {});
+
+                setFeatureFlags(nextFeatureFlags);
+                setFeatureFlagsLoaded(true);
+            },
+            (error) => {
+                console.error("Error loading feature flags:", error);
+                setFeatureFlags({});
+                setFeatureFlagsLoaded(true);
+            }
+        );
+
+        return unsubscribe;
+    }, [user]);
+
+    useEffect(() => {
+        let cancelled = false;
+
+        const resetCompanyContext = () => {
+            setRecentlySelectedCompanyName(null);
+            setStripeConnectedAccountId(null);
+            setStripeId(null);
+            setCompanyUserAccess(null);
+            setCompanyRole(null);
+            setCompanyRoleLoading(false);
+            setCompanyRoleLoaded(false);
+        };
+
+        const loadSelectedCompanyContext = async () => {
+            if (!user || accountType !== "Company" || !recentlySelectedCompany) {
+                resetCompanyContext();
+                return;
+            }
+
+            setCompanyRoleLoading(true);
+            setCompanyRoleLoaded(false);
+
+            try {
+                const companyDocRef = doc(db, "companies", recentlySelectedCompany);
+                const userAccessDocRef = doc(db, "users", user.uid, "userAccess", recentlySelectedCompany);
+
+                const [companyDoc, userAccessDoc] = await Promise.all([
+                    getDoc(companyDocRef),
+                    getDoc(userAccessDocRef),
+                ]);
+
+                if (cancelled) return;
+
+                if (companyDoc.exists()) {
+                    const companyData = companyDoc.data();
+                    setRecentlySelectedCompanyName(companyData.name || null);
+                    setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
+                    setStripeId(companyData.stripeConnectedAccountId || null);
+                } else {
+                    setRecentlySelectedCompanyName(null);
+                    setStripeConnectedAccountId(null);
+                    setStripeId(null);
+                }
+
+                if (!userAccessDoc.exists()) {
+                    setCompanyUserAccess(null);
+                    setCompanyRole(null);
+                    return;
+                }
+
+                const access = { id: userAccessDoc.id, ...userAccessDoc.data() };
+                setCompanyUserAccess(access);
+
+                if (!access.roleId) {
+                    setCompanyRole(null);
+                    return;
+                }
+
+                const roleDoc = await getDoc(doc(db, "companies", recentlySelectedCompany, "roles", access.roleId));
+                if (cancelled) return;
+
+                setCompanyRole(roleDoc.exists() ? { id: roleDoc.id, ...roleDoc.data() } : null);
+            } catch (error) {
+                if (!cancelled) {
+                    console.error("Error loading selected company role context:", error);
+                    setCompanyUserAccess(null);
+                    setCompanyRole(null);
+                }
+            } finally {
+                if (!cancelled) {
+                    setCompanyRoleLoading(false);
+                    setCompanyRoleLoaded(true);
+                }
+            }
+        };
+
+        loadSelectedCompanyContext();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [user, accountType, recentlySelectedCompany]);
+
+    const hasCompanyPermission = useCallback((permissionId) => {
+        return roleHasCompanyPermission(companyRole, permissionId);
+    }, [companyRole]);
+
+    const isFeatureEnabled = useCallback((featureFlagId) => {
+        return Boolean(featureFlags[featureFlagId]?.enabled);
+    }, [featureFlags]);
 
     const values = {
         user,
@@ -121,6 +266,16 @@ export function AuthContext({ children }) {
         setRecentlySelectedCompanyName,
         role,
         setRole,
+        companyUserAccess,
+        setCompanyUserAccess,
+        companyRole,
+        setCompanyRole,
+        companyRoleLoading,
+        companyRoleLoaded,
+        hasCompanyPermission,
+        featureFlags,
+        featureFlagsLoaded,
+        isFeatureEnabled,
         companySubscription,
         setCompanySubscription,
         pendingInvite, // Pass invite data down

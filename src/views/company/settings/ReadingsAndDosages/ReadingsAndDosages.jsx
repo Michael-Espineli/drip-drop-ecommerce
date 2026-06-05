@@ -186,7 +186,7 @@ const DetailView = ({ item, onBack, companyId }) => {
                         ) : (
                              <div className="space-y-2">
                                 <p><span className="font-semibold">Rate:</span> ${item.rate}</p>
-                                <p><span className="font-semibold">Linked Item ID:</span> {item.linkedItemId || 'None'}</p>
+                                <p><span className="font-semibold">Linked Item:</span> {item.linkedItemName || (item.linkedItemId ? 'Linked item' : 'None')}</p>
                              </div>
                         )}
                     </div>

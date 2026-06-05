@@ -1,17 +1,16 @@
-import React, { useEffect, useState, useContext } from 'react';
+import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { Context } from '../context/AuthContext';
 import {
     HomeIcon,
     ChatBubbleOvalLeftEllipsisIcon,
     BuildingStorefrontIcon,
     HeartIcon,
     DocumentTextIcon,
-    ArrowPathIcon,
     WrenchScrewdriverIcon,
     CogIcon,
     ArrowLeftOnRectangleIcon,
-    TruckIcon
+    TruckIcon,
+    CreditCardIcon
 } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 
@@ -25,13 +24,13 @@ const clientNavItems = {
         { title: 'Repair Requests', icon: <TruckIcon />, path: '/client/repair-requests' },
         { title: 'Service Requests', icon: <DocumentTextIcon />, path: '/client/service-requests' },
     ],
-    // 'Agreements': [
-    //     { title: 'Contracts', icon: <DocumentTextIcon />, path: '/client/contracts' },
-    //     { title: 'Recurring Contracts', icon: <ArrowPathIcon />, path: '/client/recurring-contracts' },
-    // ],
     'Companies': [
         { title: 'Browse Companies', icon: <BuildingStorefrontIcon />, path: '/client/companies' },
         { title: 'Saved Companies', icon: <HeartIcon />, path: '/client/saved-companies' },
+    ],
+    'Agreements': [
+        { title: 'Service Agreements', icon: <DocumentTextIcon />, path: '/client/service-agreements' },
+        { title: 'Billing', icon: <CreditCardIcon />, path: '/client/billing' },
     ],
     'NA': [
         { title: 'Settings', icon: <CogIcon />, path: '/client/settings' },
@@ -75,7 +74,9 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
                                 )}
                                 <ul className='flex flex-col gap-1'>
                                     {clientNavItems[category].map(item => {
-                                        const isActive = pathname.toLowerCase() === item.path.toLowerCase();
+                                        const itemPath = item.path.toLowerCase();
+                                        const currentPath = pathname.toLowerCase();
+                                        const isActive = currentPath === itemPath || currentPath.startsWith(`${itemPath}/`);
                                         return (
                                             <li key={`${item.path}-${item.title}`}>
                                                 <Link 

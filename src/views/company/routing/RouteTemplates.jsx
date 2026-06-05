@@ -114,7 +114,7 @@ const RouteTemplates = () => {
                                                     <span className='text-lg font-bold mr-4 bg-gray-800 w-8 h-8 flex items-center justify-center rounded-full'>{stop.order}</span>
                                                     <div>
                                                         <p className="font-semibold">{stop.customerName}</p>
-                                                        <p className="text-sm text-gray-400">Location ID: {stop.locationId}</p>
+                                                        <p className="text-sm text-gray-400">{stop.locationName || (stop.locationId ? "Linked location" : "No location")}</p>
                                                     </div>
                                                 </div>
                                             ))}

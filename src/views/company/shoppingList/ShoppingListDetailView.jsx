@@ -4,10 +4,12 @@ import { deleteDoc, doc, getDoc, updateDoc, Timestamp } from "firebase/firestore
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
+import { linkedReferenceText } from "../../../utils/displayReferences";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
 const statusOptions = ["Need to Purchase", "Purchased", "Installed"];
+const shoppingListCollectionNames = ["shoppingList", "shoppingListItems"];
 
 const ShoppingListDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -17,6 +19,7 @@ const ShoppingListDetailView = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [updating, setUpdating] = useState(false);
     const [edit, setEdit] = useState(false);
+    const [sourceCollection, setSourceCollection] = useState("shoppingList");
 
     const [item, setItem] = useState({
         id: "",
@@ -31,13 +34,21 @@ const ShoppingListDetailView = () => {
         datePurchased: "",
         quantity: "",
         jobId: "",
+        jobName: "",
         customerId: "",
         customerName: "",
         userId: "",
         userName: "",
         dbItemId: "",
+        dbItemName: "",
         purchasedItem: "",
         invoiced: false,
+        serviceLocationId: "",
+        serviceLocationName: "",
+        plannedUnitCostCents: null,
+        plannedUnitPriceCents: null,
+        plannedTotalCostCents: null,
+        plannedTotalPriceCents: null,
     });
 
     const [editForm, setEditForm] = useState({
@@ -52,13 +63,21 @@ const ShoppingListDetailView = () => {
         datePurchased: "",
         quantity: "",
         jobId: "",
+        jobName: "",
         customerId: "",
         customerName: "",
         userId: "",
         userName: "",
         dbItemId: "",
+        dbItemName: "",
         purchasedItem: "",
         invoiced: false,
+        serviceLocationId: "",
+        serviceLocationName: "",
+        plannedUnitCostCents: null,
+        plannedUnitPriceCents: null,
+        plannedTotalCostCents: null,
+        plannedTotalPriceCents: null,
     });
 
     useEffect(() => {
@@ -69,17 +88,28 @@ const ShoppingListDetailView = () => {
         try {
             setIsLoading(true);
 
-            const docRef = doc(
-                db,
-                "companies",
-                recentlySelectedCompany,
-                "shoppingListItems",
-                shoppingItemId
-            );
-            const docSnap = await getDoc(docRef);
+            let docSnap = null;
+            let loadedCollection = "shoppingList";
 
-            if (docSnap.exists()) {
+            for (const collectionName of shoppingListCollectionNames) {
+                const docRef = doc(
+                    db,
+                    "companies",
+                    recentlySelectedCompany,
+                    collectionName,
+                    shoppingItemId
+                );
+                const snap = await getDoc(docRef);
+                if (snap.exists()) {
+                    docSnap = snap;
+                    loadedCollection = collectionName;
+                    break;
+                }
+            }
+
+            if (docSnap?.exists()) {
                 const data = docSnap.data();
+                setSourceCollection(loadedCollection);
 
                 const formattedDate = data.datePurchased?.toDate
                     ? format(data.datePurchased.toDate(), "yyyy-MM-dd")
@@ -98,13 +128,21 @@ const ShoppingListDetailView = () => {
                     datePurchased: formattedDate,
                     quantity: data.quantity || "",
                     jobId: data.jobId || "",
+                    jobName: data.jobName || data.jobInternalId || "",
                     customerId: data.customerId || "",
                     customerName: data.customerName || "",
                     userId: data.userId || "",
                     userName: data.userName || "",
-                    dbItemId: data.dbItemId || "",
+                    dbItemId: data.dbItemId || data.itemId || "",
+                    dbItemName: data.dbItemName || data.itemName || "",
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
+                    serviceLocationId: data.serviceLocationId || "",
+                    serviceLocationName: data.serviceLocationName || "",
+                    plannedUnitCostCents: data.plannedUnitCostCents ?? data.cost ?? null,
+                    plannedUnitPriceCents: data.plannedUnitPriceCents ?? data.price ?? null,
+                    plannedTotalCostCents: data.plannedTotalCostCents ?? null,
+                    plannedTotalPriceCents: data.plannedTotalPriceCents ?? null,
                 };
 
                 setItem(loadedItem);
@@ -145,7 +183,7 @@ const ShoppingListDetailView = () => {
                 db,
                 "companies",
                 recentlySelectedCompany,
-                "shoppingListItems",
+                sourceCollection,
                 shoppingItemId
             );
 
@@ -163,16 +201,22 @@ const ShoppingListDetailView = () => {
                     : null,
                 quantity: editForm.quantity || "",
                 jobId: editForm.category === "Job" ? editForm.jobId || "" : "",
-                customerId:
-                    editForm.category === "Customer" ? editForm.customerId || "" : "",
-                customerName:
-                    editForm.category === "Customer" ? editForm.customerName || "" : "",
+                jobName: editForm.category === "Job" ? editForm.jobName || "" : "",
+                customerId: editForm.category === "Personal" ? "" : editForm.customerId || "",
+                customerName: editForm.category === "Personal" ? "" : editForm.customerName || "",
                 userId: editForm.category === "Personal" ? editForm.userId || "" : "",
                 userName:
                     editForm.category === "Personal" ? editForm.userName || "" : "",
                 dbItemId: editForm.dbItemId || "",
+                dbItemName: editForm.dbItemName || "",
                 purchasedItem: editForm.purchasedItem || "",
                 invoiced: !!editForm.invoiced,
+                serviceLocationId: editForm.serviceLocationId || "",
+                serviceLocationName: editForm.serviceLocationName || "",
+                plannedUnitCostCents: editForm.plannedUnitCostCents ?? null,
+                plannedUnitPriceCents: editForm.plannedUnitPriceCents ?? null,
+                plannedTotalCostCents: editForm.plannedTotalCostCents ?? null,
+                plannedTotalPriceCents: editForm.plannedTotalPriceCents ?? null,
             };
 
             await updateDoc(docRef, payload);
@@ -201,7 +245,7 @@ const ShoppingListDetailView = () => {
                 db,
                 "companies",
                 recentlySelectedCompany,
-                "shoppingListItems",
+                sourceCollection,
                 shoppingItemId
             );
 
@@ -218,6 +262,16 @@ const ShoppingListDetailView = () => {
     const displayDate = item.datePurchased
         ? format(new Date(item.datePurchased), "MM / d / yyyy")
         : "—";
+    const displayName = item.name || item.dbItemName || "—";
+    const moneyFromCents = (value) => {
+        if (value === null || value === undefined || value === "") return "—";
+        const amount = Number(value);
+        if (!Number.isFinite(amount)) return "—";
+        return new Intl.NumberFormat("en-US", {
+            style: "currency",
+            currency: "USD",
+        }).format(amount / 100);
+    };
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -280,7 +334,7 @@ const ShoppingListDetailView = () => {
                                             className="w-full p-3 border border-gray-300 rounded-lg"
                                         />
                                     ) : (
-                                        <p>{item.name || "—"}</p>
+                                        <p>{displayName}</p>
                                     )}
                                 </div>
 
@@ -400,6 +454,20 @@ const ShoppingListDetailView = () => {
                                         <p>{item.dbItemId || "—"}</p>
                                     )}
                                 </div>
+
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">DB Item Name</p>
+                                    {edit ? (
+                                        <input
+                                            type="text"
+                                            value={editForm.dbItemName}
+                                            onChange={(e) => handleEditFieldChange("dbItemName", e.target.value)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                        />
+                                    ) : (
+                                        <p>{item.dbItemName || "—"}</p>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="mt-4">
@@ -499,19 +567,96 @@ const ShoppingListDetailView = () => {
                         {editForm.category === "Job" || item.category === "Job" ? (
                             <div className="bg-white p-6 rounded-xl shadow-lg">
                                 <h3 className="text-xl font-bold mb-4 text-gray-800">Job</h3>
-                                <p className="text-sm font-semibold text-gray-500 mb-1">Job ID</p>
-                                {edit ? (
-                                    <input
-                                        type="text"
-                                        value={editForm.jobId}
-                                        onChange={(e) => handleEditFieldChange("jobId", e.target.value)}
-                                        className="w-full p-3 border border-gray-300 rounded-lg"
-                                    />
-                                ) : (
-                                    <p>{item.jobId || "—"}</p>
-                                )}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Job</p>
+                                        {edit ? (
+                                            <input
+                                                type="text"
+                                                value={editForm.jobId}
+                                                onChange={(e) => handleEditFieldChange("jobId", e.target.value)}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        ) : item.jobId ? (
+                                            <Link to={`/company/jobs/detail/${item.jobId}`} className="font-semibold text-blue-600 hover:underline">
+                                                {linkedReferenceText("Job", item.jobId, item.jobName)}
+                                            </Link>
+                                        ) : (
+                                            <p>Not connected</p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Job Name</p>
+                                        {edit ? (
+                                            <input
+                                                type="text"
+                                                value={editForm.jobName}
+                                                onChange={(e) => handleEditFieldChange("jobName", e.target.value)}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        ) : (
+                                            <p>{item.jobName || "—"}</p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Service Location</p>
+                                        {edit ? (
+                                            <input
+                                                type="text"
+                                                value={editForm.serviceLocationId}
+                                                onChange={(e) => handleEditFieldChange("serviceLocationId", e.target.value)}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        ) : item.serviceLocationId ? (
+                                            <Link to={`/company/serviceLocations/detail/${item.serviceLocationId}`} className="font-semibold text-blue-600 hover:underline">
+                                                {linkedReferenceText("Service Location", item.serviceLocationId, item.serviceLocationName)}
+                                            </Link>
+                                        ) : (
+                                            <p>Not connected</p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Service Location</p>
+                                        {edit ? (
+                                            <input
+                                                type="text"
+                                                value={editForm.serviceLocationName}
+                                                onChange={(e) => handleEditFieldChange("serviceLocationName", e.target.value)}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                            />
+                                        ) : (
+                                            <p>{item.serviceLocationName || "—"}</p>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
                         ) : null}
+
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            <h3 className="text-xl font-bold mb-4 text-gray-800">Planned Pricing</h3>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Unit Cost</p>
+                                    <p>{moneyFromCents(item.plannedUnitCostCents)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Unit Billable</p>
+                                    <p>{moneyFromCents(item.plannedUnitPriceCents)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Total Cost</p>
+                                    <p>{moneyFromCents(item.plannedTotalCostCents)}</p>
+                                </div>
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Total Billable</p>
+                                    <p>{moneyFromCents(item.plannedTotalPriceCents)}</p>
+                                </div>
+                            </div>
+                        </div>
 
                         {editForm.category === "Customer" || item.category === "Customer" ? (
                             <div className="bg-white p-6 rounded-xl shadow-lg">
@@ -519,7 +664,7 @@ const ShoppingListDetailView = () => {
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <p className="text-sm font-semibold text-gray-500 mb-1">Customer ID</p>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">Customer</p>
                                         {edit ? (
                                             <input
                                                 type="text"
@@ -529,8 +674,12 @@ const ShoppingListDetailView = () => {
                                                 }
                                                 className="w-full p-3 border border-gray-300 rounded-lg"
                                             />
+                                        ) : item.customerId ? (
+                                            <Link to={`/company/customers/details/${item.customerId}`} className="font-semibold text-blue-600 hover:underline">
+                                                {linkedReferenceText("Customer", item.customerId, item.customerName)}
+                                            </Link>
                                         ) : (
-                                            <p>{item.customerId || "—"}</p>
+                                            <p>Not connected</p>
                                         )}
                                     </div>
 
@@ -559,7 +708,7 @@ const ShoppingListDetailView = () => {
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
-                                        <p className="text-sm font-semibold text-gray-500 mb-1">User ID</p>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">User</p>
                                         {edit ? (
                                             <input
                                                 type="text"
@@ -568,7 +717,7 @@ const ShoppingListDetailView = () => {
                                                 className="w-full p-3 border border-gray-300 rounded-lg"
                                             />
                                         ) : (
-                                            <p>{item.userId || "—"}</p>
+                                            <p>{item.userName || (item.userId ? "Assigned user" : "—")}</p>
                                         )}
                                     </div>
 
@@ -596,7 +745,7 @@ const ShoppingListDetailView = () => {
                             <div className="space-y-3 text-gray-700">
                                 <div className="flex justify-between">
                                     <span>Name:</span>
-                                    <span>{item.name || "—"}</span>
+                                    <span>{displayName}</span>
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Category:</span>

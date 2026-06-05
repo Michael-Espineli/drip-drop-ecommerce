@@ -17,6 +17,12 @@ import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import { format } from 'date-fns';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+    debugServiceStopTypeWrite,
+    resolveServiceStopTypeFields,
+    SERVICE_STOP_TYPE_USE_CASES,
+} from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 
 const SERVICE_STOP_OPERATION_STATUS = {
     finished: 'Finished',
@@ -83,11 +89,13 @@ const PreEstimateVisitCard = ({
     onVisitCreated
 }) => {
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const db = getFirestore();
     const [serviceDate, setServiceDate] = useState('');
     const [techId, setTechId] = useState('');
     const [notes, setNotes] = useState('');
     const [saving, setSaving] = useState(false);
+    const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
 
     const badge = getVisitBadge(existingVisit);
 
@@ -126,7 +134,27 @@ const PreEstimateVisitCard = ({
         },
     ];
 
+    useEffect(() => {
+        if (!companyId) return;
+
+        const fetchServiceStopTypes = async () => {
+            try {
+                const snapshot = await getDocs(collection(db, 'companies', companyId, 'companyServiceStopTypes'));
+                setCompanyServiceStopTypes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+            } catch (error) {
+                console.warn('[LeadDetail][serviceStopTypesLoadFailed]', {
+                    companyId,
+                    error: error?.message || String(error),
+                });
+            }
+        };
+
+        fetchServiceStopTypes();
+    }, [companyId, db]);
+
     const handleCreateVisit = async () => {
+        if (!requirePermission("612", "respond to leads")) return;
+
         if (!companyId) {
             toast.error('No company selected.');
             return;
@@ -168,6 +196,12 @@ const PreEstimateVisitCard = ({
                 (sum, task) => sum + (task.estimatedTime || 0),
                 0
             );
+            const resolvedTypeFields = resolveServiceStopTypeFields({
+                companyServiceStopTypes,
+                fallbackName: 'Initial Estimate Visit',
+                useCase: SERVICE_STOP_TYPE_USE_CASES.estimate,
+                context: 'LeadDetail.PreEstimateVisitCard.createVisit',
+            });
 
             const resolvedCustomerName =
                 lead.customerName ||
@@ -207,9 +241,10 @@ const PreEstimateVisitCard = ({
 
                 description: notes || lead.serviceDescription || 'Initial estimate visit',
 
-                typeId: 'initialEstimate',
-                type: 'Initial Estimate Visit',
-                typeImage: '',
+                typeId: resolvedTypeFields.typeId,
+                type: resolvedTypeFields.type,
+                typeImage: resolvedTypeFields.typeImage,
+                serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
 
                 jobId: '',
                 jobName: lead.serviceName || 'Lead Visit',
@@ -236,6 +271,10 @@ const PreEstimateVisitCard = ({
                 isSkipped: false,
             };
 
+            debugServiceStopTypeWrite({
+                context: 'LeadDetail.PreEstimateVisitCard.createVisit',
+                payload: stopPayload,
+            });
             await setDoc(serviceStopRef, stopPayload);
 
             for (const task of defaultPreEstimateTasks) {
@@ -448,6 +487,7 @@ export default function LeadDetail() {
     const { leadId } = useParams();
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
     const [lead, setLead] = useState(null);
@@ -540,6 +580,8 @@ export default function LeadDetail() {
     }, [leadId, recentlySelectedCompany, db, navigate]);
 
     const handleStatusChange = async (newStatus) => {
+        if (!requirePermission("614", "update leads")) return;
+
         const leadRef = doc(db, 'homeownerServiceRequests', leadId);
         const originalStatus = lead.status;
 
@@ -572,6 +614,7 @@ export default function LeadDetail() {
     };
 
     const saveDescription = async () => {
+        if (!requirePermission("614", "update leads")) return;
         if (!lead) return;
 
         const nextDescription = descriptionDraft;
@@ -634,6 +677,8 @@ export default function LeadDetail() {
 
     const renderActions = () => {
         if (source === 'Manual' && !customerId) {
+            if (!can("612")) return null;
+
             return (
                 <button
                     onClick={() => navigate(`/company/customers/create-from-lead/${lead.id}`)}
@@ -645,6 +690,8 @@ export default function LeadDetail() {
         }
 
         if (customerId || source !== 'Manual') {
+            if (!can("612")) return null;
+
             return (
                 <button
                     onClick={() => navigate(`/company/recurring-contracts/createNew/${lead.customerId}`)}
@@ -686,23 +733,25 @@ export default function LeadDetail() {
                                         Description
                                     </p>
 
-                                    <button
-                                        type="button"
-                                        onClick={saveDescription}
-                                        disabled={
-                                            savingDescription ||
-                                            descriptionDraft === (lead.serviceDescription || '')
-                                        }
-                                        className={[
-                                            'px-3 py-1 rounded-lg text-sm font-semibold transition border',
-                                            savingDescription ||
+                                    {can("614") && (
+                                        <button
+                                            type="button"
+                                            onClick={saveDescription}
+                                            disabled={
+                                                savingDescription ||
                                                 descriptionDraft === (lead.serviceDescription || '')
-                                                ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
-                                                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100',
-                                        ].join(' ')}
-                                    >
-                                        {savingDescription ? 'Saving...' : 'Save'}
-                                    </button>
+                                            }
+                                            className={[
+                                                'px-3 py-1 rounded-lg text-sm font-semibold transition border',
+                                                savingDescription ||
+                                                    descriptionDraft === (lead.serviceDescription || '')
+                                                    ? 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+                                                    : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-100',
+                                            ].join(' ')}
+                                        >
+                                            {savingDescription ? 'Saving...' : 'Save'}
+                                        </button>
+                                    )}
                                 </div>
 
                                 <textarea
@@ -710,8 +759,9 @@ export default function LeadDetail() {
                                     placeholder="Add lead description..."
                                     value={descriptionDraft}
                                     onChange={(e) => setDescriptionDraft(e.target.value)}
+                                    readOnly={!can("614")}
                                     onBlur={() => {
-                                        if (descriptionDraft !== (lead.serviceDescription || '')) {
+                                        if (can("614") && descriptionDraft !== (lead.serviceDescription || '')) {
                                             saveDescription();
                                         }
                                     }}
@@ -787,21 +837,23 @@ export default function LeadDetail() {
                     </div>
 
                     <div className="space-y-6">
-                        <div className="bg-white p-6 rounded-2xl shadow-lg">
-                            <h3 className="text-lg font-semibold text-gray-800 mb-4">Manage Status</h3>
-                            <select
-                                value={status}
-                                onChange={(e) => handleStatusChange(e.target.value)}
-                                className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
-                            >
-                                <option value="Pending">Pending</option>
-                                <option value="In Progress">In Progress</option>
-                                <option value="Completed">Completed</option>
-                                <option value="Cancelled">Cancelled</option>
-                            </select>
-                        </div>
+                        {can("614") && (
+                            <div className="bg-white p-6 rounded-2xl shadow-lg">
+                                <h3 className="text-lg font-semibold text-gray-800 mb-4">Manage Status</h3>
+                                <select
+                                    value={status}
+                                    onChange={(e) => handleStatusChange(e.target.value)}
+                                    className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
+                                >
+                                    <option value="Pending">Pending</option>
+                                    <option value="In Progress">In Progress</option>
+                                    <option value="Completed">Completed</option>
+                                    <option value="Cancelled">Cancelled</option>
+                                </select>
+                            </div>
+                        )}
 
-                        {customerId ? (
+                        {customerId && can("612") ? (
                             <PreEstimateVisitCard
                                 lead={lead}
                                 companyId={recentlySelectedCompany}
@@ -809,9 +861,9 @@ export default function LeadDetail() {
                                 existingVisit={estimateVisit}
                                 onVisitCreated={setEstimateVisit}
                             />
-                        ) : (
+                        ) : !customerId && can("612") ? (
                             <PreEstimateVisitLockedCard lead={lead} />
-                        )}
+                        ) : null}
 
                         {estimate ? (
                             <EstimateSnapshot estimate={estimate} />
@@ -832,10 +884,12 @@ export default function LeadDetail() {
                                     </div>
                                 )}
 
-                                <div className="bg-white p-6 rounded-2xl shadow-lg">
-                                    <h3 className="text-lg font-semibold text-gray-800 mb-4">Actions</h3>
-                                    <div className="space-y-3">{renderActions()}</div>
-                                </div>
+                                {can("612") && (
+                                    <div className="bg-white p-6 rounded-2xl shadow-lg">
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Actions</h3>
+                                        <div className="space-y-3">{renderActions()}</div>
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>

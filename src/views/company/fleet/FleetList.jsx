@@ -1,9 +1,9 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import {
   collection,
+  deleteDoc,
   doc,
   getDocs,
-  limit,
   onSnapshot,
   query,
   setDoc,
@@ -16,8 +16,10 @@ import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { FaCarSide, FaPlus, FaRegCalendarAlt, FaSearch, FaShuttleVan, FaTruck } from "react-icons/fa";
 import { MdEdit, MdLocalGasStation } from "react-icons/md";
+import { FiTrash2 } from "react-icons/fi";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
 const VEHICLE_STATUSES = ["Active", "Retired"];
@@ -57,6 +59,24 @@ const formatMiles = (value) => {
   return Number.isFinite(miles) ? miles.toLocaleString() : "0";
 };
 
+const formatTripMiles = (value) => {
+  const miles = Number(value || 0);
+  return Number.isFinite(miles)
+    ? miles.toLocaleString(undefined, { maximumFractionDigits: 1 })
+    : "0";
+};
+
+const routeDistance = (route) => {
+  const storedDistance = Number(route?.distanceMiles ?? route?.distance ?? NaN);
+  if (Number.isFinite(storedDistance) && storedDistance > 0) return storedDistance;
+
+  const start = Number(route?.startMilage ?? route?.startMileage ?? NaN);
+  const end = Number(route?.endMilage ?? route?.endMileage ?? NaN);
+  if (Number.isFinite(start) && Number.isFinite(end) && end >= start) return end - start;
+
+  return 0;
+};
+
 const getVehicleIcon = (type, className = "h-5 w-5") => {
   if (type === "Car") return <FaCarSide className={className} />;
   if (type === "Van") return <FaShuttleVan className={className} />;
@@ -78,6 +98,14 @@ const getRouteDate = (route) => (
   toDate(route?.routeDate) ||
   toDate(route?.startTime) ||
   toDate(route?.createdAt)
+);
+
+const routeWorkerName = (route) => (
+  route?.techName ||
+  route?.companyUserName ||
+  route?.userName ||
+  route?.tech ||
+  "Unassigned route"
 );
 
 const StatCard = ({ label, value, helper }) => (
@@ -254,6 +282,7 @@ const FleetFormModal = ({ form, isEditing, onChange, onClose, onSubmit, saving }
 
 export default function FleetList() {
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const [vehicles, setVehicles] = useState([]);
   const [selectedVehicleId, setSelectedVehicleId] = useState("");
   const [recentRoutes, setRecentRoutes] = useState([]);
@@ -286,7 +315,9 @@ export default function FleetList() {
         });
 
         setVehicles(fleet);
-        setSelectedVehicleId((current) => current || fleet[0]?.id || "");
+        setSelectedVehicleId((current) => (
+          fleet.some((vehicle) => vehicle.id === current) ? current : fleet[0]?.id || ""
+        ));
         setLoading(false);
       },
       (error) => {
@@ -313,16 +344,22 @@ export default function FleetList() {
     setRoutesLoading(true);
     try {
       const routesRef = collection(db, "companies", recentlySelectedCompany, "activeRoutes");
-      const routesQuery = query(routesRef, where("vehicalId", "==", selectedVehicle.id), limit(20));
-      const snapshot = await getDocs(routesQuery);
-      const routes = snapshot.docs
-        .map((snap) => ({ id: snap.id, ...snap.data() }))
+      const [legacySnapshot, vehicleSnapshot] = await Promise.all([
+        getDocs(query(routesRef, where("vehicalId", "==", selectedVehicle.id))),
+        getDocs(query(routesRef, where("vehicleId", "==", selectedVehicle.id))),
+      ]);
+
+      const routesById = new Map();
+      [...legacySnapshot.docs, ...vehicleSnapshot.docs].forEach((snap) => {
+        routesById.set(snap.id, { id: snap.id, ...snap.data() });
+      });
+
+      const routes = [...routesById.values()]
         .sort((a, b) => {
           const aDate = getRouteDate(a)?.getTime() || 0;
           const bDate = getRouteDate(b)?.getTime() || 0;
           return bDate - aDate;
-        })
-        .slice(0, 5);
+        });
 
       setRecentRoutes(routes);
     } catch (error) {
@@ -371,13 +408,28 @@ export default function FleetList() {
     });
   }, [searchTerm, statusFilter, typeFilter, vehicles]);
 
+  const selectedRouteStats = useMemo(() => {
+    const totalMiles = recentRoutes.reduce((sum, route) => sum + routeDistance(route), 0);
+    const lastRoute = recentRoutes[0] || null;
+
+    return {
+      tripCount: recentRoutes.length,
+      totalMiles,
+      lastUsed: lastRoute ? formatDate(getRouteDate(lastRoute)) : "No trips",
+    };
+  }, [recentRoutes]);
+
   const openCreateModal = () => {
+    if (!requirePermission("292", "create fleet vehicles")) return;
+
     setEditingVehicle(null);
     setForm(emptyForm);
     setShowModal(true);
   };
 
   const openEditModal = (vehicle) => {
+    if (!requirePermission("294", "update fleet vehicles")) return;
+
     setEditingVehicle(vehicle);
     setForm({
       nickName: vehicle.nickName || "",
@@ -400,6 +452,9 @@ export default function FleetList() {
 
   const saveVehicle = async (event) => {
     event.preventDefault();
+    const permissionId = editingVehicle?.id ? "294" : "292";
+    const action = editingVehicle?.id ? "update fleet vehicles" : "create fleet vehicles";
+    if (!requirePermission(permissionId, action)) return;
 
     if (!recentlySelectedCompany) {
       toast.error("Select a company before updating fleet.");
@@ -443,6 +498,37 @@ export default function FleetList() {
     }
   };
 
+  const deleteVehicle = async (vehicle) => {
+    if (!vehicle?.id) return;
+    if (!requirePermission("296", "delete fleet vehicles")) return;
+
+    if (!recentlySelectedCompany) {
+      toast.error("Select a company before deleting fleet vehicles.");
+      return;
+    }
+
+    const vehicleName = vehicle.nickName || [vehicle.year, vehicle.make, vehicle.model].filter(Boolean).join(" ") || "this vehicle";
+    const confirmed = window.confirm(
+      `Delete ${vehicleName}? This removes the fleet vehicle record. Trip history on active routes will stay available.`
+    );
+    if (!confirmed) return;
+
+    setSaving(true);
+    try {
+      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "vehicals", vehicle.id));
+      setSelectedVehicleId((current) => {
+        if (current !== vehicle.id) return current;
+        return vehicles.find((item) => item.id !== vehicle.id)?.id || "";
+      });
+      toast.success("Vehicle deleted.");
+    } catch (error) {
+      console.error("Error deleting vehicle:", error);
+      toast.error("Failed to delete vehicle.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto max-w-screen-2xl space-y-6">
@@ -451,14 +537,16 @@ export default function FleetList() {
             <h1 className="text-3xl font-bold text-gray-900">Fleet</h1>
             <p className="text-sm text-gray-500">Manage company vehicles used by iOS active routes.</p>
           </div>
-          <button
-            type="button"
-            onClick={openCreateModal}
-            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
-          >
-            <FaPlus className="h-4 w-4" />
-            Add Vehicle
-          </button>
+          {can("292") && (
+            <button
+              type="button"
+              onClick={openCreateModal}
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+            >
+              <FaPlus className="h-4 w-4" />
+              Add Vehicle
+            </button>
+          )}
         </header>
 
         <section className="grid gap-4 md:grid-cols-4">
@@ -568,14 +656,29 @@ export default function FleetList() {
                         </p>
                       </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => openEditModal(selectedVehicle)}
-                      className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                    >
-                      <MdEdit className="h-4 w-4" />
-                      Edit
-                    </button>
+                    <div className="flex shrink-0 items-center gap-2">
+                      {can("294") && (
+                        <button
+                          type="button"
+                          onClick={() => openEditModal(selectedVehicle)}
+                          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                        >
+                          <MdEdit className="h-4 w-4" />
+                          Edit
+                        </button>
+                      )}
+                      {can("296") && (
+                        <button
+                          type="button"
+                          onClick={() => deleteVehicle(selectedVehicle)}
+                          disabled={saving}
+                          className="inline-flex items-center gap-2 rounded-lg border border-red-200 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <FiTrash2 className="h-4 w-4" />
+                          Delete
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   <dl className="mt-5 grid grid-cols-2 gap-4 text-sm">
@@ -610,6 +713,21 @@ export default function FleetList() {
                       </dd>
                     </div>
                   </dl>
+
+                  <div className="mt-5 grid grid-cols-3 gap-3 border-t border-gray-100 pt-5 text-sm">
+                    <div>
+                      <p className="font-semibold text-gray-500">Trips</p>
+                      <p className="mt-1 text-lg font-bold text-gray-900">{selectedRouteStats.tripCount}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-500">Trip Miles</p>
+                      <p className="mt-1 text-lg font-bold text-gray-900">{formatTripMiles(selectedRouteStats.totalMiles)}</p>
+                    </div>
+                    <div>
+                      <p className="font-semibold text-gray-500">Last Used</p>
+                      <p className="mt-1 text-sm font-semibold text-gray-900">{selectedRouteStats.lastUsed}</p>
+                    </div>
+                  </div>
                 </>
               ) : (
                 <div className="py-10 text-center text-sm text-gray-500">Select a vehicle to see details.</div>
@@ -618,21 +736,24 @@ export default function FleetList() {
 
             <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
-                <h2 className="text-lg font-bold text-gray-900">Recent Route Use</h2>
-                {selectedVehicle && <span className="text-xs font-semibold text-gray-500">{recentRoutes.length} routes</span>}
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">Trip History</h2>
+                  <p className="text-xs text-gray-500">Matched from active routes by vehicle id.</p>
+                </div>
+                {selectedVehicle && <span className="text-xs font-semibold text-gray-500">{recentRoutes.length} trips</span>}
               </div>
 
               {routesLoading ? (
                 <div className="py-6 text-sm text-gray-500">Loading routes...</div>
               ) : recentRoutes.length === 0 ? (
-                <div className="py-6 text-sm text-gray-500">No active route history found for this vehicle.</div>
+                <div className="py-6 text-sm text-gray-500">No active route trip history found for this vehicle.</div>
               ) : (
-                <div className="mt-4 space-y-3">
+                <div className="mt-4 max-h-[520px] space-y-3 overflow-y-auto pr-1">
                   {recentRoutes.map((route) => (
                     <div key={route.id} className="rounded-lg border border-gray-100 bg-gray-50 p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="font-semibold text-gray-900">{route.techName || route.companyUserName || "Unassigned route"}</p>
+                          <p className="font-semibold text-gray-900">{routeWorkerName(route)}</p>
                           <p className="text-xs text-gray-500">{formatDate(getRouteDate(route))}</p>
                         </div>
                         <Pill tone={route.status === "Complete" || route.status === "Finished" ? "green" : "blue"}>
@@ -640,9 +761,9 @@ export default function FleetList() {
                         </Pill>
                       </div>
                       <div className="mt-2 grid grid-cols-3 gap-2 text-xs text-gray-600">
-                        <span>Start: {formatMiles(route.startMilage)}</span>
-                        <span>End: {formatMiles(route.endMilage)}</span>
-                        <span>Distance: {formatMiles(route.distanceMiles)}</span>
+                        <span>Start: {formatMiles(route.startMilage ?? route.startMileage)}</span>
+                        <span>End: {formatMiles(route.endMilage ?? route.endMileage)}</span>
+                        <span>Distance: {formatTripMiles(routeDistance(route))}</span>
                       </div>
                     </div>
                   ))}

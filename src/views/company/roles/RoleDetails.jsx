@@ -3,125 +3,15 @@ import { Link, useParams } from "react-router-dom";
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-
-const permissionsList = [
-  { id: "0", name: "Operations", description: "Can See the Operations Tabs", category: "Operations" },
-  { id: "10", name: "Customer", description: "", category: "Operations" },
-  { id: "12", name: "Create Customer", description: "", category: "Operations" },
-  { id: "14", name: "Update Customer", description: "", category: "Operations" },
-  { id: "16", name: "Delete Customer", description: "", category: "Operations" },
-  { id: "20", name: "Jobs", description: "", category: "Operations" },
-  { id: "22", name: "Create Jobs", description: "", category: "Operations" },
-  { id: "24", name: "Update Jobs", description: "", category: "Operations" },
-  { id: "26", name: "Delete Jobs", description: "", category: "Operations" },
-  { id: "30", name: "Repair Requests", description: "", category: "Operations" },
-  { id: "32", name: "Create Repair Requests", description: "", category: "Operations" },
-  { id: "34", name: "Update Repair Requests", description: "", category: "Operations" },
-  { id: "36", name: "Delete Repair Requests", description: "", category: "Operations" },
-  { id: "40", name: "Service Location", description: "", category: "Operations" },
-  { id: "42", name: "Create Service Location", description: "", category: "Operations" },
-  { id: "44", name: "Update Service Location", description: "", category: "Operations" },
-  { id: "46", name: "Delete Service Location", description: "", category: "Operations" },
-  { id: "50", name: "Bodies of Water", description: "", category: "Operations" },
-  { id: "52", name: "Create Bodies of Water", description: "", category: "Operations" },
-  { id: "54", name: "Update Bodies of Water", description: "", category: "Operations" },
-  { id: "56", name: "Delete Bodies of Water", description: "", category: "Operations" },
-  { id: "60", name: "Equipment", description: "", category: "Operations" },
-  { id: "62", name: "Create Equipment", description: "", category: "Operations" },
-  { id: "64", name: "Update Equipment", description: "", category: "Operations" },
-  { id: "66", name: "Delete Equipment", description: "", category: "Operations" },
-
-  { id: "200", name: "Management", description: "", category: "Operations" },
-  { id: "210", name: "Route Over View", description: "", category: "Management" },
-  { id: "220", name: "Live Route Access", description: "", category: "Management" },
-  { id: "230", name: "Routes", description: "", category: "Management" },
-  { id: "232", name: "Create Routes", description: "", category: "Management" },
-  { id: "234", name: "Update Routes", description: "", category: "Management" },
-  { id: "236", name: "Delete Routes", description: "", category: "Management" },
-  { id: "240", name: "ServiceStops", description: "", category: "Management" },
-  { id: "242", name: "Create Service Stops", description: "", category: "Management" },
-  { id: "244", name: "Update Service Stops", description: "", category: "Management" },
-  { id: "246", name: "Delete Service Stops", description: "", category: "Management" },
-  { id: "250", name: "ServiceStops For Others", description: "", category: "Management" },
-  { id: "252", name: "Create Service Stops For Others", description: "", category: "Management" },
-  { id: "254", name: "Update Service Stops For Others", description: "", category: "Management" },
-  { id: "256", name: "Delete Service Stops For Others", description: "", category: "Management" },
-  { id: "260", name: "Company Users", description: "", category: "Management" },
-  { id: "262", name: "Create Company Users", description: "", category: "Management" },
-  { id: "264", name: "Update Company Users", description: "", category: "Management" },
-  { id: "266", name: "Delete Company Users", description: "", category: "Management" },
-  { id: "280", name: "WorkLogs", description: "", category: "Management" },
-  { id: "282", name: "Create Work Logs", description: "", category: "Management" },
-  { id: "284", name: "Update Work Logs", description: "", category: "Management" },
-  { id: "286", name: "Delete Work Logs", description: "", category: "Management" },
-  { id: "290", name: "Fleet", description: "", category: "Management" },
-  { id: "292", name: "Create Fleet", description: "", category: "Management" },
-  { id: "294", name: "Update Fleet", description: "", category: "Management" },
-  { id: "296", name: "Delete Fleet", description: "", category: "Management" },
-
-  { id: "400", name: "Finance", description: "", category: "Finance" },
-  { id: "410", name: "Finished Jobs", description: "", category: "Finance" },
-  { id: "412", name: "Create Finished Jobs", description: "", category: "Finance" },
-  { id: "414", name: "Update Finished Jobs", description: "", category: "Finance" },
-  { id: "416", name: "Delete Finished Jobs", description: "", category: "Finance" },
-
-  { id: "600", name: "Marketing", description: "", category: "Marketing" },
-  { id: "610", name: "Leads", description: "", category: "Marketing" },
-  { id: "612", name: "Respond Leads", description: "", category: "Marketing" },
-  { id: "614", name: "Update Leads", description: "", category: "Marketing" },
-  { id: "616", name: "Delete Leads", description: "", category: "Marketing" },
-  { id: "620", name: "Estimates", description: "", category: "Marketing" },
-  { id: "622", name: "Respond Estimates", description: "", category: "Marketing" },
-  { id: "624", name: "Update Estimates", description: "", category: "Marketing" },
-  { id: "626", name: "Delete Estimates", description: "", category: "Marketing" },
-
-  { id: "800", name: "Settings", description: "", category: "Settings" },
-  { id: "810", name: "Company Information", description: "", category: "Settings" },
-  { id: "812", name: "Create Company Information", description: "", category: "Settings" },
-  { id: "814", name: "Update Company Information", description: "", category: "Settings" },
-  { id: "816", name: "Delete Company Information", description: "", category: "Settings" },
-  { id: "820", name: "Task Groups", description: "", category: "Settings" },
-  { id: "822", name: "Create Task Groups", description: "", category: "Settings" },
-  { id: "824", name: "Update Task Groups", description: "", category: "Settings" },
-  { id: "826", name: "Delete Task Groups", description: "", category: "Settings" },
-  { id: "830", name: "Email Configuration", description: "", category: "Settings" },
-  { id: "832", name: "Create Email Configuration", description: "", category: "Settings" },
-  { id: "834", name: "Update Email Configuration", description: "", category: "Settings" },
-  { id: "836", name: "Delete Email Configuration", description: "", category: "Settings" },
-  { id: "840", name: "Readings and Dosages", description: "", category: "Settings" },
-  { id: "842", name: "Create Readings and Dosages", description: "", category: "Settings" },
-  { id: "844", name: "Update Readings and Dosages", description: "", category: "Settings" },
-  { id: "846", name: "Delete Readings and Dosages", description: "", category: "Settings" },
-  { id: "850", name: "Database Items", description: "", category: "Settings" },
-  { id: "852", name: "Create Database Items", description: "", category: "Settings" },
-  { id: "854", name: "Update Database Items", description: "", category: "Settings" },
-  { id: "856", name: "Delete Database Items", description: "", category: "Settings" },
-  { id: "860", name: "User Roles", description: "", category: "Settings" },
-  { id: "862", name: "Create User Roles", description: "", category: "Settings" },
-  { id: "864", name: "Update User Roles", description: "", category: "Settings" },
-  { id: "866", name: "Delete User Roles", description: "", category: "Settings" },
-  { id: "870", name: "Reports", description: "", category: "Settings" },
-  { id: "872", name: "Create Reports", description: "", category: "Settings" },
-  { id: "874", name: "Update Reports", description: "", category: "Settings" },
-  { id: "876", name: "Delete Reports", description: "", category: "Settings" },
-  { id: "880", name: "Terms Templates", description: "", category: "Settings" },
-  { id: "882", name: "Create Terms Templates", description: "", category: "Settings" },
-  { id: "884", name: "Update Terms Templates", description: "", category: "Settings" },
-  { id: "886", name: "Delete Terms Templates", description: "", category: "Settings" },
-  { id: "890", name: "Manage Subscriptions", description: "", category: "Settings" },
-  { id: "892", name: "Create Manage Subscriptions", description: "", category: "Settings" },
-  { id: "894", name: "Update Manage Subscriptions", description: "", category: "Settings" },
-  { id: "896", name: "Delete Manage Subscriptions", description: "", category: "Settings" }
-];
-
-const permissionsByCategory = permissionsList.reduce((acc, permission) => {
-  if (!acc[permission.category]) acc[permission.category] = [];
-  acc[permission.category].push(permission);
-  return acc;
-}, {});
+import {
+  companyPermissions as permissionsList,
+  companyPermissionsByCategory as permissionsByCategory
+} from "../../../utils/companyPermissions";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const RoleDetails = () => {
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const { roleId } = useParams();
 
   const [role, setRole] = useState(null);
@@ -174,6 +64,8 @@ const RoleDetails = () => {
   };
 
   const handleSave = async () => {
+    if (!requirePermission("864", "update user roles")) return;
+
     const docRef = doc(db, "companies", recentlySelectedCompany, "roles", roleId);
     try {
       await updateDoc(docRef, formData);
@@ -258,12 +150,14 @@ const RoleDetails = () => {
 
           <div className="flex flex-wrap gap-2">
             {!editMode ? (
+              can("864") && (
               <button
                 onClick={() => setEditMode(true)}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-white font-medium hover:bg-blue-700 transition"
               >
                 Edit
               </button>
+              )
             ) : (
               <>
                 <button

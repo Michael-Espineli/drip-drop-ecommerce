@@ -6,6 +6,7 @@ import { Context } from "../../../context/AuthContext";
 import { BodyOfWater } from "../../../utils/models/BodyOfWater";
 import { fetchBodyOfWaterHistory } from "../../../utils/bodyOfWaterHistory";
 import { format } from "date-fns";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-blue-500 focus:border-blue-500";
@@ -27,6 +28,7 @@ const InfoCard = ({ label, value }) => (
 const BodiesOfWaterDetails = () => {
   const { bodyOfWaterId } = useParams();
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
 
   const [bodyOfWater, setBodyOfWater] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -90,6 +92,7 @@ const BodiesOfWaterDetails = () => {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!requirePermission("54", "update bodies of water")) return;
 
     const updatedData = {
       name,
@@ -157,6 +160,7 @@ const BodiesOfWaterDetails = () => {
 
           <div className="flex items-center gap-2">
             {!edit ? (
+              can("54") && (
               <button
                 onClick={() => setEdit(true)}
                 className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
@@ -164,6 +168,7 @@ const BodiesOfWaterDetails = () => {
               >
                 Edit
               </button>
+              )
             ) : (
               <>
                 <button

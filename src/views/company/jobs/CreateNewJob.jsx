@@ -16,12 +16,51 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
+
+const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
+    const toneClass =
+        tone === "green"
+            ? "bg-green-50 border-green-200 text-green-800"
+            : tone === "red"
+                ? "bg-red-50 border-red-200 text-red-800"
+                : tone === "blue"
+                    ? "bg-blue-50 border-blue-200 text-blue-800"
+                    : tone === "amber"
+                        ? "bg-amber-50 border-amber-200 text-amber-800"
+                        : "bg-gray-50 border-gray-200 text-gray-800";
+
+    return (
+        <div className={`rounded-xl border p-4 ${toneClass}`}>
+            <p className="text-xs font-semibold uppercase tracking-wider opacity-70">
+                {title}
+            </p>
+            <p className="mt-1 text-xl font-bold">{value}</p>
+            {subtitle && <p className="mt-1 text-sm opacity-80">{subtitle}</p>}
+        </div>
+    );
+};
+
+const SectionCard = ({ title, subtitle, children, action }) => (
+    <div className="bg-white p-6 rounded-xl shadow-lg">
+        <div className="flex items-start justify-between gap-3">
+            <div>
+                <h3 className="text-xl font-bold text-gray-800">{title}</h3>
+                {subtitle && <p className="text-gray-600 mt-1">{subtitle}</p>}
+            </div>
+            {action}
+        </div>
+        <div className="mt-6">{children}</div>
+    </div>
+);
 
 const CreateNewJob = () => {
     const navigate = useNavigate();
     const location = useLocation();
 
     const { recentlySelectedCompany, dataBaseUser, currentUser, user } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const {
         customerId: customerIdParam,
         locationId: locationIdParam,
@@ -29,6 +68,12 @@ const CreateNewJob = () => {
     } = useParams();
 
     const repairRequest = location.state?.repairRequest || null;
+    const repairRequestSourcePath =
+        location.state?.repairRequestSourcePath ||
+        repairRequest?.sourcePath ||
+        "company";
+    const equipmentContext = location.state?.equipmentContext || null;
+    const jobIntent = location.state?.jobIntent || equipmentContext?.jobIntent || "";
     const startingTemplateFromState =
         location.state?.startingTemplate ||
         location.state?.jobTemplate ||
@@ -206,6 +251,8 @@ const CreateNewJob = () => {
             serviceLocationId: task.serviceLocationId || "",
             bodyOfWaterId: task.bodyOfWaterId || "",
             dataBaseItemId: task.dataBaseItemId || "",
+            shoppingListItemId: task.shoppingListItemId || "",
+            shoppingListItemIds: Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : [],
 
             ...overrides,
         };
@@ -445,20 +492,27 @@ const CreateNewJob = () => {
     useEffect(() => {
         if (!customerList.length) return;
 
-        const initialCustomerId = customerIdParam || repairRequest?.customerId;
+        const initialCustomerId = customerIdParam || repairRequest?.customerId || equipmentContext?.customerId;
         if (!initialCustomerId) return;
 
         const matchedCustomer = customerList.find((customer) => customer.id === initialCustomerId);
         if (matchedCustomer) {
             setSelectedCustomer(matchedCustomer);
         }
-    }, [customerList, customerIdParam, repairRequest]);
+    }, [customerList, customerIdParam, repairRequest, equipmentContext]);
 
     useEffect(() => {
         if (repairRequest?.description) {
             setDescription(repairRequest.description);
+            return;
         }
-    }, [repairRequest]);
+
+        if (equipmentContext?.equipmentId && jobIntent) {
+            const label = jobIntent === "maintenance" ? "maintenance" : "repair";
+            const equipmentName = equipmentContext.equipmentName || "equipment";
+            setDescription((current) => current || `Create ${label} job for ${equipmentName}.`);
+        }
+    }, [repairRequest, equipmentContext, jobIntent]);
 
     useEffect(() => {
         if (!selectedCustomer || !recentlySelectedCompany) {
@@ -497,7 +551,8 @@ const CreateNewJob = () => {
                 const initialLocationId =
                     locationIdParam ||
                     repairRequest?.locationId ||
-                    repairRequest?.serviceLocationId;
+                    repairRequest?.serviceLocationId ||
+                    equipmentContext?.serviceLocationId;
 
                 if (initialLocationId) {
                     const matchedLocation = locations.find((loc) => loc.id === initialLocationId);
@@ -516,7 +571,7 @@ const CreateNewJob = () => {
         };
 
         fetchServiceLocations();
-    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest]);
+    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest, equipmentContext]);
 
     useEffect(() => {
         if (!selectedServiceLocation || !recentlySelectedCompany) {
@@ -573,13 +628,15 @@ const CreateNewJob = () => {
                 setBodyOfWaterList(bodies);
                 setEquipmentList(equipment);
 
-                if (repairRequest?.bodyOfWaterId) {
-                    const matchedBody = bodies.find((item) => item.id === repairRequest.bodyOfWaterId);
+                const initialBodyOfWaterId = repairRequest?.bodyOfWaterId || equipmentContext?.bodyOfWaterId;
+                if (initialBodyOfWaterId) {
+                    const matchedBody = bodies.find((item) => item.id === initialBodyOfWaterId);
                     if (matchedBody) setSelectedBodyOfWater(matchedBody);
                 }
 
-                if (repairRequest?.equipmentId) {
-                    const matchedEquipment = equipment.find((item) => item.id === repairRequest.equipmentId);
+                const initialEquipmentId = repairRequest?.equipmentId || equipmentContext?.equipmentId;
+                if (initialEquipmentId) {
+                    const matchedEquipment = equipment.find((item) => item.id === initialEquipmentId);
                     if (matchedEquipment) setSelectedEquipment(matchedEquipment);
                 }
             } catch (error) {
@@ -588,7 +645,7 @@ const CreateNewJob = () => {
         };
 
         fetchLocationDetails();
-    }, [selectedServiceLocation, recentlySelectedCompany, repairRequest]);
+    }, [selectedServiceLocation, recentlySelectedCompany, repairRequest, equipmentContext]);
 
     useEffect(() => {
         if (!selectedTemplate || templateApplied) return;
@@ -837,6 +894,8 @@ const CreateNewJob = () => {
     };
 
     const createNewJob = async () => {
+        if (!requirePermission("22", "create jobs")) return;
+
         if (!canCreateJob) {
             alert("Please fill all required fields: Admin, Customer, Service Location, Rate, and Labor Cost.");
             return;
@@ -909,6 +968,7 @@ const CreateNewJob = () => {
                 equipmentId: selectedEquipment?.id || "",
                 equipmentName: selectedEquipment?.label || "",
                 repairRequestId: repairRequest?.id || "",
+                repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
                 sourceTemplateId: selectedTemplate?.id || "",
                 sourceTemplateName: selectedTemplate?.name || "",
             };
@@ -978,11 +1038,15 @@ const CreateNewJob = () => {
             }
 
             if (repairRequest?.id) {
+                const repairRequestRef = repairRequestSourcePath === "homeowner"
+                    ? doc(db, "homeownerRepairRequests", repairRequest.id)
+                    : doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id);
+
                 await updateDoc(
-                    doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequest.id),
+                    repairRequestRef,
                     {
                         jobIds: arrayUnion(jobId),
-                        status: "In Progress",
+                        status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
                     }
                 );
             }
@@ -1007,42 +1071,6 @@ const CreateNewJob = () => {
         const previous = steps[Math.max(currentIndex - 1, 0)];
         setActiveStep(previous);
     };
-
-    const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
-        const toneClass =
-            tone === "green"
-                ? "bg-green-50 border-green-200 text-green-800"
-                : tone === "red"
-                    ? "bg-red-50 border-red-200 text-red-800"
-                    : tone === "blue"
-                        ? "bg-blue-50 border-blue-200 text-blue-800"
-                        : tone === "amber"
-                            ? "bg-amber-50 border-amber-200 text-amber-800"
-                            : "bg-gray-50 border-gray-200 text-gray-800";
-
-        return (
-            <div className={`rounded-xl border p-4 ${toneClass}`}>
-                <p className="text-xs font-semibold uppercase tracking-wider opacity-70">
-                    {title}
-                </p>
-                <p className="mt-1 text-xl font-bold">{value}</p>
-                {subtitle && <p className="mt-1 text-sm opacity-80">{subtitle}</p>}
-            </div>
-        );
-    };
-
-    const SectionCard = ({ title, subtitle, children, action }) => (
-        <div className="bg-white p-6 rounded-xl shadow-lg">
-            <div className="flex items-start justify-between gap-3">
-                <div>
-                    <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-                    {subtitle && <p className="text-gray-600 mt-1">{subtitle}</p>}
-                </div>
-                {action}
-            </div>
-            <div className="mt-6">{children}</div>
-        </div>
-    );
 
     const emptyState = (title, message) => (
         <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">

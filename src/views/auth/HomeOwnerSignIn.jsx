@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import { Context } from "../../context/AuthContext";
@@ -11,16 +11,22 @@ export default function HomeOwnerSignIn() {
     const auth = getAuth();
 
     const navigate = useNavigate();
-    const { user } = useContext(Context);
+    const location = useLocation();
+    const { user, accountType } = useContext(Context);
     useEffect(() => {
         if (!user) return;
-        if (user.accountType === 'Company') {
+        const queryParams = new URLSearchParams(location.search);
+        const redirectPath = queryParams.get('redirect');
+
+        if (redirectPath && accountType === 'Client') {
+            navigate(redirectPath);
+        } else if (accountType === 'Company') {
             navigate('/company/dashboard');
-        } else if (user.accountType === 'Client') {
+        } else if (accountType === 'Client') {
             navigate('/client/dashboard');
         }
 
-    }, [user]);
+    }, [accountType, location.search, navigate, user]);
 
     const handleSignIn = async (e) => {
         e.preventDefault();
@@ -34,7 +40,9 @@ export default function HomeOwnerSignIn() {
         try {
             await signInWithEmailAndPassword(auth, email, password);
             toast.success('Signed in successfully!');
-            navigate('/client/dashboard');
+            const queryParams = new URLSearchParams(location.search);
+            const redirectPath = queryParams.get('redirect') || '/client/dashboard';
+            navigate(redirectPath);
         } catch (error) {
             console.error("Firebase Sign-In Error:", error);
             switch (error.code) {

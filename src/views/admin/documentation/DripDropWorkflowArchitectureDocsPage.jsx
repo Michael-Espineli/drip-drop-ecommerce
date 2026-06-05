@@ -1,4 +1,5 @@
 export default function DripDropWorkflowArchitectureDocsPage() {
+    const ADMIN_YELLOW = '#debf44';
     const sections = [
         {
             title: '1. Job Lifecycle',
@@ -234,18 +235,21 @@ export default function DripDropWorkflowArchitectureDocsPage() {
     ];
 
     return (
-        <div className="min-h-screen bg-slate-100 p-6">
+        <div className="min-h-screen bg-slate-900 px-2 py-5 text-slate-100 md:px-7">
             <div className="mx-auto max-w-7xl space-y-6">
-                <div className="rounded-3xl bg-white p-8 shadow-sm">
+                <div className="rounded-xl border border-slate-800/60 bg-slate-950 p-6 shadow-2xl md:p-8">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                         <div>
-                            <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">
+                            <p
+                                className="text-sm font-semibold uppercase tracking-wide"
+                                style={{ color: ADMIN_YELLOW }}
+                            >
                                 Internal Documentation
                             </p>
-                            <h1 className="mt-2 text-4xl font-bold text-slate-900">
+                            <h1 className="mt-2 text-4xl font-extrabold text-slate-100">
                                 DripDrop Workflow Architecture
                             </h1>
-                            <p className="mt-3 max-w-3xl text-base text-slate-600">
+                            <p className="mt-3 max-w-3xl text-base text-slate-400">
                                 Architecture overview for jobs, planned labor, shopping integration,
                                 templates, route prep, payroll, billing, and reusable workflow data models.
                             </p>
@@ -259,8 +263,8 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                 </div>
 
                 <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-                    <div className="sticky top-6 h-fit rounded-3xl bg-white p-5 shadow-sm">
-                        <h2 className="mb-4 text-lg font-semibold text-slate-900">
+                    <div className="sticky top-6 h-fit rounded-xl border border-slate-800/60 bg-slate-950 p-5 shadow-2xl">
+                        <h2 className="mb-4 text-lg font-semibold text-slate-100">
                             Navigation
                         </h2>
 
@@ -269,7 +273,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                 <a
                                     key={section.title}
                                     href={`#section-${index}`}
-                                    className="block rounded-xl px-3 py-2 text-sm text-slate-700 transition hover:bg-slate-100 hover:text-slate-900"
+                                    className="block rounded-md px-3 py-2 text-sm text-slate-300 transition hover:bg-slate-900/70 hover:text-slate-100"
                                 >
                                     {section.title}
                                 </a>
@@ -282,24 +286,24 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                             <div
                                 id={`section-${index}`}
                                 key={section.title}
-                                className="rounded-3xl bg-white p-6 shadow-sm"
+                                className="rounded-xl border border-slate-800/60 bg-slate-950 p-6 shadow-2xl"
                             >
-                                <h2 className="text-2xl font-bold text-slate-900">
+                                <h2 className="text-2xl font-bold text-slate-100">
                                     {section.title}
                                 </h2>
 
                                 {section.content && (
-                                    <p className="mt-4 text-base leading-7 text-slate-600">
+                                    <p className="mt-4 text-base leading-7 text-slate-400">
                                         {section.content}
                                     </p>
                                 )}
 
                                 {section.firestorePath && (
-                                    <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                    <div className="mt-5 rounded-lg border border-slate-800/60 bg-slate-900/60 p-4">
                                         <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
                                             Firestore Path
                                         </p>
-                                        <code className="text-sm text-slate-800">
+                                        <code className="text-sm text-slate-200">
                                             {section.firestorePath}
                                         </code>
                                     </div>
@@ -307,7 +311,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
 
                                 {section.fields && (
                                     <div className="mt-6">
-                                        <h3 className="mb-3 text-lg font-semibold text-slate-900">
+                                        <h3 className="mb-3 text-lg font-semibold text-slate-100">
                                             Important Fields
                                         </h3>
 
@@ -315,7 +319,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                             {section.fields.map((field) => (
                                                 <div
                                                     key={field}
-                                                    className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 font-mono text-sm text-slate-700"
+                                                    className="rounded-lg border border-slate-800/60 bg-slate-900/60 px-4 py-3 font-mono text-sm text-slate-300"
                                                 >
                                                     {field}
                                                 </div>
@@ -330,10 +334,13 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                             {section.bullets.map((bullet) => (
                                                 <li
                                                     key={bullet}
-                                                    className="flex items-start gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                                                    className="flex items-start gap-3 rounded-lg border border-slate-800/60 bg-slate-900/60 p-4"
                                                 >
-                                                    <div className="mt-1 h-2 w-2 rounded-full bg-blue-500" />
-                                                    <span className="text-sm leading-6 text-slate-700">
+                                                    <div
+                                                        className="mt-1 h-2 w-2 rounded-full"
+                                                        style={{ backgroundColor: ADMIN_YELLOW }}
+                                                    />
+                                                    <span className="text-sm leading-6 text-slate-300">
                                                         {bullet}
                                                     </span>
                                                 </li>
@@ -344,14 +351,14 @@ export default function DripDropWorkflowArchitectureDocsPage() {
 
                                 {section.formulas && (
                                     <div className="mt-6 space-y-3">
-                                        <h3 className="text-lg font-semibold text-slate-900">
+                                        <h3 className="text-lg font-semibold text-slate-100">
                                             Calculations
                                         </h3>
 
                                         {section.formulas.map((formula) => (
                                             <div
                                                 key={formula}
-                                                className="rounded-2xl bg-slate-900 px-4 py-3 font-mono text-sm text-green-300"
+                                                className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 font-mono text-sm text-emerald-200"
                                             >
                                                 {formula}
                                             </div>
@@ -364,7 +371,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                         {section.codeBlocks.map((block) => (
                                             <pre
                                                 key={block}
-                                                className="overflow-auto rounded-2xl bg-slate-900 p-4 text-sm text-slate-100"
+                                                className="overflow-auto rounded-lg border border-slate-800/60 bg-slate-900/80 p-4 text-sm text-slate-100"
                                             >
                                                 <code>{block}</code>
                                             </pre>
@@ -401,12 +408,12 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                 )}
 
                                 {section.important && (
-                                    <div className="mt-6 rounded-2xl border border-amber-300 bg-amber-50 p-5">
-                                        <p className="text-sm font-semibold uppercase tracking-wide text-amber-700">
+                                    <div className="mt-6 rounded-lg border border-[#debf44]/30 bg-[#debf44]/10 p-5">
+                                        <p className="text-sm font-semibold uppercase tracking-wide" style={{ color: ADMIN_YELLOW }}>
                                             Important Rule
                                         </p>
 
-                                        <p className="mt-2 font-mono text-sm text-amber-900">
+                                        <p className="mt-2 font-mono text-sm text-slate-100">
                                             {section.important}
                                         </p>
                                     </div>
@@ -422,26 +429,29 @@ export default function DripDropWorkflowArchitectureDocsPage() {
 
 function StatCard({ title, value }) {
     return (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="rounded-lg border border-slate-800/60 bg-slate-900/60 p-4">
             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
                 {title}
             </p>
 
-            <p className="mt-2 text-lg font-bold text-slate-900">{value}</p>
+            <p className="mt-2 text-lg font-bold text-slate-100">{value}</p>
         </div>
     );
 }
 
 function StatusGroup({ title, items }) {
+    const ADMIN_YELLOW = '#debf44';
+
     return (
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-5">
-            <h3 className="mb-4 text-lg font-semibold text-slate-900">{title}</h3>
+        <div className="rounded-lg border border-slate-800/60 bg-slate-900/60 p-5">
+            <h3 className="mb-4 text-lg font-semibold text-slate-100">{title}</h3>
 
             <div className="flex flex-wrap gap-2">
                 {items.map((item) => (
                     <span
                         key={item}
-                        className="rounded-full border border-slate-300 bg-white px-3 py-1 text-sm text-slate-700"
+                        className="rounded-full border bg-slate-950 px-3 py-1 text-sm text-slate-300"
+                        style={{ borderColor: `${ADMIN_YELLOW}4d` }}
                     >
                         {item}
                     </span>

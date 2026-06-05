@@ -2,7 +2,7 @@ import React, { useState, useContext } from "react";
 import { useNavigate } from "react-router-dom";
 import * as XLSX from "xlsx";
 import { db } from "../../../utils/config";
-import { collection, setDoc, doc } from "firebase/firestore";
+import { setDoc, doc } from "firebase/firestore";
 import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../context/AuthContext";
 
@@ -44,8 +44,8 @@ const DataBaseItemBulkUpload = () => {
 
   const buildItemFromRow = (row) => {
     // Expected columns (recommended):
-    // name, description, category, subCategory, uom, rate, billingRate, sku, size, color, billable
-    const id = row.id ? safeStr(row.id) : `com_db_item_${uuidv4()}`;
+    // name, description, category, subCategory, uom, rate, sellPrice, sku, size, color, billable, tracking
+    const id = row.id ? safeStr(row.id) : `com_sett_db_${uuidv4()}`;
 
     // "label-like" inputs; we store as strings (like your item object expects)
     const categoryLabel = safeStr(row.category).trim();
@@ -61,7 +61,7 @@ const DataBaseItemBulkUpload = () => {
     const billable = toBool(row.billable);
 
     const rateCents = toCents(row.rate);
-    const billingRateCents = toCents(row.billingRate);
+    const sellPriceCents = toCents(row.sellPrice ?? row.billingRate);
 
     // Matches your provided shape
     const item = {
@@ -80,7 +80,10 @@ const DataBaseItemBulkUpload = () => {
       subCategory: subCategoryLabel,
       timesPurchased: 0,
       venderId: "",
-      billingRate: billingRateCents,
+      vendorId: "",
+      sellPrice: sellPriceCents,
+      billingRate: sellPriceCents,
+      tracking: safeStr(row.tracking).trim(),
     };
 
     return item;
@@ -145,13 +148,10 @@ const DataBaseItemBulkUpload = () => {
           const row = data[i];
           const item = buildItemFromRow(row);
 
-          // Choose the collection where your "database items" should live.
-          // If your app uses a different path, change it here.
-          // Example: 'databaseItems' or 'items' or 'inventory'
-          const itemId = item.id || `com_db_item_${uuidv4()}`;
+          const itemId = item.id || `com_sett_db_${uuidv4()}`;
 
           await setDoc(
-            doc(collection(db, "companies", recentlySelectedCompany, "databaseItems"), itemId),
+            doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
             item
           );
         }
@@ -201,7 +201,8 @@ const DataBaseItemBulkUpload = () => {
       color: randomItem(colors),
       billable: "TRUE",
       rate: (randomInt(100, 5000) / 100).toFixed(2), // dollars
-      billingRate: (randomInt(100, 8000) / 100).toFixed(2), // dollars
+      sellPrice: (randomInt(100, 8000) / 100).toFixed(2), // dollars
+      tracking: "",
     };
   };
 
@@ -231,10 +232,10 @@ const DataBaseItemBulkUpload = () => {
         const row = generateRandomDBItemRow();
         const item = buildItemFromRow(row);
 
-        const itemId = item.id || `com_db_item_${uuidv4()}`;
+        const itemId = item.id || `com_sett_db_${uuidv4()}`;
 
         await setDoc(
-          doc(collection(db, "companies", recentlySelectedCompany, "databaseItems"), itemId),
+          doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
           item
         );
       }
@@ -294,7 +295,7 @@ const DataBaseItemBulkUpload = () => {
                   rate
                 </th>
                 <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                  billingRate
+                  sellPrice
                 </th>
                 <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
                   sku
@@ -308,6 +309,9 @@ const DataBaseItemBulkUpload = () => {
                 <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
                   billable
                 </th>
+                <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                  tracking
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -315,14 +319,15 @@ const DataBaseItemBulkUpload = () => {
                 <td className="p-4 whitespace-nowrap">Muriatic Acid</td>
                 <td className="p-4 whitespace-nowrap">Pool acid for pH control</td>
                 <td className="p-4 whitespace-nowrap">Chemicals</td>
-                <td className="p-4 whitespace-nowrap">General</td>
-                <td className="p-4 whitespace-nowrap">GAL</td>
+                <td className="p-4 whitespace-nowrap">Misc</td>
+                <td className="p-4 whitespace-nowrap">Gallon</td>
                 <td className="p-4 whitespace-nowrap">9.99</td>
                 <td className="p-4 whitespace-nowrap">14.99</td>
                 <td className="p-4 whitespace-nowrap">SKU-12345</td>
                 <td className="p-4 whitespace-nowrap">1</td>
                 <td className="p-4 whitespace-nowrap">Clear</td>
                 <td className="p-4 whitespace-nowrap">TRUE / FALSE</td>
+                <td className="p-4 whitespace-nowrap">optional-template-id</td>
               </tr>
             </tbody>
           </table>

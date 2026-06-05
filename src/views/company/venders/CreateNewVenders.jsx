@@ -1,264 +1,381 @@
-import React, { useState, useContext } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { doc, setDoc } from "firebase/firestore";
+import React, { useContext, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { doc, serverTimestamp, setDoc } from "firebase/firestore";
+import toast from "react-hot-toast";
+import {
+    FaArrowLeft,
+    FaEnvelope,
+    FaMapMarkerAlt,
+    FaPhone,
+    FaSave,
+    FaStickyNote,
+    FaStore,
+} from "react-icons/fa";
+import { v4 as uuidv4 } from "uuid";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { v4 as uuidv4 } from "uuid";
-import { VENDOR_RECORDS_COLLECTION, VENDOR_SETTINGS_DOC } from "../../../utils/vendors";
+import {
+    fetchCompanyVendor,
+    VENDOR_RECORDS_COLLECTION,
+    VENDOR_SETTINGS_DOC,
+} from "../../../utils/vendors";
+
+const emptyForm = {
+    name: "",
+    email: "",
+    phoneNumber: "",
+    streetAddress: "",
+    city: "",
+    state: "",
+    zip: "",
+    billingNotes: "",
+};
+
+const formatAddress = (form) => [
+    form.streetAddress,
+    form.city,
+    form.state,
+    form.zip,
+].filter(Boolean).join(", ");
+
+const fieldClass = "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
+const InfoRow = ({ icon: Icon, label, value }) => (
+    <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
+        <Icon className="mt-0.5 shrink-0 text-slate-400" />
+        <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+            <p className="mt-1 break-words font-semibold text-slate-900">{value || "Not set"}</p>
+        </div>
+    </div>
+);
 
 const CreateNewVendor = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { vendorId } = useParams();
+    const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const navigate = useNavigate();
+    const isEditing = Boolean(vendorId);
 
-    const [isLoading, setIsLoading] = useState(false);
+    const [form, setForm] = useState(emptyForm);
+    const [vendorSource, setVendorSource] = useState("canonical");
+    const [loading, setLoading] = useState(isEditing);
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState("");
 
-    const [name, setName] = useState("");
-    const [email, setEmail] = useState("");
-    const [phoneNumber, setPhoneNumber] = useState("");
+    useEffect(() => {
+        let cancelled = false;
 
-    const [billingAddressStreetAddress, setBillingAddressStreetAddress] = useState("");
-    const [billingAddressCity, setBillingAddressCity] = useState("");
-    const [billingAddressState, setBillingAddressState] = useState("");
-    const [billingAddressZip, setBillingAddressZip] = useState("");
+        const loadVendor = async () => {
+            if (!isEditing) {
+                setLoading(false);
+                return;
+            }
 
-    const [billingNotes, setBillingNotes] = useState("");
+            if (!recentlySelectedCompany || !vendorId) {
+                setLoading(false);
+                setError("Missing company or vendor id.");
+                return;
+            }
 
-    async function createNewVendor(e) {
-        e.preventDefault();
+            try {
+                setLoading(true);
+                setError("");
+                const vendor = await fetchCompanyVendor(db, recentlySelectedCompany, vendorId);
 
-        if (!name.trim()) {
-            alert("Please enter a vendor name.");
+                if (!vendor) {
+                    setError("Vendor not found.");
+                    return;
+                }
+
+                if (!cancelled) {
+                    setVendorSource(vendor.source || "canonical");
+                    setForm({
+                        name: vendor.name || "",
+                        email: vendor.email || "",
+                        phoneNumber: vendor.phoneNumber || "",
+                        streetAddress: vendor.streetAddress || vendor.address?.streetAddress || "",
+                        city: vendor.city || vendor.address?.city || "",
+                        state: vendor.state || vendor.address?.state || "",
+                        zip: vendor.zip || vendor.address?.zip || "",
+                        billingNotes: vendor.billingNotes || "",
+                    });
+                }
+            } catch (loadError) {
+                console.error("Error loading vendor:", loadError);
+                if (!cancelled) setError(loadError.message || "Unable to load vendor.");
+            } finally {
+                if (!cancelled) setLoading(false);
+            }
+        };
+
+        loadVendor();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [isEditing, recentlySelectedCompany, vendorId]);
+
+    const updateField = (field, value) => {
+        setForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const previewAddress = useMemo(() => formatAddress(form), [form]);
+
+    async function saveVendor(event) {
+        event.preventDefault();
+
+        if (!form.name.trim()) {
+            toast.error("Please enter a vendor name.");
             return;
         }
 
         if (!recentlySelectedCompany) {
-            alert("No company selected.");
+            toast.error("No company selected.");
             return;
         }
 
         try {
-            setIsLoading(true);
-
-            const vendorId = `com_ven_${uuidv4()}`;
-
+            setSaving(true);
+            const nextVendorId = vendorId || `com_ven_${uuidv4()}`;
             const vendor = {
-                id: vendorId,
-                name: name.trim(),
-                email: email.trim() || "",
-                phoneNumber: phoneNumber.trim() || "",
+                id: nextVendorId,
+                name: form.name.trim(),
+                email: form.email.trim(),
+                phoneNumber: form.phoneNumber.trim(),
                 address: {
-                    streetAddress: billingAddressStreetAddress.trim() || "",
-                    city: billingAddressCity.trim() || "",
-                    state: billingAddressState.trim() || "",
-                    zip: billingAddressZip.trim() || "",
+                    streetAddress: form.streetAddress.trim(),
+                    city: form.city.trim(),
+                    state: form.state.trim(),
+                    zip: form.zip.trim(),
                 },
-                billingNotes: billingNotes.trim() || "",
-                dateCreated: new Date(),
+                billingNotes: form.billingNotes.trim(),
+                updatedAt: serverTimestamp(),
+                ...(isEditing ? {} : { dateCreated: serverTimestamp() }),
             };
 
             await setDoc(
-                doc(db, "companies", recentlySelectedCompany, "settings", VENDOR_SETTINGS_DOC, VENDOR_RECORDS_COLLECTION, vendorId),
-                vendor
+                doc(db, "companies", recentlySelectedCompany, "settings", VENDOR_SETTINGS_DOC, VENDOR_RECORDS_COLLECTION, nextVendorId),
+                vendor,
+                { merge: true }
             );
 
-            navigate("/company/vendors");
-        } catch (error) {
-            console.error("Error creating vendor:", error);
-            alert("Failed to create vendor. Please try again.");
+            toast.success(isEditing ? "Vendor updated." : "Vendor created.");
+            navigate(`/company/vendors/detail/${nextVendorId}`);
+        } catch (saveError) {
+            console.error("Error saving vendor:", saveError);
+            toast.error(saveError.message || "Failed to save vendor.");
         } finally {
-            setIsLoading(false);
+            setSaving(false);
         }
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-lg mx-auto">
-                <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold text-gray-800">Create New Vendor</h2>
-                    <Link
-                        to="/company/vendors"
-                        className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
-                    >
-                        Back
-                    </Link>
-                </div>
+        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+                                {recentlySelectedCompanyName || "Selected company"}
+                            </p>
+                            <h1 className="mt-2 text-3xl font-bold text-slate-950">
+                                {isEditing ? "Vendor Detail" : "New Vendor"}
+                            </h1>
+                            <p className="mt-2 text-sm text-slate-600">
+                                Store vendor contact details, purchasing notes, billing info, and address records.
+                            </p>
+                        </div>
+                        <Link
+                            to="/company/vendors"
+                            className="inline-flex w-fit items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                            <FaArrowLeft className="text-xs" />
+                            Vendors
+                        </Link>
+                    </div>
+                </section>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <div className="lg:col-span-2">
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
-                            <h3 className="text-xl font-bold mb-4 text-gray-800">Vendor Details</h3>
+                {error && (
+                    <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm font-semibold text-rose-700">
+                        {error}
+                    </div>
+                )}
 
-                            <form onSubmit={createNewVendor} className="space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {loading ? (
+                    <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
+                        Loading vendor...
+                    </div>
+                ) : (
+                    <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+                        <main className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                            <div className="border-b border-slate-200 px-5 py-4">
+                                <h2 className="text-lg font-bold text-slate-950">Vendor Information</h2>
+                                {isEditing && vendorSource === "legacy" && (
+                                    <p className="mt-1 text-sm text-amber-700">
+                                        This record was loaded from the legacy vendor path. Saving writes it to the current vendor path.
+                                    </p>
+                                )}
+                            </div>
+
+                            <form onSubmit={saveVendor} className="space-y-6 p-5">
+                                <div className="grid gap-4 md:grid-cols-2">
                                     <div className="md:col-span-2">
-                                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorName">
                                             Vendor Name
                                         </label>
                                         <input
-                                            value={name}
-                                            onChange={(e) => setName(e.target.value)}
+                                            id="vendorName"
+                                            value={form.name}
+                                            onChange={(event) => updateField("name", event.target.value)}
                                             type="text"
-                                            placeholder="Vendor Name"
-                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                            placeholder="Vendor name"
+                                            className={`${fieldClass} mt-2`}
                                         />
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorEmail">
                                             Email
                                         </label>
                                         <input
-                                            value={email}
-                                            onChange={(e) => setEmail(e.target.value)}
+                                            id="vendorEmail"
+                                            value={form.email}
+                                            onChange={(event) => updateField("email", event.target.value)}
                                             type="email"
                                             placeholder="vendor@email.com"
-                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                            className={`${fieldClass} mt-2`}
                                         />
                                     </div>
 
                                     <div>
-                                        <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                        <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorPhone">
                                             Phone Number
                                         </label>
                                         <input
-                                            value={phoneNumber}
-                                            onChange={(e) => setPhoneNumber(e.target.value)}
+                                            id="vendorPhone"
+                                            value={form.phoneNumber}
+                                            onChange={(event) => updateField("phoneNumber", event.target.value)}
                                             type="text"
                                             placeholder="(555) 555-5555"
-                                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                            className={`${fieldClass} mt-2`}
                                         />
                                     </div>
                                 </div>
 
-                                <div>
-                                    <h4 className="text-lg font-bold text-gray-800 mb-3">Address</h4>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="border-t border-slate-200 pt-5">
+                                    <h3 className="text-base font-bold text-slate-950">Address</h3>
+                                    <div className="mt-4 grid gap-4 md:grid-cols-2">
                                         <div className="md:col-span-2">
-                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorStreet">
                                                 Street Address
                                             </label>
                                             <input
-                                                value={billingAddressStreetAddress}
-                                                onChange={(e) => setBillingAddressStreetAddress(e.target.value)}
+                                                id="vendorStreet"
+                                                value={form.streetAddress}
+                                                onChange={(event) => updateField("streetAddress", event.target.value)}
                                                 type="text"
                                                 placeholder="123 Main St"
-                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                                className={`${fieldClass} mt-2`}
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorCity">
                                                 City
                                             </label>
                                             <input
-                                                value={billingAddressCity}
-                                                onChange={(e) => setBillingAddressCity(e.target.value)}
+                                                id="vendorCity"
+                                                value={form.city}
+                                                onChange={(event) => updateField("city", event.target.value)}
                                                 type="text"
                                                 placeholder="City"
-                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                                className={`${fieldClass} mt-2`}
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorState">
                                                 State
                                             </label>
                                             <input
-                                                value={billingAddressState}
-                                                onChange={(e) => setBillingAddressState(e.target.value)}
+                                                id="vendorState"
+                                                value={form.state}
+                                                onChange={(event) => updateField("state", event.target.value)}
                                                 type="text"
                                                 placeholder="State"
-                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                                className={`${fieldClass} mt-2`}
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorZip">
                                                 ZIP
                                             </label>
                                             <input
-                                                value={billingAddressZip}
-                                                onChange={(e) => setBillingAddressZip(e.target.value)}
+                                                id="vendorZip"
+                                                value={form.zip}
+                                                onChange={(event) => updateField("zip", event.target.value)}
                                                 type="text"
                                                 placeholder="ZIP Code"
-                                                className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                                className={`${fieldClass} mt-2`}
                                             />
                                         </div>
                                     </div>
                                 </div>
 
-                                <div>
-                                    <label className="block text-sm font-semibold text-gray-700 mb-2">
+                                <div className="border-t border-slate-200 pt-5">
+                                    <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorNotes">
                                         Notes
                                     </label>
                                     <textarea
-                                        value={billingNotes}
-                                        onChange={(e) => setBillingNotes(e.target.value)}
-                                        placeholder="Notes, billing details, account info, etc."
-                                        rows={4}
-                                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                                        id="vendorNotes"
+                                        value={form.billingNotes}
+                                        onChange={(event) => updateField("billingNotes", event.target.value)}
+                                        placeholder="Notes, billing details, account info, preferred contact method..."
+                                        rows={5}
+                                        className={`${fieldClass} mt-2`}
                                     />
                                 </div>
 
                                 <button
                                     type="submit"
-                                    disabled={isLoading}
-                                    className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition disabled:opacity-50"
+                                    disabled={saving}
+                                    className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
                                 >
-                                    {isLoading ? "Creating Vendor..." : "Create Vendor"}
+                                    <FaSave className="text-xs" />
+                                    {saving ? "Saving..." : isEditing ? "Save Vendor" : "Create Vendor"}
                                 </button>
                             </form>
-                        </div>
-                    </div>
+                        </main>
 
-                    <div className="space-y-6">
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
-                            <h3 className="text-xl font-bold mb-4 text-gray-800">Preview</h3>
-                            <div className="space-y-3 text-gray-700">
-                                <div className="flex justify-between gap-4">
-                                    <span className="font-medium">Name:</span>
-                                    <span className="text-right">{name || "—"}</span>
+                        <aside className="space-y-6">
+                            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                                <div className="flex items-center justify-between gap-3">
+                                    <h2 className="text-lg font-bold text-slate-950">Snapshot</h2>
+                                    <FaStore className="text-slate-400" />
                                 </div>
-                                <div className="flex justify-between gap-4">
-                                    <span className="font-medium">Email:</span>
-                                    <span className="text-right break-all">{email || "—"}</span>
+                                <div className="mt-4 space-y-3">
+                                    <InfoRow icon={FaStore} label="Name" value={form.name} />
+                                    <InfoRow icon={FaEnvelope} label="Email" value={form.email} />
+                                    <InfoRow icon={FaPhone} label="Phone" value={form.phoneNumber} />
+                                    <InfoRow icon={FaMapMarkerAlt} label="Address" value={previewAddress} />
+                                    <InfoRow icon={FaStickyNote} label="Notes" value={form.billingNotes} />
                                 </div>
-                                <div className="flex justify-between gap-4">
-                                    <span className="font-medium">Phone:</span>
-                                    <span className="text-right">{phoneNumber || "—"}</span>
-                                </div>
+                            </section>
 
-                                <div className="border-t pt-3">
-                                    <p className="font-medium mb-2">Address</p>
-                                    <div className="text-sm text-gray-600 space-y-1">
-                                        <p>{billingAddressStreetAddress || "—"}</p>
-                                        <p>
-                                            {[billingAddressCity, billingAddressState, billingAddressZip]
-                                                .filter(Boolean)
-                                                .join(", ") || "—"}
-                                        </p>
-                                    </div>
-                                </div>
-
-                                <div className="border-t pt-3">
-                                    <p className="font-medium mb-2">Notes</p>
-                                    <p className="text-sm text-gray-600 whitespace-pre-wrap">
-                                        {billingNotes || "—"}
-                                    </p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                                <h2 className="text-lg font-bold text-slate-950">Usage</h2>
+                                <p className="mt-2 text-sm text-slate-500">
+                                    Vendor records are used by purchases, receipt imports, and database items. Keep contact and account notes current so purchasing workflows stay clean.
+                                </p>
+                            </section>
+                        </aside>
+                    </section>
+                )}
             </div>
-
-            {isLoading && (
-                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-                    <div className="bg-white rounded-xl shadow-xl px-8 py-6 text-gray-800 font-semibold">
-                        Creating vendor...
-                    </div>
-                </div>
-            )}
         </div>
     );
 };

@@ -366,7 +366,7 @@ function RecurringContractDetailView() {
                                 </h1>
                                 <StatusPill status={contract.status} />
                             </div>
-                            <p className="text-gray-500 mt-2">Contract ID: {contract.id}</p>
+                            <p className="text-gray-500 mt-2">Recurring contract profile</p>
                         </div>
 
                         <div className="flex flex-wrap gap-3">
@@ -426,10 +426,10 @@ function RecurringContractDetailView() {
                                 <Field label="Amount" value={moneyValue} />
                                 <Field label="Frequency" value={contract.frequency || contract.interval} />
                                 <Field label="Start Date" value={contract.startDate || contract.dateCreated} />
-                                <Field label="Sender Id" value={contract.senderId} />
-                                <Field label="Receiver Id" value={contract.receiverId} />
-                                <Field label="Connected Account" value={contract.connectedAccount} />
-                                <Field label="Price Id" value={contract.priceId} />
+                                <Field label="Sender" value={contract.senderName || (contract.senderId ? 'Linked sender' : '')} />
+                                <Field label="Receiver" value={contract.receiverName || (contract.receiverId ? 'Linked receiver' : '')} />
+                                <Field label="Connected Account" value={contract.connectedAccount ? 'Connected' : ''} />
+                                <Field label="Price" value={contract.priceId ? 'Price configured' : ''} />
                             </div>
 
                             <div className="mt-6">
@@ -442,9 +442,9 @@ function RecurringContractDetailView() {
                         <SectionCard title="Routing Information">
                             <div className="space-y-4">
                                 <Field label="Routed" value={contract.routed} />
-                                <Field label="recurringServiceStopId" value={contract.recurringServiceStopId} />
-                                <Field label="Service Location Id" value={contract.serviceLocationId} />
-                                <Field label="Body Of Water Id" value={contract.bodyOfWaterId} />
+                                <Field label="Recurring Service Stop" value={contract.recurringServiceStopId ? 'Linked recurring stop' : ''} />
+                                <Field label="Service Location" value={contract.serviceLocationName || (contract.serviceLocationId ? 'Linked service location' : '')} />
+                                <Field label="Body Of Water" value={contract.bodyOfWaterName || (contract.bodyOfWaterId ? 'Linked body of water' : '')} />
                             </div>
                         </SectionCard>
 
@@ -452,8 +452,8 @@ function RecurringContractDetailView() {
                             <div className="space-y-4">
                                 <Field label="Created At" value={contract.createdAt} />
                                 <Field label="Updated At" value={contract.updatedAt} />
-                                <Field label="Customer Id" value={contract.customerId} />
-                                <Field label="Subscription Id" value={contract.subscriptionId} />
+                                <Field label="Customer" value={contract.customerName || (contract.customerId ? 'Linked customer' : '')} />
+                                <Field label="Subscription" value={contract.subscriptionId ? 'Linked subscription' : ''} />
                             </div>
                         </SectionCard>
                     </div>

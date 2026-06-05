@@ -15,10 +15,14 @@ export const WATER_HISTORY_TYPES = {
 };
 
 const taskTypeToWaterHistoryType = (taskType) => {
-  switch (taskType) {
-    case "Fill Water":
+  switch (String(taskType || "").trim().toLowerCase()) {
+    case "fill water":
+    case "fill":
       return WATER_HISTORY_TYPES.FILL;
-    case "Empty Water":
+    case "empty water":
+    case "drain water":
+    case "drain":
+    case "empty":
       return WATER_HISTORY_TYPES.EMPTY;
     default:
       return null;
@@ -57,7 +61,9 @@ export const recordBodyOfWaterTaskHistory = async ({
 
   const bodyOfWaterRef = doc(db, "companies", companyId, "bodiesOfWater", bodyOfWaterId);
   const bodyOfWaterSnap = await getDoc(bodyOfWaterRef);
-  const bodyOfWater = bodyOfWaterSnap.exists() ? bodyOfWaterSnap.data() : {};
+  if (!bodyOfWaterSnap.exists()) return null;
+
+  const bodyOfWater = bodyOfWaterSnap.data() || {};
 
   const sourceId = task?.jobTaskId || task?.id || crypto.randomUUID();
   const serviceStopId = serviceStop?.id || task?.serviceStopId?.id || "";

@@ -496,7 +496,7 @@ const buildJobReport = ({ jobs, purchases, payrollLines, groupBy }) => {
     const costCents = purchaseByJob.get(job.id) || 0;
     const payrollCents = payrollByJob.get(job.id) || 0;
     group.rows.push({
-      internalId: job.internalId || job.id,
+      internalId: job.internalId || "Job",
       date: shortDate(itemDate(job, ["invoiceDate", "dateCreated", "createdAt"])),
       customer: job.customerName || "-",
       operationStatus: job.operationStatus || "-",
@@ -541,7 +541,7 @@ const buildVehicleReport = ({ vehicles, activeRoutes, mode }) => {
     const distance = routes.reduce((total, route) => total + toNumber(route.distanceMiles || route.distance || 0), 0);
     return {
       id: vehicle.id,
-      name: vehicle.nickName || `${vehicle.year || ""} ${vehicle.make || ""} ${vehicle.model || ""}`.trim() || vehicle.id,
+      name: vehicle.nickName || `${vehicle.year || ""} ${vehicle.make || ""} ${vehicle.model || ""}`.trim() || "Vehicle",
       metrics: {},
       rows: mode === "summary"
         ? [{ type: vehicle.vehicalType || "-", status: vehicle.status || "-", miles: toNumber(vehicle.miles), routes: routes.length, distance }]

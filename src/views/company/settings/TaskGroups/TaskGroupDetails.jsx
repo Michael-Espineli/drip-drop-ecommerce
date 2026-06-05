@@ -16,11 +16,13 @@ import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../../context/AuthContext";
 import toast from "react-hot-toast";
 import { useNavigate } from "react-router-dom";
+import useCompanyPermissions from "../../../../hooks/useCompanyPermissions";
 
 const TaskGroupDetails = () => {
   const navigate = useNavigate();
 
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
 
   const { taskGroupId } = useParams();
 
@@ -118,6 +120,8 @@ const TaskGroupDetails = () => {
 
   async function editTask(e, taskId) {
     e.preventDefault();
+    if (!requirePermission("824", "update task groups")) return;
+
     const task = taskList.find((item) => item.id === taskId);
 
     setTaskToEdit(task);
@@ -125,6 +129,7 @@ const TaskGroupDetails = () => {
 
   async function handleAddTask(e) {
     e.preventDefault();
+    if (!requirePermission("824", "update task groups")) return;
 
     try {
       let taskId = "com_set_tg_tas_" + uuidv4();
@@ -199,6 +204,8 @@ const TaskGroupDetails = () => {
 
   async function removeTask(e, taskId) {
     e.preventDefault();
+    if (!requirePermission("824", "update task groups")) return;
+
     try {
       await deleteDoc(
         doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId, "tasks", taskId)
@@ -249,6 +256,8 @@ const TaskGroupDetails = () => {
 
   async function deleteTaskGroup(e, t) {
     e.preventDefault();
+    if (!requirePermission("826", "delete task groups")) return;
+
     try {
       await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroupId));
       toast.dismiss(t.id);
@@ -312,7 +321,7 @@ const TaskGroupDetails = () => {
             </p>
           </div>
 
-          {taskGroup.canDelete && (
+          {taskGroup.canDelete && can("826") && (
             <button
               className="inline-flex items-center justify-center rounded-xl border border-red-200 bg-white px-3 py-2 text-sm font-semibold text-red-600 hover:bg-red-50 transition"
               onClick={customToast}
@@ -374,7 +383,7 @@ const TaskGroupDetails = () => {
                     <td className="py-3 px-5 text-sm text-slate-600">{task.description}</td>
 
                     <td className="py-3 px-5 text-right whitespace-nowrap">
-                      {(taskToEdit.id === task.id) && (
+                      {(taskToEdit.id === task.id) && can("824") && (
                         <div className="inline-flex items-center gap-2">
                           <button
                             onClick={(e) => removeTask(e, task.id)}
@@ -391,7 +400,7 @@ const TaskGroupDetails = () => {
                         </div>
                       )}
 
-                      {(taskToEdit.id !== task.id) && (
+                      {(taskToEdit.id !== task.id) && can("824") && (
                         <div className="inline-flex items-center gap-2">
                           <button
                             onClick={(e) => removeTask(e, task.id)}
@@ -426,6 +435,7 @@ const TaskGroupDetails = () => {
           </div>
 
           {/* Add Task Form */}
+          {can("824") && (
           <div className="border-t border-slate-200 bg-white p-5 space-y-3">
             <div className="flex flex-col gap-3 md:flex-row md:items-center">
               <input
@@ -558,9 +568,11 @@ const TaskGroupDetails = () => {
               </div>
             </div>
           </div>
+          )}
         </div>
 
         {/* Footer Button */}
+        {can("824") && (
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
           <button
             onClick={(e) => clearNewTask(e)}
@@ -569,6 +581,7 @@ const TaskGroupDetails = () => {
             Update Task Group
           </button>
         </div>
+        )}
       </div>
     </div>
   );

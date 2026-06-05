@@ -11,6 +11,12 @@ import DatePicker from "react-datepicker";
 import "react-datepicker/dist/react-datepicker.css";
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
+import {
+  debugServiceStopTypeWrite,
+  resolveServiceStopTypeFields,
+  SERVICE_STOP_TYPE_USE_CASES,
+  suggestCompanyServiceStopType,
+} from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 
 const functions = getFunctions();
 // Reusable form components
@@ -57,12 +63,119 @@ const RouteBuilder = () => {
   // Data state
   const [technicians, setTechnicians] = useState([]);
   const [allStops, setAllStops] = useState([]);
+  const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
+  const [selectedServiceStopType, setSelectedServiceStopType] = useState(null);
+  const [availableStopTypeSelections, setAvailableStopTypeSelections] = useState({});
   const [isLoading, setIsLoading] = useState(false);
 
   const daysOfWeek = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'].map(day => ({
     value: day,
     label: day
   }));
+
+  const serviceStopTypeOptions = useMemo(
+    () =>
+      companyServiceStopTypes
+        .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+        .map((type) => ({
+          ...type,
+          value: type.id,
+          label: type.name || "Unnamed Service Stop Type",
+        }))
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    [companyServiceStopTypes]
+  );
+
+  const serviceStopTypeById = useMemo(
+    () => new Map(serviceStopTypeOptions.map((type) => [type.id, type])),
+    [serviceStopTypeOptions]
+  );
+
+  const serviceStopTypeForStop = (stop) =>
+    serviceStopTypeById.get(stop?.typeId) || selectedServiceStopType || null;
+
+  const resolveStopTypeFields = (stop = {}, selectedType = null) =>
+    resolveServiceStopTypeFields({
+      companyServiceStopTypes,
+      selectedType,
+      selectedTypeId: selectedType?.id || stop.typeId || "",
+      fallbackName: stop.type || "Recurring Service Stop",
+      fallbackImage: stop.typeImage || "",
+      useCase: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+      context: "RouteBuilder.resolveStopTypeFields",
+    });
+
+  const stopWithServiceStopType = (stop, selectedType = null) => {
+    const resolvedTypeFields = resolveStopTypeFields(stop, selectedType);
+
+    return {
+      ...stop,
+      type: resolvedTypeFields.type,
+      typeId: resolvedTypeFields.typeId,
+      typeImage: resolvedTypeFields.typeImage,
+      serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+    };
+  };
+
+  const buildRouteStopsFromRouteOrder = async (route, stopList) => {
+    const orderedStops = Array.isArray(route?.order)
+      ? [...route.order].sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
+      : [];
+
+    const recurringStopEntries = await Promise.all(
+      orderedStops
+        .filter((orderedStop) => orderedStop.recurringServiceStopId)
+        .map(async (orderedStop) => {
+          try {
+            const snap = await getDoc(doc(
+              db,
+              "companies",
+              recentlySelectedCompany,
+              "recurringServiceStop",
+              orderedStop.recurringServiceStopId
+            ));
+            return [orderedStop.recurringServiceStopId, snap.exists() ? snap.data() : null];
+          } catch (error) {
+            console.warn("Unable to load recurring service stop for route stop.", {
+              recurringServiceStopId: orderedStop.recurringServiceStopId,
+              error,
+            });
+            return [orderedStop.recurringServiceStopId, null];
+          }
+        })
+    );
+    const recurringStopsById = new Map(recurringStopEntries);
+
+    return orderedStops
+      .map((orderedStop) => {
+        const recurringStop = recurringStopsById.get(orderedStop.recurringServiceStopId) || {};
+        const serviceLocation = stopList.find((location) =>
+          location.id === orderedStop.locationId ||
+          location.id === recurringStop.serviceLocationId
+        );
+
+        if (!serviceLocation && !recurringStop.serviceLocationId) return null;
+
+        return {
+          ...(serviceLocation || {}),
+          id: serviceLocation?.id || recurringStop.serviceLocationId || orderedStop.locationId || orderedStop.recurringServiceStopId,
+          routeOrderId: orderedStop.id,
+          recurringServiceStopId: orderedStop.recurringServiceStopId,
+          customerId: orderedStop.customerId || recurringStop.customerId || serviceLocation?.customerId || "",
+          customerName: orderedStop.customerName || recurringStop.customerName || serviceLocation?.customerName || "",
+          address: serviceLocation?.address || recurringStop.address || {},
+          type: orderedStop.type || recurringStop.type || serviceLocation?.type || "",
+          typeId: orderedStop.typeId || recurringStop.typeId || serviceLocation?.typeId || "",
+          typeImage: orderedStop.typeImage || recurringStop.typeImage || serviceLocation?.typeImage || "",
+          serviceStopTypeUseCaseRawValue:
+            orderedStop.serviceStopTypeUseCaseRawValue ||
+            recurringStop.serviceStopTypeUseCaseRawValue ||
+            SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+          estimatedTime: recurringStop.estimatedTime ?? serviceLocation?.estimatedTime ?? null,
+        };
+      })
+      .filter(Boolean);
+  };
 
   // =============================
   // iOS helper -> React helper
@@ -145,12 +258,14 @@ const RouteBuilder = () => {
   };
 
   const createRecurringServiceStopForRouteStop = async (stop) => {
+    const resolvedTypeFields = resolveStopTypeFields(stop, serviceStopTypeForStop(stop));
     const recurringServiceStop = {
       id: `comp_rss_${uuidv4()}`,
       internalId: await getNextRecurringServiceStopInternalId(),
-      type: stop.type ?? "",
-      typeId: stop.typeId ?? "",
-      typeImage: stop.typeImage ?? "",
+      type: resolvedTypeFields.type,
+      typeId: resolvedTypeFields.typeId,
+      typeImage: resolvedTypeFields.typeImage,
+      serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
       customerName: stop.customerName,
       customerId: stop.customerId,
       address: stop.address,
@@ -172,11 +287,35 @@ const RouteBuilder = () => {
       mainCompanyId: stop.mainCompanyId ?? null,
     };
 
+    debugServiceStopTypeWrite({
+      context: "RouteBuilder.createRecurringServiceStopForRouteStop",
+      payload: recurringServiceStop,
+    });
     return createFirstRecurringServiceStop(recentlySelectedCompany, recurringServiceStop);
   };
 
   const buildRouteOrderItem = async (stop, index) => {
+    const resolvedTypeFields = resolveStopTypeFields(stop, serviceStopTypeForStop(stop));
     const recurringServiceStopId = stop.recurringServiceStopId || await createRecurringServiceStopForRouteStop(stop);
+
+    if (stop.recurringServiceStopId) {
+      try {
+        await updateDoc(
+          doc(db, "companies", recentlySelectedCompany, "recurringServiceStop", stop.recurringServiceStopId),
+          {
+            type: resolvedTypeFields.type,
+            typeId: resolvedTypeFields.typeId,
+            typeImage: resolvedTypeFields.typeImage,
+            serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+          }
+        );
+      } catch (error) {
+        console.warn("Unable to sync route stop service stop type.", {
+          recurringServiceStopId: stop.recurringServiceStopId,
+          error,
+        });
+      }
+    }
 
     return {
       id: stop.routeOrderId || uuidv4(),
@@ -184,7 +323,11 @@ const RouteBuilder = () => {
       recurringServiceStopId,
       customerId: stop.customerId,
       customerName: stop.customerName,
-      locationId: stop.serviceLocationId || stop.id
+      locationId: stop.serviceLocationId || stop.id,
+      type: resolvedTypeFields.type,
+      typeId: resolvedTypeFields.typeId,
+      typeImage: resolvedTypeFields.typeImage,
+      serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
     };
   };
 
@@ -195,31 +338,24 @@ const RouteBuilder = () => {
 
     Promise.all([
       getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'))),
-      getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations')))
+      getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'))),
+      getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes')))
     ])
-      .then(([techSnapshot, stopsSnapshot]) => {
+      .then(async ([techSnapshot, stopsSnapshot, serviceStopTypesSnapshot]) => {
         const techList = techSnapshot.docs.map(doc => ({ value: doc.data().userId, label: doc.data().userName, ...doc.data() }));
         setTechnicians(techList);
 
         const stopList = stopsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setAllStops(stopList);
 
+        const typeList = serviceStopTypesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setCompanyServiceStopTypes(typeList);
+
         // If editing, set the technician and stops
         if (editingTemplate) {
           const tech = techList.find(t => t.value === editingTemplate.techId);
           setSelectedTechnician(tech || null);
-          const orderedStops = (editingTemplate.order || [])
-            .sort((a, b) => a.order - b.order)
-            .map(orderedStop => {
-              const serviceLocation = stopList.find(c => c.id === orderedStop.locationId);
-              if (!serviceLocation) return null;
-              return {
-                ...serviceLocation,
-                routeOrderId: orderedStop.id,
-                recurringServiceStopId: orderedStop.recurringServiceStopId,
-              };
-            })
-            .filter(Boolean);
+          const orderedStops = await buildRouteStopsFromRouteOrder(editingTemplate, stopList);
           setRouteStops(orderedStops);
         } else if (state?.defaultTechnicianId) {
           const tech = techList.find(t => t.value === state.defaultTechnicianId);
@@ -229,6 +365,19 @@ const RouteBuilder = () => {
       .catch(() => toast.error("Failed to fetch initial data."))
       .finally(() => setIsLoading(false));
   }, [recentlySelectedCompany, editingTemplate]);
+
+  useEffect(() => {
+    if (selectedServiceStopType || !serviceStopTypeOptions.length) return;
+
+    const suggestedType = suggestCompanyServiceStopType(
+      serviceStopTypeOptions,
+      SERVICE_STOP_TYPE_USE_CASES.recurringRoute
+    );
+
+    if (suggestedType) {
+      setSelectedServiceStopType(suggestedType);
+    }
+  }, [selectedServiceStopType, serviceStopTypeOptions]);
 
   // Auto-load existing template when day/tech changes (if not in edit mode)
   useEffect(() => {
@@ -246,21 +395,10 @@ const RouteBuilder = () => {
 
         if (!snapshot.empty) {
           const existing = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() };
-          toast.success(`Loaded existing template for ${existing.tech} on ${existing.day}.`);
+          toast.success(`Loaded existing route for ${existing.tech} on ${existing.day}.`);
           setEditingTemplate(existing);
           setDescription(existing.description);
-          const ordered = (existing.order || [])
-            .sort((a, b) => a.order - b.order)
-            .map(os => {
-              const serviceLocation = allStops.find(c => c.id === os.locationId);
-              if (!serviceLocation) return null;
-              return {
-                ...serviceLocation,
-                routeOrderId: os.id,
-                recurringServiceStopId: os.recurringServiceStopId,
-              };
-            })
-            .filter(Boolean);
+          const ordered = await buildRouteStopsFromRouteOrder(existing, allStops);
           setRouteStops(ordered);
         } else {
           // Reset if no template found for this combo
@@ -342,7 +480,7 @@ const RouteBuilder = () => {
         batch.set(routeRef, templateData, { merge: true });
         await batch.commit();
 
-        toast.success("Template successfully updated!");
+        toast.success("Route successfully updated!");
         navigate('/company/route-management');
         return;
       }
@@ -378,7 +516,7 @@ const RouteBuilder = () => {
       batch.set(routeRef, templateData, { merge: true });
       await batch.commit();
 
-      toast.success("Template successfully created!");
+      toast.success("Route successfully created!");
       navigate('/company/route-management');
 
     } catch (error) {
@@ -431,14 +569,39 @@ const RouteBuilder = () => {
     setRouteStops(items);
   };
 
+  const handleAvailableStopTypeChange = (stopId, selectedType) => {
+    setAvailableStopTypeSelections((current) => ({
+      ...current,
+      [stopId]: selectedType,
+    }));
+  };
+
+  const handleAddStop = (stop) => {
+    const selectedType = availableStopTypeSelections[stop.id] || selectedServiceStopType;
+    setRouteStops([...routeStops, stopWithServiceStopType(stop, selectedType)]);
+    setAvailableStopTypeSelections((current) => {
+      const next = { ...current };
+      delete next[stop.id];
+      return next;
+    });
+  };
+
+  const handleRouteStopTypeChange = (stopId, selectedType) => {
+    setRouteStops((currentStops) =>
+      currentStops.map((stop) =>
+        stop.id === stopId ? stopWithServiceStopType(stop, selectedType) : stop
+      )
+    );
+  };
+
   return (
     <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
       <div className="max-w-7xl mx-auto">
         <header className="mb-8">
           <h1 className='text-3xl font-bold text-gray-800'>
-            {editingTemplate ? 'Edit Route Template' : 'Create Route Template'}
+            {editingTemplate ? 'Edit Route' : 'New Route'}
           </h1>
-          <p className='text-gray-600 mt-1'>Drag and drop to build and organize your route templates.</p>
+          <p className='text-gray-600 mt-1'>Build the planned route, assign each stop type, and arrange the stop order.</p>
         </header>
 
         <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
@@ -464,6 +627,13 @@ const RouteBuilder = () => {
               isDisabled={!!editingTemplate}
               isLoading={isLoading}
             />
+            <SelectInput
+              options={serviceStopTypeOptions}
+              value={selectedServiceStopType}
+              onChange={setSelectedServiceStopType}
+              placeholder="Default Service Stop Type"
+              isLoading={isLoading}
+            />
           </div>
         </div>
 
@@ -483,17 +653,26 @@ const RouteBuilder = () => {
               />
               <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
                 {availableStops.map(stop => (
-                  <div key={stop.id} className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
-                    <div>
+                  <div key={stop.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <div className="mb-3">
                       <p className="font-semibold text-gray-800">{stop.customerName}</p>
                       <p className="text-sm text-gray-500">{stop.address?.streetAddress}</p>
                     </div>
-                    <Button
-                      onClick={() => setRouteStops([...routeStops, stop])}
-                      className="bg-blue-600 text-white hover:bg-blue-700"
-                    >
-                      Add
-                    </Button>
+                    <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
+                      <SelectInput
+                        options={serviceStopTypeOptions}
+                        value={availableStopTypeSelections[stop.id] || selectedServiceStopType}
+                        onChange={(selectedType) => handleAvailableStopTypeChange(stop.id, selectedType)}
+                        placeholder="Service Stop Type"
+                        isLoading={isLoading}
+                      />
+                      <Button
+                        onClick={() => handleAddStop(stop)}
+                        className="bg-blue-600 text-white hover:bg-blue-700"
+                      >
+                        Add
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -515,21 +694,30 @@ const RouteBuilder = () => {
                             ref={provided.innerRef}
                             {...provided.draggableProps}
                             {...provided.dragHandleProps}
-                            className="bg-white p-4 rounded-lg shadow flex justify-between items-center border border-gray-200"
+                            className="bg-white p-4 rounded-lg shadow border border-gray-200"
                           >
-                            <div className='flex items-center'>
-                              <span className='text-lg font-bold text-gray-400 mr-4'>{index + 1}</span>
-                              <div>
-                                <p className="font-semibold text-gray-900">{stop.customerName}</p>
-                                <p className="text-sm text-gray-600">{stop.address?.streetAddress}</p>
+                            <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] md:items-center">
+                              <div className='flex items-center'>
+                                <span className='text-lg font-bold text-gray-400 mr-4'>{index + 1}</span>
+                                <div>
+                                  <p className="font-semibold text-gray-900">{stop.customerName}</p>
+                                  <p className="text-sm text-gray-600">{stop.address?.streetAddress}</p>
+                                </div>
                               </div>
+                              <SelectInput
+                                options={serviceStopTypeOptions}
+                                value={serviceStopTypeForStop(stop)}
+                                onChange={(selectedType) => handleRouteStopTypeChange(stop.id, selectedType)}
+                                placeholder="Service Stop Type"
+                                isLoading={isLoading}
+                              />
+                              <Button
+                                onClick={() => setRouteStops(routeStops.filter(s => s.id !== stop.id))}
+                                className="bg-red-500 text-white hover:bg-red-600"
+                              >
+                                Remove
+                              </Button>
                             </div>
-                            <Button
-                              onClick={() => setRouteStops(routeStops.filter(s => s.id !== stop.id))}
-                              className="bg-red-500 text-white hover:bg-red-600"
-                            >
-                              Remove
-                            </Button>
                           </div>
                         )}
                       </Draggable>
@@ -547,7 +735,7 @@ const RouteBuilder = () => {
             Cancel
           </Button>
           <Button onClick={handleSaveTemplate} disabled={isLoading} className='bg-green-600 text-white disabled:bg-gray-400 hover:bg-green-700'>
-            {isLoading ? 'Saving...' : (editingTemplate ? 'Update Template' : 'Create Template')}
+            {isLoading ? 'Saving...' : (editingTemplate ? 'Update Route' : 'Create Route')}
           </Button>
         </div>
       </div>

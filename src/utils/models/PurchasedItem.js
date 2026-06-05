@@ -1,5 +1,5 @@
 export class PurchasedItem {
-    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate) {
+    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate, assignmentStatus = "unassigned", assignedToJob = false, assignedJobId = "", billingOwner = "purchasedItem", jobBillingStatus = "", jobBillable = false, jobBillingRate = 0) {
         this.id = id;
         this.receiptId = receiptId;
         this.invoiceNum = invoiceNum;
@@ -21,6 +21,13 @@ export class PurchasedItem {
         this.notes = notes;
         this.jobId = jobId;
         this.billingRate = billingRate;
+        this.assignmentStatus = assignmentStatus;
+        this.assignedToJob = assignedToJob;
+        this.assignedJobId = assignedJobId;
+        this.billingOwner = billingOwner;
+        this.jobBillingStatus = jobBillingStatus;
+        this.jobBillable = jobBillable;
+        this.jobBillingRate = jobBillingRate;
     }
 
     get quantity() {
@@ -50,7 +57,14 @@ export class PurchasedItem {
             data.sku,
             data.notes,
             data.jobId,
-            data.billingRate
+            data.billingRate,
+            data.assignmentStatus || (data.jobId || data.workOrderId ? "assignedToJob" : "unassigned"),
+            Boolean(data.assignedToJob || data.jobId || data.workOrderId),
+            data.assignedJobId || data.jobId || data.workOrderId || "",
+            data.billingOwner || (data.jobId || data.workOrderId ? "job" : "purchasedItem"),
+            data.jobBillingStatus || (data.jobId || data.workOrderId ? "handledByJob" : ""),
+            Boolean(data.jobBillable),
+            data.jobBillingRate || 0
         );
     }
 
@@ -95,6 +109,13 @@ export class PurchasedItem {
             notes: this.notes,
             jobId: this.jobId,
             billingRate: this.billingRate,
+            assignmentStatus: this.assignmentStatus,
+            assignedToJob: this.assignedToJob,
+            assignedJobId: this.assignedJobId,
+            billingOwner: this.billingOwner,
+            jobBillingStatus: this.jobBillingStatus,
+            jobBillable: this.jobBillable,
+            jobBillingRate: this.jobBillingRate,
         };
     }
 }

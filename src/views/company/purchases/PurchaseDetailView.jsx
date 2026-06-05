@@ -10,11 +10,14 @@ import {
     where,
     orderBy,
     deleteDoc,
+    arrayUnion,
+    arrayRemove,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
+import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
 
 const PurchaseDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -49,6 +52,16 @@ const PurchaseDetailView = () => {
     const [shoppingListItemsLoading, setShoppingListItemsLoading] = useState(false);
     const [shoppingListItems, setShoppingListItems] = useState([]);
     const [shoppingListSearch, setShoppingListSearch] = useState("");
+    const [jobModalOpen, setJobModalOpen] = useState(false);
+    const [jobsLoading, setJobsLoading] = useState(false);
+    const [jobs, setJobs] = useState([]);
+    const [jobSearch, setJobSearch] = useState("");
+    const [jobStartDate, setJobStartDate] = useState(() => {
+        const date = new Date();
+        date.setDate(date.getDate() - 30);
+        return format(date, "yyyy-MM-dd");
+    });
+    const [jobEndDate, setJobEndDate] = useState(() => format(new Date(), "yyyy-MM-dd"));
 
     const selectStyles = {
         control: (provided) => ({
@@ -121,6 +134,15 @@ const PurchaseDetailView = () => {
                         customerName: purchaseData.customerName || "",
                         priceRaw: purchaseData.price || 0,
                         shoppingListItemId: purchaseData.shoppingListItemId || "",
+                        jobId: purchaseData.jobId || purchaseData.workOrderId || "",
+                        workOrderId: purchaseData.workOrderId || purchaseData.jobId || "",
+                        assignedJobId: purchaseData.assignedJobId || purchaseData.jobId || purchaseData.workOrderId || "",
+                        assignedToJob: Boolean(purchaseData.assignedToJob || purchaseData.jobId || purchaseData.workOrderId),
+                        assignmentStatus: purchaseData.assignmentStatus || (purchaseData.jobId || purchaseData.workOrderId ? "assignedToJob" : "unassigned"),
+                        billingOwner: purchaseData.billingOwner || (purchaseData.jobId || purchaseData.workOrderId ? "job" : "purchasedItem"),
+                        jobBillingStatus: purchaseData.jobBillingStatus || (purchaseData.jobId || purchaseData.workOrderId ? "handledByJob" : ""),
+                        jobBillable: Boolean(purchaseData.jobBillable ?? purchaseData.billable),
+                        jobBillingRate: purchaseData.jobBillingRate || purchaseData.billingRate || purchaseData.price || 0,
                     };
 
                     setPurchase(purchaseObj);
@@ -264,19 +286,33 @@ const PurchaseDetailView = () => {
                 (parseFloat(editForm.billingRate || 0) || 0) * 100
             );
 
+            const assignedToJob = Boolean(
+                purchase.jobId ||
+                purchase.workOrderId ||
+                purchase.assignedToJob ||
+                purchase.assignmentStatus === "assignedToJob"
+            );
+
             const updatePayload = {
                 name: editForm.name || "",
                 invoiceNum: editForm.invoiceNum || "",
                 quantityString: editForm.quantityString || "",
                 description: editForm.description || "",
                 notes: editForm.notes || "",
-                billable: !!editForm.billable,
-                invoiced: !!editForm.billable ? !!editForm.invoiced : false,
                 returned: !!editForm.returned,
-                billingRate: !!editForm.billable ? billingRateInCents : 0,
-                customerId: !!editForm.billable ? editForm.customerId || "" : "",
-                customerName:
-                    !!editForm.billable ? editForm.customerName || "" : "",
+                ...(assignedToJob
+                    ? {
+                        jobBillable: !!editForm.billable,
+                        jobBillingRate: !!editForm.billable ? billingRateInCents : 0,
+                    }
+                    : {
+                        billable: !!editForm.billable,
+                        invoiced: !!editForm.billable ? !!editForm.invoiced : false,
+                        billingRate: !!editForm.billable ? billingRateInCents : 0,
+                        customerId: !!editForm.billable ? editForm.customerId || "" : "",
+                        customerName:
+                            !!editForm.billable ? editForm.customerName || "" : "",
+                    }),
             };
 
             await updateDoc(docRef, updatePayload);
@@ -284,8 +320,8 @@ const PurchaseDetailView = () => {
             setPurchase((prev) => ({
                 ...prev,
                 ...updatePayload,
-                billingRate: formatCurrency(updatePayload.billingRate / 100),
-                billingRateRaw: updatePayload.billingRate,
+                billingRate: formatCurrency((updatePayload.billingRate ?? prev.billingRateRaw ?? 0) / 100),
+                billingRateRaw: updatePayload.billingRate ?? prev.billingRateRaw ?? 0,
                 total: formatCurrency(
                     ((prev.priceRaw || 0) / 100) *
                     parseFloat(updatePayload.quantityString || 0)
@@ -588,6 +624,154 @@ const PurchaseDetailView = () => {
         }
     };
 
+    const dateRangeBounds = (startValue, endValue) => {
+        const start = new Date(`${startValue}T00:00:00`);
+        const end = new Date(`${endValue}T23:59:59.999`);
+        return { start, end };
+    };
+
+    const openJobModal = async () => {
+        setJobModalOpen(true);
+        if (!jobs.length) {
+            await loadJobs();
+        }
+    };
+
+    const loadJobs = async () => {
+        if (!recentlySelectedCompany) return;
+
+        try {
+            setJobsLoading(true);
+            const { start, end } = dateRangeBounds(jobStartDate, jobEndDate);
+            if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+                window.alert("Select a valid job date range.");
+                return;
+            }
+
+            const jobsQuery = query(
+                collection(db, "companies", recentlySelectedCompany, "workOrders"),
+                where("dateCreated", ">=", start),
+                where("dateCreated", "<=", end),
+                orderBy("dateCreated", "desc")
+            );
+
+            const snap = await getDocs(jobsQuery);
+            setJobs(
+                snap.docs.map((docSnap) => ({
+                    ...docSnap.data(),
+                    id: docSnap.data().id || docSnap.id,
+                }))
+            );
+        } catch (error) {
+            console.log(error);
+            console.log("Load Jobs For Purchase");
+            window.alert("Could not load jobs for that date range.");
+        } finally {
+            setJobsLoading(false);
+        }
+    };
+
+    const connectJob = async (job) => {
+        if (!job?.id) return;
+
+        try {
+            setUpdating(true);
+            const previousJobId = purchase.jobId || purchase.workOrderId || "";
+            const purchaseRef = doc(
+                db,
+                "companies",
+                recentlySelectedCompany,
+                "purchasedItems",
+                purchaseId
+            );
+
+            await updateDoc(purchaseRef, {
+                jobId: job.id,
+                workOrderId: job.id,
+                assignedJobId: job.id,
+                assignedToJob: true,
+                assignmentStatus: "assignedToJob",
+                billingOwner: "job",
+                jobBillingStatus: "handledByJob",
+                jobBillable: Boolean(purchase.jobBillable ?? purchase.billable),
+                jobBillingRate: purchase.jobBillingRate || purchase.billingRateRaw || purchase.priceRaw || 0,
+            });
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", job.id), {
+                purchasedItemsIds: arrayUnion(purchaseId),
+            });
+
+            if (previousJobId && previousJobId !== job.id) {
+                await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", previousJobId), {
+                    purchasedItemsIds: arrayRemove(purchaseId),
+                });
+            }
+
+            setPurchase((prev) => ({
+                ...prev,
+                jobId: job.id,
+                workOrderId: job.id,
+                assignedJobId: job.id,
+                assignedToJob: true,
+                assignmentStatus: "assignedToJob",
+                billingOwner: "job",
+                jobBillingStatus: "handledByJob",
+                jobBillable: Boolean(prev.jobBillable ?? prev.billable),
+                jobBillingRate: prev.jobBillingRate || prev.billingRateRaw || prev.priceRaw || 0,
+            }));
+            setJobModalOpen(false);
+        } catch (error) {
+            console.log(error);
+            console.log("Connect Job");
+            window.alert("Could not connect this purchased item to the selected job.");
+        } finally {
+            setUpdating(false);
+        }
+    };
+
+    const clearJobConnection = async () => {
+        const currentJobId = purchase.jobId || purchase.workOrderId || "";
+        if (!currentJobId) return;
+
+        try {
+            setUpdating(true);
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId), {
+                jobId: "",
+                workOrderId: "",
+                assignedJobId: "",
+                assignedToJob: false,
+                assignmentStatus: "unassigned",
+                billingOwner: "purchasedItem",
+                jobBillingStatus: "",
+                jobBillable: false,
+                jobBillingRate: 0,
+            });
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", currentJobId), {
+                purchasedItemsIds: arrayRemove(purchaseId),
+            });
+
+            setPurchase((prev) => ({
+                ...prev,
+                jobId: "",
+                workOrderId: "",
+                assignedJobId: "",
+                assignedToJob: false,
+                assignmentStatus: "unassigned",
+                billingOwner: "purchasedItem",
+                jobBillingStatus: "",
+                jobBillable: false,
+                jobBillingRate: 0,
+            }));
+        } catch (error) {
+            console.log(error);
+            console.log("Clear Job Connection");
+            window.alert("Could not clear this job connection.");
+        } finally {
+            setUpdating(false);
+        }
+    };
+
     const filteredShoppingListItems = shoppingListItems.filter((item) => {
         const search = shoppingListSearch.toLowerCase().trim();
         if (!search) return true;
@@ -605,10 +789,32 @@ const PurchaseDetailView = () => {
         shoppingListItems.find(
             (item) => item.id === purchase.shoppingListItemId
         ) || null;
+    const connectedJobId = purchase.jobId || purchase.workOrderId || "";
+    const connectedJob = jobs.find((job) => job.id === connectedJobId) || null;
+
+    const filteredJobs = jobs.filter((job) => {
+        const search = jobSearch.toLowerCase().trim();
+        if (!search) return true;
+
+        return (
+            (job.internalId || "").toLowerCase().includes(search) ||
+            (job.customerName || "").toLowerCase().includes(search) ||
+            (job.description || "").toLowerCase().includes(search) ||
+            (job.operationStatus || "").toLowerCase().includes(search) ||
+            (job.billingStatus || "").toLowerCase().includes(search)
+        );
+    });
 
     const currentCustomer = edit
         ? customerList.find((c) => c.id === editForm.customerId) || null
         : selectedCustomer;
+
+    const isAssignedToJob = Boolean(
+        purchase.jobId ||
+        purchase.workOrderId ||
+        purchase.assignedToJob ||
+        purchase.assignmentStatus === "assignedToJob"
+    );
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -930,10 +1136,69 @@ const PurchaseDetailView = () => {
 
                         <div className="bg-white p-6 rounded-xl shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">
+                                Job Link
+                            </h3>
+
+                            <div className="space-y-4 text-gray-700">
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">
+                                        Connected Job
+                                    </p>
+                                    {connectedJobId ? (
+                                        <Link to={`/company/jobs/detail/${connectedJobId}`} className="font-semibold text-blue-600 hover:underline">
+                                            {linkedReferenceText("Job", connectedJobId, displayRecordReference(connectedJob, ""))}
+                                        </Link>
+                                    ) : (
+                                        <p>Not connected</p>
+                                    )}
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={openJobModal}
+                                        className="w-full py-3 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
+                                    >
+                                        {purchase.jobId || purchase.workOrderId
+                                            ? "Change Job"
+                                            : "Connect Job"}
+                                    </button>
+
+                                    {(purchase.jobId || purchase.workOrderId) && (
+                                        <button
+                                            type="button"
+                                            onClick={clearJobConnection}
+                                            disabled={updating}
+                                            className="w-full py-3 px-4 bg-red-50 text-red-700 font-semibold rounded-lg hover:bg-red-100 transition"
+                                        >
+                                            Clear Job Connection
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                            <h3 className="text-xl font-bold mb-4 text-gray-800">
                                 Billing
                             </h3>
 
-                            {!(edit ? editForm.billable : purchase.billable) ? (
+                            {isAssignedToJob ? (
+                                <div className="space-y-4 text-gray-700">
+                                    <div className="inline-flex px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 font-semibold text-sm">
+                                        Billing Managed By Job
+                                    </div>
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">
+                                            Job Billing Rate
+                                        </p>
+                                        <p>{formatCurrency((purchase.jobBillingRate || purchase.billingRateRaw || purchase.priceRaw || 0) / 100)}</p>
+                                    </div>
+                                    <p className="text-sm text-gray-500">
+                                        Standalone billable and invoiced flags are ignored while this material is assigned to a job.
+                                    </p>
+                                </div>
+                            ) : !(edit ? editForm.billable : purchase.billable) ? (
                                 <div className="space-y-4 text-gray-700">
                                     <div className="inline-flex px-3 py-1 rounded-full bg-gray-100 text-gray-700 font-semibold text-sm">
                                         Not Billable
@@ -1130,9 +1395,19 @@ const PurchaseDetailView = () => {
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Shopping List Item:</span>
-                                    <span className="text-right break-all">
-                                        {purchase.shoppingListItemId || "—"}
+                                    <span className="text-right">
+                                        {connectedShoppingListItem?.name || (purchase.shoppingListItemId ? "Connected" : "—")}
                                     </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Job:</span>
+                                    {connectedJobId ? (
+                                        <Link to={`/company/jobs/detail/${connectedJobId}`} className="text-right font-semibold text-blue-600 hover:underline">
+                                            {linkedReferenceText("Job", connectedJobId, displayRecordReference(connectedJob, ""))}
+                                        </Link>
+                                    ) : (
+                                        <span>—</span>
+                                    )}
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Invoiced:</span>
@@ -1205,7 +1480,6 @@ const PurchaseDetailView = () => {
                                                     {item.description || "No description"}
                                                 </p>
                                                 <div className="mt-2 text-xs text-gray-500 space-y-1">
-                                                    <p>ID: {item.id}</p>
                                                     <p>Category: {item.category || "—"}</p>
                                                     <p>Status: {item.status || "—"}</p>
                                                     <p>Purchaser: {item.purchaserName || "—"}</p>
@@ -1226,6 +1500,138 @@ const PurchaseDetailView = () => {
                             ) : (
                                 <div className="text-center py-10 text-gray-500">
                                     No shopping list items found.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {jobModalOpen && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-4xl bg-white rounded-2xl shadow-2xl overflow-hidden">
+                        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200">
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-800">
+                                    Select Job
+                                </h3>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    Load jobs inside a date range, then connect this purchase
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setJobModalOpen(false)}
+                                className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="p-6 space-y-4">
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">
+                                        Start Date
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={jobStartDate}
+                                        onChange={(e) => setJobStartDate(e.target.value)}
+                                        className="w-full p-3 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">
+                                        End Date
+                                    </label>
+                                    <input
+                                        type="date"
+                                        value={jobEndDate}
+                                        onChange={(e) => setJobEndDate(e.target.value)}
+                                        className="w-full p-3 border border-gray-300 rounded-lg"
+                                    />
+                                </div>
+                                <div className="md:col-span-2">
+                                    <label className="block text-xs font-bold text-gray-600 mb-1">
+                                        Search
+                                    </label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="text"
+                                            value={jobSearch}
+                                            onChange={(e) => setJobSearch(e.target.value)}
+                                            placeholder="Search jobs..."
+                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={loadJobs}
+                                            disabled={jobsLoading}
+                                            className="shrink-0 px-4 py-2 text-sm font-bold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-60"
+                                        >
+                                            {jobsLoading ? "Loading" : "Load"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {jobsLoading ? (
+                                <div className="text-center py-10 text-gray-500">
+                                    Loading jobs...
+                                </div>
+                            ) : filteredJobs.length > 0 ? (
+                                <div className="max-h-[460px] overflow-y-auto space-y-3">
+                                    {filteredJobs.map((job) => {
+                                        const jobDate = job.dateCreated?.toDate ? job.dateCreated.toDate() : job.dateCreated;
+                                        const dateLabel = jobDate ? format(new Date(jobDate), "MMM d, yyyy") : "No date";
+                                        const isSelected = (purchase.jobId || purchase.workOrderId) === job.id;
+
+                                        return (
+                                            <div
+                                                key={job.id}
+                                                className={[
+                                                    "p-4 rounded-xl border flex flex-col md:flex-row md:items-center md:justify-between gap-4",
+                                                    isSelected
+                                                        ? "border-blue-300 bg-blue-50"
+                                                        : "border-gray-200 bg-gray-50",
+                                                ].join(" ")}
+                                            >
+                                                <div className="min-w-0">
+                                                    <div className="flex flex-wrap items-center gap-2">
+                                                        <p className="font-semibold text-gray-800">
+                                                            {job.internalId || "Job"}
+                                                        </p>
+                                                        <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                                                            {job.operationStatus || "Status"}
+                                                        </span>
+                                                        <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                                                            {job.billingStatus || "Billing"}
+                                                        </span>
+                                                    </div>
+                                                    <p className="text-sm text-gray-500 mt-1">
+                                                        {job.customerName || "No customer"} • {dateLabel}
+                                                    </p>
+                                                    <p className="text-xs text-gray-500 mt-2 line-clamp-2">
+                                                        {job.description || "No description"}
+                                                    </p>
+                                                </div>
+
+                                                <button
+                                                    type="button"
+                                                    onClick={() => connectJob(job)}
+                                                    disabled={isSelected}
+                                                    className="shrink-0 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition disabled:opacity-60"
+                                                >
+                                                    {isSelected ? "Selected" : "Select"}
+                                                </button>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <div className="text-center py-10 text-gray-500">
+                                    No jobs found for this date range.
                                 </div>
                             )}
                         </div>

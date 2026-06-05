@@ -1,4 +1,4 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
     BuildingOffice2Icon,
@@ -9,11 +9,17 @@ import {
     ArchiveBoxIcon,
     CreditCardIcon,
     CurrencyDollarIcon,
-    DocumentTextIcon
+    DocumentTextIcon,
+    ArrowDownIcon,
+    ArrowUpIcon
 } from '@heroicons/react/24/outline';
 import { BiPurchaseTagAlt } from 'react-icons/bi';
 import { getFunctions, httpsCallable } from 'firebase/functions';
+import { doc, updateDoc } from 'firebase/firestore';
+import toast from 'react-hot-toast';
 import { Context } from "../../../context/AuthContext";
+import { db } from '../../../utils/config';
+import { DEFAULT_COMPANY_CATEGORY_ORDER } from '../../../navigation';
 
 const functions = getFunctions();
 
@@ -29,11 +35,134 @@ const SettingsLink = ({ to, icon, title, description }) => (
     </Link>
 );
 
+const categoryLabels = {
+    NA: 'Dashboard & Messages',
+};
+
+const normalizeNavigationOrder = (savedOrder) => {
+    const ordered = Array.isArray(savedOrder) ? savedOrder : [];
+    const normalized = [
+        ...ordered.filter((category) => DEFAULT_COMPANY_CATEGORY_ORDER.includes(category)),
+        ...DEFAULT_COMPANY_CATEGORY_ORDER.filter((category) => !ordered.includes(category)),
+    ];
+
+    return [...new Set(normalized)];
+};
+
+const NavigationOrderSettings = () => {
+    const { user, dataBaseUser, setDataBaseUser } = useContext(Context);
+    const [categoryOrder, setCategoryOrder] = useState(DEFAULT_COMPANY_CATEGORY_ORDER);
+    const [isSaving, setIsSaving] = useState(false);
+
+    useEffect(() => {
+        setCategoryOrder(normalizeNavigationOrder(dataBaseUser?.settings?.companyNavigationCategoryOrder));
+    }, [dataBaseUser]);
+
+    const saveCategoryOrder = async (nextOrder) => {
+        if (!user?.uid) return;
+
+        setCategoryOrder(nextOrder);
+        setIsSaving(true);
+
+        try {
+            await updateDoc(doc(db, "users", user.uid), {
+                "settings.companyNavigationCategoryOrder": nextOrder,
+            });
+            setDataBaseUser((current) => ({
+                ...current,
+                settings: {
+                    ...(current?.settings || {}),
+                    companyNavigationCategoryOrder: nextOrder,
+                },
+            }));
+            toast.success("Navigation order updated.");
+        } catch (error) {
+            console.error("Failed to save navigation order:", error);
+            toast.error("Failed to save navigation order.");
+            setCategoryOrder(normalizeNavigationOrder(dataBaseUser?.settings?.companyNavigationCategoryOrder));
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const moveCategory = (index, direction) => {
+        const nextIndex = index + direction;
+        if (nextIndex < 0 || nextIndex >= categoryOrder.length || isSaving) return;
+
+        const nextOrder = [...categoryOrder];
+        [nextOrder[index], nextOrder[nextIndex]] = [nextOrder[nextIndex], nextOrder[index]];
+        saveCategoryOrder(nextOrder);
+    };
+
+    const resetOrder = () => {
+        if (isSaving) return;
+        saveCategoryOrder(DEFAULT_COMPANY_CATEGORY_ORDER);
+    };
+
+    return (
+        <section className="mb-10 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h2 className="text-xl font-semibold text-gray-800">Navigation Order</h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                        Set your personal sidebar order. This only changes navigation for your user account.
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={resetOrder}
+                    disabled={isSaving}
+                    className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Reset Default
+                </button>
+            </div>
+
+            <div className="mt-5 divide-y divide-slate-100 rounded-md border border-slate-200">
+                {categoryOrder.map((category, index) => (
+                    <div key={category} className="flex items-center justify-between gap-3 p-3">
+                        <div>
+                            <p className="text-sm font-semibold text-slate-900">{categoryLabels[category] || category}</p>
+                            <p className="text-xs text-slate-500">Position {index + 1}</p>
+                        </div>
+                        <div className="flex gap-2">
+                            <button
+                                type="button"
+                                onClick={() => moveCategory(index, -1)}
+                                disabled={index === 0 || isSaving}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                aria-label={`Move ${categoryLabels[category] || category} up`}
+                            >
+                                <ArrowUpIcon className="h-4 w-4" />
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => moveCategory(index, 1)}
+                                disabled={index === categoryOrder.length - 1 || isSaving}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                aria-label={`Move ${categoryLabels[category] || category} down`}
+                            >
+                                <ArrowDownIcon className="h-4 w-4" />
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </section>
+    );
+};
+
 const CompanySettings = () => {
     const { recentlySelectedCompany } = useContext(Context);
 
     const settings = {
         general: [
+            {
+                to: '/company/setup-guide',
+                icon: <DocumentTextIcon className="w-6 h-6" />,
+                title: 'Setup Guide',
+                description: 'Walk through setup from customers to service, routing, agreements, and billing.'
+            },
             {
                 to: '/company/selector',
                 icon: <CogIcon className="w-6 h-6" />,
@@ -154,6 +283,8 @@ const CompanySettings = () => {
                     <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
                     <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
                 </div>
+
+                <NavigationOrderSettings />
 
                 {/* General Settings */}
                 <div className="mb-10">

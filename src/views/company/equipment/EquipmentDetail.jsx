@@ -1,9 +1,13 @@
 import React, { useState, useEffect, useContext, useRef, useMemo } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import { Equipment } from "../../../utils/models/Equipment";
+import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
+import { Equipment, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from "../../../utils/models/Equipment";
 import { MaintenanceHistory } from "../../../utils/models/MaintenanceHistory";
 import { RepairHistory } from "../../../utils/models/RepairHistory";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
+import {
+  displayRepairRequestStatus,
+  isOpenRepairRequestStatus,
+} from "../../../utils/models/RepairRequest";
 import {
   query,
   collection,
@@ -22,6 +26,12 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format, addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { v4 as uuidv4 } from "uuid";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+  BriefcaseIcon,
+  PencilSquareIcon,
+  WrenchScrewdriverIcon,
+} from "@heroicons/react/24/outline";
 
 import toast from "react-hot-toast";
 
@@ -56,6 +66,26 @@ const Field = ({ label, children }) => (
     {children}
   </div>
 );
+
+const DetailActionButton = ({ label, icon: Icon, tone = "blue", onClick }) => {
+  const toneClasses =
+    tone === "amber"
+      ? "text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100"
+      : tone === "green"
+        ? "text-green-700 bg-green-50 border-green-200 hover:bg-green-100"
+        : "text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition ${toneClasses}`}
+    >
+      <Icon className="h-5 w-5" />
+      {label}
+    </button>
+  );
+};
 
 const ModalShell = ({ title, children, onClose, footer }) => (
   <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
@@ -108,19 +138,32 @@ const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFreque
   }
 };
 
+const CUSTOM_CATALOG_VALUE = "__custom__";
+
+const companyUserDisplayName = (user = {}) =>
+  user.userName || user.name || user.fullName || user.displayName || user.email || "";
+
+const companyUserRecordId = (user = {}) => user.userId || user.id || "";
+
 const EquipmentDetail = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const { equipmentId } = useParams();
 
   const [equipment, setEquipment] = useState({});
   const [edit, setEdit] = useState(false);
+  const [outstandingRepairRequests, setOutstandingRepairRequests] = useState([]);
+  const [outstandingJobs, setOutstandingJobs] = useState([]);
+  const [loadingOutstandingWork, setLoadingOutstandingWork] = useState(false);
 
   // ✅ prevents re-hydration while editing
   const hasHydratedRef = useRef(false);
 
   // Edit Equipment States
   const [category, setCategory] = useState("");
+  const [typeId, setTypeId] = useState("");
   const [cleanFilterPressure, setCleanFilterPressure] = useState("");
   const [currentPressure, setCurrentPressure] = useState("");
   const [dateInstalled, setDateInstalled] = useState(null);
@@ -129,7 +172,11 @@ const EquipmentDetail = () => {
   const [nextServiceDate, setNextServiceDate] = useState(null);
 
   const [make, setMake] = useState("");
+  const [makeId, setMakeId] = useState("");
   const [model, setModel] = useState("");
+  const [modelId, setModelId] = useState("");
+  const [universalEquipmentId, setUniversalEquipmentId] = useState("");
+  const [manualPdfLink, setManualPdfLink] = useState("");
   const [name, setName] = useState("");
   const [isActive, setIsActive] = useState(true);
   const [needsService, setNeedsService] = useState(false);
@@ -146,6 +193,7 @@ const EquipmentDetail = () => {
   const [showServiceHistoryModal, setShowServiceHistoryModal] = useState(false);
   const [showRepairHistoryModal, setShowRepairHistoryModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [showMakeModelModal, setShowMakeModelModal] = useState(false);
 
   // Company Users
   const [companyUsers, setCompanyUsers] = useState([]);
@@ -155,7 +203,6 @@ const EquipmentDetail = () => {
   const [maintenanceDate, setMaintenanceDate] = useState(new Date());
   const [maintenancePerformedBy, setMaintenancePerformedBy] = useState("Company");
   const [maintenanceCompanyUserId, setMaintenanceCompanyUserId] = useState("");
-  const [maintenanceCompanyUserName, setMaintenanceCompanyUserName] = useState("");
   const [maintenanceCustomerName, setMaintenanceCustomerName] = useState("");
   const [maintenanceNotes, setMaintenanceNotes] = useState("");
   const [mostRecentMaintenance, setMostRecentMaintenance] = useState(null);
@@ -165,13 +212,33 @@ const EquipmentDetail = () => {
   const [repairDate, setRepairDate] = useState(new Date());
   const [repairPerformedBy, setRepairPerformedBy] = useState("Company");
   const [repairCompanyUserId, setRepairCompanyUserId] = useState("");
-  const [repairCompanyUserName, setRepairCompanyUserName] = useState("");
   const [repairCustomerName, setRepairCustomerName] = useState("");
   const [repairPartsReplaced, setRepairPartsReplaced] = useState([]);
   const [currentPart, setCurrentPart] = useState("");
   const [repairNotes, setRepairNotes] = useState("");
   const [mostRecentRepair, setMostRecentRepair] = useState(null);
   const [mostRecentRepairPartNames, setMostRecentRepairPartNames] = useState([]);
+  const [equipmentTypes, setEquipmentTypes] = useState([]);
+  const [equipmentMakes, setEquipmentMakes] = useState([]);
+  const [equipmentModels, setEquipmentModels] = useState([]);
+  const [catalogTypeId, setCatalogTypeId] = useState(CUSTOM_CATALOG_VALUE);
+  const [catalogMakeId, setCatalogMakeId] = useState(CUSTOM_CATALOG_VALUE);
+  const [catalogEquipmentId, setCatalogEquipmentId] = useState(CUSTOM_CATALOG_VALUE);
+
+  useEffect(() => {
+    const action = location.state?.equipmentAction;
+    if (!action) return;
+
+    if (action === "recordMaintenance") {
+      setShowServiceHistoryModal(true);
+    } else if (action === "recordRepair") {
+      setShowRepairHistoryModal(true);
+    } else if (action === "editMakeModel") {
+      setShowMakeModelModal(true);
+    }
+
+    navigate(location.pathname, { replace: true, state: {} });
+  }, [location.pathname, location.state, navigate]);
 
   // -----------------------------
   // Load company users list
@@ -198,16 +265,67 @@ const EquipmentDetail = () => {
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
-    if (!companyUsers.length) return;
-    const u = companyUsers.find((x) => x.id === maintenanceCompanyUserId);
-    setMaintenanceCompanyUserName(u?.name || u?.fullName || "");
-  }, [maintenanceCompanyUserId, companyUsers]);
+    const fetchEquipmentTypes = async () => {
+      try {
+        const typesSnap = await getDocs(query(collection(db, "universal", "equipment", "equipmentTypes"), orderBy("name", "asc")));
+        setEquipmentTypes(typesSnap.docs.map((typeDoc) => ({ id: typeDoc.id, ...typeDoc.data() })));
+      } catch (error) {
+        console.error("Error loading universal equipment types:", error);
+        setEquipmentTypes([]);
+      }
+    };
+
+    fetchEquipmentTypes();
+  }, []);
 
   useEffect(() => {
-    if (!companyUsers.length) return;
-    const u = companyUsers.find((x) => x.id === repairCompanyUserId);
-    setRepairCompanyUserName(u?.name || u?.fullName || "");
-  }, [repairCompanyUserId, companyUsers]);
+    if (!catalogTypeId || catalogTypeId === CUSTOM_CATALOG_VALUE) {
+      setEquipmentMakes([]);
+      return;
+    }
+
+    const fetchEquipmentMakes = async () => {
+      try {
+        const makesSnap = await getDocs(
+          query(
+            collection(db, "universal", "equipment", "equipmentMakes"),
+            where("types", "array-contains", catalogTypeId)
+          )
+        );
+        setEquipmentMakes(makesSnap.docs.map((makeDoc) => ({ id: makeDoc.id, ...makeDoc.data() })));
+      } catch (error) {
+        console.error("Error loading universal equipment makes:", error);
+        setEquipmentMakes([]);
+      }
+    };
+
+    fetchEquipmentMakes();
+  }, [catalogTypeId]);
+
+  useEffect(() => {
+    if (!catalogTypeId || catalogTypeId === CUSTOM_CATALOG_VALUE || !catalogMakeId || catalogMakeId === CUSTOM_CATALOG_VALUE) {
+      setEquipmentModels([]);
+      return;
+    }
+
+    const fetchEquipmentModels = async () => {
+      try {
+        const modelsSnap = await getDocs(
+          query(
+            collection(db, "universal", "equipment", "equipment"),
+            where("typeId", "==", catalogTypeId),
+            where("makeId", "==", catalogMakeId)
+          )
+        );
+        setEquipmentModels(modelsSnap.docs.map((modelDoc) => ({ id: modelDoc.id, ...modelDoc.data() })));
+      } catch (error) {
+        console.error("Error loading universal equipment models:", error);
+        setEquipmentModels([]);
+      }
+    };
+
+    fetchEquipmentModels();
+  }, [catalogTypeId, catalogMakeId]);
 
   // -----------------------------
   // Load equipment + live history
@@ -238,7 +356,15 @@ const EquipmentDetail = () => {
             setNextServiceDate(snapEquipment.nextServiceDate || null);
 
             setMake(snapEquipment.make || "");
+            setMakeId(snapEquipment.makeId || "");
             setModel(snapEquipment.model || "");
+            setModelId(snapEquipment.modelId || "");
+            setUniversalEquipmentId(snapEquipment.universalEquipmentId || snapEquipment.modelId || "");
+            setManualPdfLink(snapEquipment.manualPdfLink || "");
+            setTypeId(snapEquipment.typeId || "");
+            setCatalogTypeId(snapEquipment.typeId || CUSTOM_CATALOG_VALUE);
+            setCatalogMakeId(snapEquipment.makeId || CUSTOM_CATALOG_VALUE);
+            setCatalogEquipmentId(snapEquipment.universalEquipmentId || snapEquipment.modelId || CUSTOM_CATALOG_VALUE);
             setName(snapEquipment.name || "");
             setIsActive(!!snapEquipment.isActive);
             setNeedsService(!!snapEquipment.needsService);
@@ -251,7 +377,7 @@ const EquipmentDetail = () => {
             );
             setServiceFrequencyEvery(snapEquipment.serviceFrequencyEvery || "");
 
-            setStatus(snapEquipment.status || "");
+            setStatus(displayEquipmentStatus(snapEquipment.status || ""));
             setNotes(snapEquipment.notes || "");
             hasHydratedRef.current = true;
           } else if (!hasHydratedRef.current) {
@@ -265,7 +391,15 @@ const EquipmentDetail = () => {
             setNextServiceDate(snapEquipment.nextServiceDate || null);
 
             setMake(snapEquipment.make || "");
+            setMakeId(snapEquipment.makeId || "");
             setModel(snapEquipment.model || "");
+            setModelId(snapEquipment.modelId || "");
+            setUniversalEquipmentId(snapEquipment.universalEquipmentId || snapEquipment.modelId || "");
+            setManualPdfLink(snapEquipment.manualPdfLink || "");
+            setTypeId(snapEquipment.typeId || "");
+            setCatalogTypeId(snapEquipment.typeId || CUSTOM_CATALOG_VALUE);
+            setCatalogMakeId(snapEquipment.makeId || CUSTOM_CATALOG_VALUE);
+            setCatalogEquipmentId(snapEquipment.universalEquipmentId || snapEquipment.modelId || CUSTOM_CATALOG_VALUE);
             setName(snapEquipment.name || "");
             setIsActive(!!snapEquipment.isActive);
             setNeedsService(!!snapEquipment.needsService);
@@ -277,7 +411,7 @@ const EquipmentDetail = () => {
             );
             setServiceFrequencyEvery(snapEquipment.serviceFrequencyEvery || "");
 
-            setStatus(snapEquipment.status || "");
+            setStatus(displayEquipmentStatus(snapEquipment.status || ""));
             setNotes(snapEquipment.notes || "");
             hasHydratedRef.current = true;
           }
@@ -355,12 +489,93 @@ const EquipmentDetail = () => {
     };
   }, [equipmentId, recentlySelectedCompany, edit]);
 
+  useEffect(() => {
+    const fetchOutstandingWork = async () => {
+      if (!equipmentId || !recentlySelectedCompany) return;
+
+      try {
+        setLoadingOutstandingWork(true);
+
+        const repairRequestsRef = collection(db, "companies", recentlySelectedCompany, "repairRequests");
+        const repairSnap = await getDocs(
+          query(repairRequestsRef, where("equipmentId", "==", equipmentId), limit(50))
+        );
+        const requests = repairSnap.docs
+          .map((requestDoc) => ({ id: requestDoc.id, ...requestDoc.data() }))
+          .filter((request) => isOpenRepairRequestStatus(request.status))
+          .sort((a, b) => getDateMillis(b.date || b.createdAt) - getDateMillis(a.date || a.createdAt));
+
+        const jobsRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+        const jobsQuery = equipment?.customerId
+          ? query(jobsRef, where("customerId", "==", equipment.customerId), limit(75))
+          : query(jobsRef, where("equipmentId", "==", equipmentId), limit(75));
+        const jobsSnap = await getDocs(jobsQuery);
+
+        const jobs = await Promise.all(
+          jobsSnap.docs.map(async (jobDoc) => {
+            const jobData = { id: jobDoc.id, ...jobDoc.data() };
+            let equipmentTasks = [];
+
+            try {
+              const taskSnap = await getDocs(
+                query(collection(jobDoc.ref, "tasks"), where("equipmentId", "==", equipmentId))
+              );
+              equipmentTasks = taskSnap.docs.map((taskDoc) => ({ id: taskDoc.id, ...taskDoc.data() }));
+            } catch (error) {
+              console.error("Error loading equipment-linked job tasks:", error);
+            }
+
+            return {
+              ...jobData,
+              equipmentTasks,
+            };
+          })
+        );
+
+        const unfinishedJobs = jobs
+          .filter((job) => job.equipmentId === equipmentId || job.equipmentTasks.length > 0)
+          .filter((job) => {
+            const operationStatus = String(job.operationStatus || "").trim().toLowerCase();
+            const billingStatus = String(job.billingStatus || "").trim().toLowerCase();
+            return operationStatus !== "finished" && billingStatus !== "paid" && billingStatus !== "expired";
+          })
+          .sort((a, b) => getDateMillis(b.dateCreated || b.createdAt) - getDateMillis(a.dateCreated || a.createdAt));
+
+        setOutstandingRepairRequests(requests);
+        setOutstandingJobs(unfinishedJobs);
+      } catch (error) {
+        console.error("Error loading outstanding equipment work:", error);
+        setOutstandingRepairRequests([]);
+        setOutstandingJobs([]);
+      } finally {
+        setLoadingOutstandingWork(false);
+      }
+    };
+
+    fetchOutstandingWork();
+  }, [equipmentId, recentlySelectedCompany, equipment?.customerId]);
+
   /**
    * ✅ Recalculate nextServiceDate live while editing
    */
   const computedNextServiceDate = useMemo(() => {
     return computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery);
   }, [lastServiceDate, serviceFrequency, serviceFrequencyEvery]);
+
+  const getDateValue = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value.toDate === "function") return value.toDate();
+    if (typeof value === "number") return new Date(value);
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const getDateMillis = (value) => {
+    const date = getDateValue(value);
+    return date ? date.getTime() : 0;
+  };
 
 
   useEffect(() => {
@@ -369,6 +584,8 @@ const EquipmentDetail = () => {
   }, [edit, computedNextServiceDate]);
 
   const handleSave = async () => {
+    if (!requirePermission("64", "update equipment")) return;
+
     try {
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
@@ -376,6 +593,7 @@ const EquipmentDetail = () => {
 
       await updateDoc(docRef, {
         type: category,
+        typeId,
         cleanFilterPressure,
         currentPressure,
         dateInstalled,
@@ -384,7 +602,11 @@ const EquipmentDetail = () => {
         nextServiceDate: next,
 
         make,
+        makeId,
         model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
         name,
         isActive,
         needsService,
@@ -400,6 +622,7 @@ const EquipmentDetail = () => {
       setEquipment((prev) => ({
         ...prev,
         type: category,
+        typeId,
         cleanFilterPressure,
         currentPressure,
         dateInstalled,
@@ -408,7 +631,11 @@ const EquipmentDetail = () => {
         nextServiceDate: next,
 
         make,
+        makeId,
         model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
         name,
         isActive,
         needsService,
@@ -426,7 +653,46 @@ const EquipmentDetail = () => {
     }
   };
 
+  const handleSaveMakeModel = async () => {
+    if (!requirePermission("64", "update equipment")) return;
+
+    try {
+      const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
+
+      await updateDoc(docRef, {
+        type: category,
+        typeId,
+        make,
+        makeId,
+        model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
+      });
+
+      setEquipment((prev) => ({
+        ...prev,
+        type: category,
+        typeId,
+        make,
+        makeId,
+        model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
+      }));
+
+      setShowMakeModelModal(false);
+      toast.success("Make and model updated");
+    } catch (error) {
+      console.error("Error updating equipment make/model:", error);
+      toast.error("Failed to update make and model");
+    }
+  };
+
   const handleDelete = async () => {
+    if (!requirePermission("66", "delete equipment")) return;
+
     try {
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
       await deleteDoc(docRef);
@@ -437,6 +703,8 @@ const EquipmentDetail = () => {
   };
 
   const handleCreateMaintenance = async () => {
+    if (!requirePermission("64", "update equipment")) return;
+
     try {
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
@@ -444,9 +712,10 @@ const EquipmentDetail = () => {
       const serviceHistoryDoc = doc(docRef, "serviceHistory", serviceId);
 
       const performedBy = maintenancePerformedBy;
-      const techId = performedBy === "Company" ? (maintenanceCompanyUserId || "") : "";
+      const selectedCompanyUser = companyUsers.find((u) => u.id === maintenanceCompanyUserId);
+      const techId = performedBy === "Company" ? companyUserRecordId(selectedCompanyUser) : "";
       const techName =
-        performedBy === "Company" ? (maintenanceCompanyUserName || "") : (maintenanceCustomerName || "").trim();
+        performedBy === "Company" ? companyUserDisplayName(selectedCompanyUser) : (maintenanceCustomerName || "").trim();
 
       const newMaintenanceRecord = {
         id: serviceId,
@@ -498,6 +767,8 @@ const EquipmentDetail = () => {
   };
 
   const handleCreateRepair = async () => {
+    if (!requirePermission("64", "update equipment")) return;
+
     try {
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
@@ -529,8 +800,9 @@ const EquipmentDetail = () => {
       }
 
       const performedBy = repairPerformedBy;
-      const techId = performedBy === "Company" ? (repairCompanyUserId || "") : "";
-      const techName = performedBy === "Company" ? (repairCompanyUserName || "") : (repairCustomerName || "").trim();
+      const selectedCompanyUser = companyUsers.find((u) => u.id === repairCompanyUserId);
+      const techId = performedBy === "Company" ? companyUserRecordId(selectedCompanyUser) : "";
+      const techName = performedBy === "Company" ? companyUserDisplayName(selectedCompanyUser) : (repairCustomerName || "").trim();
 
       const newRepairRecord = {
         id: serviceId,
@@ -573,6 +845,94 @@ const EquipmentDetail = () => {
     setRepairPartsReplaced((prev) => prev.filter((_, i) => i !== index));
   };
 
+  const getEquipmentDisplayName = () =>
+    [
+      equipment?.name,
+      equipment?.make,
+      equipment?.model,
+    ].filter(Boolean).join(" ") || equipment?.type || "Equipment";
+
+  const buildEquipmentContext = (jobIntent = "") => ({
+    jobIntent,
+    equipmentId: equipment?.id || equipmentId || "",
+    equipmentName: getEquipmentDisplayName(),
+    customerId: equipment?.customerId || "",
+    customerName: equipment?.customerName || "",
+    serviceLocationId: equipment?.serviceLocationId || "",
+    bodyOfWaterId: equipment?.bodyOfWaterId || "",
+    type: equipment?.type || "",
+    make: equipment?.make || "",
+    model: equipment?.model || "",
+    name: equipment?.name || "",
+  });
+
+  const createEquipmentJob = (jobIntent) => {
+    navigate("/company/jobs/createNew", {
+      state: {
+        equipmentContext: buildEquipmentContext(jobIntent),
+        jobIntent,
+      },
+    });
+  };
+
+  const handleCatalogTypeChange = (value) => {
+    setCatalogTypeId(value);
+    setCatalogMakeId(CUSTOM_CATALOG_VALUE);
+    setCatalogEquipmentId(CUSTOM_CATALOG_VALUE);
+    setEquipmentModels([]);
+    setMakeId("");
+    setModelId("");
+    setUniversalEquipmentId("");
+    setManualPdfLink("");
+
+    if (value === CUSTOM_CATALOG_VALUE) {
+      setTypeId("");
+      return;
+    }
+
+    const selected = equipmentTypes.find((item) => item.id === value);
+    setTypeId(selected?.id || "");
+    setCategory(selected?.name || "");
+    setMake("");
+    setModel("");
+  };
+
+  const handleCatalogMakeChange = (value) => {
+    setCatalogMakeId(value);
+    setCatalogEquipmentId(CUSTOM_CATALOG_VALUE);
+    setModelId("");
+    setUniversalEquipmentId("");
+    setManualPdfLink("");
+
+    if (value === CUSTOM_CATALOG_VALUE) {
+      setMakeId("");
+      return;
+    }
+
+    const selected = equipmentMakes.find((item) => item.id === value);
+    setMakeId(selected?.id || "");
+    setMake(selected?.name || "");
+    setModel("");
+  };
+
+  const handleCatalogEquipmentChange = (value) => {
+    setCatalogEquipmentId(value);
+
+    if (value === CUSTOM_CATALOG_VALUE) {
+      setModelId("");
+      setUniversalEquipmentId("");
+      setManualPdfLink("");
+      return;
+    }
+
+    const selected = equipmentModels.find((item) => item.id === value);
+    setModel(selected?.model || selected?.name || "");
+    setModelId(selected?.id || "");
+    setUniversalEquipmentId(selected?.id || "");
+    setManualPdfLink(selected?.manualPdfLink || "");
+    if (!name.trim()) setName(selected?.name || selected?.model || "");
+  };
+
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
       <div className="mx-auto space-y-6">
@@ -599,6 +959,7 @@ const EquipmentDetail = () => {
           <div className="flex items-center gap-2">
 
             {!edit ? (
+              can("64") && (
               <button
                 onClick={() => {
                   hasHydratedRef.current = true;
@@ -609,6 +970,7 @@ const EquipmentDetail = () => {
               >
                 Edit
               </button>
+              )
             ) : (
               <>
                 <button
@@ -625,16 +987,150 @@ const EquipmentDetail = () => {
                 >
                   Cancel
                 </button>
-                <button
-                  onClick={() => setShowDeleteModal(true)}
-                  className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-                  type="button"
-                >
-                  Delete
-                </button>
+                {can("66") && (
+                  <button
+                    onClick={() => setShowDeleteModal(true)}
+                    className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
+                    type="button"
+                  >
+                    Delete
+                  </button>
+                )}
               </>
             )}
           </div>
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-4">
+          <div className="flex flex-wrap gap-2">
+            {can("64") && (
+              <>
+                <DetailActionButton
+                  label="Edit Make/Model"
+                  icon={PencilSquareIcon}
+                  onClick={() => setShowMakeModelModal(true)}
+                />
+                <DetailActionButton
+                  label="Record Maintenance"
+                  icon={WrenchScrewdriverIcon}
+                  tone="green"
+                  onClick={() => setShowServiceHistoryModal(true)}
+                />
+                <DetailActionButton
+                  label="Record Repair"
+                  icon={WrenchScrewdriverIcon}
+                  tone="amber"
+                  onClick={() => setShowRepairHistoryModal(true)}
+                />
+              </>
+            )}
+
+            {can("22") && (
+              <>
+                <DetailActionButton
+                  label="Create Maintenance Job"
+                  icon={BriefcaseIcon}
+                  tone="green"
+                  onClick={() => createEquipmentJob("maintenance")}
+                />
+                <DetailActionButton
+                  label="Create Repair Job"
+                  icon={BriefcaseIcon}
+                  tone="amber"
+                  onClick={() => createEquipmentJob("repair")}
+                />
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Outstanding Work</h3>
+              <p className="text-sm text-gray-500 mt-1">Open repair requests and unfinished jobs tied to this equipment.</p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Badge tone={outstandingRepairRequests.length ? "red" : "green"}>
+                {outstandingRepairRequests.length} Repair Request{outstandingRepairRequests.length === 1 ? "" : "s"}
+              </Badge>
+              <Badge tone={outstandingJobs.length ? "yellow" : "green"}>
+                {outstandingJobs.length} Job{outstandingJobs.length === 1 ? "" : "s"}
+              </Badge>
+            </div>
+          </div>
+
+          {loadingOutstandingWork ? (
+            <p className="mt-5 text-gray-500">Loading outstanding work...</p>
+          ) : outstandingRepairRequests.length === 0 && outstandingJobs.length === 0 ? (
+            <p className="mt-5 text-gray-500">No outstanding work is connected to this equipment.</p>
+          ) : (
+            <div className="mt-5 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <h4 className="font-bold text-gray-800">Repair Requests</h4>
+                <div className="mt-3 space-y-2">
+                  {outstandingRepairRequests.length ? (
+                    outstandingRepairRequests.map((request) => {
+                      const requestDate = getDateValue(request.date || request.createdAt);
+                      return (
+                        <Link
+                          key={request.id}
+                          to={`/company/repair-requests/detail/${request.id}`}
+                          className="block rounded-lg border border-gray-200 bg-white p-3 hover:border-blue-300 transition"
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold text-gray-800">{request.description || "Repair Request"}</p>
+                              <p className="mt-1 text-xs text-gray-500">
+                                {requestDate ? format(requestDate, "MMM d, yyyy") : "No date"}
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-yellow-100 px-2 py-1 text-xs font-bold text-yellow-800">
+                              {displayRepairRequestStatus(request.status)}
+                            </span>
+                          </div>
+                        </Link>
+                      );
+                    })
+                  ) : (
+                    <p className="text-sm text-gray-500">No unresolved repair requests.</p>
+                  )}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <h4 className="font-bold text-gray-800">Jobs</h4>
+                <div className="mt-3 space-y-2">
+                  {outstandingJobs.length ? (
+                    outstandingJobs.map((job) => (
+                      <Link
+                        key={job.id}
+                        to={`/company/jobs/detail/${job.id}`}
+                        className="block rounded-lg border border-gray-200 bg-white p-3 hover:border-blue-300 transition"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold text-gray-800">{job.internalId || "Job"}</p>
+                            <p className="mt-1 text-sm text-gray-600">{job.description || job.type || "Job"}</p>
+                            {job.equipmentTasks?.length ? (
+                              <p className="mt-1 text-xs text-gray-500">
+                                {job.equipmentTasks.length} equipment task{job.equipmentTasks.length === 1 ? "" : "s"}
+                              </p>
+                            ) : null}
+                          </div>
+                          <span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-bold text-blue-800">
+                            {job.operationStatus || "—"}
+                          </span>
+                        </div>
+                      </Link>
+                    ))
+                  ) : (
+                    <p className="text-sm text-gray-500">No unfinished jobs.</p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Detail Card */}
@@ -646,7 +1142,7 @@ const EquipmentDetail = () => {
                 <Badge tone={equipment?.needsService ? "red" : "green"}>
                   {equipment?.needsService ? "Needs Service" : "No Service Needed"}
                 </Badge>
-                {equipment?.status ? <Badge tone="blue">{equipment.status}</Badge> : null}
+                {equipment?.status ? <Badge tone="blue">{displayEquipmentStatus(equipment.status)}</Badge> : null}
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -656,12 +1152,34 @@ const EquipmentDetail = () => {
                 </div>
 
                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Make</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Make</p>
+                    {can("64") && (
+                      <button
+                        type="button"
+                        onClick={() => setShowMakeModelModal(true)}
+                        className="text-xs font-bold text-blue-700 hover:text-blue-900"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.make || "—"}</p>
                 </div>
 
                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Model</p>
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Model</p>
+                    {can("64") && (
+                      <button
+                        type="button"
+                        onClick={() => setShowMakeModelModal(true)}
+                        className="text-xs font-bold text-blue-700 hover:text-blue-900"
+                      >
+                        Edit
+                      </button>
+                    )}
+                  </div>
                   <p className="mt-1 text-gray-800 font-semibold">{equipment?.model || "—"}</p>
                 </div>
                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -712,6 +1230,20 @@ const EquipmentDetail = () => {
                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
                 <p className="mt-2 text-gray-700 whitespace-pre-wrap">{equipment?.notes || "—"}</p>
               </div>
+
+              {equipment?.manualPdfLink && (
+                <div className="p-4 rounded-xl bg-blue-50 border border-blue-200">
+                  <p className="text-xs font-semibold text-blue-700 uppercase tracking-wider">Catalog Manual</p>
+                  <a
+                    href={equipment.manualPdfLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-block font-semibold text-blue-700 hover:text-blue-900"
+                  >
+                    View Manual
+                  </a>
+                </div>
+              )}
             </div>
           ) : (
             <div className="space-y-5">
@@ -723,15 +1255,41 @@ const EquipmentDetail = () => {
                 </Field>
 
                 <Field label="Category">
-                  <input value={category} onChange={(e) => setCategory(e.target.value)} className={inputBase} />
+                  <input
+                    value={category}
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      setTypeId("");
+                      setCatalogTypeId(CUSTOM_CATALOG_VALUE);
+                    }}
+                    className={inputBase}
+                  />
                 </Field>
 
                 <Field label="Make">
-                  <input value={make} onChange={(e) => setMake(e.target.value)} className={inputBase} />
+                  <input
+                    value={make}
+                    onChange={(e) => {
+                      setMake(e.target.value);
+                      setMakeId("");
+                      setCatalogMakeId(CUSTOM_CATALOG_VALUE);
+                    }}
+                    className={inputBase}
+                  />
                 </Field>
 
                 <Field label="Model">
-                  <input value={model} onChange={(e) => setModel(e.target.value)} className={inputBase} />
+                  <input
+                    value={model}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      setModelId("");
+                      setUniversalEquipmentId("");
+                      setManualPdfLink("");
+                      setCatalogEquipmentId(CUSTOM_CATALOG_VALUE);
+                    }}
+                    className={inputBase}
+                  />
                 </Field>
 
                 <Field label="Date Installed">
@@ -779,10 +1337,11 @@ const EquipmentDetail = () => {
 
                 <Field label="Status">
                   <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputBase}>
-                    <option value="Operational">Operational</option>
-                    <option value="Nonoperational">Nonoperational</option>
-                    <option value="Needs Repair">Needs Repair</option>
-                    <option value="Needs Maintenance">Needs Maintenance</option>
+                    {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                      <option key={statusOption} value={statusOption}>
+                        {statusOption}
+                      </option>
+                    ))}
                   </select>
                 </Field>
                 {
@@ -900,13 +1459,15 @@ const EquipmentDetail = () => {
                 <h3 className="text-xl font-bold text-gray-800">Most Recent Maintenance</h3>
                 <p className="text-sm text-gray-500 mt-1">Log service and keep the schedule up to date.</p>
               </div>
-              <button
-                onClick={() => setShowServiceHistoryModal(true)}
-                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
-                type="button"
-              >
-                New
-              </button>
+              {can("64") && (
+                <button
+                  onClick={() => setShowServiceHistoryModal(true)}
+                  className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  type="button"
+                >
+                  New
+                </button>
+              )}
             </div>
 
             <div className="mt-5">
@@ -949,13 +1510,15 @@ const EquipmentDetail = () => {
                 <h3 className="text-xl font-bold text-gray-800">Most Recent Repair</h3>
                 <p className="text-sm text-gray-500 mt-1">Track repairs and replaced parts.</p>
               </div>
-              <button
-                onClick={() => setShowRepairHistoryModal(true)}
-                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
-                type="button"
-              >
-                New
-              </button>
+              {can("64") && (
+                <button
+                  onClick={() => setShowRepairHistoryModal(true)}
+                  className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  type="button"
+                >
+                  New
+                </button>
+              )}
             </div>
 
             <div className="mt-5">
@@ -996,6 +1559,121 @@ const EquipmentDetail = () => {
           </div>
         </div>
       </div>
+
+      {/* -----------------------------
+          Make / Model Modal
+         ----------------------------- */}
+      {showMakeModelModal && (
+        <ModalShell
+          title="Edit Make and Model"
+          onClose={() => setShowMakeModelModal(false)}
+          footer={
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowMakeModelModal(false)}
+                className="py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveMakeModel}
+                className="py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
+                type="button"
+              >
+                Save
+              </button>
+            </div>
+          }
+        >
+          <div className="grid grid-cols-1 gap-4">
+            <Field label="Catalog Type">
+              <select
+                value={catalogTypeId}
+                onChange={(e) => handleCatalogTypeChange(e.target.value)}
+                className={inputBase}
+              >
+                <option value={CUSTOM_CATALOG_VALUE}>Custom Type</option>
+                {equipmentTypes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+
+            {catalogTypeId === CUSTOM_CATALOG_VALUE && (
+              <Field label="Custom Type">
+                <input value={category} onChange={(e) => { setCategory(e.target.value); setTypeId(""); }} className={inputBase} />
+              </Field>
+            )}
+
+            <Field label="Make">
+              <select
+                value={catalogMakeId}
+                onChange={(e) => handleCatalogMakeChange(e.target.value)}
+                className={inputBase}
+                disabled={catalogTypeId !== CUSTOM_CATALOG_VALUE && !equipmentMakes.length}
+              >
+                <option value={CUSTOM_CATALOG_VALUE}>Custom Make</option>
+                {equipmentMakes.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              {catalogMakeId === CUSTOM_CATALOG_VALUE && (
+                <input
+                  value={make}
+                  onChange={(e) => { setMake(e.target.value); setMakeId(""); }}
+                  className={`${inputBase} mt-2`}
+                  placeholder="Custom Make"
+                />
+              )}
+            </Field>
+
+            <Field label="Model">
+              <select
+                value={catalogEquipmentId}
+                onChange={(e) => handleCatalogEquipmentChange(e.target.value)}
+                className={inputBase}
+                disabled={catalogMakeId !== CUSTOM_CATALOG_VALUE && !equipmentModels.length}
+              >
+                <option value={CUSTOM_CATALOG_VALUE}>Custom Equipment</option>
+                {equipmentModels.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.model || item.name}
+                  </option>
+                ))}
+              </select>
+              {catalogEquipmentId === CUSTOM_CATALOG_VALUE && (
+                <input
+                  value={model}
+                  onChange={(e) => {
+                    setModel(e.target.value);
+                    setModelId("");
+                    setUniversalEquipmentId("");
+                    setManualPdfLink("");
+                  }}
+                  className={`${inputBase} mt-2`}
+                  placeholder="Custom Model"
+                />
+              )}
+            </Field>
+
+            {manualPdfLink && (
+              <a
+                href={manualPdfLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm font-semibold text-blue-600 hover:text-blue-800"
+              >
+                View selected catalog manual
+              </a>
+            )}
+          </div>
+        </ModalShell>
+      )}
 
       {/* -----------------------------
           Maintenance Modal
@@ -1052,7 +1730,7 @@ const EquipmentDetail = () => {
                   ) : (
                     companyUsers.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.userName || u.email || u.id}
+                        {companyUserDisplayName(u) || "Technician"}
                       </option>
                     ))
                   )}
@@ -1126,7 +1804,7 @@ const EquipmentDetail = () => {
                   ) : (
                     companyUsers.map((u) => (
                       <option key={u.id} value={u.id}>
-                        {u.userName || u.email || u.id}
+                        {companyUserDisplayName(u) || "Technician"}
                       </option>
                     ))
                   )}

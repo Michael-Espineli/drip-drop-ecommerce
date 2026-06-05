@@ -10,9 +10,75 @@ import { v4 as uuidv4 } from "uuid";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
 import { fetchCompanyVendors } from "../../../utils/vendors";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+
+const UOM_OPTIONS = [
+  { id: 1, label: "Gallon" },
+  { id: 2, label: "Pounds" },
+  { id: 3, label: "Ounce" },
+  { id: 4, label: "Feet" },
+  { id: 5, label: "Square Feet" },
+  { id: 6, label: "Liter" },
+  { id: 7, label: "Inch" },
+  { id: 8, label: "Quart" },
+  { id: 9, label: "Tab" },
+  { id: 10, label: "Unit" },
+];
+
+const CATEGORY_OPTIONS = [
+  { id: 1, label: "PVC" },
+  { id: 2, label: "Galvanized" },
+  { id: 3, label: "Chemicals" },
+  { id: 4, label: "Useables" },
+  { id: 5, label: "Equipment" },
+  { id: 6, label: "Parts" },
+  { id: 7, label: "Electrical" },
+  { id: 8, label: "Tools" },
+  { id: 9, label: "Misc" },
+];
+
+const SUBCATEGORY_OPTIONS = [
+  "Pipe",
+  "Glue",
+  "Primer",
+  "Pipe Extender",
+  "Fitting Extender",
+  "Inside Coupler",
+  "Sweep",
+  "Street",
+  "Valve",
+  "Bushing",
+  "Tee",
+  "Elbow",
+  "45",
+  "Coupler",
+  "Union",
+  "Male Adaptor",
+  "Nipple",
+  "Pump",
+  "Heater",
+  "Filter",
+  "Salt Cell",
+  "Light",
+  "Cleaner",
+  "Control System",
+  "Auto Chlorinator",
+  "Wire",
+  "Misc",
+].map((label, index) => ({ id: index + 1, label }));
+
+const DEFAULT_UOM = UOM_OPTIONS.find((option) => option.label === "Unit");
+const DEFAULT_CATEGORY = CATEGORY_OPTIONS.find((option) => option.label === "Misc");
+const DEFAULT_SUBCATEGORY = SUBCATEGORY_OPTIONS.find((option) => option.label === "Misc");
+
+const centsFromDollarInput = (value) => {
+  const parsed = Number(String(value || "").replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
+};
 
 const CreateNewDataBaseItem = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { requirePermission } = useCompanyPermissions();
 
   const navigate = useNavigate();
 
@@ -24,49 +90,27 @@ const CreateNewDataBaseItem = () => {
   const [rate, setRate] = useState("0");
   const [rateUSD, setRateUSD] = useState("0");
 
-  const [billingRate, setBillingRate] = useState("0");
-  const [billingRateUSD, setBillingRateUSD] = useState("0");
+  const [sellPrice, setSellPrice] = useState("0");
+  const [sellPriceUSD, setSellPriceUSD] = useState("0");
 
   const [sku, setSku] = useState("");
-  const [uom, setUom] = useState("");
-  const [category, setCategory] = useState("");
-  const [subcategory, setSubcategory] = useState("");
+  const [uom, setUom] = useState(DEFAULT_UOM);
+  const [category, setCategory] = useState(DEFAULT_CATEGORY);
+  const [subcategory, setSubcategory] = useState(DEFAULT_SUBCATEGORY);
   const [color, setColor] = useState("");
   const [description, setDescription] = useState("");
   const [itemName, setItemName] = useState("");
   const [size, setSize] = useState("");
+  const [tracking, setTracking] = useState("");
 
   const [venderList, setVenderList] = useState([]);
   const [vender, setVender] = useState("");
   const [venderName, setVenderName] = useState("");
   const [venderId, setVenderId] = useState("");
 
-  const [uomList, setUomList] = useState([
-    { id: 1, label: "Gallon" },
-    { id: 2, label: "Pounds" },
-    { id: 3, label: "Oz" },
-    { id: 4, label: "Feet" },
-    { id: 5, label: "Square Feet" },
-    { id: 6, label: "Liter" },
-    { id: 7, label: "Inch" },
-    { id: 8, label: "Quart" },
-    { id: 9, label: "Tab" },
-    { id: 10, label: "Unit" },
-  ]);
-
-  const [categoryList, setCategoryList] = useState([
-    { id: 1, label: "PVC" },
-    { id: 2, label: "Galvanized" },
-    { id: 3, label: "Chemicals" },
-    { id: 4, label: "Useables" },
-    { id: 5, label: "Equipment" },
-    { id: 6, label: "Parts" },
-    { id: 7, label: "Electrical" },
-    { id: 8, label: "Tools" },
-    { id: 9, label: "Misc" },
-  ]);
-
-  const [subcategoryList, setSubcategoryList] = useState([{ id: 1, label: "Please Update" }]);
+  const [uomList] = useState(UOM_OPTIONS);
+  const [categoryList] = useState(CATEGORY_OPTIONS);
+  const [subcategoryList] = useState(SUBCATEGORY_OPTIONS);
 
   const handleUOMChange = (selectedOption2) => {
     (async () => {
@@ -88,8 +132,8 @@ const CreateNewDataBaseItem = () => {
 
   const handleVenderChange = (selectedOption2) => {
     (async () => {
-      setVenderName(selectedOption2.label);
-      setVenderId(selectedOption2.id);
+      setVenderName(selectedOption2?.label || selectedOption2?.name || "");
+      setVenderId(selectedOption2?.id || "");
       setVender(selectedOption2);
     })();
   };
@@ -104,6 +148,11 @@ const CreateNewDataBaseItem = () => {
       try {
         const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
         setVenderList(vendors);
+        if (vendors.length) {
+          setVender((current) => current || vendors[0]);
+          setVenderName((current) => current || vendors[0].label || vendors[0].name || "");
+          setVenderId((current) => current || vendors[0].id || "");
+        }
       } catch (error) {
         console.log("Error loading vendors", error);
       }
@@ -115,13 +164,15 @@ const CreateNewDataBaseItem = () => {
     try {
       setEdit(true);
       setRate(purchase.rate);
-      setUom(purchase.UOM);
-      setCategory(purchase.category);
+      setUom(UOM_OPTIONS.find((option) => option.label === purchase.UOM) || DEFAULT_UOM);
+      setCategory(CATEGORY_OPTIONS.find((option) => option.label === purchase.category) || DEFAULT_CATEGORY);
       setColor(purchase.color);
       setDescription(purchase.description);
       setItemName(purchase.name);
       setSize(purchase.size);
-      setBillingRate(purchase.billingRate);
+      setSellPrice(String((purchase.sellPrice ?? purchase.billingRate ?? 0) / 100));
+      setSubcategory(SUBCATEGORY_OPTIONS.find((option) => option.label === purchase.subCategory) || DEFAULT_SUBCATEGORY);
+      setTracking(purchase.tracking || "");
     } catch (error) {
       console.log(error);
     }
@@ -156,20 +207,20 @@ const CreateNewDataBaseItem = () => {
     }
   }
 
-  async function billingRateInput(e) {
+  async function sellPriceInput(e) {
     e.preventDefault();
     try {
       let value = e.target.value.replace(/[^\d.]/g, "");
-      setBillingRate(value);
+      setSellPrice(value);
       const parts = value.split(".");
       if (parts.length > 1) {
         parts[1] = parts[1].slice(0, 2);
         value = parts.join(".");
       }
       if (!isNaN(value)) {
-        setBillingRateUSD(value);
+        setSellPriceUSD(value);
       } else {
-        setBillingRateUSD("0");
+        setSellPriceUSD("0");
       }
     } catch (error) {
       console.log(error);
@@ -186,17 +237,21 @@ const CreateNewDataBaseItem = () => {
 
   async function createNewItem(e) {
     e.preventDefault();
+    if (!requirePermission("852", "create database items")) return;
+
     try {
       let id = "com_sett_db_" + uuidv4();
 
-      let rateCents = rateUSD * 100;
-      let billingRateCents = billingRateUSD * 100;
+      let rateCents = centsFromDollarInput(rateUSD || rate);
+      let sellPriceCents = centsFromDollarInput(sellPriceUSD || sellPrice);
+      const selectedVendorId = vender?.id || venderId || "";
+      const selectedVendorName = vender?.label || vender?.name || venderName || "";
 
       let item = {
-        UOM: uom.label,
+        UOM: uom?.label || "Unit",
         id: id,
         billable: billable,
-        category: category.label,
+        category: category?.label || "Misc",
         color: color,
         dateUpdated: new Date(),
         description: description,
@@ -204,11 +259,14 @@ const CreateNewDataBaseItem = () => {
         rate: rateCents,
         size: size,
         sku: sku,
-        storeName: "",
-        subCategory: subcategory.label,
+        storeName: selectedVendorName,
+        subCategory: subcategory?.label || "Misc",
         timesPurchased: 0,
-        venderId: "",
-        billingRate: billingRateCents,
+        venderId: selectedVendorId,
+        vendorId: selectedVendorId,
+        sellPrice: sellPriceCents,
+        billingRate: sellPriceCents,
+        tracking: tracking,
       };
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
@@ -269,7 +327,7 @@ const CreateNewDataBaseItem = () => {
                   value={rate}
                 />
               </div>
-              <div className="text-xs text-slate-500 mt-1">Internal cost rate (not customer-facing).</div>
+              <div className="text-xs text-slate-500 mt-1">Internal cost rate, stored in cents.</div>
             </div>
 
             {/* Billable Toggle + Billing Rate */}
@@ -278,7 +336,7 @@ const CreateNewDataBaseItem = () => {
                 <div>
                   <div className="text-sm font-semibold text-slate-800">Billing</div>
                   <div className="text-xs text-slate-500 mt-1">
-                    Mark billable to set a customer billing rate.
+                    Mark billable to set the customer-facing sell price.
                   </div>
                 </div>
 
@@ -301,15 +359,15 @@ const CreateNewDataBaseItem = () => {
 
               {billable && (
                 <div className="mt-4">
-                  <label className="block text-sm font-semibold text-slate-700">Billing Rate</label>
+                  <label className="block text-sm font-semibold text-slate-700">Sell Price</label>
                   <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-400">
                     <span className="text-sm font-semibold text-slate-500">$</span>
                     <input
                       className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
-                      onChange={(e) => billingRateInput(e)}
+                      onChange={(e) => sellPriceInput(e)}
                       type="text"
                       placeholder="0.00"
-                      value={billingRate}
+                      value={sellPrice}
                     />
                   </div>
                 </div>
@@ -536,6 +594,17 @@ const CreateNewDataBaseItem = () => {
                 type="text"
                 placeholder="Short description"
                 value={description}
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-semibold text-slate-700">Tracking</label>
+              <input
+                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                onChange={(e) => setTracking(e.target.value)}
+                type="text"
+                placeholder="Optional linked tracking/template ID"
+                value={tracking}
               />
             </div>
           </div>

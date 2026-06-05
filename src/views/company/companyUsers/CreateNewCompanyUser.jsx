@@ -7,6 +7,7 @@ import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from 'uuid';
 import Select from 'react-select';
 import toast from 'react-hot-toast';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const Input = (props) => <input {...props} className={`bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${props.className}`} />;
 const SelectInput = (props) => <Select {...props} styles={{ control: (base) => ({ ...base, background: '#F9FAFB', border: '2px solid #E5E7EB', borderRadius: '0.5rem', padding: '0.25rem' }) }} />;
@@ -27,6 +28,7 @@ const TabButton = ({ active, onClick, children }) => (
 
 const CreateNewCompanyUser = () => {
     const { name: companyName, recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
     const [activeTab, setActiveTab] = useState('new'); // 'new' or 'existing'
@@ -62,6 +64,8 @@ const CreateNewCompanyUser = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!requirePermission("262", "create company users")) return;
+
         if (activeTab === 'new') {
             handleInviteNewUser();
         } else {
@@ -70,6 +74,8 @@ const CreateNewCompanyUser = () => {
     };
 
     const handleInviteNewUser = async () => {
+        if (!requirePermission("262", "create company users")) return;
+
         if (!firstName || !lastName || !email || !role) {
             toast.error("Please fill out all fields to invite a new user.");
             return;
@@ -109,6 +115,8 @@ const CreateNewCompanyUser = () => {
     };
 
     const handleAddExistingUser = async () => {
+        if (!requirePermission("262", "create company users")) return;
+
         if (!email || !role) {
             toast.error("Please provide an email and select a role.");
             return;

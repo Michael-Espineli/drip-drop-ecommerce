@@ -15,12 +15,736 @@ if (process.env.SEND_GRID_API_KEY && process.env.SEND_GRID_API_KEY.startsWith('S
 }
 
 const db = admin.firestore();
+const REAL_EMAILS_FEATURE_FLAG_ID = "feature_flag_005";
+const EMAIL_TEST_RECIPIENT = "michael@dripdrop-poolapp.com";
+const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
+const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
+const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
+const SERVICE_STOP_CATEGORIES = {
+    route: "Route",
+    job: "Job",
+    jobEstimate: "Job Estimate",
+    serviceAgreementEstimate: "Service Agreement Estimate",
+    customerRelationship: "Customer Relationship",
+};
+
+const defaultServiceStopCategoryEmailSetting = (category, companyName = "Your Pool Company", legacyEmailConfig = {}) => {
+    const legacyBody = String(legacyEmailConfig.emailBody || "").trim();
+
+    const defaultByCategory = {
+        [SERVICE_STOP_CATEGORIES.route]: {
+            emailSubject: `${companyName} Service Report`,
+            emailBody: `Thank you for letting ${companyName} service your pool. Here is a summary of today's visit.`,
+            sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+        },
+        [SERVICE_STOP_CATEGORIES.job]: {
+            emailSubject: `${companyName} Job Visit Summary`,
+            emailBody: `Thank you for choosing ${companyName}. Here is a summary of the work completed during this visit.`,
+            sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+        },
+        [SERVICE_STOP_CATEGORIES.jobEstimate]: {
+            emailSubject: `${companyName} Estimate Visit Recap`,
+            emailBody: `Thank you for meeting with ${companyName}. Here is a recap of the information gathered for your estimate.`,
+            sendGridTemplateId: DEFAULT_JOB_ESTIMATE_TEMPLATE_ID,
+        },
+        [SERVICE_STOP_CATEGORIES.serviceAgreementEstimate]: {
+            emailSubject: `${companyName} Service Agreement Visit Recap`,
+            emailBody: `Thank you for considering ${companyName} for recurring service. Here is a recap of the service location information we gathered.`,
+            sendGridTemplateId: DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID,
+        },
+        [SERVICE_STOP_CATEGORIES.customerRelationship]: {
+            emailSubject: `${companyName} Visit Recap`,
+            emailBody: `Thank you for taking the time to meet with ${companyName}. Here is a recap of the visit and any follow-up notes.`,
+            sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+        },
+    };
+
+    const defaults = defaultByCategory[category] || defaultByCategory[SERVICE_STOP_CATEGORIES.customerRelationship];
+
+    return {
+        category,
+        sendEmailOnFinish: legacyEmailConfig.emailIsOn === true,
+        requirePhotoOnFinish: legacyEmailConfig.requirePhoto === true,
+        emailSubject: defaults.emailSubject,
+        emailBody: legacyBody || defaults.emailBody,
+        emailFooter: "Please contact us with any questions.",
+        sendGridTemplateId: defaults.sendGridTemplateId,
+    };
+};
+
+const inferServiceStopCategory = (serviceStopData = {}) => {
+    const explicitCategory = String(serviceStopData.category || "").trim();
+    if (Object.values(SERVICE_STOP_CATEGORIES).includes(explicitCategory)) {
+        return explicitCategory;
+    }
+
+    const typeId = String(serviceStopData.typeId || "").trim();
+    switch (typeId) {
+        case "system_recurring_service_stop":
+            return SERVICE_STOP_CATEGORIES.route;
+        case "system_job_service_stop":
+            return SERVICE_STOP_CATEGORIES.job;
+        case "system_job_estimate_service_stop":
+            return SERVICE_STOP_CATEGORIES.jobEstimate;
+        case "system_service_agreement_estimate_service_stop":
+            return SERVICE_STOP_CATEGORIES.serviceAgreementEstimate;
+        case "system_customer_relationship_service_stop":
+            return SERVICE_STOP_CATEGORIES.customerRelationship;
+        default:
+            break;
+    }
+
+    if (String(serviceStopData.recurringServiceStopId || "").trim()) {
+        return SERVICE_STOP_CATEGORIES.route;
+    }
+
+    if (String(serviceStopData.jobId || "").trim()) {
+        return SERVICE_STOP_CATEGORIES.job;
+    }
+
+    const searchableText = `${serviceStopData.type || ""} ${serviceStopData.description || ""}`.toLowerCase();
+    if (
+        searchableText.includes("service agreement") ||
+        searchableText.includes("recurring service estimate") ||
+        searchableText.includes("new pool") ||
+        searchableText.includes("new service") ||
+        searchableText.includes("startup") ||
+        searchableText.includes("start up")
+    ) {
+        return SERVICE_STOP_CATEGORIES.serviceAgreementEstimate;
+    }
+
+    if (searchableText.includes("estimate") || searchableText.includes("estiamte")) {
+        return SERVICE_STOP_CATEGORIES.jobEstimate;
+    }
+
+    return SERVICE_STOP_CATEGORIES.customerRelationship;
+};
+
+const resolveServiceStopCategoryEmailSetting = ({
+    emailConfigData = {},
+    serviceStopData = {},
+    companyName = "Your Pool Company",
+}) => {
+    const category = inferServiceStopCategory(serviceStopData);
+    const categorySettings = emailConfigData.serviceStopCategorySettings || {};
+    const configuredSetting = categorySettings[category];
+    const fallbackSetting = defaultServiceStopCategoryEmailSetting(category, companyName, emailConfigData);
+
+    return {
+        ...fallbackSetting,
+        ...(configuredSetting || {}),
+        category,
+    };
+};
+
+const getCallableData = (data) => data?.data || data || {};
+
+const getCallableAuth = async (data, context, message) => {
+    if (context.auth?.uid) {
+        return {
+            uid: context.auth.uid,
+            token: context.auth.token || {}
+        };
+    }
+
+    const payload = getCallableData(data);
+    const idToken = payload.idToken;
+
+    if (!idToken) {
+        throw new HttpsError("unauthenticated", message);
+    }
+
+    try {
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+        return {
+            uid: decodedToken.uid,
+            token: decodedToken
+        };
+    } catch (error) {
+        console.error("Unable to verify callable id token", error);
+        throw new HttpsError("unauthenticated", message);
+    }
+};
+
+const isFeatureFlagEnabled = async (flagId) => {
+    const flagDoc = await db.collection("featureFlags").doc(flagId).get();
+
+    if (!flagDoc.exists) return false;
+
+    return flagDoc.data()?.enabled === true;
+};
+
+const resolveEmailDeliveryRecipient = async (intendedTo) => {
+    const realEmailsEnabled = await isFeatureFlagEnabled(REAL_EMAILS_FEATURE_FLAG_ID);
+    const normalizedIntendedTo = String(intendedTo || "").trim();
+
+    return {
+        realEmailsEnabled,
+        intendedTo: normalizedIntendedTo,
+        actualTo: realEmailsEnabled && normalizedIntendedTo ? normalizedIntendedTo : EMAIL_TEST_RECIPIENT,
+        testMode: !realEmailsEnabled || !normalizedIntendedTo,
+        realEmailsFeatureFlagId: REAL_EMAILS_FEATURE_FLAG_ID,
+    };
+};
+
+const addDeliveryModeTemplateData = (templateData, emailDelivery) => ({
+    ...templateData,
+    deliveryMode: emailDelivery.testMode ? "test" : "real",
+    intendedCustomerEmail: emailDelivery.intendedTo,
+    actualRecipientEmail: emailDelivery.actualTo,
+});
+
+const getCompanyContactEmail = (companyData = {}) => (
+    companyData.email ||
+    companyData.companyEmail ||
+    companyData.billingEmail ||
+    companyData.mainContact?.email ||
+    ""
+);
+
+const getCompanyCustomerEmail = async ({ companyId, customerId }) => {
+    if (!companyId || !customerId) return "";
+
+    const customerDoc = await db
+        .collection("companies")
+        .doc(companyId)
+        .collection("customers")
+        .doc(customerId)
+        .get();
+
+    if (!customerDoc.exists) return "";
+
+    const customer = customerDoc.data() || {};
+    return (
+        customer.email ||
+        customer.billingEmail ||
+        customer.mainContact?.email ||
+        customer.contact?.email ||
+        ""
+    );
+};
+
+const userHasCompanyAccess = async (uid, companyId) => {
+    if (!uid || !companyId) return false;
+
+    const accessDoc = await db
+        .collection("users")
+        .doc(uid)
+        .collection("userAccess")
+        .doc(companyId)
+        .get();
+
+    return accessDoc.exists;
+};
+
+const formatCurrency = (amountCents = 0) => {
+    const amount = (Number(amountCents) || 0) / 100;
+    return new Intl.NumberFormat("en-US", {
+        style: "currency",
+        currency: "USD"
+    }).format(amount);
+};
+
+const formatDate = (value) => {
+    if (!value) return "";
+
+    const date =
+        typeof value.toDate === "function"
+            ? value.toDate()
+            : new Date(value);
+
+    if (Number.isNaN(date.getTime())) return "";
+
+    return date.toLocaleDateString("en-US", {
+        month: "long",
+        day: "numeric",
+        year: "numeric",
+        timeZone: "America/Los_Angeles"
+    });
+};
+
+const labelize = (value) => {
+    if (!value) return "";
+    return String(value)
+        .replace(/([A-Z])/g, " $1")
+        .replace(/[_-]/g, " ")
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const escapeHtml = (value) => String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
+const normalizeAgreementLocation = (agreement) => {
+    const firstLocation = Array.isArray(agreement.serviceLocationSnapshots)
+        ? agreement.serviceLocationSnapshots[0]
+        : null;
+
+    return firstLocation || {};
+};
+
+const buildAgreementTerms = (agreement) => {
+    if (Array.isArray(agreement.termsList) && agreement.termsList.length > 0) {
+        return agreement.termsList
+            .filter(Boolean)
+            .map((description, index) => ({
+                title: `Term ${index + 1}`,
+                description: String(description)
+            }));
+    }
+
+    if (agreement.terms) {
+        return [{
+            title: "Agreement Terms",
+            description: String(agreement.terms)
+        }];
+    }
+
+    return [];
+};
+
+const buildServiceAgreementTemplateData = ({
+    agreement,
+    companyData,
+    agreementUrl,
+}) => {
+    const companyName = agreement.companyName || companyData.name || companyData.companyName || "Your Pool Company";
+    const location = normalizeAgreementLocation(agreement);
+    const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+    const terms = buildAgreementTerms(agreement);
+
+    return {
+        subject: `${companyName} Service Agreement`,
+        preHeader: "Your pool service agreement is ready to review.",
+        customer: agreement.customerName || "Customer",
+        companyName,
+        agreementTitle: agreement.title || "Service Agreement",
+        agreementNumber: agreement.id || "",
+        agreementStatus: labelize(agreement.status || "sent"),
+        agreementUrl,
+        sentDate: formatDate(new Date()),
+        expiresAt: formatDate(agreement.expiresAt),
+        address01: location.streetAddress || "",
+        address02: location.address02 || "",
+        city: location.city || "",
+        state: location.state || "",
+        zip: location.zip || "",
+        billingAmount: formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents),
+        billingFrequency: labelize(agreement.serviceCadence || agreement.rateType),
+        billingStartDate: formatDate(agreement.startDate),
+        paymentTerms: labelize(agreement.paymentTerms || "dueOnReceipt"),
+        autopayStatus: "Optional",
+        lineItems: lineItems.map((item) => ({
+            name: item.name || item.description || "Service",
+            description: item.description || "",
+            quantity: String(item.quantity || 1),
+            unitAmount: formatCurrency(item.unitAmountCents),
+            totalAmount: formatCurrency(item.totalAmountCents)
+        })),
+        termsSummary: agreement.termsTemplateName
+            ? `This agreement uses the ${agreement.termsTemplateName} terms template.`
+            : "",
+        terms,
+        companyPhone: companyData.phoneNumber || companyData.phone || "",
+        companyEmail: companyData.email || companyData.companyEmail || "",
+        supportUrl: process.env.SUPPORT_URL || "https://dripdrop-poolapp.com/support",
+        contactUrl: companyData.email ? `mailto:${companyData.email}` : "https://dripdrop-poolapp.com/contact",
+        legalUrl: process.env.LEGAL_URL || "https://dripdrop-poolapp.com/legal"
+    };
+};
 
 //----------Send Grid Functions//----------Send Grid Functions
+exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context) => {
+    console.log("Send Service Agreement Email");
+
+    const callableAuth = await getCallableAuth(
+        data,
+        context,
+        "You must be signed in to send a service agreement."
+    );
+
+    const payload = getCallableData(data);
+    const companyId = payload.companyId;
+    const agreementId = payload.agreementId;
+    const agreementBaseUrl = payload.agreementBaseUrl || process.env.SERVICE_AGREEMENT_BASE_URL || process.env.APP_BASE_URL || "";
+    const templateId = process.env.SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID || process.env.SENDGRID_SERVICE_AGREEMENT_TEMPLATE_ID || DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID;
+
+    if (!companyId) {
+        throw new HttpsError("invalid-argument", "Missing companyId.");
+    }
+
+    if (!agreementId) {
+        throw new HttpsError("invalid-argument", "Missing agreementId.");
+    }
+
+    if (!(await userHasCompanyAccess(callableAuth.uid, companyId))) {
+        throw new HttpsError("permission-denied", "You do not have access to send email for this company.");
+    }
+
+    if (!templateId) {
+        throw new HttpsError("failed-precondition", "Missing SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID.");
+    }
+
+    if (!agreementBaseUrl) {
+        throw new HttpsError("failed-precondition", "Missing agreement review base URL.");
+    }
+
+    if (!process.env.SEND_GRID_API_KEY || !process.env.SEND_GRID_API_KEY.startsWith("SG.")) {
+        throw new HttpsError("failed-precondition", "SendGrid API key is not configured.");
+    }
+
+    const agreementRef = db.collection("salesAgreements").doc(agreementId);
+    const agreementDoc = await agreementRef.get();
+
+    if (!agreementDoc.exists) {
+        throw new HttpsError("not-found", "Service agreement not found.");
+    }
+
+    const agreement = {
+        id: agreementDoc.id,
+        ...agreementDoc.data()
+    };
+
+    if (agreement.companyId !== companyId) {
+        throw new HttpsError("permission-denied", "Agreement does not belong to the selected company.");
+    }
+
+    if (!agreement.email) {
+        throw new HttpsError("failed-precondition", "Agreement is missing a customer email.");
+    }
+
+    const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+    if (!lineItems.length) {
+        throw new HttpsError("failed-precondition", "Agreement needs at least one line item before sending.");
+    }
+
+    if (!agreement.terms && !(Array.isArray(agreement.termsList) && agreement.termsList.length)) {
+        throw new HttpsError("failed-precondition", "Agreement needs terms before sending.");
+    }
+
+    const companyRef = db.collection("companies").doc(companyId);
+    const companyDoc = await companyRef.get();
+
+    if (!companyDoc.exists) {
+        throw new HttpsError("not-found", "Company not found.");
+    }
+
+    const companyData = companyDoc.data() || {};
+    const emailConfigDoc = await companyRef.collection("settings").doc("emailConfiguration").get();
+    const emailConfig = emailConfigDoc.exists ? emailConfigDoc.data() : {};
+
+    if (emailConfig.emailIsOn === false) {
+        throw new HttpsError("failed-precondition", "Company email is turned off.");
+    }
+
+    const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
+    const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
+    const agreementUrl = `${agreementBaseUrl.replace(/\/$/, "")}/client/service-agreements/${agreementId}`;
+    const emailDelivery = await resolveEmailDeliveryRecipient(agreement.email);
+    const dynamicTemplateData = buildServiceAgreementTemplateData({
+        agreement,
+        companyData,
+        agreementUrl,
+    });
+
+    const msg = {
+        to: emailDelivery.actualTo,
+        from: fromEmail,
+        replyTo: replyToEmail,
+        templateId,
+        dynamicTemplateData: addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery)
+    };
+
+    const sendResult = await sgMail.send(msg);
+    const messageId = sendResult?.[0]?.headers?.["x-message-id"] || "";
+
+    await agreementRef.set({
+        status: "sent",
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        sentByUserId: callableAuth.uid,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        emailDelivery: {
+            provider: "sendGrid",
+            templateId,
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            from: fromEmail,
+            replyTo: replyToEmail,
+            messageId,
+            agreementUrl,
+            testMode: emailDelivery.testMode,
+            realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+            realEmailsEnabled: emailDelivery.realEmailsEnabled,
+            lastSentAt: admin.firestore.FieldValue.serverTimestamp(),
+        }
+    }, { merge: true });
+
+    return {
+        status: 200,
+        message: "Service agreement email sent.",
+        messageId,
+        agreementUrl,
+        to: emailDelivery.actualTo,
+        intendedTo: emailDelivery.intendedTo,
+        testMode: emailDelivery.testMode
+    };
+});
+
+const buildSalesInvoiceTemplateData = ({
+    invoice,
+    companyData,
+    invoiceUrl,
+}) => {
+    const companyName = invoice.companyName || companyData.name || companyData.companyName || "Your Pool Company";
+    const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
+    const locations = Array.isArray(invoice.serviceLocationSnapshots) ? invoice.serviceLocationSnapshots : [];
+    const firstLocation = locations[0] || {};
+
+    return {
+        subject: `${companyName} Invoice ${invoice.invoiceNumber || invoice.id}`,
+        preHeader: "Your pool service invoice is ready to review.",
+        customer: invoice.customerName || "Customer",
+        companyName,
+        invoiceTitle: invoice.title || "Invoice",
+        invoiceNumber: invoice.invoiceNumber || invoice.id || "",
+        invoiceStatus: labelize(invoice.status || "open"),
+        invoiceUrl,
+        sentDate: formatDate(new Date()),
+        dueDate: formatDate(invoice.dueDate),
+        address01: firstLocation.streetAddress || "",
+        address02: firstLocation.address02 || "",
+        city: firstLocation.city || "",
+        state: firstLocation.state || "",
+        zip: firstLocation.zip || "",
+        subtotalAmount: formatCurrency(invoice.subtotalAmountCents),
+        discountAmount: formatCurrency(invoice.discountAmountCents),
+        taxAmount: formatCurrency(invoice.taxAmountCents),
+        totalAmount: formatCurrency(invoice.totalAmountCents),
+        amountPaid: formatCurrency(invoice.amountPaidCents),
+        amountDue: formatCurrency(invoice.amountDueCents ?? invoice.totalAmountCents),
+        memo: invoice.memo || "",
+        lineItems: lineItems.map((item) => ({
+            name: item.name || item.description || "Service",
+            description: item.description || "",
+            quantity: String(item.quantity || 1),
+            unitAmount: formatCurrency(item.unitAmountCents),
+            totalAmount: formatCurrency(item.totalAmountCents)
+        })),
+        companyPhone: companyData.phoneNumber || companyData.phone || "",
+        companyEmail: companyData.email || companyData.companyEmail || "",
+        supportUrl: process.env.SUPPORT_URL || "https://dripdrop-poolapp.com/support",
+        contactUrl: companyData.email ? `mailto:${companyData.email}` : "https://dripdrop-poolapp.com/contact",
+        legalUrl: process.env.LEGAL_URL || "https://dripdrop-poolapp.com/legal"
+    };
+};
+
+const buildSalesInvoiceFallbackText = (templateData) => {
+    const lines = [
+        `${templateData.companyName} sent you ${templateData.invoiceTitle || "an invoice"}.`,
+        `Invoice: ${templateData.invoiceNumber}`,
+        `Total: ${templateData.totalAmount}`,
+        `Amount due: ${templateData.amountDue}`,
+        templateData.dueDate ? `Due date: ${templateData.dueDate}` : "",
+        "",
+        `Review invoice: ${templateData.invoiceUrl}`,
+    ];
+
+    return lines.filter((line) => line !== "").join("\n");
+};
+
+const buildSalesInvoiceFallbackHtml = (templateData) => {
+    const rows = Array.isArray(templateData.lineItems)
+        ? templateData.lineItems.map((item) => `
+            <tr>
+                <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;">
+                    <strong>${escapeHtml(item.name)}</strong>
+                    ${item.description ? `<div style="color:#64748b;font-size:13px;margin-top:3px;">${escapeHtml(item.description)}</div>` : ""}
+                </td>
+                <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:center;">${escapeHtml(item.quantity)}</td>
+                <td style="padding:10px 0;border-bottom:1px solid #e5e7eb;text-align:right;">${escapeHtml(item.totalAmount)}</td>
+            </tr>
+        `).join("")
+        : "";
+
+    return `
+        <div style="margin:0;padding:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a;">
+            <div style="max-width:640px;margin:0 auto;padding:28px 16px;">
+                <div style="background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:24px;">
+                    <p style="margin:0 0 8px;color:#64748b;font-size:14px;">${escapeHtml(templateData.companyName)}</p>
+                    <h1 style="margin:0 0 8px;font-size:24px;line-height:1.25;">Invoice ${escapeHtml(templateData.invoiceNumber)}</h1>
+                    <p style="margin:0 0 20px;color:#475569;">Hi ${escapeHtml(templateData.customer)}, your pool service invoice is ready.</p>
+                    <div style="display:block;background:#f1f5f9;border-radius:8px;padding:16px;margin-bottom:20px;">
+                        <div style="font-size:13px;color:#64748b;">Amount due</div>
+                        <div style="font-size:28px;font-weight:700;margin-top:2px;">${escapeHtml(templateData.amountDue)}</div>
+                        ${templateData.dueDate ? `<div style="font-size:13px;color:#64748b;margin-top:6px;">Due ${escapeHtml(templateData.dueDate)}</div>` : ""}
+                    </div>
+                    ${rows ? `
+                        <table style="width:100%;border-collapse:collapse;margin-bottom:20px;font-size:14px;">
+                            <thead>
+                                <tr>
+                                    <th style="padding:0 0 8px;text-align:left;color:#64748b;font-size:12px;text-transform:uppercase;">Item</th>
+                                    <th style="padding:0 0 8px;text-align:center;color:#64748b;font-size:12px;text-transform:uppercase;">Qty</th>
+                                    <th style="padding:0 0 8px;text-align:right;color:#64748b;font-size:12px;text-transform:uppercase;">Total</th>
+                                </tr>
+                            </thead>
+                            <tbody>${rows}</tbody>
+                        </table>
+                    ` : ""}
+                    <a href="${escapeHtml(templateData.invoiceUrl)}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:6px;padding:12px 18px;font-weight:700;">Review Invoice</a>
+                    ${templateData.memo ? `<p style="margin:20px 0 0;color:#475569;">${escapeHtml(templateData.memo)}</p>` : ""}
+                    <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;">This message was sent by ${escapeHtml(templateData.companyName)} through DripDrop.</p>
+                </div>
+            </div>
+        </div>
+    `;
+};
+
+exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => {
+    console.log("Send Sales Invoice Email");
+
+    const callableAuth = await getCallableAuth(
+        data,
+        context,
+        "You must be signed in to send an invoice."
+    );
+
+    const payload = getCallableData(data);
+    const companyId = payload.companyId;
+    const invoiceId = payload.invoiceId;
+    const invoiceBaseUrl = payload.invoiceBaseUrl || process.env.SALES_INVOICE_BASE_URL || process.env.APP_BASE_URL || "";
+    const templateId = process.env.SEND_GRID_SALES_INVOICE_TEMPLATE_ID || process.env.SENDGRID_SALES_INVOICE_TEMPLATE_ID || "";
+
+    if (!companyId) {
+        throw new HttpsError("invalid-argument", "Missing companyId.");
+    }
+
+    if (!invoiceId) {
+        throw new HttpsError("invalid-argument", "Missing invoiceId.");
+    }
+
+    if (!(await userHasCompanyAccess(callableAuth.uid, companyId))) {
+        throw new HttpsError("permission-denied", "You do not have access to send email for this company.");
+    }
+
+    if (!invoiceBaseUrl) {
+        throw new HttpsError("failed-precondition", "Missing invoice review base URL.");
+    }
+
+    if (!process.env.SEND_GRID_API_KEY || !process.env.SEND_GRID_API_KEY.startsWith("SG.")) {
+        throw new HttpsError("failed-precondition", "SendGrid API key is not configured.");
+    }
+
+    const invoiceRef = db.collection("salesInvoices").doc(invoiceId);
+    const invoiceDoc = await invoiceRef.get();
+
+    if (!invoiceDoc.exists) {
+        throw new HttpsError("not-found", "Sales invoice not found.");
+    }
+
+    const invoice = {
+        id: invoiceDoc.id,
+        ...invoiceDoc.data()
+    };
+
+    if (invoice.companyId !== companyId) {
+        throw new HttpsError("permission-denied", "Invoice does not belong to the selected company.");
+    }
+
+    if (!invoice.email) {
+        throw new HttpsError("failed-precondition", "Invoice is missing a customer email.");
+    }
+
+    const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
+    if (!lineItems.length) {
+        throw new HttpsError("failed-precondition", "Invoice needs at least one line item before sending.");
+    }
+
+    const companyRef = db.collection("companies").doc(companyId);
+    const companyDoc = await companyRef.get();
+
+    if (!companyDoc.exists) {
+        throw new HttpsError("not-found", "Company not found.");
+    }
+
+    const companyData = companyDoc.data() || {};
+    const emailConfigDoc = await companyRef.collection("settings").doc("emailConfiguration").get();
+    const emailConfig = emailConfigDoc.exists ? emailConfigDoc.data() : {};
+
+    if (emailConfig.emailIsOn === false) {
+        throw new HttpsError("failed-precondition", "Company email is turned off.");
+    }
+
+    const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "mespineli@dripdrop-poolapp.com";
+    const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
+    const invoiceUrl = `${invoiceBaseUrl.replace(/\/$/, "")}/client/billing/invoices/${invoiceId}`;
+    const emailDelivery = await resolveEmailDeliveryRecipient(invoice.email);
+    const dynamicTemplateData = buildSalesInvoiceTemplateData({
+        invoice,
+        companyData,
+        invoiceUrl,
+    });
+    const invoiceTemplateData = addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery);
+    const templateMode = templateId ? "sendGridDynamicTemplate" : "fallbackHtml";
+
+    const msg = templateId ? {
+        to: emailDelivery.actualTo,
+        from: fromEmail,
+        replyTo: replyToEmail,
+        templateId,
+        dynamicTemplateData: invoiceTemplateData
+    } : {
+        to: emailDelivery.actualTo,
+        from: fromEmail,
+        replyTo: replyToEmail,
+        subject: invoiceTemplateData.subject,
+        text: buildSalesInvoiceFallbackText(invoiceTemplateData),
+        html: buildSalesInvoiceFallbackHtml(invoiceTemplateData)
+    };
+
+    const sendResult = await sgMail.send(msg);
+    const messageId = sendResult?.[0]?.headers?.["x-message-id"] || "";
+
+    await invoiceRef.set({
+        status: invoice.status === "paid" ? "paid" : "open",
+        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        emailDelivery: {
+            provider: "sendGrid",
+            templateId: templateId || "fallback-html",
+            templateMode,
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            from: fromEmail,
+            replyTo: replyToEmail,
+            messageId,
+            invoiceUrl,
+            testMode: emailDelivery.testMode,
+            realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+            realEmailsEnabled: emailDelivery.realEmailsEnabled,
+            lastSentAt: admin.firestore.FieldValue.serverTimestamp(),
+        }
+    }, { merge: true });
+
+    return {
+        status: 200,
+        message: "Sales invoice email sent.",
+        messageId,
+        invoiceUrl,
+        to: emailDelivery.actualTo,
+        intendedTo: emailDelivery.intendedTo,
+        testMode: emailDelivery.testMode,
+        templateMode
+    };
+});
+
 exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context) => {
     console.log("Send Service Report On Finish");
-
-    const email = "michaelespineli2000@gmail.com";
 
     try {
         const companyId = data?.data?.companyId || data?.companyId;
@@ -74,19 +798,18 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
             .limit(1)
             .get();
 
+        let stopDataDoc = null;
+        let stopData = {};
+
         if (stopDataSnapshot.empty) {
-            console.log("Did not Find Stop Data");
-            return {
-                status: 404,
-                error: "Stop data not found"
-            };
+            console.log("Did not Find Stop Data. Continuing with service stop details only.");
+        } else {
+            stopDataDoc = stopDataSnapshot.docs[0];
+            stopData = stopDataDoc.data();
+
+            console.log("Stop Data Doc Id:", stopDataDoc.id);
+            console.log("Stop Data:", stopData);
         }
-
-        const stopDataDoc = stopDataSnapshot.docs[0];
-        const stopData = stopDataDoc.data();
-
-        console.log("Stop Data Doc Id:", stopDataDoc.id);
-        console.log("Stop Data:", stopData);
 
         // 3. Get Company
         const companyRef = db.collection("companies").doc(companyId);
@@ -102,6 +825,7 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
 
         const companyData = companyDoc.data();
         const companyName = companyData.name || serviceStopData.companyName || "Your Pool Company";
+        const companyContactEmail = getCompanyContactEmail(companyData);
 
         console.log("Company data:", companyData);
 
@@ -123,12 +847,18 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
         }
 
         const emailConfigData = emailConfigDoc.data();
+        const categoryEmailSetting = resolveServiceStopCategoryEmailSetting({
+            emailConfigData,
+            serviceStopData,
+            companyName,
+        });
 
-        if (!emailConfigData.emailIsOn) {
-            console.log("Email Not Turned on for Company");
+        if (!categoryEmailSetting.sendEmailOnFinish) {
+            console.log("Email Not Turned on for Service Stop Category", categoryEmailSetting.category);
             return {
                 status: 200,
-                account: "Company email is turned off"
+                account: "Category email is turned off",
+                category: categoryEmailSetting.category
             };
         }
 
@@ -161,6 +891,19 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
                 account: "Customer email is turned off"
             };
         }
+
+        const customerEmail = (
+            serviceStopData.email ||
+            serviceStopData.customerEmail ||
+            stopData.email ||
+            stopData.customerEmail ||
+            customerEmailConfigData.email ||
+            await getCompanyCustomerEmail({
+                companyId,
+                customerId: serviceStopData.customerId || stopData.customerId || "",
+            })
+        );
+        const emailDelivery = await resolveEmailDeliveryRecipient(customerEmail);
 
         // Helpers
         const formatDate = (value) => {
@@ -256,6 +999,14 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
         };
 
         const photoUrls = normalizePhotoUrls(serviceStopData.photoUrls);
+        if (categoryEmailSetting.requirePhotoOnFinish && photoUrls.length === 0) {
+            console.log("Photo Required For Service Stop Category", categoryEmailSetting.category);
+            return {
+                status: 400,
+                error: "A photo is required before this service stop can be finished.",
+                category: categoryEmailSetting.category
+            };
+        }
 
         const emailStopData = {
             id: stopData.id || serviceStopId,
@@ -272,36 +1023,45 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
         };
 
         // 6. Build SendGrid Message
+        let replyToEmail = emailConfigData.replyToEmail || companyContactEmail || "info@dripdrop-poolapp.com"
+        const serviceReportTemplateData = addDeliveryModeTemplateData({
+            subject: categoryEmailSetting.emailSubject || `${companyName} Service Stop Recap`,
+            preHeader: categoryEmailSetting.emailBody || "Your service stop recap is ready.",
+
+            customer: serviceStopData.customerName || "",
+            customerId: serviceStopData.customerId || "",
+
+            technician: serviceStopData.tech || "",
+            technicianId: serviceStopData.techId || "",
+
+            companyName: companyName,
+            serviceStopCategory: categoryEmailSetting.category,
+            category: categoryEmailSetting.category,
+            emailSubject: categoryEmailSetting.emailSubject || "",
+            emailBody: categoryEmailSetting.emailBody || "",
+            emailFooter: categoryEmailSetting.emailFooter || "",
+            categoryMessage: categoryEmailSetting.emailBody || "",
+
+            stopData: emailStopData,
+
+            address01: serviceStopData.address?.streetAddress || "",
+            address02: serviceStopData.address?.address02 || "",
+            city: serviceStopData.address?.city || "",
+            state: serviceStopData.address?.state || "",
+            zip: serviceStopData.address?.zip || "",
+
+            serviceTime: formatTime(serviceStopData.endTime || serviceStopData.startTime || serviceStopData.serviceDate),
+            serviceDate: formatDate(serviceStopData.serviceDate),
+
+            photoUrls: photoUrls
+        }, emailDelivery);
         const msg = {
-            to: email,
-            from: "mespineli@dripdrop-poolapp.com",
-            cc: "michaelespineli@murdockpoolservice.com",
-            templateId: "d-a987a065df0e43378dafd14c1b7ee419",
-            dynamicTemplateData: {
-                subject: companyName + " Weekly Service Report",
-                preHeader: "Your weekly pool service report is ready.",
 
-                customer: serviceStopData.customerName || "",
-                customerId: serviceStopData.customerId || "",
-
-                technician: serviceStopData.tech || "",
-                technicianId: serviceStopData.techId || "",
-
-                companyName: companyName,
-
-                stopData: emailStopData,
-
-                address01: serviceStopData.address?.streetAddress || "",
-                address02: serviceStopData.address?.address02 || "",
-                city: serviceStopData.address?.city || "",
-                state: serviceStopData.address?.state || "",
-                zip: serviceStopData.address?.zip || "",
-
-                serviceTime: formatTime(serviceStopData.endTime || serviceStopData.startTime || serviceStopData.serviceDate),
-                serviceDate: formatDate(serviceStopData.serviceDate),
-
-                photoUrls: photoUrls
-            }
+            to: emailDelivery.actualTo,
+            from: "info@dripdrop-poolapp.com",
+            replyTo: replyToEmail,
+            templateId: categoryEmailSetting.sendGridTemplateId || DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+            dynamicTemplateData: serviceReportTemplateData
         };
 
         console.log("Msg data:", JSON.stringify(msg.dynamicTemplateData, null, 2));
@@ -312,7 +1072,11 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
 
         return {
             status: 200,
-            account: "Successfully Sent"
+            account: "Successfully Sent",
+            category: categoryEmailSetting.category,
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            testMode: emailDelivery.testMode
         };
     } catch (error) {
         console.log("Failed To Send Service Stop Email");
@@ -327,84 +1091,91 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
 exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
 
     console.log('Send Job Estiamte Email')
-    let email = "michaelespineli2000@gmail.com"
 
     try {
-        let companyName = ""
-        let companyId = data.data.companyId
-        let mainCompanyId = data.data.companyId
-        let serviceStopId = data.data.serviceStopId
-        console.log(companyId)
-        console.log(serviceStopId)
+        const payload = getCallableData(data);
+        let companyId = payload.companyId;
+        const mainCompanyId = payload.mainCompanyId || payload.companyId;
+        const serviceStopId = payload.serviceStopId;
+
+        if (!companyId) {
+            throw new Error("Missing companyId");
+        }
+
+        if (!serviceStopId) {
+            throw new Error("Missing serviceStopId");
+        }
 
         //Get Service Stop
-        const ssRef = db.collection("companies").doc(mainCompanyId).collection("serviceStops").doc(serviceStopId)
-        ssRef.get().then((ssdoc) => {
-            if (ssdoc.exists) {
-                console.log("Service Stop data:", ssdoc.data());
-                let serviceStopData = ssdoc.data()
-                if (serviceStopData.otherCompany) {
-                    companyId = serviceStopData.contractedCompanyId
-                }
+        const ssRef = db.collection("companies").doc(mainCompanyId).collection("serviceStops").doc(serviceStopId);
+        const ssdoc = await ssRef.get();
 
-                //Get Company
-                const companyRef = db.collection("companies").doc(companyId)
-                companyRef.get().then((companyDoc) => {
-                    if (companyDoc.exists) {
-                        console.log("Company data:", companyDoc.data());
-                        let companyData = companyDoc.data()
-                        companyName = companyData.name
+        if (!ssdoc.exists) {
+            return {
+                status: 404,
+                error: "Service stop not found"
+            };
+        }
 
-                        //Get Stop Data
-                        const msg = {
-                            to: email,
-                            from: 'mespineli@dripdrop-poolapp.com ',
-                            // cc: "michaelespineli@murdockpoolservice.com", //Maybe Company Email
-                            templateId: 'd-566087cd96864db0a07167e8a080cc12',
-                            dynamicTemplateData: {
-                                subject: companyName + " Job Estiamte",
-                                preHeader: "Pre-header",
-                                customer: serviceStopData.customerName,
-                                customerId: serviceStopData.customerId,
-                                technician: serviceStopData.tech,
-                                technicianId: serviceStopData.techId,
-                                stopData: {},
-                                companyName: companyName,
-                                address01: serviceStopData.address.streetAddress,
-                                city: serviceStopData.address.city,
-                                state: serviceStopData.address.state,
-                                zip: serviceStopData.address.zip,
-                                serviceTime: "12:35 PM",
-                                serviceDate: "5/16/2025",
-                                photoUrls: [
-                                ]
-                            }
-                        }
+        const serviceStopData = ssdoc.data();
+        if (serviceStopData.otherCompany) {
+            companyId = serviceStopData.contractedCompanyId || companyId;
+        }
 
-                        sgMail
-                            .send(msg)
-                            .then(() => {
+        const companyRef = db.collection("companies").doc(companyId);
+        const companyDoc = await companyRef.get();
 
-                                console.log('Successfully Sent')
-                            })
-                            .catch((error) => {
-                                console.error(error)
-                                return {
-                                    status: 500,
-                                    error: error.message
-                                };
-                            })
-                    }
-                })
+        if (!companyDoc.exists) {
+            return {
+                status: 404,
+                error: "Company not found"
+            };
+        }
 
-            }
-        })
-        //Get Service Stop From 
-        //Get Customer information VIA API Call to Firebase from service stop info using either company id or contractedcompanyId
+        const companyData = companyDoc.data();
+        const companyName = companyData.name || companyData.companyName || serviceStopData.companyName || "Your Pool Company";
+        const customerEmail = (
+            serviceStopData.email ||
+            serviceStopData.customerEmail ||
+            await getCompanyCustomerEmail({
+                companyId,
+                customerId: serviceStopData.customerId || "",
+            })
+        );
+        const emailDelivery = await resolveEmailDeliveryRecipient(customerEmail);
+        const templateData = addDeliveryModeTemplateData({
+            subject: companyName + " Job Estiamte",
+            preHeader: "Pre-header",
+            customer: serviceStopData.customerName,
+            customerId: serviceStopData.customerId,
+            technician: serviceStopData.tech,
+            technicianId: serviceStopData.techId,
+            stopData: {},
+            companyName: companyName,
+            address01: serviceStopData.address?.streetAddress || "",
+            city: serviceStopData.address?.city || "",
+            state: serviceStopData.address?.state || "",
+            zip: serviceStopData.address?.zip || "",
+            serviceTime: "12:35 PM",
+            serviceDate: "5/16/2025",
+            photoUrls: []
+        }, emailDelivery);
+        const msg = {
+            to: emailDelivery.actualTo,
+            from: 'mespineli@dripdrop-poolapp.com ',
+            replyTo: getCompanyContactEmail(companyData) || 'info@dripdrop-poolapp.com',
+            templateId: 'd-566087cd96864db0a07167e8a080cc12',
+            dynamicTemplateData: templateData
+        };
+
+        await sgMail.send(msg);
 
         return {
             status: 200,
-            account: "Successfully Sent"
+            account: "Successfully Sent",
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            testMode: emailDelivery.testMode
         };
     } catch (error) {
         console.error(
@@ -423,95 +1194,78 @@ exports.sendInvoiceEmail = functions.https.onCall(async (data, context) => {
     console.log('Send Service Report On Finish')
 
     try {
-        let companyName = ""
-        let companyId = data.data.companyId
-        let invoiceId = data.data.invoiceId
-        console.log(companyId)
-        console.log(invoiceId)
+        const payload = getCallableData(data);
+        const invoiceId = payload.invoiceId;
+
+        if (!invoiceId) {
+            throw new Error("Missing invoiceId");
+        }
 
         //Get Invoice
-        const invoiceRef = db.collection("invoices").doc(invoiceId)
-        invoiceRef.get().then((invoiceDoc) => {
-            if (invoiceDoc.exists) {
-                console.log("Invoice data:", invoiceDoc.data());
-                let invoiceData = invoiceDoc.data()
+        const invoiceRef = db.collection("invoices").doc(invoiceId);
+        const invoiceDoc = await invoiceRef.get();
 
-                console.log("Invoice Data")
-                console.log(invoiceData)
-                //Get Company
-                const companyRef = db.collection("companies").doc(invoiceData.receiverId)
-                companyRef.get().then((companyDoc) => {
-                    if (companyDoc.exists) {
-                        console.log("Company data:", companyDoc.data());
-                        let companyData = companyDoc.data()
-                        companyName = companyData.name
-                        let companyEmail = "Michaelespineli2000@gmail.com"
-                        //Get Stop Data
+        if (!invoiceDoc.exists) {
+            return {
+                status: 404,
+                error: "Invoice not found"
+            };
+        }
 
-                        let pushLineItems = []
-                        var lineItems = invoiceData.lineItems
+        const invoiceData = invoiceDoc.data();
+        const companyRef = db.collection("companies").doc(invoiceData.receiverId);
+        const companyDoc = await companyRef.get();
 
-                        console.log("Line items: " + lineItems.length)
-                        console.log(invoiceData.lineItems)
-                        for (let i = 0; i < lineItems.length; i++) {
-                            let lineItem = lineItems[i]
-                            console.log("Line Item:")
-                            console.log(lineItem)
-                            pushLineItems.push({
-                                id: lineItem.id,
-                                description: lineItem.description,
-                                induvidualCost: (lineItem.induvidualCost / 100).toFixed(2),
-                                itemId: lineItem.itemId,
-                                total: ((lineItem.total / 100).toFixed(2)),
-                                quantity: (lineItem.total / lineItem.induvidualCost)
+        if (!companyDoc.exists) {
+            return {
+                status: 404,
+                error: "Receiver company not found"
+            };
+        }
 
-                            })
-                        }
+        const companyData = companyDoc.data();
+        const companyName = companyData.name || companyData.companyName || invoiceData.receiverName || "Your Pool Company";
+        const intendedEmail = invoiceData.email || invoiceData.receiverEmail || getCompanyContactEmail(companyData);
+        const emailDelivery = await resolveEmailDeliveryRecipient(intendedEmail);
+        const lineItems = Array.isArray(invoiceData.lineItems) ? invoiceData.lineItems : [];
+        const pushLineItems = lineItems.map((lineItem) => ({
+            id: lineItem.id,
+            description: lineItem.description,
+            induvidualCost: ((Number(lineItem.induvidualCost) || 0) / 100).toFixed(2),
+            itemId: lineItem.itemId,
+            total: ((Number(lineItem.total) || 0) / 100).toFixed(2),
+            quantity: Number(lineItem.induvidualCost)
+                ? ((Number(lineItem.total) || 0) / Number(lineItem.induvidualCost))
+                : 0
+        }));
+        const templateData = addDeliveryModeTemplateData({
+            subject: companyName + " Invoice " + invoiceData.internalIdenifier + " for $" + ((Number(invoiceData.total) || 0) / 100).toFixed(2),
+            invoiceId: invoiceData.internalIdenifier,
+            preHeader: "Pre-header",
+            receiverCompany: invoiceData.receiverName,
+            receiverCompanyId: invoiceData.receiverId,
+            senderCompany: invoiceData.senderName,
+            senderCompanyId: invoiceData.senderId,
+            terms: invoiceData.terms,
+            total: ((Number(invoiceData.total) || 0) / 100).toFixed(2),
+            lineItems: pushLineItems,
+        }, emailDelivery);
+        const msg = {
+            to: emailDelivery.actualTo,
+            from: 'mespineli@dripdrop-poolapp.com ',
+            replyTo: getCompanyContactEmail(companyData) || 'info@dripdrop-poolapp.com',
+            templateId: 'd-16d13e4c5d7e4c6f91667c76a3513c41',
+            dynamicTemplateData: templateData
+        };
 
-                        console.log("Push line items:")
-                        console.log(pushLineItems)
-                        const msg = {
-                            to: companyEmail,
-                            from: 'mespineli@dripdrop-poolapp.com ',
-                            cc: "michaelespineli@murdockpoolservice.com", //Maybe Company Email
-                            templateId: 'd-16d13e4c5d7e4c6f91667c76a3513c41',
-                            dynamicTemplateData: {
-                                subject: companyName + " Invoice " + invoiceData.internalIdenifier + " for $" + (invoiceData.total / 100).toFixed(2),
-                                invoiceId: invoiceData.internalIdenifier,
-                                preHeader: "Pre-header",
-                                receiverCompany: invoiceData.receiverName,
-                                receiverCompanyId: invoiceData.receiverId,
-                                senderCompany: invoiceData.senderName,
-                                senderCompanyId: invoiceData.senderId,
-                                terms: invoiceData.terms,
-                                total: (invoiceData.total / 100).toFixed(2),
-                                lineItems: pushLineItems,
-                            }
-                        }
-                        sgMail
-                            .send(msg)
-                            .then(() => {
-
-                                console.log('Successfully Sent')
-                            })
-                            .catch((error) => {
-                                console.error(error)
-                                return {
-                                    status: 500,
-                                    error: error.message
-                                };
-                            })
-                    }
-                })
-
-            }
-        })
-        //Get Service Stop From 
-        //Get Customer information VIA API Call to Firebase from service stop info using either company id or contractedcompanyId
+        await sgMail.send(msg);
 
         return {
             status: 200,
-            account: "Successfully Sent"
+            account: "Successfully Sent",
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            testMode: emailDelivery.testMode
         };
     } catch (error) {
         console.error(
@@ -530,87 +1284,84 @@ exports.sendPaymentConfirmationEmail = functions.https.onCall(async (data, conte
     console.log('Send Service Report On Finish')
 
     try {
-        let companyName = ""
-        let companyId = data.data.companyId
-        let invoiceId = data.data.invoiceId
-        console.log(companyId)
-        console.log(invoiceId)
+        const payload = getCallableData(data);
+        const invoiceId = payload.invoiceId;
+
+        if (!invoiceId) {
+            throw new Error("Missing invoiceId");
+        }
 
         //Get Service Stop
-        const invoiceRef = db.collection("invoices").collection("invoices").doc(invoiceId)
-        invoiceRef.get().then((invoiceDoc) => {
-            if (invoiceDoc.exists) {
-                console.log("Service Stop data:", invoiceDoc.data());
-                let invoiceData = invoiceDoc.data()
+        const invoiceRef = db.collection("invoices").doc(invoiceId);
+        const invoiceDoc = await invoiceRef.get();
 
-                //Get Company
-                const companyRef = db.collection("companies").doc(invoiceData.receivedData)
-                companyRef.get().then((companyDoc) => {
-                    if (companyDoc.exists) {
-                        console.log("Company data:", companyDoc.data());
-                        let companyData = companyDoc.data()
-                        companyName = companyData.name
-                        let companyEmail = "Michaelespineli2000@gmail.com"
-                        //Get Stop Data
+        if (!invoiceDoc.exists) {
+            return {
+                status: 404,
+                error: "Invoice not found"
+            };
+        }
 
-                        let pushLineItems = []
-                        for (let i = 0; i < invoiceData.lineItems; i++) {
-                            let lineItem = invoiceData.lineItems[i]
+        const invoiceData = invoiceDoc.data();
+        const receiverCompanyId = invoiceData.receivedData || invoiceData.receiverId;
 
-                            pushLineItems.push({
-                                id: lineItem.id,
-                                description: lineItem.description,
-                                induvidualCost: lineItem.induvidualCost / 100,
-                                itemId: lineItem.itemId,
-                                total: lineItem.total / 100,
-                                quantity: (lineItem.total / lineItem.induvidualCost)
+        if (!receiverCompanyId) {
+            throw new Error("Invoice is missing receiver company id");
+        }
 
-                            })
-                        }
+        const companyRef = db.collection("companies").doc(receiverCompanyId);
+        const companyDoc = await companyRef.get();
 
-                        const msg = {
-                            to: companyEmail,
-                            from: 'mespineli@dripdrop-poolapp.com ',
-                            cc: "michaelespineli@murdockpoolservice.com", //Maybe Company Email
-                            templateId: 'd-6f7f138176c747be80aabd671e67577a',
-                            dynamicTemplateData: {
-                                subject: companyName + "Invoice " + invoiceData.internalIdenifier + " for " + invoiceData.total / 100,
-                                invoiceId: invoiceData.internalIdenifier,
-                                preHeader: "Pre-header",
-                                receiverCompany: invoiceData.receiverName,
-                                receiverCompanyId: invoiceData.receiverId,
-                                senderCompany: invoiceData.senderName,
-                                senderCompanyId: invoiceData.senderId,
-                                terms: invoiceData.terms,
-                                total: invoiceData.total / 100,
-                                lineItems: pushLineItems,
-                            }
-                        }
+        if (!companyDoc.exists) {
+            return {
+                status: 404,
+                error: "Receiver company not found"
+            };
+        }
 
-                        sgMail
-                            .send(msg)
-                            .then(() => {
+        const companyData = companyDoc.data();
+        const companyName = companyData.name || companyData.companyName || invoiceData.receiverName || "Your Pool Company";
+        const intendedEmail = invoiceData.email || invoiceData.receiverEmail || getCompanyContactEmail(companyData);
+        const emailDelivery = await resolveEmailDeliveryRecipient(intendedEmail);
+        const lineItems = Array.isArray(invoiceData.lineItems) ? invoiceData.lineItems : [];
+        const pushLineItems = lineItems.map((lineItem) => ({
+            id: lineItem.id,
+            description: lineItem.description,
+            induvidualCost: ((Number(lineItem.induvidualCost) || 0) / 100).toFixed(2),
+            itemId: lineItem.itemId,
+            total: ((Number(lineItem.total) || 0) / 100).toFixed(2),
+            quantity: Number(lineItem.induvidualCost)
+                ? ((Number(lineItem.total) || 0) / Number(lineItem.induvidualCost))
+                : 0
+        }));
+        const templateData = addDeliveryModeTemplateData({
+            subject: companyName + " Invoice " + invoiceData.internalIdenifier + " for " + ((Number(invoiceData.total) || 0) / 100).toFixed(2),
+            invoiceId: invoiceData.internalIdenifier,
+            preHeader: "Pre-header",
+            receiverCompany: invoiceData.receiverName,
+            receiverCompanyId: invoiceData.receiverId,
+            senderCompany: invoiceData.senderName,
+            senderCompanyId: invoiceData.senderId,
+            terms: invoiceData.terms,
+            total: ((Number(invoiceData.total) || 0) / 100).toFixed(2),
+            lineItems: pushLineItems,
+        }, emailDelivery);
+        const msg = {
+            to: emailDelivery.actualTo,
+            from: 'mespineli@dripdrop-poolapp.com ',
+            replyTo: getCompanyContactEmail(companyData) || 'info@dripdrop-poolapp.com',
+            templateId: 'd-6f7f138176c747be80aabd671e67577a',
+            dynamicTemplateData: templateData
+        };
 
-                                console.log('Successfully Sent')
-                            })
-                            .catch((error) => {
-                                console.error(error)
-                                return {
-                                    status: 500,
-                                    error: error.message
-                                };
-                            })
-                    }
-                })
-
-            }
-        })
-        //Get Service Stop From 
-        //Get Customer information VIA API Call to Firebase from service stop info using either company id or contractedcompanyId
+        await sgMail.send(msg);
 
         return {
             status: 200,
-            account: "Successfully Sent"
+            account: "Successfully Sent",
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            testMode: emailDelivery.testMode
         };
     } catch (error) {
         console.error(

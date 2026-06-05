@@ -9,6 +9,7 @@ import {
     ChevronRightIcon, TruckIcon, PencilIcon, XMarkIcon, CheckIcon
 } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
+import { displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
 
 const BodyOfWaterDetailView = () => {
     const { bodyOfWaterId } = useParams();
@@ -253,7 +254,7 @@ const OutstandingRepairsWidget = ({ repairRequests }) => {
                         <div className="flex justify-between items-start text-sm">
                             <div>
                                 <p className="font-semibold text-gray-800">{req.issueDescription || "No description"}</p>
-                                <p className="text-gray-500">Status: <span className="font-medium text-yellow-600">{req.status || 'Pending'}</span></p>
+                                <p className="text-gray-500">Status: <span className="font-medium text-yellow-600">{displayRepairRequestStatus(req.status)}</span></p>
                             </div>
                             <p className="text-gray-500 flex-shrink-0 ml-4">{req.createdAt ? format(req.createdAt.toDate(), 'MMM d, yyyy') : ''}</p>
                         </div>

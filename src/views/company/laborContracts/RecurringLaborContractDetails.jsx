@@ -62,17 +62,15 @@ const RecurringLaborContractDetails = () => {
         <div className='px-2 md:px-7 py-5'>
             <div className='w-full bg-[#747e79] p-4 rounded-md'>
                 <div className='left-0 w-full justify-between'>
-                    <p>{laborContractId}</p>
+                    <p>Recurring labor contract</p>
                     <p>{laborContract.atWill}</p>
                     {/* <p>{laborContract.dateSent}</p> */}
                     {/* <p>{laborContract.endDate}</p> */}
                     {/* <p>{companyUser.lastDateToAccept}</p> */}
                     <p>{laborContract.notes}</p>
                     <p>{laborContract.receiverAcceptance}</p>
-                    <p>{laborContract.receiverId}</p>
                     <p>{laborContract.receiverName}</p>
                     <p>{laborContract.senderAcceptance}</p>
-                    <p>{laborContract.senderId}</p>
                     <p>{laborContract.senderName}</p>
                     {/* <p>{laborContract.startDate}</p> */}
                     <p>{laborContract.status}</p>

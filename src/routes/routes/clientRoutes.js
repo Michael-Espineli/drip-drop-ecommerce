@@ -7,11 +7,9 @@ const NewPool = lazy(()=> import("../../views/client/NewPool"))
 const ConnectToCompany = lazy(()=> import("../../views/client/ConnectToCompany"))
 
 
-const Contracts = lazy(()=> import("../../views/client/contract/Contracts"))
 const Messages = lazy(()=> import("../../views/client/Messages/Messages"))
 const NewCompanyChat = lazy(()=> import("../../views/client/Messages/NewCompanyChat"))
 const CompanyConversation = lazy(()=> import("../../views/client/Messages/CompanyConversation"))
-const ContractDetailView = lazy(()=> import("../../views/client/contract/ContractDetailView"))
 
 const Companies = lazy(()=> import("../../views/client/companies/Companies"))
 const SavedCompanies = lazy(()=> import("../../views/client/companies/SavedCompanies"))
@@ -32,6 +30,10 @@ const NewRequest = lazy(() => import("../../views/client/serviceRequests/NewRequ
 const ServiceRequests = lazy(() => import("../../views/client/serviceRequests/ServiceRequests"));
 const ServiceRequestDetail = lazy(() => import("../../views/client/serviceRequests/ServiceRequestDetail"));
 const EditServiceRequest = lazy(() => import("../../views/client/serviceRequests/EditServiceRequest"));
+const ServiceAgreements = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreements"));
+const ServiceAgreementDetail = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreementDetail"));
+const ClientBilling = lazy(() => import("../../views/client/billing/ClientBilling"));
+const ClientInvoiceDetail = lazy(() => import("../../views/client/billing/ClientInvoiceDetail"));
 
 const NewBodyOfWater = lazy(() => import("../../views/client/pools/NewBodyOfWater"));
 const BodyOfWaterDetailView = lazy(() => import("../../views/client/pools/BodyOfWaterDetailView"));
@@ -115,13 +117,6 @@ export const clientRoutes = [
     },
     // Detail Views
     {
-        path:'/contracts/contract/:contractId',
-        element: <ContractDetailView/>,
-        ability :['Admin','Client'],
-        role:'Client'
-    }
-    ,
-    {
         path:'/serviceStop/detail/:serviceStopId',
         element: <ServiceHistoryDetail/>,
         ability :['Admin','Client'],
@@ -161,18 +156,6 @@ export const clientRoutes = [
     {
         path:'/client/saved-companies', 
         element: <SavedCompanies/>,
-        ability :['Admin','Client'], 
-        role:'Client'
-    },
-    {
-        path:'/client/contracts', 
-        element: <Contracts/>,
-        ability :['Admin','Client'], 
-        role:'Client'
-    },
-    {
-        path:'/client/recurring-contracts', 
-        element: <Dashboard/>,
         ability :['Admin','Client'], 
         role:'Client'
     },
@@ -227,6 +210,42 @@ export const clientRoutes = [
     {
         path: '/client/service-requests/edit/:requestId',
         element: <EditServiceRequest />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/service-agreements',
+        element: <ServiceAgreements />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/service-agreements/:agreementId',
+        element: <ServiceAgreementDetail />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/customer/service-agreements/:agreementId',
+        element: <ServiceAgreementDetail />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/billing',
+        element: <ClientBilling />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/billing/invoices/:invoiceId',
+        element: <ClientInvoiceDetail />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/customer/invoices/:invoiceId',
+        element: <ClientInvoiceDetail />,
         ability: ['Admin', 'Client'],
         role: 'Client'
     }

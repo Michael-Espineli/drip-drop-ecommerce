@@ -6,6 +6,7 @@ import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import { toast } from 'react-hot-toast';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const InfoSection = ({ title, children }) => (
     <div className="border-b border-gray-200 pb-6 mb-6">
@@ -40,6 +41,7 @@ const FormSelect = ({ label, name, value, onChange, children }) => (
 const CreateNewServiceLocation = () => {
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     
     const [customers, setCustomers] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState('');
@@ -98,6 +100,8 @@ const CreateNewServiceLocation = () => {
 
     const handleCreate = async (e) => {
         e.preventDefault();
+        if (!requirePermission("42", "create service locations")) return;
+
         if (!recentlySelectedCompany || !selectedCustomer) {
             toast.error('Please select a customer.');
             return;

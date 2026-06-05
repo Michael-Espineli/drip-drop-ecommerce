@@ -38,6 +38,8 @@ const UniversalEquipment = () => {
   const [model, setModel] = useState('');
   const [manualPdfLink, setManualPdfLink] = useState('');
   const [equipmentMakes, setEquipmentMakes] = useState([]);
+  const [parts, setParts] = useState([]);
+  const [originalPartIds, setOriginalPartIds] = useState([]);
 
   // --- Admin theme helpers (single source of truth) ---
   const ADMIN_YELLOW = '#debf44';
@@ -143,11 +145,28 @@ const UniversalEquipment = () => {
     setView('create');
   };
 
+  const handleTypeChange = (value) => {
+    const selectedType = equipmentTypes.find((item) => item.name === value);
+    setType(value);
+    setTypeId(selectedType?.id || '');
+    setMake('');
+    setMakeId('');
+  };
+
+  const handleMakeChange = (value) => {
+    const selectedMake = equipmentMakes.find((item) => item.name === value);
+    setMake(value);
+    setMakeId(selectedMake?.id || '');
+  };
+
   const handleSelectEquipment = async (id) => {
     const docRef = doc(db, 'universal', 'equipment', 'equipment', id);
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      setSelectedEquipment({ id: docSnap.id, ...docSnap.data() });
+      const partList = await fetchUniversalParts(docSnap.id);
+      setSelectedEquipment({ id: docSnap.id, ...docSnap.data(), parts: partList });
+      setParts(partList);
+      setOriginalPartIds(partList.map((part) => part.id).filter(Boolean));
       setView('detail');
     } else {
       console.log('No such document!');
@@ -157,9 +176,13 @@ const UniversalEquipment = () => {
   const handleEdit = () => {
     setName(selectedEquipment?.name || '');
     setType(selectedEquipment?.type || '');
+    setTypeId(selectedEquipment?.typeId || '');
     setMake(selectedEquipment?.make || '');
+    setMakeId(selectedEquipment?.makeId || '');
     setModel(selectedEquipment?.model || '');
     setManualPdfLink(selectedEquipment?.manualPdfLink || '');
+    setParts(selectedEquipment?.parts || []);
+    setOriginalPartIds((selectedEquipment?.parts || []).map((part) => part.id).filter(Boolean));
     setView('edit');
   };
 
@@ -172,17 +195,18 @@ const UniversalEquipment = () => {
   const handleFormSubmit = async (e) => {
     e.preventDefault();
 
-    const selectedMake = equipmentMakes.find((m) => m.name === make);
     const equipmentId = 'com_equ_' + uuidv4();
+    const targetEquipmentId = view === 'edit' ? selectedEquipment.id : equipmentId;
 
     const equipmentData = {
-      id: equipmentId,
+      id: targetEquipmentId,
       name,
       type,
       typeId,
       make,
-      makeId: selectedMake ? selectedMake.id : '',
+      makeId,
       model,
+      modelId: targetEquipmentId,
       manualPdfLink,
     };
 
@@ -193,6 +217,7 @@ const UniversalEquipment = () => {
       await setDoc(doc(collection(db, 'universal', 'equipment', 'equipment'), equipmentId), equipmentData);
     }
 
+    await saveUniversalParts(targetEquipmentId);
     setView('list');
     resetForm();
   };
@@ -205,6 +230,76 @@ const UniversalEquipment = () => {
     setMakeId('');
     setModel('');
     setManualPdfLink('');
+    setParts([]);
+    setOriginalPartIds([]);
+  };
+
+  const fetchUniversalParts = async (equipmentId) => {
+    const partsSnapshot = await getDocs(
+      collection(db, 'universal', 'equipment', 'equipment', equipmentId, 'parts')
+    );
+
+    return partsSnapshot.docs.map((partDoc) => ({
+      id: partDoc.id,
+      ...partDoc.data(),
+    }));
+  };
+
+  const saveUniversalParts = async (equipmentId) => {
+    const cleanParts = parts
+      .map((part) => ({
+        ...part,
+        name: (part.name || '').trim(),
+        sku: (part.sku || '').trim(),
+        manualPdfLink: (part.manualPdfLink || '').trim(),
+      }))
+      .filter((part) => part.name);
+
+    const currentIds = cleanParts.map((part) => part.id).filter(Boolean);
+    const removedIds = originalPartIds.filter((partId) => !currentIds.includes(partId));
+
+    await Promise.all([
+      ...removedIds.map((partId) =>
+        deleteDoc(doc(db, 'universal', 'equipment', 'equipment', equipmentId, 'parts', partId))
+      ),
+      ...cleanParts.map((part) => {
+        const partId = part.id || 'unv_equ_part_' + uuidv4();
+
+        return setDoc(
+          doc(db, 'universal', 'equipment', 'equipment', equipmentId, 'parts', partId),
+          {
+            id: partId,
+            name: part.name,
+            sku: part.sku || '',
+            make: make || '',
+            model: model || '',
+            manualPdfLink: part.manualPdfLink || '',
+          }
+        );
+      }),
+    ]);
+  };
+
+  const addPartRow = () => {
+    setParts((current) => [
+      ...current,
+      {
+        id: 'unv_equ_part_' + uuidv4(),
+        name: '',
+        sku: '',
+        manualPdfLink: '',
+      },
+    ]);
+  };
+
+  const updatePart = (partId, field, value) => {
+    setParts((current) =>
+      current.map((part) => (part.id === partId ? { ...part, [field]: value } : part))
+    );
+  };
+
+  const removePart = (partId) => {
+    setParts((current) => current.filter((part) => part.id !== partId));
   };
 
   const handleOpenAddModal = (t) => {
@@ -217,10 +312,13 @@ const UniversalEquipment = () => {
 
     const collectionName = modalType === 'type' ? 'equipmentTypes' : 'equipmentMakes';
     const id = 'unv_equ_' + uuidv4();
+    const selectedType = equipmentTypes.find((item) => item.name === type);
 
     await setDoc(doc(collection(db, 'universal', 'equipment', collectionName), id), {
       id,
       name: newItemName,
+      description: '',
+      ...(modalType === 'make' ? { types: selectedType?.id ? [selectedType.id] : [] } : {}),
     });
 
     setNewItemName('');
@@ -315,6 +413,7 @@ const UniversalEquipment = () => {
               >
                 Model
               </th>
+              <th className="px-4 py-3 text-left font-bold">Manual</th>
             </tr>
           </thead>
 
@@ -329,6 +428,9 @@ const UniversalEquipment = () => {
                 <td className="px-4 py-3 text-slate-200">{item.type}</td>
                 <td className="px-4 py-3 text-slate-200">{item.make}</td>
                 <td className="px-4 py-3 text-slate-300">{item.model}</td>
+                <td className="px-4 py-3 text-slate-300">
+                  {item.manualPdfLink ? 'Linked' : 'None'}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -358,6 +460,10 @@ const UniversalEquipment = () => {
           <span className="text-slate-400 font-semibold">Model:</span> {selectedEquipment?.model}
         </p>
         <p className="text-slate-200">
+          <span className="text-slate-400 font-semibold">Parts:</span>{' '}
+          {selectedEquipment?.parts?.length || 0}
+        </p>
+        <p className="text-slate-200">
           <span className="text-slate-400 font-semibold">Manual:</span>{' '}
           {selectedEquipment?.manualPdfLink ? (
             <a
@@ -374,6 +480,25 @@ const UniversalEquipment = () => {
           )}
         </p>
       </div>
+
+      {!!selectedEquipment?.parts?.length && (
+        <div className="mt-5 rounded-lg border border-slate-800/60 overflow-hidden">
+          <div className="px-4 py-3 bg-slate-900/70 text-sm font-bold text-slate-200">
+            Catalog Parts
+          </div>
+          <div className="divide-y divide-slate-800/60">
+            {selectedEquipment.parts.map((part) => (
+              <div key={part.id} className="px-4 py-3 text-sm text-slate-200">
+                <p className="font-semibold">{part.name || 'Part'}</p>
+                <p className="text-slate-400">
+                  {part.sku ? `SKU: ${part.sku}` : 'No SKU'}
+                  {part.manualPdfLink ? ' • Manual linked' : ''}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="flex justify-end gap-3 mt-6">
         <button onClick={handleEdit} className={btnPrimary}>
@@ -431,7 +556,7 @@ const UniversalEquipment = () => {
 
           <div>
             <label className="text-sm font-semibold text-slate-300">Type</label>
-            <select value={type} onChange={(e) => setType(e.target.value)} className={selectClass + ' mt-1'}>
+            <select value={type} onChange={(e) => handleTypeChange(e.target.value)} className={selectClass + ' mt-1'}>
               <option value="">Select a Type</option>
               {equipmentTypes.map((t) => (
                 <option key={t.id} value={t.name}>
@@ -443,7 +568,7 @@ const UniversalEquipment = () => {
 
           <div>
             <label className="text-sm font-semibold text-slate-300">Make</label>
-            <select value={make} onChange={(e) => setMake(e.target.value)} className={selectClass + ' mt-1'}>
+            <select value={make} onChange={(e) => handleMakeChange(e.target.value)} className={selectClass + ' mt-1'}>
               <option value="">Select a Make</option>
               {equipmentMakes.map((m) => (
                 <option key={m.id} value={m.name}>
@@ -472,6 +597,53 @@ const UniversalEquipment = () => {
               onChange={(e) => setManualPdfLink(e.target.value)}
               className={inputClass + ' mt-1'}
             />
+          </div>
+
+          <div className="md:col-span-2 rounded-lg border border-slate-800/60 p-4">
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <p className="text-sm font-bold text-slate-200">Catalog Parts</p>
+                <p className="text-xs text-slate-500">Parts are copied to company equipment when this catalog item is selected.</p>
+              </div>
+              <button type="button" onClick={addPartRow} className={btnAccentOutline}>
+                Add Part
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {parts.map((part) => (
+                <div key={part.id} className="grid grid-cols-1 lg:grid-cols-[1fr_180px_1fr_auto] gap-3">
+                  <input
+                    type="text"
+                    value={part.name || ''}
+                    onChange={(e) => updatePart(part.id, 'name', e.target.value)}
+                    className={inputClass}
+                    placeholder="Part name"
+                  />
+                  <input
+                    type="text"
+                    value={part.sku || ''}
+                    onChange={(e) => updatePart(part.id, 'sku', e.target.value)}
+                    className={inputClass}
+                    placeholder="SKU"
+                  />
+                  <input
+                    type="text"
+                    value={part.manualPdfLink || ''}
+                    onChange={(e) => updatePart(part.id, 'manualPdfLink', e.target.value)}
+                    className={inputClass}
+                    placeholder="Part manual link"
+                  />
+                  <button type="button" onClick={() => removePart(part.id)} className={btnDangerOutline}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+
+              {parts.length === 0 && (
+                <p className="text-sm text-slate-500">No parts added yet.</p>
+              )}
+            </div>
           </div>
         </div>
 

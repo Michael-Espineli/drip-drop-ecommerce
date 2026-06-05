@@ -6,23 +6,46 @@ import { ArrowLeftOnRectangleIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
+import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 
 const Sidebar = ({ showSidebar, setShowSidebar }) => {
     const auth = getAuth();
-    const { role, recentlySelectedCompany, user, handleLogout } = useContext(Context);
+    const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0 });
 
     useEffect(() => {
         if (role) {
-            const navs = getNav(role);
-            setNavItemsByCategory(navs);
+            const savedCategoryOrder = dataBaseUser?.settings?.companyNavigationCategoryOrder;
+            const navs = getNav(role, savedCategoryOrder);
+            const filteredNavs = Object.entries(navs).reduce((acc, [category, items]) => {
+                const visibleItems = items.filter((item) => (
+                    item.role !== "Company" ||
+                    (
+                        (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
+                        (!item.featureFlagId || (featureFlagsLoaded && isFeatureEnabled(item.featureFlagId)))
+                    )
+                ));
+
+                if (visibleItems.length > 0) {
+                    acc[category] = visibleItems;
+                }
+
+                return acc;
+            }, {});
+
+            setNavItemsByCategory(filteredNavs);
         }
-    }, [role]);
+    }, [role, dataBaseUser, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled]);
 
     useEffect(() => {
-        if (!recentlySelectedCompany || !user) return;
+        if (!recentlySelectedCompany || !user) {
+            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {} });
+            return;
+        }
+
+        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {} }));
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -32,8 +55,7 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
 
         const messagesQuery = query(
             collection(db, "chats"),
-            where("participantIds", "array-contains", user.uid),
-            where("unreadMessages", "array-contains", user.uid)
+            where("participantIds", "array-contains", user.uid)
         );
 
         const shoppingQuery = query(
@@ -46,12 +68,29 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             where("status", "==", "Need to Purchase")
         );
 
+        const internalRepairRequestsQuery = collection(
+            db,
+            "companies",
+            recentlySelectedCompany,
+            "repairRequests"
+        );
+
+        const externalRepairRequestsQuery = query(
+            collection(db, "homeownerRepairRequests"),
+            where("companyId", "==", recentlySelectedCompany)
+        );
+
         const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
             setCounts(prev => ({ ...prev, leads: snapshot.size }));
         });
 
         const unsubscribeMessages = onSnapshot(messagesQuery, snapshot => {
-            setCounts(prev => ({ ...prev, messages: snapshot.size }));
+            const unreadCount = snapshot.docs.filter((chatDoc) => {
+                const data = chatDoc.data();
+                return data.userWhoHaveNotRead?.includes(user.uid) || data.unreadMessages?.includes(user.uid);
+            }).length;
+
+            setCounts(prev => ({ ...prev, messages: unreadCount }));
         });
 
         const unsubscribeShopping = onSnapshot(shoppingQuery, snapshot => {
@@ -62,11 +101,40 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             setCounts(prev => ({ ...prev, legacyShopping: snapshot.size }));
         });
 
+        const updateRepairRequestCount = (source, snapshot) => {
+            const count = snapshot.docs.filter((requestDoc) => (
+                isOpenRepairRequestStatus(requestDoc.data()?.status)
+            )).length;
+
+            setCounts(prev => {
+                const repairRequestSources = {
+                    ...prev.repairRequestSources,
+                    [source]: count,
+                };
+
+                return {
+                    ...prev,
+                    repairRequestSources,
+                    repairRequests: Object.values(repairRequestSources).reduce((total, value) => total + value, 0),
+                };
+            });
+        };
+
+        const unsubscribeInternalRepairRequests = onSnapshot(internalRepairRequestsQuery, snapshot => {
+            updateRepairRequestCount("internal", snapshot);
+        });
+
+        const unsubscribeExternalRepairRequests = onSnapshot(externalRepairRequestsQuery, snapshot => {
+            updateRepairRequestCount("external", snapshot);
+        });
+
         return () => {
             unsubscribeLeads();
             unsubscribeMessages();
             unsubscribeShopping();
             unsubscribeLegacyShopping();
+            unsubscribeInternalRepairRequests();
+            unsubscribeExternalRepairRequests();
         };
     }, [recentlySelectedCompany, user]);
 
@@ -118,7 +186,9 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
                                                     ? counts.messages
                                                     : item.title === 'Shopping List'
                                                         ? (counts.shopping || 0) + (counts.legacyShopping || 0)
-                                                        : 0;
+                                                        : item.title === 'Repair Requests'
+                                                            ? counts.repairRequests
+                                                            : 0;
 
                                         return (
                                             <li key={`${item.path}-${item.title}`}>
@@ -128,7 +198,7 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
                                                     <span className={`w-6 h-6 ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>{item.icon}</span>
                                                     <span>{item.title}</span>
                                                     {count > 0 && (
-                                                        <span className="bg-red-500 text-white text-xs font-semibold mr-2 px-2.5 py-0.5 rounded-full">
+                                                        <span className="ml-auto bg-red-500 text-white text-xs font-semibold px-2.5 py-0.5 rounded-full">
                                                             {count}
                                                         </span>
                                                     )}

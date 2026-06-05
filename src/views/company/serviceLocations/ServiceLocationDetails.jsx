@@ -6,11 +6,13 @@ import { doc, getDoc, updateDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 import MapComponent from '../../components/MapComponent';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const ServiceLocationDetails = () => {
     const { serviceLocationId } = useParams();
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
 
     const [serviceLocation, setServiceLocation] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -86,6 +88,8 @@ const ServiceLocationDetails = () => {
 
     const handleSave = async (e) => {
         e.preventDefault();
+        if (!requirePermission("44", "update service locations")) return;
+
         const updatedData = {
             nickName,
             gateCode,
@@ -130,7 +134,9 @@ const ServiceLocationDetails = () => {
                 ) : (
                     <div className='w-full flex justify-between items-center'>
                         <h1 className='font-bold text-xl'>Service Location Information</h1>
-                        <button onClick={() => setEdit(true)} className='bg-blue-500 hover:bg-blue-700 cursor-pointer font-normal ml-2 rounded text-white px-4 py-1 text-base'>Edit</button>
+                        {can("44") && (
+                            <button onClick={() => setEdit(true)} className='bg-blue-500 hover:bg-blue-700 cursor-pointer font-normal ml-2 rounded text-white px-4 py-1 text-base'>Edit</button>
+                        )}
                     </div>
                 )}
 

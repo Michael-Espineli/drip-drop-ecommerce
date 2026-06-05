@@ -538,7 +538,7 @@ const JobTemplates = () => {
                     <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">Active</span>
                   )}
                 </div>
-                <p className="mt-2 break-all text-xs text-slate-500">{template.templateReference || template.internalId || template.companyTemplateId || template.id}</p>
+                <p className="mt-2 text-xs text-slate-500">{template.templateReference || template.internalId || template.companyTemplateId || "Reusable job template"}</p>
 
                 <div className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
                   <Metric label="Tasks" value={template.taskCount} />
@@ -589,7 +589,7 @@ const JobTemplates = () => {
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-xl font-bold text-slate-900">{detailTemplate.name}</h2>
-                <p className="mt-1 break-all text-sm text-slate-500">{detailTemplate.id}</p>
+                <p className="mt-1 text-sm text-slate-500">{detailTemplate.templateReference || detailTemplate.internalId || "Reusable job template"}</p>
               </div>
               <button type="button" onClick={closeDetails} className="rounded-md px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100">
                 Close

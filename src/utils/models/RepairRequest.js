@@ -3,6 +3,55 @@ import { v4 as uuidv4 } from 'uuid';
 import { DripDropStoredImage } from './DripDropStoredImage';
 import { format } from 'date-fns';
 
+export const REPAIR_REQUEST_STATUS = {
+  UNRESOLVED: 'Unresolved',
+  CONVERTED_TO_JOB: 'Converted To Job',
+  RESOLVED: 'Resolved',
+  CANCELLED: 'Cancelled',
+  LEGACY_IN_PROGRESS: 'In Progress',
+  LEGACY_PENDING: 'pending',
+  LEGACY_IN_PROGRESS_SLUG: 'in-progress',
+};
+
+export const REPAIR_REQUEST_STATUS_OPTIONS = [
+  REPAIR_REQUEST_STATUS.UNRESOLVED,
+  REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+  REPAIR_REQUEST_STATUS.RESOLVED,
+  REPAIR_REQUEST_STATUS.CANCELLED,
+];
+
+export const DEFAULT_REPAIR_REQUEST_FILTER_STATUSES = [
+  REPAIR_REQUEST_STATUS.UNRESOLVED,
+];
+
+const OPEN_REPAIR_REQUEST_STATUSES = new Set([
+  REPAIR_REQUEST_STATUS.UNRESOLVED.toLowerCase(),
+]);
+
+export const normalizeRepairRequestStatus = (status) => (
+  String(status || REPAIR_REQUEST_STATUS.UNRESOLVED).trim().toLowerCase()
+);
+
+export const isLegacyPendingRepairRequestStatus = (status) => (
+  normalizeRepairRequestStatus(status) === REPAIR_REQUEST_STATUS.LEGACY_PENDING
+);
+
+export const repairRequestStatusForSelection = (status) => {
+  if (!status || isLegacyPendingRepairRequestStatus(status)) {
+    return REPAIR_REQUEST_STATUS.UNRESOLVED;
+  }
+
+  return status;
+};
+
+export const displayRepairRequestStatus = (status) => (
+  repairRequestStatusForSelection(status)
+);
+
+export const isOpenRepairRequestStatus = (status) => (
+  OPEN_REPAIR_REQUEST_STATUSES.has(normalizeRepairRequestStatus(status))
+);
+
 export class RepairRequest {
   constructor({
     id = 'rep_req_' + uuidv4(),
@@ -12,7 +61,7 @@ export class RepairRequest {
     requesterName = '',
     date = new Date(),
     formattedDate = 'NA',
-    status = 'Unresolved',
+    status = REPAIR_REQUEST_STATUS.UNRESOLVED,
     description = '',
     jobIds = [],
     photoUrls = [], // Expecting an array of DripDropStoredImage objects or URL strings

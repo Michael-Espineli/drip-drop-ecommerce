@@ -6,6 +6,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import { ServiceStop } from '../../../utils/models/ServiceStop';
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const ServiceStops = () => {
 
@@ -16,6 +17,7 @@ const ServiceStops = () => {
     const [serviceStopList, setServiceStopList] = useState([]);
     const [filteredStops, setFilteredStops] = useState([]);
     const { recentlySelectedCompany } = useContext(Context);
+    const { can } = useCompanyPermissions();
     const [searchTerm, setSearchTerm] = useState('');
 
     // const [statusFilter, setStatusFilter] = useState(location.state?.filter || 'All');
@@ -120,9 +122,11 @@ const ServiceStops = () => {
                         <h2 className="text-3xl font-bold text-gray-800">Service Stops</h2>
 
                     </div>
-                    <Link to={'/company/serviceStops/createNew'} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>
-                        Create New
-                    </Link>
+                    {can("242") && (
+                        <Link to={'/company/serviceStops/createNew'} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>
+                            Create New
+                        </Link>
+                    )}
                 </div>
 
                 <div className="bg-white shadow-lg rounded-xl p-6">

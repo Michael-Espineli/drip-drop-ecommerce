@@ -34,14 +34,14 @@ const RouteRow = ({ day, tech, route, onCreate, onEdit }) => {
           </div>
           {orderedStops.length ? (
             <p className="mt-1 line-clamp-1 text-sm text-slate-500">
-              {orderedStops.map((stop) => stop.customerName || stop.locationName || stop.recurringServiceStopId).filter(Boolean).join(" -> ")}
+              {orderedStops.map((stop) => stop.customerName || stop.locationName || "Unnamed stop").filter(Boolean).join(" -> ")}
             </p>
           ) : (
             <p className="mt-1 text-sm text-slate-500">No ordered stops on this route yet.</p>
           )}
         </div>
       ) : (
-        <p className="text-sm text-slate-500">No recurring route template for this technician and day.</p>
+        <p className="text-sm text-slate-500">No planned route for this technician and day.</p>
       )}
 
       <div className="flex justify-start md:justify-end">
@@ -52,7 +52,7 @@ const RouteRow = ({ day, tech, route, onCreate, onEdit }) => {
             ? "rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800"
             : "rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"}
         >
-          {route ? "Edit" : "Add"}
+          {route ? "Edit" : "New"}
         </button>
       </div>
     </div>
@@ -77,7 +77,7 @@ const DaySection = ({ day, technicians, routesByDayTech, onCreate, onEdit }) => 
           onClick={() => onCreate(day)}
           className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-white"
         >
-          Add Route
+          New Route
         </button>
       </div>
 
@@ -133,8 +133,8 @@ const RouteManagement = () => {
             .sort((a, b) => a.label.localeCompare(b.label))
         );
       } catch (error) {
-        console.error("Error fetching route templates:", error);
-        toast.error("Failed to load route templates.");
+        console.error("Error fetching planned routes:", error);
+        toast.error("Failed to load planned routes.");
       } finally {
         setIsLoading(false);
       }
@@ -193,7 +193,7 @@ const RouteManagement = () => {
       <div className="mx-auto max-w-7xl">
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-slate-900">Route Management</h1>
+            <h1 className="text-3xl font-bold text-slate-900">Planned Routes</h1>
             <p className="mt-1 text-slate-600">Recurring routes organized by day and technician.</p>
           </div>
           <button
@@ -201,7 +201,7 @@ const RouteManagement = () => {
             onClick={() => handleCreate(null)}
             className="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
           >
-            Create Route
+            New Route
           </button>
         </header>
 

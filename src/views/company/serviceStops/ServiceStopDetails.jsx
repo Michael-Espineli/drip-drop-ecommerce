@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
     doc,
     getDoc,
@@ -10,13 +10,16 @@ import {
     addDoc,
     updateDoc,
     arrayUnion,
+    writeBatch,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { ServiceStop } from "../../../utils/models/ServiceStop";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
-import { recordBodyOfWaterTaskHistory } from "../../../utils/bodyOfWaterHistory";
+import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
+import { promptForReplacementInstallDetails } from "../../../utils/replacementTasks";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -32,14 +35,29 @@ const jobTaskTypeOptions = [
     "Replace",
 ];
 
+const equipmentTaskTypes = new Set([
+    "Clean Filter",
+    "Maintenance",
+    "Repair",
+    "Remove",
+    "Replace",
+]);
+
+const taskNeedsEquipment = (type) => equipmentTaskTypes.has(type);
+
 const ServiceStopDetails = () => {
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const { serviceStopId } = useParams();
+    const navigate = useNavigate();
 
     const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
+    const [equipmentList, setEquipmentList] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+    const [deleting, setDeleting] = useState(false);
 
     const [showAddTask, setShowAddTask] = useState(false);
     const [savingTask, setSavingTask] = useState(false);
@@ -110,15 +128,34 @@ const ServiceStopDetails = () => {
                             ),
                             where("serviceLocationId", "==", stopData.serviceLocationId)
                         );
-                        const bodyOfWaterSnapshot = await getDocs(bodyOfWaterQuery);
+                        const equipmentQuery = query(
+                            collection(
+                                db,
+                                "companies",
+                                recentlySelectedCompany,
+                                "equipment"
+                            ),
+                            where("serviceLocationId", "==", stopData.serviceLocationId)
+                        );
+                        const [bodyOfWaterSnapshot, equipmentSnapshot] = await Promise.all([
+                            getDocs(bodyOfWaterQuery),
+                            getDocs(equipmentQuery),
+                        ]);
                         setBodiesOfWater(
                             bodyOfWaterSnapshot.docs.map((doc) => ({
                                 id: doc.id,
                                 ...doc.data(),
                             }))
                         );
+                        setEquipmentList(
+                            equipmentSnapshot.docs.map((doc) => ({
+                                id: doc.id,
+                                ...doc.data(),
+                            }))
+                        );
                     } else {
                         setBodiesOfWater([]);
+                        setEquipmentList([]);
                     }
 
                     setNewTask((prev) => ({
@@ -200,6 +237,33 @@ const ServiceStopDetails = () => {
         });
     };
 
+    const statusForTasks = (tasks = []) => {
+        if (!tasks.length) return serviceStop?.operationStatus || "Not Finished";
+        const finishedCount = tasks.filter((task) => task.status === "Finished").length;
+        if (finishedCount === tasks.length) return "Finished";
+        if (finishedCount > 0) return "In Progress";
+        return "Not Finished";
+    };
+
+    const updateServiceStopStatusFromTasks = async (tasks = []) => {
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return serviceStop?.operationStatus || "";
+
+        const nextStatus = statusForTasks(tasks);
+        if (!nextStatus || nextStatus === serviceStop.operationStatus) return nextStatus;
+
+        await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId),
+            { operationStatus: nextStatus }
+        );
+
+        setServiceStop((prev) => ({
+            ...prev,
+            operationStatus: nextStatus,
+        }));
+
+        return nextStatus;
+    };
+
     const handleTaskFieldChange = (field, value) => {
         setNewTask((prev) => ({
             ...prev,
@@ -209,6 +273,7 @@ const ServiceStopDetails = () => {
 
     const saveNewTask = async (e) => {
         e.preventDefault();
+        if (!requirePermission("244", "update service stops")) return;
 
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
@@ -227,8 +292,21 @@ const ServiceStopDetails = () => {
             return;
         }
 
+        if (taskNeedsEquipment(newTask.type) && !newTask.equipmentId) {
+            toast.error("Select equipment for this task");
+            return;
+        }
+
         try {
             setSavingTask(true);
+            const replacementInstallDetails =
+                newTask.status === "Finished" ? promptForReplacementInstallDetails(newTask) : {};
+
+            if (replacementInstallDetails === null) {
+                toast.error("Replacement install details are required before finishing this task");
+                setSavingTask(false);
+                return;
+            }
 
             const serviceStopTaskPayload = {
                 name: newTask.name.trim(),
@@ -264,6 +342,7 @@ const ServiceStopDetails = () => {
                 serviceLocationId: newTask.serviceLocationId || "",
                 bodyOfWaterId: newTask.bodyOfWaterId || "",
                 shoppingListItemId: newTask.shoppingListItemId || "",
+                ...(replacementInstallDetails || {}),
             };
 
             const taskRef = await addDoc(
@@ -284,12 +363,29 @@ const ServiceStopDetails = () => {
             };
 
             if (createdTask.status === "Finished") {
-                await recordBodyOfWaterTaskHistory({
+                const effects = await runWorkCompletionEffects({
                     db,
                     companyId: recentlySelectedCompany,
                     task: createdTask,
                     serviceStop,
+                    currentJobOperationStatus: serviceStop?.operationStatus || "",
+                    syncJobStatus: true,
                 });
+
+                if (effects.equipmentHistory?.replacementEquipmentId) {
+                    const replacementUpdates = {
+                        replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                        installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                        ...(effects.equipmentHistory.installedPurchasedItemId
+                            ? {
+                                purchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                                installedPurchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                            }
+                            : {}),
+                    };
+                    await updateDoc(taskRef, replacementUpdates);
+                    Object.assign(createdTask, replacementUpdates);
+                }
             }
 
             if (
@@ -320,7 +416,9 @@ const ServiceStopDetails = () => {
                 });
             }
 
-            setTaskList((prev) => [createdTask, ...prev]);
+            const nextTasks = [createdTask, ...taskList];
+            await updateServiceStopStatusFromTasks(nextTasks);
+            setTaskList(nextTasks);
             toast.success("Task added");
             setShowAddTask(false);
             resetTaskForm();
@@ -333,6 +431,7 @@ const ServiceStopDetails = () => {
     };
 
     const markTaskFinished = async (task) => {
+        if (!requirePermission("244", "update service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !task?.id) return;
 
         try {
@@ -346,42 +445,170 @@ const ServiceStopDetails = () => {
                 task.id
             );
 
-            await updateDoc(taskRef, { status: "Finished" });
-
-            const finishedTask = { ...task, status: "Finished" };
-
-            if (serviceStop.jobId && task.jobTaskId) {
-                await updateDoc(
-                    doc(
-                        db,
-                        "companies",
-                        recentlySelectedCompany,
-                        "workOrders",
-                        serviceStop.jobId,
-                        "tasks",
-                        task.jobTaskId
-                    ),
-                    { status: "Finished" }
-                );
+            const installDetails = promptForReplacementInstallDetails(task);
+            if (installDetails === null) {
+                toast.error("Replacement install details are required before finishing this task");
+                return;
             }
 
-            await recordBodyOfWaterTaskHistory({
+            const finishedTask = { ...task, ...installDetails, status: "Finished" };
+
+            const effects = await runWorkCompletionEffects({
                 db,
                 companyId: recentlySelectedCompany,
                 task: finishedTask,
                 serviceStop,
+                currentJobOperationStatus: serviceStop?.operationStatus || "",
+                syncJobStatus: true,
             });
 
-            setTaskList((prev) =>
-                prev.map((item) =>
-                    item.id === task.id ? finishedTask : item
-                )
+            const taskUpdates = {
+                status: "Finished",
+                ...(installDetails?.installedEquipmentName ? { installedEquipmentName: installDetails.installedEquipmentName } : {}),
+                ...(installDetails?.installedEquipmentType ? { installedEquipmentType: installDetails.installedEquipmentType } : {}),
+                ...(installDetails?.installedEquipmentMake ? { installedEquipmentMake: installDetails.installedEquipmentMake } : {}),
+                ...(installDetails?.installedEquipmentModel ? { installedEquipmentModel: installDetails.installedEquipmentModel } : {}),
+                ...(installDetails?.installedEquipmentNotes ? { installedEquipmentNotes: installDetails.installedEquipmentNotes } : {}),
+                ...(effects.equipmentHistory?.replacementEquipmentId
+                    ? {
+                        replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                        installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                    }
+                    : {}),
+                ...(effects.equipmentHistory?.installedPurchasedItemId
+                    ? {
+                        purchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                        installedPurchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                    }
+                    : {}),
+            };
+
+            await updateDoc(taskRef, taskUpdates);
+
+            const syncedFinishedTask = { ...finishedTask, ...taskUpdates };
+            const nextTasks = taskList.map((item) =>
+                item.id === task.id ? syncedFinishedTask : item
             );
+            await updateServiceStopStatusFromTasks(nextTasks);
+            setTaskList(nextTasks);
 
             toast.success("Task marked finished");
         } catch (error) {
             console.error(error);
             toast.error("Failed to finish task");
+        }
+    };
+
+    const handleDeleteServiceStop = async () => {
+        if (!requirePermission("246", "delete service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
+
+        try {
+            setDeleting(true);
+
+            const batch = writeBatch(db);
+            const serviceStopRef = doc(
+                db,
+                "companies",
+                recentlySelectedCompany,
+                "serviceStops",
+                serviceStopId
+            );
+
+            const taskSnapshot = await getDocs(
+                collection(
+                    db,
+                    "companies",
+                    recentlySelectedCompany,
+                    "serviceStops",
+                    serviceStopId,
+                    "tasks"
+                )
+            );
+            taskSnapshot.docs.forEach((taskDoc) => batch.delete(taskDoc.ref));
+
+            const storeSnapshot = await getDocs(
+                collection(
+                    db,
+                    "companies",
+                    recentlySelectedCompany,
+                    "serviceStops",
+                    serviceStopId,
+                    "stores"
+                )
+            );
+            storeSnapshot.docs.forEach((storeDoc) => batch.delete(storeDoc.ref));
+
+            const historySnapshot = await getDocs(
+                collection(
+                    db,
+                    "companies",
+                    recentlySelectedCompany,
+                    "serviceStops",
+                    serviceStopId,
+                    "history"
+                )
+            );
+            historySnapshot.docs.forEach((historyDoc) => batch.delete(historyDoc.ref));
+
+            const stopDataSnapshot = await getDocs(
+                query(
+                    collection(db, "companies", recentlySelectedCompany, "stopData"),
+                    where("serviceStopId", "==", serviceStopId)
+                )
+            );
+            stopDataSnapshot.docs.forEach((stopDataDoc) => batch.delete(stopDataDoc.ref));
+
+            const routesSnapshot = await getDocs(
+                query(
+                    collection(db, "companies", recentlySelectedCompany, "activeRoutes"),
+                    where("serviceStopsIds", "array-contains", serviceStopId)
+                )
+            );
+            routesSnapshot.docs.forEach((routeDoc) => {
+                const route = routeDoc.data();
+                const remainingStopIds = (route.serviceStopsIds || []).filter((id) => id !== serviceStopId);
+                const wasFinished = ["finished", "completed", "done", "complete"].includes(
+                    String(serviceStop.operationStatus || "").toLowerCase()
+                );
+                const finishedStops = Math.max(
+                    0,
+                    Math.min(
+                        remainingStopIds.length,
+                        Number(route.finishedStops || 0) - (wasFinished ? 1 : 0)
+                    )
+                );
+
+                batch.update(routeDoc.ref, {
+                    serviceStopsIds: remainingStopIds,
+                    order: Array.isArray(route.order)
+                        ? route.order
+                            .filter((item) => (item.serviceStopId || item.id) !== serviceStopId)
+                            .map((item, index) => ({ ...item, order: index + 1 }))
+                        : [],
+                    totalStops: remainingStopIds.length,
+                    finishedStops,
+                    status: remainingStopIds.length === 0
+                        ? "Did Not Start"
+                        : finishedStops === remainingStopIds.length
+                            ? "Finished"
+                            : finishedStops > 0
+                                ? "In Progress"
+                                : (route.status || "Did Not Start"),
+                });
+            });
+
+            batch.delete(serviceStopRef);
+            await batch.commit();
+
+            toast.success("Service stop deleted");
+            navigate("/company/serviceStops");
+        } catch (error) {
+            console.error("Error deleting service stop:", error);
+            toast.error("Failed to delete service stop");
+        } finally {
+            setDeleting(false);
+            setShowDeleteConfirm(false);
         }
     };
 
@@ -423,6 +650,15 @@ const ServiceStopDetails = () => {
                         <h2 className="text-3xl font-bold text-gray-800">Service Stop Details</h2>
                         <p className="text-sm text-gray-500">#{serviceStop.internalId || "—"}</p>
                     </div>
+                    {can("246") && (
+                        <button
+                            type="button"
+                            onClick={() => setShowDeleteConfirm(true)}
+                            className="px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-sm font-semibold text-red-700 hover:bg-red-100 transition"
+                        >
+                            Delete
+                        </button>
+                    )}
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -475,13 +711,13 @@ const ServiceStopDetails = () => {
                                         }${serviceStop.address?.state ? `, ${serviceStop.address.state}` : ""}`}
                                 />
 
-                                <Field label="Job ID">
+                                <Field label="Job">
                                     {serviceStop.jobId ? (
                                         <Link
                                             to={`/company/jobs/detail/${serviceStop.jobId}`}
                                             className="text-blue-600 hover:underline"
                                         >
-                                            {serviceStop.jobId}
+                                            {serviceStop.jobInternalId || "Open Job"}
                                         </Link>
                                     ) : (
                                         <p className="text-gray-800">—</p>
@@ -537,7 +773,7 @@ const ServiceStopDetails = () => {
                                     </p>
                                 </div>
 
-                                {!showAddTask && (
+                                {!showAddTask && can("244") && (
                                     <button
                                         onClick={() => setShowAddTask(true)}
                                         className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition"
@@ -612,7 +848,27 @@ const ServiceStopDetails = () => {
                                                     <option value="">Select body of water</option>
                                                     {bodiesOfWater.map((body) => (
                                                         <option key={body.id} value={body.id}>
-                                                            {body.name || body.id}
+                                                            {body.name || "Unnamed Body Of Water"}
+                                                        </option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+
+                                        {taskNeedsEquipment(newTask.type) && (
+                                            <div>
+                                                <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                    Equipment
+                                                </label>
+                                                <select
+                                                    value={newTask.equipmentId}
+                                                    onChange={(e) => handleTaskFieldChange("equipmentId", e.target.value)}
+                                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                >
+                                                    <option value="">Select equipment</option>
+                                                    {equipmentList.map((equipment) => (
+                                                        <option key={equipment.id} value={equipment.id}>
+                                                            {equipment.name || equipment.model || equipment.type || "Unnamed Equipment"}
                                                         </option>
                                                     ))}
                                                 </select>
@@ -768,7 +1024,7 @@ const ServiceStopDetails = () => {
                                                 </span>
                                             </div>
 
-                                            {task.status !== "Finished" && (
+                                            {task.status !== "Finished" && can("244") && (
                                                 <div className="mt-3">
                                                     <button
                                                         type="button"
@@ -838,6 +1094,34 @@ const ServiceStopDetails = () => {
                     </div>
                 </div>
             </div>
+            {showDeleteConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                    <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+                        <h3 className="text-xl font-bold text-gray-900">Delete Service Stop</h3>
+                        <p className="mt-3 text-sm text-gray-600">
+                            This will delete this service stop and its tasks/readings history. This cannot be undone.
+                        </p>
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteConfirm(false)}
+                                disabled={deleting}
+                                className="px-4 py-2 rounded-lg bg-gray-100 text-sm font-semibold text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteServiceStop}
+                                disabled={deleting}
+                                className="px-4 py-2 rounded-lg bg-red-600 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                            >
+                                {deleting ? "Deleting..." : "Delete"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

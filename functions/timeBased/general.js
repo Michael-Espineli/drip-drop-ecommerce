@@ -124,6 +124,44 @@ function dayNameToIndex(name) {
   return weekdayArry.indexOf(name);
 }
 
+function normalizeServiceStopTypeFields(source, contextLabel) {
+  const hasTypeId = typeof source?.typeId === "string" && source.typeId.trim().length > 0;
+  const hasType = typeof source?.type === "string" && source.type.trim().length > 0;
+  const fallback = {
+    typeId: "system_recurring_service_stop",
+    type: "Recurring Service Stop",
+    typeImage: "figure.pool.swim",
+  };
+
+  const fields = {
+    typeId: hasTypeId ? source.typeId : fallback.typeId,
+    type: hasType ? source.type : fallback.type,
+    typeImage: typeof source?.typeImage === "string" && source.typeImage.trim().length > 0
+      ? source.typeImage
+      : fallback.typeImage,
+  };
+
+  if (!hasTypeId || !hasType) {
+    console.warn("[ServiceStopTypeFunction][fallback]", {
+      context: contextLabel,
+      recurringServiceStopId: source?.id || "",
+      incomingTypeId: source?.typeId || "",
+      incomingType: source?.type || "",
+      resolvedTypeId: fields.typeId,
+      resolvedType: fields.type,
+    });
+  } else {
+    console.log("[ServiceStopTypeFunction][resolved]", {
+      context: contextLabel,
+      recurringServiceStopId: source?.id || "",
+      typeId: fields.typeId,
+      type: fields.type,
+    });
+  }
+
+  return fields;
+}
+
 // Fetch counter once, write once, but still safe under concurrency via transaction.
 async function allocateInternalIds(db, companyId, countNeeded) {
   const settingsRef = db.collection(`companies/${companyId}/settings`).doc("serviceStops");
@@ -146,6 +184,11 @@ async function allocateInternalIds(db, companyId, countNeeded) {
 }
 
 function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, internalId }) {
+  const serviceStopTypeFields = normalizeServiceStopTypeFields(
+    rssData,
+    "weeklySundayRSSCreate.buildServiceStopIOSShape"
+  );
+
   return {
     id: idss,                       // iOS: "comp_ss_" + UUID
     internalId: internalId,         // iOS: "S" + count (weekly uses SettingsManager, others use settings doc)
@@ -173,9 +216,9 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
     description: rssData.description,
     serviceLocationId: rssData.serviceLocationId,
 
-    typeId: rssData.typeId,
-    type: rssData.type,
-    typeImage: rssData.typeImage,
+    typeId: serviceStopTypeFields.typeId,
+    type: serviceStopTypeFields.type,
+    typeImage: serviceStopTypeFields.typeImage,
 
     jobId: "",
     jobName: "", // iOS standard

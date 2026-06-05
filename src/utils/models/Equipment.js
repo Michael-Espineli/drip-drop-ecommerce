@@ -1,6 +1,34 @@
 import { DripDropStoredImage } from "./DripDropStoredImage";
 import { format } from 'date-fns/format';
 
+export const EQUIPMENT_STATUS = {
+  OPERATIONAL: "Operational",
+  NEEDS_REPAIR: "Needs Repair",
+  NON_OPERATIONAL: "Non-Operational",
+  LEGACY_NONOPERATIONAL: "Nonoperational",
+  NEEDS_MAINTENANCE: "Needs Maintenance",
+  REPLACED: "Replaced",
+};
+
+export const EQUIPMENT_STATUS_OPTIONS = [
+  EQUIPMENT_STATUS.OPERATIONAL,
+  EQUIPMENT_STATUS.NEEDS_REPAIR,
+  EQUIPMENT_STATUS.NON_OPERATIONAL,
+  EQUIPMENT_STATUS.NEEDS_MAINTENANCE,
+];
+
+export const normalizeEquipmentStatus = (status) => (
+  String(status || "").trim().toLowerCase().replace(/[-_\s]/g, "")
+);
+
+export const displayEquipmentStatus = (status) => {
+  if (normalizeEquipmentStatus(status) === normalizeEquipmentStatus(EQUIPMENT_STATUS.NON_OPERATIONAL)) {
+    return EQUIPMENT_STATUS.NON_OPERATIONAL;
+  }
+
+  return status || "";
+};
+
 export class Equipment {
   constructor({
     id = null,
@@ -17,6 +45,8 @@ export class Equipment {
     makeId = "",
     model = "",
     modelId = "",
+    universalEquipmentId = "",
+    manualPdfLink = "",
     name = "",
     needsService = false,
     isActive = false,
@@ -44,6 +74,8 @@ export class Equipment {
     this.makeId = makeId;
     this.model = model;
     this.modelId = modelId;
+    this.universalEquipmentId = universalEquipmentId;
+    this.manualPdfLink = manualPdfLink;
     this.name = name;
     this.needsService = needsService;
     this.nextServiceDate = nextServiceDate;
@@ -71,6 +103,8 @@ export class Equipment {
       makeId: this.makeId,
       model: this.model,
       modelId: this.modelId,
+      universalEquipmentId: this.universalEquipmentId,
+      manualPdfLink: this.manualPdfLink,
       name: this.name,
       isActive: this.isActive,
       needsService: this.needsService,
@@ -111,6 +145,8 @@ export class Equipment {
       makeId: data.makeId || "",
       model: data.model || "",
       modelId: data.modelId || "",
+      universalEquipmentId: data.universalEquipmentId || data.modelId || "",
+      manualPdfLink: data.manualPdfLink || "",
       name: data.name || "",
       needsService: data.needsService || false,
       isActive: data.isActive ?? data.active ?? false,

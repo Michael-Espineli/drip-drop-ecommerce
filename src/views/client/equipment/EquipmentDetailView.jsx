@@ -6,6 +6,7 @@ import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { ArrowLeftIcon, TrashIcon, WrenchScrewdriverIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
+import { displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
 
 const EquipmentDetailView = () => {
     const { equipmentId } = useParams();
@@ -105,6 +106,8 @@ const EquipmentDetailView = () => {
         return null;
     }
 
+    const outstandingRepairRequests = repairHistory.filter(req => isOpenRepairRequestStatus(req.status));
+
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
@@ -145,6 +148,7 @@ const EquipmentDetailView = () => {
                     )}
                 </div>
 
+                <OutstandingRepairRequests requests={outstandingRepairRequests} />
                 <RepairHistoryList history={repairHistory} />
             </div>
         </div>
@@ -164,6 +168,36 @@ const DetailItem = ({ label, value }) => (
     <div>
         <p className="font-semibold text-gray-800">{label}</p>
         <p className="text-gray-600">{value || 'N/A'}</p>
+    </div>
+);
+
+const OutstandingRepairRequests = ({ requests }) => (
+    <div className="bg-white rounded-lg shadow-md mt-8">
+        <div className="p-6 border-b flex items-center justify-between gap-3">
+            <h3 className="text-xl font-bold text-gray-800">Outstanding Repair Requests</h3>
+            <span className={`px-3 py-1 text-xs font-bold rounded-full ${requests.length ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
+                {requests.length}
+            </span>
+        </div>
+        {requests.length ? (
+            <ul className="divide-y divide-gray-200">
+                {requests.map(req => (
+                    <li key={req.id}>
+                        <Link to={`/client/repair-requests/${req.id}`} className="block p-4 hover:bg-gray-50">
+                            <div className="flex justify-between items-start">
+                                <div>
+                                    <p className="font-semibold text-gray-800">{req.description || req.issueDescription || 'Repair Request'}</p>
+                                    <p className="text-sm text-gray-500">Status: <span className="font-medium">{displayRepairRequestStatus(req.status)}</span></p>
+                                </div>
+                                <ChevronRightIcon className="w-5 h-5 text-gray-400 mt-1 ml-4" />
+                            </div>
+                        </Link>
+                    </li>
+                ))}
+            </ul>
+        ) : (
+            <p className="p-6 text-sm text-gray-500">No outstanding repair requests for this equipment.</p>
+        )}
     </div>
 );
 
@@ -188,8 +222,8 @@ const RepairHistoryList = ({ history }) => {
                         <Link to={`/client/repair-requests/${req.id}`} className="block p-4 hover:bg-gray-50">
                             <div className="flex justify-between items-start">
                                 <div>
-                                    <p className="font-semibold text-gray-800">{req.issueDescription || 'No Description'}</p>
-                                    <p className="text-sm text-gray-500">Status: <span className="font-medium">{req.status}</span></p>
+                                    <p className="font-semibold text-gray-800">{req.description || req.issueDescription || 'No Description'}</p>
+                                    <p className="text-sm text-gray-500">Status: <span className="font-medium">{displayRepairRequestStatus(req.status)}</span></p>
                                 </div>
                                 <div className="text-right flex-shrink-0 ml-4">
                                     <p className="text-sm text-gray-600">{req.createdAt ? format(req.createdAt.toDate(), 'MMM d, yyyy') : ''}</p>

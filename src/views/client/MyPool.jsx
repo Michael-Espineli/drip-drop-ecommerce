@@ -1,11 +1,13 @@
 
-import React, { useState, useContext, useEffect, useCallback } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../utils/config';
 import { query, collection, getDocs, where, orderBy } from 'firebase/firestore';
 import { Context } from '../../context/AuthContext';
 import { PlusIcon, ChevronRightIcon, WrenchScrewdriverIcon, TruckIcon, DocumentTextIcon, BeakerIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
+import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
+import { salesCollectionNames } from '../../utils/models/Sales';
 
 const MyPool = () => {
     const { user } = useContext(Context);
@@ -17,7 +19,7 @@ const MyPool = () => {
         equipment: [],
         repairRequests: [],
         serviceStops: [],
-        contracts: [],
+        serviceAgreements: [],
     });
 
     const [displayData, setDisplayData] = useState({
@@ -26,7 +28,7 @@ const MyPool = () => {
         repairRequests: [],
         lastService: null,
         nextService: null,
-        contracts: [],
+        serviceAgreements: [],
     });
 
     const [loading, setLoading] = useState(true);
@@ -43,16 +45,30 @@ const MyPool = () => {
                 const equipQuery = query(collection(db, 'homeownerEquipment'), where('userId', '==', user.uid));
                 const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('userId', '==', user.uid), orderBy('createdAt', 'desc'));
                 const serviceQuery = query(collection(db, 'homeownerServiceStops'), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'));
-                const contractQuery = query(collection(db, 'contracts'), where('userId', '==', user.uid));
+                const agreementQueries = [
+                    query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
+                ];
 
-                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, contractSnap] = await Promise.all([
+                if (user.email) {
+                    agreementQueries.push(
+                        query(collection(db, salesCollectionNames.agreements), where('email', '==', user.email))
+                    );
+                }
+
+                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap] = await Promise.all([
                     getDocs(locationQuery),
                     getDocs(bowQuery),
                     getDocs(equipQuery),
                     getDocs(repairQuery),
-                    getDocs(serviceQuery),
-                    getDocs(contractQuery)
+                    getDocs(serviceQuery)
                 ]);
+                const agreementSnaps = await Promise.all(agreementQueries.map(getDocs));
+                const agreementMap = new Map();
+                agreementSnaps.forEach((snap) => {
+                    snap.docs.forEach((agreementDoc) => {
+                        agreementMap.set(agreementDoc.id, { id: agreementDoc.id, ...agreementDoc.data() });
+                    });
+                });
 
                 setServiceLocations(locSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setAllData({
@@ -60,7 +76,7 @@ const MyPool = () => {
                     equipment: equipSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     repairRequests: repairSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     serviceStops: serviceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    contracts: contractSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+                    serviceAgreements: Array.from(agreementMap.values())
                 });
 
             } catch (error) {
@@ -80,14 +96,16 @@ const MyPool = () => {
         let filteredBodiesOfWater = allData.bodiesOfWater;
         let filteredEquipment = allData.equipment;
         let filteredRepairRequests = allData.repairRequests;
-        let filteredContracts = allData.contracts;
+        let filteredServiceAgreements = allData.serviceAgreements;
         let filteredServiceStops = allData.serviceStops;
 
         if (selectedLocation !== 'all') {
             filteredBodiesOfWater = allData.bodiesOfWater.filter(item => item.serviceLocationId === selectedLocation);
             filteredEquipment = allData.equipment.filter(item => item.serviceLocationId === selectedLocation);
             filteredRepairRequests = allData.repairRequests.filter(item => item.serviceLocationId === selectedLocation);
-            filteredContracts = allData.contracts.filter(item => item.serviceLocationId === selectedLocation);
+            filteredServiceAgreements = allData.serviceAgreements.filter((item) => (
+                Array.isArray(item.serviceLocationIds) && item.serviceLocationIds.includes(selectedLocation)
+            ));
             filteredServiceStops = allData.serviceStops.filter(item => item.serviceLocationId === selectedLocation);
         }
 
@@ -97,7 +115,7 @@ const MyPool = () => {
             bodiesOfWater: filteredBodiesOfWater.slice(0, 5),
             equipment: filteredEquipment.slice(0, 5),
             repairRequests: filteredRepairRequests.slice(0, 5),
-            contracts: filteredContracts,
+            serviceAgreements: filteredServiceAgreements,
             lastService: lastService,
             nextService: null,
         });
@@ -139,7 +157,7 @@ const MyPool = () => {
                             <ServiceRecapWidget
                                 lastService={displayData.lastService}
                                 nextService={displayData.nextService}
-                                contracts={displayData.contracts}
+                                serviceAgreements={displayData.serviceAgreements}
                                 selectedLocation={selectedLocation}
                             />
                         </div>
@@ -253,7 +271,7 @@ const RepairRequestsWidget = ({ repairRequests }) => (
                 <Link to={`/client/repair-requests/${req.id}`} key={req.id} className="flex justify-between items-start p-3 hover:bg-gray-50 rounded-lg -m-2">
                     <div>
                         <p className="font-semibold text-gray-800">{req.issueDescription || "No description"}</p>
-                        <p className="text-sm text-gray-500">Status: <span className="font-medium text-yellow-600">{req.status || 'Pending'}</span></p>
+                        <p className="text-sm text-gray-500">Status: <span className="font-medium text-yellow-600">{displayRepairRequestStatus(req.status)}</span></p>
                     </div>
                     {req.createdAt && <p className="text-sm text-gray-500 flex-shrink-0 ml-4">{format(req.createdAt.toDate(), 'MMM d, yyyy')}</p>}
                 </Link>
@@ -264,14 +282,14 @@ const RepairRequestsWidget = ({ repairRequests }) => (
     </Widget>
 );
 
-const ServiceRecapWidget = ({ lastService, nextService, contracts, selectedLocation }) => {
-    const showBrowseCompaniesLink = selectedLocation !== 'all' && contracts.length === 0;
+const ServiceRecapWidget = ({ lastService, nextService, serviceAgreements, selectedLocation }) => {
+    const showBrowseCompaniesLink = selectedLocation !== 'all' && serviceAgreements.length === 0;
 
     return (
         <Widget title="Service Details" icon={DocumentTextIcon}>
             {showBrowseCompaniesLink ? (
                 <div className="text-center py-4">
-                    <p className="text-gray-500 mb-4">No service contract found for this location.</p>
+                    <p className="text-gray-500 mb-4">No service agreement found for this location.</p>
                     <Link to="/client/companies" className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700">
                         Browse Companies
                     </Link>

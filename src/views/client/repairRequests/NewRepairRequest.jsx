@@ -1,10 +1,11 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, storage } from '../../../firebase'; // Corrected import
-import { collection, query, where, getDocs, setDoc, serverTimestamp, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, setDoc, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { Context } from '../../../context/AuthContext';
-import { RepairRequest } from '../../../utils/models/RepairRequest';
+import { REPAIR_REQUEST_STATUS, RepairRequest } from '../../../utils/models/RepairRequest';
+import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from '../../../utils/models/Equipment';
 import { ArrowUpOnSquareIcon, PhotoIcon } from '@heroicons/react/24/solid';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -19,6 +20,7 @@ const NewRepairRequest = () => {
     const [selectedLocation, setSelectedLocation] = useState('');
     const [selectedBodyOfWater, setSelectedBodyOfWater] = useState('');
     const [selectedEquipment, setSelectedEquipment] = useState('');
+    const [equipmentStatusUpdate, setEquipmentStatusUpdate] = useState('');
     const [description, setDescription] = useState('');
     const [files, setFiles] = useState([]);
     const [filePreviews, setFilePreviews] = useState([]);
@@ -57,6 +59,7 @@ const NewRepairRequest = () => {
         if (!selectedBodyOfWater) {
             setEquipment([]);
             setSelectedEquipment('');
+            setEquipmentStatusUpdate('');
             return;
         }
         const fetchEquipment = async () => {
@@ -66,6 +69,17 @@ const NewRepairRequest = () => {
         };
         fetchEquipment();
     }, [selectedBodyOfWater]);
+
+    const handleBodyOfWaterChange = (value) => {
+        setSelectedBodyOfWater(value);
+        setSelectedEquipment('');
+        setEquipmentStatusUpdate('');
+    };
+
+    const handleEquipmentChange = (value) => {
+        setSelectedEquipment(value);
+        setEquipmentStatusUpdate(value ? EQUIPMENT_STATUS.NEEDS_REPAIR : '');
+    };
 
     const handleFileChange = (e) => {
         const selectedFiles = Array.from(e.target.files);
@@ -101,7 +115,7 @@ const NewRepairRequest = () => {
                 requesterId: user.uid,
                 requesterName: user.displayName || 'N/A',
                 date: new Date(),
-                status: 'pending',
+                status: REPAIR_REQUEST_STATUS.UNRESOLVED,
                 description,
                 photoUrls,
                 locationId: selectedLocation,
@@ -115,6 +129,12 @@ const NewRepairRequest = () => {
                 ...newRequest.toFirestore(),
                 createdAt: serverTimestamp()
             });
+
+            if (selectedEquipment && equipmentStatusUpdate) {
+                await updateDoc(doc(db, 'homeownerEquipment', selectedEquipment), {
+                    status: equipmentStatusUpdate
+                });
+            }
 
             setIsLoading(false);
             navigate('/client/repair-requests');
@@ -141,7 +161,7 @@ const NewRepairRequest = () => {
 
                     <div>
                         <label htmlFor="bodyOfWater" className="block text-sm font-medium text-gray-700">Body of Water (Optional)</label>
-                        <select id="bodyOfWater" value={selectedBodyOfWater} onChange={(e) => setSelectedBodyOfWater(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md" disabled={!selectedLocation}>
+                        <select id="bodyOfWater" value={selectedBodyOfWater} onChange={(e) => handleBodyOfWaterChange(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md" disabled={!selectedLocation}>
                             <option value="">Select a body of water</option>
                             {bodiesOfWater.map(bow => <option key={bow.id} value={bow.id}>{bow.name}</option>)}
                         </select>
@@ -149,11 +169,23 @@ const NewRepairRequest = () => {
 
                     <div>
                         <label htmlFor="equipment" className="block text-sm font-medium text-gray-700">Equipment (Optional)</label>
-                        <select id="equipment" value={selectedEquipment} onChange={(e) => setSelectedEquipment(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md" disabled={!selectedBodyOfWater}>
+                        <select id="equipment" value={selectedEquipment} onChange={(e) => handleEquipmentChange(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md" disabled={!selectedBodyOfWater}>
                             <option value="">Select equipment</option>
-                            {equipment.map(eq => <option key={eq.id} value={eq.id}>{eq.name}</option>)}
+                            {equipment.map(eq => <option key={eq.id} value={eq.id}>{[eq.name, eq.model].filter(Boolean).join(' - ') || "Unnamed Equipment"}</option>)}
                         </select>
                     </div>
+
+                    {selectedEquipment && (
+                        <div>
+                            <label htmlFor="equipmentStatus" className="block text-sm font-medium text-gray-700">Equipment Status</label>
+                            <select id="equipmentStatus" value={equipmentStatusUpdate} onChange={(e) => setEquipmentStatusUpdate(e.target.value)} className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm rounded-md">
+                                <option value="">Do not change status</option>
+                                {EQUIPMENT_STATUS_OPTIONS.map(statusOption => (
+                                    <option key={statusOption} value={statusOption}>{statusOption}</option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
 
                     <div>
                         <label htmlFor="description" className="block text-sm font-medium text-gray-700">Description of Issue</label>

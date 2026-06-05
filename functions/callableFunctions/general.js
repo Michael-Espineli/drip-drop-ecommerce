@@ -15,11 +15,507 @@ const db = admin.firestore();
 
 const mySecret = defineSecret('stripe_secret_key');
 
+const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
+const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
+const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
+
+const defaultServiceStopCategoryEmailSettings = (companyName = "your pool company") => ({
+  "Route": {
+    category: "Route",
+    sendEmailOnFinish: false,
+    requirePhotoOnFinish: false,
+    emailSubject: `${companyName} Service Report`,
+    emailBody: `Thank you for letting ${companyName} service your pool. Here is a summary of today's visit.`,
+    emailFooter: "Please contact us with any questions.",
+    sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+  },
+  "Job": {
+    category: "Job",
+    sendEmailOnFinish: false,
+    requirePhotoOnFinish: false,
+    emailSubject: `${companyName} Job Visit Summary`,
+    emailBody: `Thank you for choosing ${companyName}. Here is a summary of the work completed during this visit.`,
+    emailFooter: "Please contact us with any questions.",
+    sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+  },
+  "Job Estimate": {
+    category: "Job Estimate",
+    sendEmailOnFinish: false,
+    requirePhotoOnFinish: false,
+    emailSubject: `${companyName} Estimate Visit Recap`,
+    emailBody: `Thank you for meeting with ${companyName}. Here is a recap of the information gathered for your estimate.`,
+    emailFooter: "Please contact us with any questions.",
+    sendGridTemplateId: DEFAULT_JOB_ESTIMATE_TEMPLATE_ID,
+  },
+  "Service Agreement Estimate": {
+    category: "Service Agreement Estimate",
+    sendEmailOnFinish: false,
+    requirePhotoOnFinish: false,
+    emailSubject: `${companyName} Service Agreement Visit Recap`,
+    emailBody: `Thank you for considering ${companyName} for recurring service. Here is a recap of the service location information we gathered.`,
+    emailFooter: "Please contact us with any questions.",
+    sendGridTemplateId: DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID,
+  },
+  "Customer Relationship": {
+    category: "Customer Relationship",
+    sendEmailOnFinish: false,
+    requirePhotoOnFinish: false,
+    emailSubject: `${companyName} Visit Recap`,
+    emailBody: `Thank you for taking the time to meet with ${companyName}. Here is a recap of the visit and any follow-up notes.`,
+    emailFooter: "Please contact us with any questions.",
+    sendGridTemplateId: DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID,
+  },
+});
+
 //Live
 // const publishableStripeKey = defineSecret('pk_live_51SR0FQAarMCMczenzad9KHz2dWM4tcMlSN1aquZVdN83md983TatYFy02H3usQAWeWldDMmlnPbVw5PvmhdjsXbn00sJx5TPCF');
 //Test
 
 const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+
+const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const safeDocIdPart = (value) => String(value || "")
+  .trim()
+  .replace(/\//g, "_")
+  .replace(/[^a-zA-Z0-9_-]/g, "_")
+  .slice(0, 140);
+
+const linkedHomeownerDocId = (prefix, companyId, sourceId) => (
+  `${prefix}_${safeDocIdPart(companyId)}_${safeDocIdPart(sourceId)}`
+);
+
+const customerDisplayName = (customer = {}) => {
+  if (customer.displayAsCompany && customer.company) return customer.company;
+  if (customer.displayAsCompany && customer.companyName) return customer.companyName;
+
+  return `${customer.firstName || ""} ${customer.lastName || ""}`.trim();
+};
+
+const removeUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value.map(removeUndefinedDeep).filter((item) => item !== undefined);
+  }
+
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    if (typeof value.toDate === "function") return value;
+    if (value.constructor && value.constructor.name !== "Object") return value;
+
+    return Object.entries(value).reduce((clean, [key, item]) => {
+      const cleanedValue = removeUndefinedDeep(item);
+      if (cleanedValue !== undefined) {
+        clean[key] = cleanedValue;
+      }
+      return clean;
+    }, {});
+  }
+
+  return value === undefined ? undefined : value;
+};
+
+const commitFirestoreWrites = async (firestore, writes) => {
+  for (let index = 0; index < writes.length; index += 450) {
+    const batch = firestore.batch();
+    const chunk = writes.slice(index, index + 450);
+
+    chunk.forEach((write) => {
+      if (write.type === "update") {
+        batch.update(write.ref, write.data);
+      } else {
+        batch.set(write.ref, write.data, { merge: write.merge !== false });
+      }
+    });
+
+    await batch.commit();
+  }
+};
+
+const getLinkedCustomerIds = (customer = {}) => (
+  Array.isArray(customer.linkedCustomerIds)
+    ? customer.linkedCustomerIds.filter(Boolean)
+    : []
+);
+
+const getHomeownerRelationshipId = (companyId, customerId, homeownerId) => (
+  `ccr_${safeDocIdPart(companyId)}_${safeDocIdPart(customerId)}_${safeDocIdPart(homeownerId)}`
+);
+
+async function linkHomeownerToCompanyCustomer({
+  companyId,
+  customerId,
+  homeownerId,
+  authEmail,
+  inviteId = "",
+  source = "companyInvite",
+  requestedByUserId = "",
+}) {
+  const firestore = getFirestore();
+  const normalizedAuthEmail = normalizeEmail(authEmail);
+
+  if (!companyId || !customerId || !homeownerId) {
+    return {
+      status: 400,
+      error: "Missing companyId, customerId, or homeownerId"
+    };
+  }
+
+  if (!normalizedAuthEmail) {
+    return {
+      status: 403,
+      error: "A verified email is required to link this customer account"
+    };
+  }
+
+  const companyRef = firestore.collection("companies").doc(companyId);
+  const customerRef = companyRef.collection("customers").doc(customerId);
+  const [companySnap, customerSnap] = await Promise.all([
+    companyRef.get(),
+    customerRef.get(),
+  ]);
+
+  if (!companySnap.exists) {
+    return { status: 404, error: "Company not found" };
+  }
+
+  if (!customerSnap.exists) {
+    return { status: 404, error: "Company customer not found" };
+  }
+
+  const company = companySnap.data() || {};
+  const customer = customerSnap.data() || {};
+  let invite = null;
+
+  if (inviteId) {
+    const inviteSnap = await firestore.collection("linkedInvite").doc(inviteId).get();
+    if (!inviteSnap.exists) {
+      return { status: 404, error: "Linked invite not found" };
+    }
+    invite = inviteSnap.data() || {};
+
+    if (invite.companyId && invite.companyId !== companyId) {
+      return { status: 403, error: "Invite belongs to a different company" };
+    }
+
+    if (invite.customerId && invite.customerId !== customerId) {
+      return { status: 403, error: "Invite belongs to a different customer" };
+    }
+  }
+
+  const expectedEmail = normalizeEmail(invite?.email || invite?.customerEmail || customer.email);
+  if (!expectedEmail) {
+    return {
+      status: 400,
+      error: "The company customer needs an email before it can be linked"
+    };
+  }
+
+  if (expectedEmail !== normalizedAuthEmail) {
+    return {
+      status: 403,
+      error: "Authenticated email does not match the customer invite email"
+    };
+  }
+
+  const linkedCustomerIds = getLinkedCustomerIds(customer);
+  const linkedToDifferentHomeowner = linkedCustomerIds.some((linkedId) => linkedId !== homeownerId);
+  if (linkedToDifferentHomeowner) {
+    return {
+      status: 409,
+      error: "This customer is already linked to another homeowner account"
+    };
+  }
+
+  const relationshipId = getHomeownerRelationshipId(companyId, customerId, homeownerId);
+  const relationshipRef = firestore.collection("customerCompanyRelationships").doc(relationshipId);
+  const customerName = customerDisplayName(customer);
+  const companyName = company.name || company.companyName || "";
+  const now = admin.firestore.FieldValue.serverTimestamp();
+
+  const [serviceLocationsSnap, bodiesOfWaterSnap, equipmentSnap] = await Promise.all([
+    companyRef.collection("serviceLocations").where("customerId", "==", customerId).get(),
+    companyRef.collection("bodiesOfWater").where("customerId", "==", customerId).get(),
+    companyRef.collection("equipment").where("customerId", "==", customerId).get(),
+  ]);
+
+  const serviceLocationIdMap = new Map();
+  const bodyOfWaterIdMap = new Map();
+  const bodyIdsByLocationId = new Map();
+
+  serviceLocationsSnap.docs.forEach((locationDoc) => {
+    const location = locationDoc.data() || {};
+    const sourceLocationId = location.id || locationDoc.id;
+    const homeownerLocationId = linkedHomeownerDocId("hosl", companyId, sourceLocationId);
+    serviceLocationIdMap.set(sourceLocationId, homeownerLocationId);
+    serviceLocationIdMap.set(locationDoc.id, homeownerLocationId);
+  });
+
+  bodiesOfWaterSnap.docs.forEach((bodyDoc) => {
+    const bodyOfWater = bodyDoc.data() || {};
+    const sourceBodyId = bodyOfWater.id || bodyDoc.id;
+    const sourceLocationId = bodyOfWater.serviceLocationId || "";
+    const homeownerBodyId = linkedHomeownerDocId("hobow", companyId, sourceBodyId);
+    const homeownerLocationId = serviceLocationIdMap.get(sourceLocationId) || "";
+
+    bodyOfWaterIdMap.set(sourceBodyId, homeownerBodyId);
+    bodyOfWaterIdMap.set(bodyDoc.id, homeownerBodyId);
+
+    if (homeownerLocationId) {
+      const bodyIds = bodyIdsByLocationId.get(homeownerLocationId) || [];
+      bodyIds.push(homeownerBodyId);
+      bodyIdsByLocationId.set(homeownerLocationId, bodyIds);
+    }
+  });
+
+  const writes = [
+    {
+      ref: relationshipRef,
+      data: removeUndefinedDeep({
+        id: relationshipId,
+        companyId,
+        companyName,
+        companyCustomerId: customerId,
+        companyCustomerName: customerName,
+        homeownerUserId: homeownerId,
+        homeownerEmail: normalizedAuthEmail,
+        status: "active",
+        source,
+        inviteId: inviteId || customer.linkedInviteId || "",
+        inviteEmail: expectedEmail,
+        emailVerifiedAt: now,
+        linkedAt: now,
+        updatedAt: now,
+        createdAt: now,
+        createdByUserId: requestedByUserId || homeownerId,
+        permissions: {
+          companyCanUpdateSharedFields: true,
+          companyCanDeleteHomeownerOwnedRecords: false,
+          homeownerCanEditPortalRecords: true,
+        },
+      }),
+    },
+    {
+      ref: customerRef,
+      data: removeUndefinedDeep({
+        linkedCustomerIds: admin.firestore.FieldValue.arrayUnion(homeownerId),
+        linkedCustomerUserId: homeownerId,
+        linkedHomeownerUserId: homeownerId,
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        linkedStatus: "active",
+        linkedEmail: normalizedAuthEmail,
+        linkedAt: now,
+        linkedInviteId: inviteId || customer.linkedInviteId || relationshipId,
+      }),
+    },
+  ];
+
+  serviceLocationsSnap.docs.forEach((locationDoc) => {
+    const location = locationDoc.data() || {};
+    const sourceLocationId = location.id || locationDoc.id;
+    const homeownerLocationId = serviceLocationIdMap.get(sourceLocationId);
+
+    writes.push({
+      ref: firestore.collection("homeownerServiceLocations").doc(homeownerLocationId),
+      data: removeUndefinedDeep({
+        ...location,
+        id: homeownerLocationId,
+        userId: homeownerId,
+        homeownerId,
+        customerId: homeownerId,
+        customerName,
+        companyCustomerId: customerId,
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        verified: true,
+        source: "company",
+        linkedCompanyId: companyId,
+        linkedCompanyName: companyName,
+        linkedCompanyCustomerId: customerId,
+        linkedCompanyServiceLocationId: sourceLocationId,
+        sourceCompanyServiceLocationId: sourceLocationId,
+        bodiesOfWaterId: bodyIdsByLocationId.get(homeownerLocationId) || [],
+        updatedAt: now,
+        linkedAt: now,
+      }),
+    });
+  });
+
+  bodiesOfWaterSnap.docs.forEach((bodyDoc) => {
+    const bodyOfWater = bodyDoc.data() || {};
+    const sourceBodyId = bodyOfWater.id || bodyDoc.id;
+    const sourceLocationId = bodyOfWater.serviceLocationId || "";
+    const homeownerBodyId = bodyOfWaterIdMap.get(sourceBodyId);
+
+    writes.push({
+      ref: firestore.collection("homeownerBodiesOfWater").doc(homeownerBodyId),
+      data: removeUndefinedDeep({
+        ...bodyOfWater,
+        id: homeownerBodyId,
+        userId: homeownerId,
+        homeownerId,
+        customerId: homeownerId,
+        companyCustomerId: customerId,
+        serviceLocationId: serviceLocationIdMap.get(sourceLocationId) || "",
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        verified: true,
+        source: "company",
+        linkedCompanyId: companyId,
+        linkedCompanyName: companyName,
+        linkedCompanyCustomerId: customerId,
+        linkedCompanyServiceLocationId: sourceLocationId,
+        linkedCompanyBodyOfWaterId: sourceBodyId,
+        sourceCompanyBodyOfWaterId: sourceBodyId,
+        updatedAt: now,
+        linkedAt: now,
+      }),
+    });
+  });
+
+  equipmentSnap.docs.forEach((equipmentDoc) => {
+    const equipment = equipmentDoc.data() || {};
+    const sourceEquipmentId = equipment.id || equipmentDoc.id;
+    const homeownerEquipmentId = linkedHomeownerDocId("hoequ", companyId, sourceEquipmentId);
+
+    writes.push({
+      ref: firestore.collection("homeownerEquipment").doc(homeownerEquipmentId),
+      data: removeUndefinedDeep({
+        ...equipment,
+        id: homeownerEquipmentId,
+        userId: homeownerId,
+        homeownerId,
+        customerId: homeownerId,
+        companyCustomerId: customerId,
+        serviceLocationId: serviceLocationIdMap.get(equipment.serviceLocationId || "") || "",
+        bodyOfWaterId: bodyOfWaterIdMap.get(equipment.bodyOfWaterId || "") || "",
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        verified: true,
+        source: "company",
+        linkedCompanyId: companyId,
+        linkedCompanyName: companyName,
+        linkedCompanyCustomerId: customerId,
+        linkedCompanyServiceLocationId: equipment.serviceLocationId || "",
+        linkedCompanyBodyOfWaterId: equipment.bodyOfWaterId || "",
+        linkedCompanyEquipmentId: sourceEquipmentId,
+        sourceCompanyEquipmentId: sourceEquipmentId,
+        updatedAt: now,
+        linkedAt: now,
+      }),
+    });
+  });
+
+  if (inviteId) {
+    writes.push({
+      ref: firestore.collection("linkedInvite").doc(inviteId),
+      data: {
+        accepted: true,
+        status: "accepted",
+        acceptedAt: now,
+        acceptedByUserId: homeownerId,
+        relationshipId,
+      },
+    });
+  }
+
+  const collectionsToBackfill = [
+    "salesAgreements",
+    "salesBillingProfiles",
+    "salesBillingSubscriptions",
+    "salesInvoices",
+    "salesPayments",
+    "homeownerServiceRequests",
+    "homeownerRepairRequests",
+  ];
+
+  for (const collectionName of collectionsToBackfill) {
+    try {
+      const snapshots = [];
+      snapshots.push(await firestore.collection(collectionName)
+        .where("companyId", "==", companyId)
+        .where("customerId", "==", customerId)
+        .get());
+
+      if (expectedEmail) {
+        snapshots.push(await firestore.collection(collectionName)
+          .where("companyId", "==", companyId)
+          .where("email", "==", expectedEmail)
+          .get());
+      }
+
+      const seenDocIds = new Set();
+      snapshots.forEach((snapshot) => {
+        snapshot.docs.forEach((document) => {
+          if (seenDocIds.has(document.id)) return;
+          seenDocIds.add(document.id);
+          writes.push({
+            ref: document.ref,
+            data: {
+              customerId,
+              companyCustomerId: customerId,
+              customerUserId: homeownerId,
+              homeownerUserId: homeownerId,
+              homeownerId,
+              relationshipId,
+              customerCompanyRelationshipId: relationshipId,
+              updatedAt: now,
+            },
+          });
+        });
+      });
+    } catch (error) {
+      console.warn("[CustomerCompanyRelationship] Unable to backfill collection", collectionName, error.message);
+    }
+  }
+
+  await commitFirestoreWrites(firestore, writes);
+
+  return {
+    status: 200,
+    relationshipId,
+    companyId,
+    customerId,
+    homeownerId,
+    copied: {
+      serviceLocations: serviceLocationsSnap.size,
+      bodiesOfWater: bodiesOfWaterSnap.size,
+      equipment: equipmentSnap.size,
+    },
+    account: "Successfully linked homeowner account"
+  };
+}
+
+function normalizeRecurringStopTypeFieldsForFunction(source, contextLabel) {
+  const hasTypeId = typeof source?.typeId === "string" && source.typeId.trim().length > 0;
+  const hasType = typeof source?.type === "string" && source.type.trim().length > 0;
+  const fields = {
+    typeId: hasTypeId ? source.typeId : "system_recurring_service_stop",
+    type: hasType ? source.type : "Recurring Service Stop",
+    typeImage: typeof source?.typeImage === "string" && source.typeImage.trim().length > 0
+      ? source.typeImage
+      : "figure.pool.swim",
+  };
+
+  if (!hasTypeId || !hasType) {
+    console.warn("[ServiceStopTypeFunction][fallback]", {
+      context: contextLabel,
+      recurringServiceStopId: source?.id || "",
+      incomingTypeId: source?.typeId || "",
+      incomingType: source?.type || "",
+      resolvedTypeId: fields.typeId,
+      resolvedType: fields.type,
+    });
+  } else {
+    console.log("[ServiceStopTypeFunction][resolved]", {
+      context: contextLabel,
+      recurringServiceStopId: source?.id || "",
+      typeId: fields.typeId,
+      type: fields.type,
+    });
+  }
+
+  return fields;
+}
 
 // Build to replace createFirstRecurringServiceStop
 exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, context) => {
@@ -85,6 +581,49 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       return d;
     };
 
+    const normalizeServiceStopTypeFields = (source, contextLabel) => {
+      const hasTypeId = typeof source?.typeId === "string" && source.typeId.trim().length > 0;
+      const hasType = typeof source?.type === "string" && source.type.trim().length > 0;
+      const fallback = {
+        typeId: "system_recurring_service_stop",
+        type: "Recurring Service Stop",
+        typeImage: "figure.pool.swim",
+      };
+
+      const fields = {
+        typeId: hasTypeId ? source.typeId : fallback.typeId,
+        type: hasType ? source.type : fallback.type,
+        typeImage: typeof source?.typeImage === "string" && source.typeImage.trim().length > 0
+          ? source.typeImage
+          : fallback.typeImage,
+      };
+
+      if (!hasTypeId || !hasType) {
+        console.warn("[ServiceStopTypeFunction][fallback]", {
+          context: contextLabel,
+          recurringServiceStopId: source?.id || "",
+          incomingTypeId: source?.typeId || "",
+          incomingType: source?.type || "",
+          resolvedTypeId: fields.typeId,
+          resolvedType: fields.type,
+        });
+      } else {
+        console.log("[ServiceStopTypeFunction][resolved]", {
+          context: contextLabel,
+          recurringServiceStopId: source?.id || "",
+          typeId: fields.typeId,
+          type: fields.type,
+        });
+      }
+
+      return fields;
+    };
+
+    const recurringServiceStopTypeFields = normalizeServiceStopTypeFields(
+      rssData,
+      "createFirstRecurringServiceStop2.recurringServiceStop"
+    );
+
     // MARK: - Start / End Dates
 
     const startDate = parseDate(rssData.startDate) || new Date();
@@ -132,7 +671,12 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
 
     // MARK: - Save RSS Doc
 
-    const upLoadRSSData = { ...rssData };
+    const upLoadRSSData = {
+      ...rssData,
+      typeId: recurringServiceStopTypeFields.typeId,
+      type: recurringServiceStopTypeFields.type,
+      typeImage: recurringServiceStopTypeFields.typeImage,
+    };
 
     upLoadRSSData.dateCreated =
       toFirestoreTimestamp(rssData.dateCreated, new Date()) ||
@@ -267,9 +811,9 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
 
         serviceLocationId: rssData.serviceLocationId ?? "",
 
-        type: rssData.type ?? "Recurring Service Stop",
-        typeId: rssData.typeId ?? "system_recurring_service_stop",
-        typeImage: rssData.typeImage ?? "figure.pool.swim",
+        type: recurringServiceStopTypeFields.type,
+        typeId: recurringServiceStopTypeFields.typeId,
+        typeImage: recurringServiceStopTypeFields.typeImage,
 
         jobId: "",
         jobName: "",
@@ -962,6 +1506,16 @@ exports.createFirstRecurringServiceStop = functions.https.onCall(async (data, co
   let weekdayArry = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   let companyId = data.data.companyId
   let rssData = data.data.recurringServiceStop
+  const rssTypeFields = normalizeRecurringStopTypeFieldsForFunction(
+    rssData,
+    "createFirstRecurringServiceStop.legacy"
+  );
+  rssData = {
+    ...rssData,
+    typeId: rssTypeFields.typeId,
+    type: rssTypeFields.type,
+    typeImage: rssTypeFields.typeImage,
+  };
 
   console.log(rssData)
   try {
@@ -1946,7 +2500,8 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       id: uuidv4(),
       emailIsOn: false,
       emailBody: "Thank you For letting " + companyName + " service your pool",
-      requirePhoto: false
+      requirePhoto: false,
+      serviceStopCategorySettings: defaultServiceStopCategoryEmailSettings(companyName)
     }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("emailConfiguration").set(emailConfiguration);
     console.log("Set Up email Confirmation")
@@ -2156,43 +2711,54 @@ exports.createCompanyAdminNotes = functions.https.onCall(async (data, context) =
 exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
 
   try {
-    let companyId = data.data.companyId
-    let invoiceId = data.data.customerId
-    let userId = data.data.userId
-    console.log(companyId)
-    console.log(invoiceId)
-    console.log(userId)
+    const payload = data?.data ?? data ?? {};
+    const authUserId = context.auth?.uid;
 
-    // This needs to be a cloud Function So that this work request does not get interupted while in progress.
+    if (!authUserId) {
+      return {
+        status: 401,
+        error: "You must be signed in to accept a linked invite"
+      };
+    }
 
-    //Accept Invite Information
-    // Copy Over Location Information
-    // Copy Over Body Of Water Information
-    // Copy Over Equipment Information
-    // Copy Over Historical Stop Data ( Maybe add a max Year Cap? At 5 Years if any)
-    // Access To Contracts
-    // Access To Payment Portal
-    // Access To Make Repair Requests
-    // Access To Approve Work Requests
-    // Access To Approve Shopping List Item Requests
-    // Update Company Customer Information To Link Accounts
+    const homeownerId = payload.homeownerId || payload.userId || authUserId;
+    if (homeownerId !== authUserId) {
+      return {
+        status: 403,
+        error: "Authenticated user does not match the homeowner account"
+      };
+    }
 
-    // const invoiceRef = db.collection("invoices").collection("invoices").doc(invoiceId)
-    // invoiceRef.get().then((invoiceDoc) => {
-    //   if (invoiceDoc.exists) {
-    //       console.log("Service Stop data:", invoiceDoc.data());
-    //       let invoiceData = invoiceDoc.data()
+    const inviteId = payload.inviteId || payload.linkedInviteId || payload.id || "";
+    let companyId = payload.companyId || "";
+    let customerId = payload.customerId || "";
 
-    //   }
-    // })
+    if (inviteId && (!companyId || !customerId)) {
+      const inviteSnap = await getFirestore().collection("linkedInvite").doc(inviteId).get();
+      if (!inviteSnap.exists) {
+        return {
+          status: 404,
+          error: "Linked invite not found"
+        };
+      }
 
-    return {
-      status: 200,
-      account: "Successfully Sent"
-    };
+      const invite = inviteSnap.data() || {};
+      companyId = companyId || invite.companyId || "";
+      customerId = customerId || invite.customerId || "";
+    }
+
+    return await linkHomeownerToCompanyCustomer({
+      companyId,
+      customerId,
+      homeownerId,
+      authEmail: context.auth?.token?.email || payload.email || "",
+      inviteId,
+      source: "companyInvite",
+      requestedByUserId: authUserId,
+    });
   } catch (error) {
     console.error(
-      "An error occurred when calling the Create New Recurring Service Stop API",
+      "An error occurred when accepting a linked invite",
       error
     );
     return {
@@ -2785,163 +3351,41 @@ exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (dat
 });
 
 exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (data, context) => {
-  const db = getFirestore();
+  try {
+    const payload = data?.data ?? data ?? {};
+    const authUserId = context.auth?.uid;
 
-  let receivedData = data.data
-  let companyId = receivedData.companyId
-  let companyName = receivedData.companyName
-  let customerId = receivedData.customerId
-  let homeownerId = receivedData.homeownerId
-  console.log("companyId ", companyId)
-  console.log("companyName ", companyName)
-  console.log("customerId ", customerId)
-  console.log("homeownerId ", homeownerId)
+    if (!authUserId) {
+      return {
+        status: 401,
+        error: "You must be signed in to connect this customer account"
+      };
+    }
 
-  //Get all customers
+    const homeownerId = payload.homeownerId || payload.userId || authUserId;
+    if (homeownerId !== authUserId) {
+      return {
+        status: 403,
+        error: "Authenticated user does not match the homeowner account"
+      };
+    }
 
-  //get all locations
-  await getFirestore()
-    .collection("companies")
-    .doc(companyId)
-    .collection("serviceLocations")
-    .where("customerId", "==", customerId)
-    .get().then((querySnapshot) => {
-      querySnapshot.forEach(async (doc) => {
-        console.log("Service Location:", doc.id, " => ", doc.data());
-        let serviceLocationData = doc.data()
-
-        let hoslId = 'hosl_' + uuidv4()
-
-        //Get BOW Info
-        await getFirestore()
-          .collection("companies")
-          .doc(companyId)
-          .collection("bodiesOfWater")
-          .where("customerId", "==", customerId)
-          .where("serviceLocationId", "==", serviceLocationData.serviceLocationId)
-          .get().then((querySnapshot2) => {
-            querySnapshot2.forEach(async (doc2) => {
-              console.log("Body Of Water:", doc2.id, " => ", doc2.data());
-              let bodyOfWaterData = doc2.data()
-              let hobowId = 'hobow_' + uuidv4()
-
-              //Get Equipment
-              await getFirestore()
-                .collection("companies")
-                .doc(companyId)
-                .collection("equipment")
-                .where("customerId", "==", customerId)
-                .where("bodyOfWaterId", "==", bodyOfWaterData.bodyOfWaterId)
-                .get().then((querySnapshot3) => {
-                  querySnapshot3.forEach(async (doc3) => {
-                    console.log("Equipment:", doc3.id, " => ", doc3.data());
-                    let equipmentData = doc3.data()
-
-                    //Create Equipment
-                    let hoEquId = 'hoequ_' + uuidv4()
-                    let newEquipment = {
-                      id: hoEquId,
-                      serviceLocationId: hoslId,
-                      bodyOfWaterId: hobowId,
-                      homeownerId: user.uid,
-                      dateInstalled: equipmentData.dateInstalled,
-                      isActive: equipmentData.isActive,
-                      make: equipmentData.make,
-                      makeId: equipmentData.makeId,
-                      model: equipmentData.model,
-                      modelId: equipmentData.modelId,
-                      name: equipmentData.isActive,
-                      status: equipmentData.status,
-                      type: equipmentData.type,
-                      typeId: equipmentData.typeId,
-                      // Ignore Notes
-                      // Ignore Photo Urls
-                      verified: true,
-                      linkedCompanyId: companyId,
-                      linkedCompanyName: companyName,
-                      linkedLocationId: documentData.id,
-                    }
-                    //companies/\(companyId)/settings/readings/readings
-                    await getFirestore().collection("homeownerEquipment").doc(hoEquId).set(newEquipment);
-
-                  });
-                })
-                .catch((error) => {
-                  console.log("Error getting Universal Readings documents: ", error);
-                });
-              //Create New BOW
-              let newBOW = {
-                id: hobowId,
-                homeownerId: user.uid,
-                serviceLocationId: hoslId,
-                gallons: bodyOfWaterData.gallons,
-                lastFilled: bodyOfWaterData.lastFilled,
-                material: bodyOfWaterData.material,
-                name: bodyOfWaterData.name,
-                // Ignore Notes
-                // Ignore Photo Urls
-                verified: true,
-                linkedCompanyId: companyId,
-                linkedCompanyName: companyName,
-                linkedLocationId: documentData.id,
-              }
-              //companies/\(companyId)/settings/readings/readings
-              await getFirestore().collection("homeownerBodiesOfWater").doc(hobowId).set(newBOW);
-
-            });
-          })
-          .catch((error) => {
-            console.log("Error getting Universal Readings documents: ", error);
-          });
-        //Create new SL
-        let newServiceLocation = {
-          id: hoslId,
-          address: documentData.address,
-          bodiesOfWaterId: documentData.bodiesOfWaterId,
-          customerId: documentData.customerId, // From company sl
-          customerName: documentData.customerName, // From company sl
-          dogName: documentData.dogName,
-          estimatedTime: documentData.estimatedTime,
-          nickName: documentData.nickName,
-          // Ignore Notes
-          // Ignore Photo Urls
-          photoUrls: documentData.photoUrls,
-          preText: documentData.preText,
-          gateCode: documentData.gateCode,
-          mainContact: documentData.mainContact,
-          nickName: documentData.nickName,
-
-          homeownerId: user.uid, //Instead of customerId
-          verified: true,
-          linkedCompanyId: companyId,
-          linkedCompanyName: companyName,
-          linkedLocationId: documentData.id,
-        }
-        //companies/\(companyId)/settings/readings/readings
-        await getFirestore().collection("homeownerServiceLocations").doc(hoslId).set(newServiceLocation);
-
-      });
-    })
-    .catch((error) => {
-      console.log("Error getting Universal Readings documents: ", error);
+    return await linkHomeownerToCompanyCustomer({
+      companyId: payload.companyId,
+      customerId: payload.customerId,
+      homeownerId,
+      authEmail: context.auth?.token?.email || payload.email || "",
+      inviteId: payload.inviteId || payload.linkedInviteId || "",
+      source: payload.source || "companyDirectLink",
+      requestedByUserId: authUserId,
     });
-
-
-
-  //get all stopData (10 Years)
-
-  // Set the homeowner's UID on the company customer document
-  const customerDocRef = doc(db, 'companies', companyId, 'customers', customerId);
-
-  await updateDoc(customerDocRef, {
-    linkedCustomerIds: [user.uid]
-  });
-
-
-  return {
-    success: true,
-    count: finalRecurring.length
-  };
+  } catch (error) {
+    console.error("Error connecting homeowner account to company customer", error);
+    return {
+      status: 500,
+      error: error.message || "Could not connect homeowner account"
+    };
+  }
 });
 
 exports.makeUpdatesToRecurringRoutes = functions.https.onCall(async (data, context) => {
@@ -3222,13 +3666,43 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     return value;
   }
 
+  function normalizeRecurringServiceStopTypeFields(rss, contextLabel) {
+    const hasTypeId = typeof rss?.typeId === "string" && rss.typeId.trim().length > 0;
+    const hasType = typeof rss?.type === "string" && rss.type.trim().length > 0;
+    const fields = {
+      typeId: hasTypeId ? rss.typeId : "system_recurring_service_stop",
+      type: hasType ? rss.type : "Recurring Service Stop",
+      typeImage: typeof rss?.typeImage === "string" && rss.typeImage.trim().length > 0
+        ? rss.typeImage
+        : "figure.pool.swim",
+    };
+
+    if (!hasTypeId || !hasType) {
+      console.warn("[ServiceStopTypeFunction][fallback]", {
+        context: contextLabel,
+        recurringServiceStopId: rss?.id || "",
+        incomingTypeId: rss?.typeId || "",
+        incomingType: rss?.type || "",
+        resolvedTypeId: fields.typeId,
+        resolvedType: fields.type,
+      });
+    }
+
+    return fields;
+  }
+
   function normalizeRecurringServiceStopForFirestore(rss) {
+    const serviceStopTypeFields = normalizeRecurringServiceStopTypeFields(
+      rss,
+      "normalizeRecurringServiceStopForFirestore"
+    );
+
     return removeUndefinedValues({
       id: rss.id,
       internalId: rss.internalId,
-      type: rss.type,
-      typeId: rss.typeId,
-      typeImage: rss.typeImage,
+      type: serviceStopTypeFields.type,
+      typeId: serviceStopTypeFields.typeId,
+      typeImage: serviceStopTypeFields.typeImage,
       customerName: rss.customerName,
       customerId: rss.customerId,
       address: rss.address,

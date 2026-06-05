@@ -73,7 +73,6 @@ const Products = () => {
                 <table>
                     <thead>
                         <tr>
-                            <th scope='col' className='py-3 px-4'>Id</th>
                             <th scope='col' className='py-3 px-4'>Name</th>
                             <th scope='col' className='py-3 px-4'>Description</th>
                             <th scope='col' className='py-3 px-4'>Active</th>
@@ -85,12 +84,11 @@ const Products = () => {
                         {
                             productList.map((product) =>
                             <tr key={product.id}>
-                                <td scope='col' className='py-3 px-4'>{product.id}</td>
-                                <td scope='col' className='py-3 px-4'>{product.name}</td>
-                                <td scope='col' className='py-3 px-4'>{product.description}</td>
-                                <td scope='col' className='py-3 px-4'>{product.active ? 'Active':'Deactive'}</td>
+                                <td className='py-3 px-4'>{product.name || 'Product'}</td>
+                                <td className='py-3 px-4'>{product.description}</td>
+                                <td className='py-3 px-4'>{product.active ? 'Active':'Deactive'}</td>
 
-                                <td scope='col' className='py-3 px-4'>
+                                <td className='py-3 px-4'>
                                     <Link to={`/company/stripe-subscriptions/products/edit/${product.id}`}>Edit</Link>
                                     </td>
                             </tr>

@@ -1,0 +1,495 @@
+<!--
+SendGrid Dynamic Template: Service Agreement
+
+Recommended template data:
+{
+  "subject": "Murdock Pool Service Service Agreement",
+  "preHeader": "Your pool service agreement is ready to review.",
+  "customer": "Jane Homeowner",
+  "companyName": "Murdock Pool Service",
+  "agreementTitle": "Monthly Residential Pool Service",
+  "agreementNumber": "SA-10024",
+  "agreementStatus": "Pending Review",
+  "agreementUrl": "https://app.dripdrop-poolapp.com/customer/agreements/...",
+  "sentDate": "June 2, 2026",
+  "expiresAt": "June 16, 2026",
+  "address01": "123 Main St",
+  "address02": "",
+  "city": "Fresno",
+  "state": "CA",
+  "zip": "93720",
+  "billingAmount": "$175.00",
+  "billingFrequency": "Monthly",
+  "billingStartDate": "July 1, 2026",
+  "paymentTerms": "Due on receipt",
+  "autopayStatus": "Optional",
+  "lineItems": [
+    {
+      "name": "Weekly pool service",
+      "description": "Routine cleaning, water testing, and chemical balancing.",
+      "quantity": "1",
+      "unitAmount": "$175.00",
+      "totalAmount": "$175.00"
+    }
+  ],
+  "termsSummary": "This agreement uses the company's Residential Weekly Service template.",
+  "terms": [
+    {
+      "title": "Service Schedule",
+      "description": "Service is performed once per week, weather and access permitting."
+    }
+  ],
+  "companyPhone": "(555) 555-5555",
+  "companyEmail": "office@example.com",
+  "supportUrl": "https://dripdrop-poolapp.com/support",
+  "contactUrl": "mailto:office@example.com",
+  "legalUrl": "https://dripdrop-poolapp.com/legal"
+}
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>Service Agreement</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #F5F7FB;
+            font-family: Arial, sans-serif;
+            color: #1F2937;
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        img {
+            border: 0;
+            display: block;
+            max-width: 100%;
+        }
+
+        a {
+            color: #1D2E76;
+            text-decoration: none;
+        }
+
+        .email-wrapper {
+            width: 100%;
+            background-color: #F5F7FB;
+            padding: 24px 0;
+        }
+
+        .email-container {
+            width: 100%;
+            max-width: 680px;
+            margin: 0 auto;
+            background-color: #FFFFFF;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+        }
+
+        .header {
+            background-color: #1D2E76;
+            padding: 32px 36px;
+            color: #FFFFFF;
+        }
+
+        .header-eyebrow {
+            color: #E0AE36;
+            font-size: 13px;
+            line-height: 18px;
+            font-weight: 700;
+            letter-spacing: 0;
+            text-transform: uppercase;
+            margin: 0 0 8px;
+        }
+
+        .header-title {
+            font-size: 28px;
+            line-height: 36px;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .header-copy {
+            color: #DCE4F6;
+            font-size: 15px;
+            line-height: 23px;
+            margin: 12px 0 0;
+        }
+
+        .content {
+            padding: 32px 36px;
+        }
+
+        .section {
+            margin: 0 0 26px;
+        }
+
+        .section-title {
+            color: #111827;
+            font-size: 18px;
+            line-height: 24px;
+            font-weight: 700;
+            margin: 0 0 12px;
+        }
+
+        .body-copy {
+            color: #374151;
+            font-size: 15px;
+            line-height: 24px;
+            margin: 0;
+        }
+
+        .summary-card {
+            background-color: #F8FAFC;
+            border: 1px solid #E5E7EB;
+            border-radius: 10px;
+            padding: 18px;
+        }
+
+        .summary-row {
+            border-bottom: 1px solid #E5E7EB;
+        }
+
+        .summary-row:last-child {
+            border-bottom: 0;
+        }
+
+        .summary-label {
+            color: #64748B;
+            font-size: 13px;
+            line-height: 18px;
+            padding: 10px 0;
+            width: 42%;
+            vertical-align: top;
+        }
+
+        .summary-value {
+            color: #111827;
+            font-size: 14px;
+            line-height: 20px;
+            font-weight: 700;
+            padding: 10px 0;
+            vertical-align: top;
+        }
+
+        .cta-wrap {
+            text-align: center;
+            padding: 8px 0 2px;
+        }
+
+        .cta-button {
+            display: inline-block;
+            background-color: #E0AE36;
+            color: #111827 !important;
+            border-radius: 8px;
+            padding: 14px 24px;
+            font-size: 15px;
+            line-height: 20px;
+            font-weight: 700;
+            text-decoration: none;
+        }
+
+        .line-items {
+            width: 100%;
+            border: 1px solid #E5E7EB;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+
+        .line-items th {
+            background-color: #F8FAFC;
+            color: #475569;
+            font-size: 12px;
+            line-height: 16px;
+            font-weight: 700;
+            text-transform: uppercase;
+            text-align: left;
+            padding: 12px;
+        }
+
+        .line-items td {
+            color: #1F2937;
+            font-size: 14px;
+            line-height: 20px;
+            padding: 14px 12px;
+            border-top: 1px solid #E5E7EB;
+            vertical-align: top;
+        }
+
+        .muted {
+            color: #64748B;
+            font-size: 13px;
+            line-height: 20px;
+        }
+
+        .terms-block {
+            border-left: 4px solid #E0AE36;
+            background-color: #FFF9EB;
+            padding: 14px 16px;
+            margin: 10px 0;
+        }
+
+        .terms-title {
+            color: #111827;
+            font-size: 14px;
+            line-height: 20px;
+            font-weight: 700;
+            margin: 0 0 4px;
+        }
+
+        .terms-copy {
+            color: #374151;
+            font-size: 14px;
+            line-height: 22px;
+            margin: 0;
+        }
+
+        .fallback-note {
+            background-color: #EEF6FF;
+            border: 1px solid #BFDBFE;
+            border-radius: 10px;
+            padding: 14px 16px;
+            color: #1E3A8A;
+            font-size: 14px;
+            line-height: 22px;
+        }
+
+        .footer {
+            background-color: #F8FAFC;
+            padding: 24px 36px;
+            color: #64748B;
+            font-size: 12px;
+            line-height: 18px;
+            text-align: center;
+        }
+
+        @media screen and (max-width: 620px) {
+            .email-wrapper {
+                padding: 0;
+            }
+
+            .email-container {
+                border-radius: 0;
+            }
+
+            .header,
+            .content,
+            .footer {
+                padding-left: 22px;
+                padding-right: 22px;
+            }
+
+            .header-title {
+                font-size: 24px;
+                line-height: 31px;
+            }
+
+            .line-items th:nth-child(3),
+            .line-items th:nth-child(4),
+            .line-items td:nth-child(3),
+            .line-items td:nth-child(4) {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <span style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;">
+        {{preHeader}}
+    </span>
+
+    <table role="presentation" class="email-wrapper" width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+            <td align="center">
+                <table role="presentation" class="email-container" width="100%" cellpadding="0" cellspacing="0">
+                    <tr>
+                        <td class="header">
+                            <p class="header-eyebrow">Service Agreement</p>
+                            <h1 class="header-title">{{companyName}} sent you a service agreement</h1>
+                            <p class="header-copy">
+                                Hi {{customer}}, please review the service details, pricing, and terms below.
+                            </p>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td class="content">
+                            <div class="section">
+                                <p class="body-copy">
+                                    This agreement covers service at the property listed below. You can review the full agreement and accept it online when you are ready.
+                                </p>
+                            </div>
+
+                            <div class="section cta-wrap">
+                                <a href="{{agreementUrl}}" class="cta-button">Review Service Agreement</a>
+                            </div>
+
+                            <div class="section">
+                                <h2 class="section-title">Agreement Summary</h2>
+                                <div class="summary-card">
+                                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Agreement</td>
+                                            <td class="summary-value">{{agreementTitle}}</td>
+                                        </tr>
+                                        {{#if agreementNumber}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Agreement Number</td>
+                                            <td class="summary-value">{{agreementNumber}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if agreementStatus}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Status</td>
+                                            <td class="summary-value">{{agreementStatus}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if sentDate}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Sent</td>
+                                            <td class="summary-value">{{sentDate}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if expiresAt}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Review By</td>
+                                            <td class="summary-value">{{expiresAt}}</td>
+                                        </tr>
+                                        {{/if}}
+                                    </table>
+                                </div>
+                            </div>
+
+                            <div class="section">
+                                <h2 class="section-title">Service Location</h2>
+                                <div class="summary-card">
+                                    <p class="body-copy">
+                                        {{address01}}<br>
+                                        {{#if address02}}{{address02}}<br>{{/if}}
+                                        {{city}}, {{state}} {{zip}}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <div class="section">
+                                <h2 class="section-title">Billing Details</h2>
+                                <div class="summary-card">
+                                    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+                                        {{#if billingAmount}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Amount</td>
+                                            <td class="summary-value">{{billingAmount}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if billingFrequency}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Billing Frequency</td>
+                                            <td class="summary-value">{{billingFrequency}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if billingStartDate}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Billing Starts</td>
+                                            <td class="summary-value">{{billingStartDate}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if paymentTerms}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Payment Terms</td>
+                                            <td class="summary-value">{{paymentTerms}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if autopayStatus}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Autopay</td>
+                                            <td class="summary-value">{{autopayStatus}}</td>
+                                        </tr>
+                                        {{/if}}
+                                    </table>
+                                </div>
+                            </div>
+
+                            {{#if lineItems}}
+                            <div class="section">
+                                <h2 class="section-title">Included Items</h2>
+                                <table role="presentation" class="line-items" width="100%" cellpadding="0" cellspacing="0">
+                                    <tr>
+                                        <th>Item</th>
+                                        <th>Qty</th>
+                                        <th>Unit</th>
+                                        <th>Total</th>
+                                    </tr>
+                                    {{#each lineItems}}
+                                    <tr>
+                                        <td>
+                                            <strong>{{this.name}}</strong>
+                                            {{#if this.description}}
+                                            <div class="muted">{{this.description}}</div>
+                                            {{/if}}
+                                        </td>
+                                        <td>{{this.quantity}}</td>
+                                        <td>{{this.unitAmount}}</td>
+                                        <td><strong>{{this.totalAmount}}</strong></td>
+                                    </tr>
+                                    {{/each}}
+                                </table>
+                            </div>
+                            {{/if}}
+
+                            <div class="section">
+                                <h2 class="section-title">Terms</h2>
+                                {{#if termsSummary}}
+                                <p class="body-copy">{{termsSummary}}</p>
+                                {{/if}}
+                                {{#if terms}}
+                                    {{#each terms}}
+                                    <div class="terms-block">
+                                        <p class="terms-title">{{this.title}}</p>
+                                        <p class="terms-copy">{{this.description}}</p>
+                                    </div>
+                                    {{/each}}
+                                {{/if}}
+                            </div>
+
+                            <div class="section">
+                                <div class="fallback-note">
+                                    If you do not use the customer portal, you can reply to this email or contact {{companyName}} directly to review the agreement.
+                                </div>
+                            </div>
+
+                            <div class="section cta-wrap">
+                                <a href="{{agreementUrl}}" class="cta-button">Review Service Agreement</a>
+                            </div>
+                        </td>
+                    </tr>
+
+                    <tr>
+                        <td class="footer">
+                            <strong>{{companyName}}</strong><br>
+                            {{#if companyPhone}}{{companyPhone}}<br>{{/if}}
+                            {{#if companyEmail}}<a href="mailto:{{companyEmail}}">{{companyEmail}}</a><br>{{/if}}
+                            <br>
+                            <a href="{{supportUrl}}">Support</a>
+                            &nbsp;|&nbsp;
+                            <a href="{{contactUrl}}">Contact</a>
+                            &nbsp;|&nbsp;
+                            <a href="{{legalUrl}}">Legal</a>
+                            <br><br>
+                            <a href="<%asm_group_unsubscribe_raw_url%>">Unsubscribe</a>
+                            &nbsp;|&nbsp;
+                            <a href="<%asm_preferences_raw_url%>">Email preferences</a>
+                        </td>
+                    </tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>

@@ -46,7 +46,7 @@ const PurchasesCardView = ({ item }) => {
           {item.customerName && (
             <div className="customer-name">Customer: {item.customerName}</div>
           )}
-          {item.jobId && <div className="job-id">Job: {item.jobId}</div>}
+          {item.jobId && <div className="job-id">Job: {item.jobInternalId || item.jobName || "Linked job"}</div>}
         </div>
       </div>
     </div>

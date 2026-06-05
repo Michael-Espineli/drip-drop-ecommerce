@@ -57,7 +57,7 @@ const ServiceRequestDetail = () => {
     const handleDelete = async () => {
         if (window.confirm('Are you sure you want to delete this service request?')) {
             try {
-                await deleteDoc(doc(db, 'serviceRequests', requestId));
+                await deleteDoc(doc(db, 'homeownerServiceRequests', requestId));
                 navigate('/client/service-requests');
             } catch (err) {
                 console.error("Error deleting document: ", err);

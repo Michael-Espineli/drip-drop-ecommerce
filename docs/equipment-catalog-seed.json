@@ -1,0 +1,993 @@
+[
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "FloPro",
+    "name": "Jandy FloPro Pump",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/pool-pumps/flopro",
+    "sourceNotes": "Official product page lists FloPro brochure, installation/operation manual, and replacement kit instructions.",
+    "parts": []
+  },
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "VS FloPro 1.65 HP",
+    "name": "Jandy VS FloPro 1.65 HP Variable-Speed Pump",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/pumps/h0661800.pdf",
+    "productPageUrl": "https://www.jandy.com/en/product-archive/pumps/vs-flopro-165-hp",
+    "sourceNotes": "Official product page lists H0661800 variable-speed pump installation/operation manual.",
+    "parts": []
+  },
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "VS FloPro 3.8 HP",
+    "name": "Jandy VS FloPro 3.8 HP Variable-Speed Pump",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/pumps/h0661800.pdf",
+    "productPageUrl": "https://www.jandy.com/en/commercial/pumps/vs-flopro-38-hp",
+    "sourceNotes": "Official commercial product page lists H0707400 for 1.85HP, 2.7HP, and 3.8HP VS pumps; H0661800 is a visible official Jandy VS FloPro manual link found during source collection.",
+    "parts": []
+  },
+  {
+    "type": "Filter",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "CV Cartridge Filter",
+    "name": "Jandy CV Cartridge Filter",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/filters/h0291800.pdf?rev=01adc30f9c7f4718b7c6914c004fa965",
+    "productPageUrl": "https://www.jandy.com/en/products/filters/cv",
+    "sourceNotes": "Official product page lists CL/CV filter installation manual H0291800 and specification sheet.",
+    "parts": []
+  },
+  {
+    "type": "Filter",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "CL Cartridge Filter",
+    "name": "Jandy CL Cartridge Filter",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/filters/h0291800.pdf?rev=01adc30f9c7f4718b7c6914c004fa965",
+    "productPageUrl": "https://www.jandy.com/en/commercial/filters/cl",
+    "sourceNotes": "Official Jandy CL product page lists H0291800 CL/CV installation manual and specification resources.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "JXi",
+    "name": "Jandy JXi Gas Pool & Spa Heater",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/heating/h0574300.pdf",
+    "productPageUrl": "https://www.jandy.com/en/commercial/heaters/jxi",
+    "sourceNotes": "Official product page lists JXi installation and operation manual and VersaFlo bypass manual.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "JXiQ",
+    "name": "Jandy JXiQ Gas Pool & Spa Heater",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/heating/h0780200.pdf?rev=a98229f5ba0044b38c6d2bcd27d911be",
+    "productPageUrl": "https://www.jandy.com/en/products/pool-heating/heaters/jxiq",
+    "sourceNotes": "Official product page lists H0780200 JXiQ gas pool and spa heater manual.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "AquaPure",
+    "name": "Jandy AquaPure Salt Chlorinator",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/water-sanitizers/salt-chlorinators/aquapure",
+    "sourceNotes": "Official Jandy product page lists AquaPure brochure, H0325600 installation/operation manual, and tri-sensor replacement kit instructions.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Raypak",
+    "makeId": "",
+    "model": "AVIA 264A-404A",
+    "name": "Raypak AVIA Pool and Spa Heater",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.raypak.com/products/pool-and-spa/residential-pool-and-spa-heaters/avia-pool-and-spa-heater/",
+    "sourceNotes": "Official product page and Raypak documents hub list AVIA installation and operation manual.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Raypak",
+    "makeId": "",
+    "model": "Digital 206A-406A",
+    "name": "Raypak Digital Gas Pool and Spa Heater",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.raypak.com/products/pool-and-spa/residential-pool-and-spa-heaters/digital-gas-pool-and-spa-heater/",
+    "sourceNotes": "Official Raypak product page covers Digital gas pool and spa heater models 206A-406A; Raypak document library lists current manuals and brochures.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Raypak",
+    "makeId": "",
+    "model": "E3T Single Phase",
+    "name": "Raypak E3T Electric Pool and Spa Heater",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.raypak.com/products/pool-and-spa/professional-pool-and-spa-heaters/e3t-digital-pool-and-spa-heater/",
+    "sourceNotes": "Official Raypak E3T page lists single-phase E3T electric pool/spa heater models ELS-R-0005-1-TIB through ELS-R-0027-1-TIB and a public manual resource.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "MasterTemp",
+    "name": "Pentair MasterTemp Pool and Spa Heater",
+    "manualPdfLink": "https://flowandfiltrationsolutions.pentair.com/content/dam/extranet/nam/pentair-pool/residential/heaters/mastertemp/manual/mastertemp-heater-manual-english.pdf",
+    "productPageUrl": "https://www.pentair.com/pool-spa/products/catalog.html",
+    "sourceNotes": "Official Pentair manual PDF found during source collection.",
+    "parts": []
+  },
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "IntelliFlo VS",
+    "name": "Pentair IntelliFlo Variable Speed Pump",
+    "manualPdfLink": "https://flowandfiltrationsolutions.pentair.com/content/dam/extranet/nam/pentair-pool/residential/pumps/archive/intelliflo-variable-speed/intelliflo-vs-pump-manual-english.pdf",
+    "productPageUrl": "https://www.pentair.com/pool-spa/products/catalog.html",
+    "sourceNotes": "Official Pentair IntelliFlo variable speed pump manual PDF found during source collection. Official Pentair replacement-parts sheet covers IntelliFlo VSF, IntelliFlo2 VST, and IntelliFlo VS pumps after 2018.",
+    "parts": [
+      {
+        "name": "Clamp, Cam and Ramp",
+        "sku": "357199",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "See-through Lid",
+        "sku": "357151",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Lid O-Ring",
+        "sku": "350013",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Strainer Basket",
+        "sku": "070387",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Volute WF",
+        "sku": "350015",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drain Plug O-Ring 112",
+        "sku": "192115",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drain Plug WF",
+        "sku": "071131",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Volute Kit",
+        "sku": "357243",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Nut 1/4-20 Hex SS",
+        "sku": "071406",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Washer, Flat 1/4 in. ID x 5/8 in. OD",
+        "sku": "072186",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Screw 1/4-20 x 1 in. Hex Cap SS",
+        "sku": "071657",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Foot WF",
+        "sku": "070927",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Foot Insert WFE Pump Motor Support",
+        "sku": "070929",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Bolt, Hex Head 3/8-16 x 1.25 in.",
+        "sku": "070429",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Washer, Flat 3/8 in. ID x 7/8 in. OD",
+        "sku": "072184",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Bolt, Hex Head 3/8-16 x 1.25 in.",
+        "sku": "070430",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Bolt, Hex Head 3/8-16 x 2 in.",
+        "sku": "070431",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Motor, 3.2 kW 10 Pole",
+        "sku": "350305S",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drive, VSF Model",
+        "sku": "356880Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drive, 2VST and VS Models",
+        "sku": "356878Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Keypad Assembly Kit",
+        "sku": "357527Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Keypad Cover",
+        "sku": "400100",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Keypad Relocation Kit",
+        "sku": "356904Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drive Hardware Kit",
+        "sku": "355685",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Seal Plate",
+        "sku": "074564",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Seal Plate Gasket",
+        "sku": "357100",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Mechanical Seal",
+        "sku": "071734S",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Impeller",
+        "sku": "073131",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Rubber Washer, Impeller Set Screw",
+        "sku": "075713",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Impeller Set Screw 1/4-20 LH Thread",
+        "sku": "071652",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Diffuser",
+        "sku": "072928",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Diffuser Set Screw 4-40 x 1-1/8 in.",
+        "sku": "071660",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Diffuser O-Ring",
+        "sku": "355227",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Nut 3/8 in. Brass, Nickel Plated",
+        "sku": "071404",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drive Kit, VSF Model",
+        "sku": "356922Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Drive Kit, 2VST and VS Models",
+        "sku": "356879Z",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "50 Ft. Communication Cable",
+        "sku": "350122",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Seal Plate Kit w/Mechanical Seal",
+        "sku": "350202",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Power End - 2VST and VS Models",
+        "sku": "354044",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Union Kit",
+        "sku": "357603",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Seal Plate Kit, Ozone/Salt Resistant",
+        "sku": "350199",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      },
+      {
+        "name": "Motor Fan Kit",
+        "sku": "352401",
+        "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/parts-sheets/pool-pumps/intelliflo-vsf-pump-replacement-parts.pdf"
+      }
+    ]
+  },
+  {
+    "type": "Filter",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "Clean & Clear Plus",
+    "name": "Pentair Clean & Clear Plus Cartridge Filter",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/filters/clean-and-clear-family/clean-and-clear-plus/clean-and-clear-plus-guides-manuals/clean-and-clear-plus-install-guide-2025-english.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/pool-spa/products/filters/clean-and-clear-plus-cartridge-filters.html",
+    "sourceNotes": "Official Pentair product page lists models CCP240, CCP320, CCP420, and CCP520 with owner manual resources.",
+    "parts": []
+  },
+  {
+    "type": "Filter",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "FNS Plus",
+    "name": "Pentair FNS Plus Vertical Grid D.E. Filter",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/filters/fns-plus/manual/fns-plus-vertical-grid-de-filter.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/pool-spa/products/filters/fns-plus-filters.html",
+    "sourceNotes": "Official Pentair product page and direct PDF cover FNS Plus vertical grid D.E. filters.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "IntelliChlor",
+    "name": "Pentair IntelliChlor Salt Chlorine Generator",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/sanitizers/intellichlor/intellichlor-installation-users-guide-ic15-ic20-ic40-ic60.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-water-treatment/intellichlor.html",
+    "sourceNotes": "Official Pentair page lists IC15, IC20, IC40, and IC60 resources and installation/user manuals.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "IntelliCenter",
+    "name": "Pentair IntelliCenter Pool Control System",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/automation/intellicenter/manuals---user-docs/intellicenter-web-app-users-guide.pdf",
+    "productPageUrl": "https://www.pentair.com/products/residential/pool-spa-equipment/pool-automation/intellicenter-control-system.html",
+    "sourceNotes": "Official Pentair product page and web app user guide cover IntelliCenter pool control system resources.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "GloBrite",
+    "name": "Pentair GloBrite LED Pool and Spa Light",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/lighting/globrite/manuals/globrite-white-led-light-manual-english.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/products/business-industry/commercial-pool-products/commercial-pool-lighting/globrite--white-pool-and-spa-led-lights.html",
+    "sourceNotes": "Official Pentair product page lists GloBrite white LED light owner manual resources.",
+    "parts": []
+  },
+  {
+    "type": "Filter",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "ProGrid",
+    "name": "Hayward ProGrid Vertical Grid D.E. Filter",
+    "manualPdfLink": "https://commerce.hayward-pool-assets.com/magento/literature-manuals/US/Pool_Man/Pro-grid-DE2420.pdf",
+    "productPageUrl": "https://commerce.hayward-pool-assets.com/magento/literature-manuals/US/Pool_Man/Pro-grid-DE2420.pdf",
+    "sourceNotes": "Official Hayward pool assets manual covers ProGrid vertical D.E. filter models DE2420, DE3620, DE4820, DE6020, and DE7220.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "Universal H-Series",
+    "name": "Hayward Universal H-Series Pool and Spa Heater",
+    "manualPdfLink": "https://hayward.com/media/akeneo_connector/asset_files/U/H/UHS_IO_manual_2020_2316.pdf",
+    "productPageUrl": "https://hayward.com/media/akeneo_connector/asset_files/L/I/LITUHSBRO23_Universal_H_Series_Brochure_DIGITAL_4ce2.pdf",
+    "sourceNotes": "Official Hayward manual and brochure cover Universal H-Series gas heater models H150FD through H500FD.",
+    "parts": []
+  },
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "Super Pump XE",
+    "name": "Hayward Super Pump XE",
+    "manualPdfLink": "",
+    "productPageUrl": "https://investor.hayward.com/investor-news/news-details/2021/Hayward-Expands-Energy-Efficient-DOE-Compliant-Pool-Pump-Offerings-Adding-High-Performance-XE-Series-Line/default.aspx",
+    "sourceNotes": "Official Hayward announcement lists Super Pump XE in 1.65 and 2.25 THP configurations as part of the XE pump line.",
+    "parts": []
+  },
+  {
+    "type": "Pump",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "TriStar XE",
+    "name": "Hayward TriStar XE",
+    "manualPdfLink": "",
+    "productPageUrl": "https://investor.hayward.com/investor-news/news-details/2021/Hayward-Expands-Energy-Efficient-DOE-Compliant-Pool-Pump-Offerings-Adding-High-Performance-XE-Series-Line/default.aspx",
+    "sourceNotes": "Official Hayward announcement lists TriStar XE in 1.25, 1.85, and 2.25 THP configurations.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "Vac-Sweep 380",
+    "name": "Polaris Vac-Sweep 380 Pressure Pool Cleaner",
+    "manualPdfLink": "https://www.polarispool.com/-/media/zodiac/global/downloads/polaris/cleaners/h0498400.pdf?rev=79395f7cc94b475fbdf97ce677a03e72%3Fforce%3D1",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners/pressure-automatic-pool-cleaners/polaris-vac-sweep-380",
+    "sourceNotes": "Official Polaris product page lists H0498400 Polaris 380/P38 owner manual and related cleaner resources.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "ALPHA iQ+",
+    "name": "Polaris ALPHA iQ+ Robotic Pool Cleaner",
+    "manualPdfLink": "https://www.polarispool.com/-/media/zodiac/global/downloads/polaris/cleaners/h0800400.pdf?rev=9db19b0b8dc44ea2b44860f4420bb689%3Fforce%3D1",
+    "productPageUrl": "https://www.polarispool.com/en/support/parts/polaris-alpha-iq-plus",
+    "sourceNotes": "Official Polaris support page lists H0800400 owner manual, quick start guide, and brochure for ALPHA/PHENOM/VRX robotic cleaners.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Maytronics",
+    "makeId": "",
+    "model": "Dolphin Robotic Cleaner",
+    "name": "Maytronics Dolphin Robotic Pool Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://manuals.maytronics.com/",
+    "sourceNotes": "Official Maytronics manual hub provides public manuals by Dolphin model name or part number; add exact cleaner models as they are selected.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "UltraTemp",
+    "name": "Pentair UltraTemp High Performance Heat Pump",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/aquatics/north-america/residential-pool/owner%27s-manuals/ultratemp-heat-pump-installation-and-users-guide-en-fr-sp.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/pool-spa/products/heaters-heat-pumps/ultratemp-high-performance-heat-pump.html",
+    "sourceNotes": "Official Pentair product page lists UltraTemp heat pump resources and models including 110, 120, 120Q, 140, 140 H/C, and 140C variants.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "UltraTemp ETi",
+    "name": "Pentair UltraTemp ETi Hybrid Heater",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-heaters/ultratemp-hybrid-heater.html",
+    "sourceNotes": "Official Pentair product page describes UltraTemp ETi as a hybrid heat pump and gas-fired heater with propane and natural gas variants.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "JE Heat Pump",
+    "name": "Jandy JE Series Heat Pump",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/product-archive/heat-pumps/je",
+    "sourceNotes": "Official Jandy archive page lists JE Series heat pump brochure and H0408600 owner's installation manual.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "VersaTemp",
+    "name": "Jandy VersaTemp Heat/Chill Heat Pump",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/es/products/pool-heating/heat-pumps/versatemp",
+    "sourceNotes": "Official Jandy VersaTemp product page lists H0744700 installation and operation manual for JRT heat/chill heat pump models.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "AquaCal",
+    "makeId": "",
+    "model": "TropiCal",
+    "name": "AquaCal TropiCal Heat Pump",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.aquacal.com/product/tropical/",
+    "sourceNotes": "Official AquaCal product page identifies TropiCal as a pool heat pump family with brochures/manuals and current product information.",
+    "parts": []
+  },
+  {
+    "type": "Heater",
+    "typeId": "",
+    "make": "AquaCal",
+    "makeId": "",
+    "model": "Great Big Bopper",
+    "name": "AquaCal Great Big Bopper Commercial Heat Pump",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.aquacal.com/product/great-big-bopper/",
+    "sourceNotes": "Official AquaCal product page identifies Great Big Bopper as a commercial heat pump family for large commercial swimming pools.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "Prowler 920",
+    "name": "Pentair Prowler 920 Robotic Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en/products/pool-spa-equipment/pool-cleaners/kreepy_krauly_prowler920ingroundpoolcleaner.html",
+    "sourceNotes": "Official Pentair product page lists the Prowler 920 robotic cleaner manual.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "Prowler 910",
+    "name": "Pentair Prowler 910 Robotic Aboveground Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-cleaners/kreepy_krauly_prowler910roboticabovegroundpoolcleaner.html",
+    "sourceNotes": "Official Pentair product page lists Prowler 910 manual resources for aboveground robotic pool cleaners.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "Kreepy Krauly Kruiser",
+    "name": "Pentair Kreepy Krauly Kruiser Suction Cleaner",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/cleaners/kreepy-krauly/kreepy-krauly-kruiser/manual/kreepy-krauly-kruiser-manual-english.pdf",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-cleaners/kreepy_krauly_kruiser.html",
+    "sourceNotes": "Official Pentair product page and direct manual cover Kreepy Krauly Kruiser suction-side inground cleaner.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "Rebel",
+    "name": "Pentair Rebel Suction-Side Cleaner",
+    "manualPdfLink": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/cleaners/kreepy-krauly/kreeply-krauly-warrior/manual/Rebel_Warrior_Tucson_Eng_OM.pdf",
+    "productPageUrl": "https://www.pentair.com/content/dam/extranet/nam/pentair-pool/residential/cleaners/kreepy-krauly/kreeply-krauly-warrior/manual/Rebel_Warrior_Tucson_Eng_OM.pdf",
+    "sourceNotes": "Official Pentair manual covers Rebel, Warrior, and Tucson suction-side pool cleaners.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "Vac-Sweep 3900 Sport",
+    "name": "Polaris Vac-Sweep 3900 Sport Pressure Cleaner",
+    "manualPdfLink": "https://www.polarispool.com/-/media/zodiac/global/downloads/polaris/cleaners/tl875.pdf?rev=233e0356ca8a4c64a9b3c106d917149d",
+    "productPageUrl": "https://www.polarispool.com/products/pressure/polaris-3900",
+    "sourceNotes": "Official Polaris page lists TL-875 Polaris 3900/P39 Sport installation and operation manual.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "Quattro P40",
+    "name": "Polaris Quattro P40 Pressure Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners/pressure-automatic-pool-cleaners/polaris-p40-quattro",
+    "sourceNotes": "Official Polaris Quattro P40 product page lists product specifications and public user guide resources.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "FREEDOM",
+    "name": "Polaris FREEDOM Cordless Robotic Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners/robotic-pool-cleaners/polaris-freedom",
+    "sourceNotes": "Official Polaris product page lists H0748900 owner manual and quick start guide for FREEDOM cordless robotic cleaner.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "FREEDOM SC",
+    "name": "Polaris FREEDOM SC Cordless Robotic Cleaner",
+    "manualPdfLink": "https://www.polarispool.com/-/media/zodiac/global/downloads/polaris/cleaners/h0879900-polaris-freedom-sc-owners-manual.pdf?rev=86248871d8dd4e30b8c13d80251ad6f9%3Fforce%3D1",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners/robotic-pool-cleaners/polaris-freedom-sc",
+    "sourceNotes": "Official Polaris product page and direct manual cover FREEDOM SC cordless robotic cleaner.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "ATLAS XT",
+    "name": "Polaris ATLAS XT Suction-Side Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners",
+    "sourceNotes": "Official Polaris pool cleaners catalog lists ATLAS XT as a suction-side cleaner family.",
+    "parts": []
+  },
+  {
+    "type": "Cleaner",
+    "typeId": "",
+    "make": "Polaris",
+    "makeId": "",
+    "model": "MAXX",
+    "name": "Polaris MAXX Suction-Side Cleaner",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.polarispool.com/en/products/pool-cleaners",
+    "sourceNotes": "Official Polaris pool cleaners catalog lists MAXX as a specialty suction-side cleaner.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "TruClear",
+    "name": "Jandy TruClear Salt Chlorinator",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/water-care/salt-chlorinators/truclear",
+    "sourceNotes": "Official Jandy product page lists H0613500 TruClear chlorinator installation and operation manual and H0613400 quick start guide.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "TruClear XL",
+    "name": "Jandy TruClear XL Salt Chlorinator",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/water-sanitizers/h0696800.pdf?rev=6a3e38c4136540cfb968e1fec53ab996%3Fforce%3D1",
+    "productPageUrl": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/water-sanitizers/h0696800.pdf?rev=6a3e38c4136540cfb968e1fec53ab996%3Fforce%3D1",
+    "sourceNotes": "Official Jandy manual covers TruClear XL Salt Chlorinator installation and operation.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "AquaRite S3",
+    "name": "Hayward AquaRite S3 Salt Chlorination System",
+    "manualPdfLink": "",
+    "productPageUrl": "https://investor.hayward.com/investor-news/news-details/2022/Hayward-Introduces-Advanced-AquaRite-S3-Salt-Sanitization-System/default.aspx",
+    "sourceNotes": "Official Hayward announcement identifies AquaRite S3 and AquaRite S3 Omni salt chlorination systems.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "Salt & Swim 3C",
+    "name": "Hayward Salt & Swim 3C Salt Chlorination System",
+    "manualPdfLink": "https://hayward.com/media/akeneo_connector/asset_files/0/9/092527_RevC_492f.pdf",
+    "productPageUrl": "https://hayward.com/media/akeneo_connector/asset_files/0/9/092527_RevC_492f.pdf",
+    "sourceNotes": "Official Hayward pool assets manual covers Salt & Swim 3C salt chlorination system.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "AutoPilot",
+    "makeId": "",
+    "model": "Pool Pilot Digital Nano",
+    "name": "AutoPilot Pool Pilot Digital Nano Salt Chlorinator",
+    "manualPdfLink": "",
+    "productPageUrl": "https://autopilot.com/manuals/",
+    "sourceNotes": "Official AutoPilot manuals page lists Pool Pilot Digital Nano/Nano+ user manual under legacy salt water pool systems.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "AutoPilot",
+    "makeId": "",
+    "model": "ChlorSync",
+    "name": "AutoPilot ChlorSync Salt Chlorinator",
+    "manualPdfLink": "",
+    "productPageUrl": "https://autopilot.com/manuals/",
+    "sourceNotes": "Official AutoPilot manuals page lists ChlorSync user manual resources.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "CircuPool",
+    "makeId": "",
+    "model": "RJ PLUS",
+    "name": "CircuPool RJ PLUS Saltwater Chlorination System",
+    "manualPdfLink": "https://circupool.com/assets/doc/CircuPool-RJ-PLUS-Manual.pdf",
+    "productPageUrl": "https://www.circupool.com/circupool-rj20-salt-chlorinator-system-for-up-to-20000-gallon-pools",
+    "sourceNotes": "Official CircuPool product/manual pages cover RJ PLUS saltwater chlorination systems.",
+    "parts": []
+  },
+  {
+    "type": "Chlorinator",
+    "typeId": "",
+    "make": "CMP",
+    "makeId": "",
+    "model": "Powerclean Tab",
+    "name": "CMP Powerclean Tab Chlorinator",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.c-m-p.com/pool-products/pool-sanitizers/powerclean/",
+    "sourceNotes": "Official CMP product page lists Powerclean Tab chlorinators including Ultra, Econ, and VS configurations.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "MicroBrite",
+    "name": "Pentair MicroBrite Color and White LED Light",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-lighting/microbrite-buy-online.html",
+    "sourceNotes": "Official Pentair product page lists MicroBrite Color and White LED light manual and GloBrite niche adapter kit manual.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "GloBrite Color",
+    "name": "Pentair GloBrite Color LED Pool and Spa Light",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-lighting/globrite_pool_andspaledlights.html",
+    "sourceNotes": "Official Pentair product page lists GloBrite color changing underwater LED light manual resources.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "WaterColors RGBW",
+    "name": "Jandy WaterColors RGBW Pool and Spa Lights",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/lighting/h0596700_reve.pdf?rev=7251e5dcfe6a49c4aa94d1f2b1b4d982",
+    "productPageUrl": "https://www.jandy.com/en/products/lighting/watercolors-led",
+    "sourceNotes": "Official Jandy product page and direct manual cover WaterColors RGBW pool and spa lights.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "WaterColors Nicheless HydroCool",
+    "name": "Jandy WaterColors Nicheless LED Lights with HydroCool",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/lighting/nicheless-led-gen-2",
+    "sourceNotes": "Official Jandy product page lists H0622800 WaterColors Nicheless LED Lights with HydroCool manual.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "Infinite WaterColors",
+    "name": "Jandy Infinite WaterColors Nicheless LED Light",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/lighting/h0667000_revh.pdf?rev=2b31d172ce6343279332398207fd717b",
+    "productPageUrl": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/lighting/h0667000_revh.pdf?rev=2b31d172ce6343279332398207fd717b",
+    "sourceNotes": "Official Jandy installation and operation manual covers Infinite WaterColors nicheless LED lights.",
+    "parts": []
+  },
+  {
+    "type": "Light",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "WaterColors LED Light Controller",
+    "name": "Jandy WaterColors LED Light Controller",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/pool-lights/watercolors-led-light-controller",
+    "sourceNotes": "Official Jandy product page lists H0698200 WaterColors LED Light Controller manual.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "IntelliTouch",
+    "name": "Pentair IntelliTouch Pool Control System",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en/products/pool-spa-equipment/pool-automation/intellitouch_systems.html",
+    "sourceNotes": "Official Pentair product page lists IntelliTouch user guide, quick reference guides, and related automation resources.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "EasyTouch",
+    "name": "Pentair EasyTouch Control System",
+    "manualPdfLink": "https://flowandfiltrationsolutions.pentair.com/content/dam/extranet/nam/pentair-pool/residential/automation/intellitouch/manual/easytouch-intellitouch-control-system-load-center-installation-guide.pdf",
+    "productPageUrl": "https://flowandfiltrationsolutions.pentair.com/content/dam/extranet/nam/pentair-pool/residential/automation/intellitouch/manual/easytouch-intellitouch-control-system-load-center-installation-guide.pdf",
+    "sourceNotes": "Official Pentair manual covers EasyTouch and IntelliTouch control system load center installation.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Pentair",
+    "makeId": "",
+    "model": "ScreenLogic2",
+    "name": "Pentair ScreenLogic2 Interface",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.pentair.com/en-us/products/residential/pool-spa-equipment/pool-automation/screenlogic2_interfaceforintellitouchandeasytouchautomationsystems.html",
+    "sourceNotes": "Official Pentair page describes ScreenLogic2 remote interface for IntelliTouch and EasyTouch control systems.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "OmniLogic",
+    "name": "Hayward OmniLogic Pool Automation",
+    "manualPdfLink": "",
+    "productPageUrl": "https://hayward.com/media/akeneo_connector/asset_files/L/I/LITOMNIFAM21_Omni_Automation_Brochure_download_806f.pdf",
+    "sourceNotes": "Official Hayward Omni automation brochure covers OmniLogic, OmniHub, and OmniPL control systems.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "OmniHub",
+    "name": "Hayward OmniHub Smart Pool Control",
+    "manualPdfLink": "",
+    "productPageUrl": "https://hayward.com/media/akeneo_connector/asset_files/L/I/LITOMNIFAM21_Omni_Automation_Brochure_download_806f.pdf",
+    "sourceNotes": "Official Hayward Omni automation brochure lists OmniHub as an entry-level Omni smart pool and spa control system.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Hayward",
+    "makeId": "",
+    "model": "OmniPL",
+    "name": "Hayward OmniPL Smart Pool Control",
+    "manualPdfLink": "",
+    "productPageUrl": "https://hayward.com/media/akeneo_connector/asset_files/L/I/LITOMNIFAM21_Omni_Automation_Brochure_download_806f.pdf",
+    "sourceNotes": "Official Hayward Omni automation brochure lists OmniPL as a mid-range Omni smart pool and spa control system.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "AquaLink RS",
+    "name": "Jandy AquaLink RS Pool and Spa Automation System",
+    "manualPdfLink": "https://www.jandy.com/-/media/zodiac/global/downloads/jandy/automation/6594.pdf?rev=dd107aad61ab412ba68220ad50ec1e8f",
+    "productPageUrl": "https://www.jandy.com/en/products/controls/aqualink-rs",
+    "sourceNotes": "Official Jandy AquaLink RS product page lists control panel installation manual and automation brochures.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "AquaLink RS OneTouch",
+    "name": "Jandy AquaLink RS OneTouch",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/controls/system-components/interfaces/aqualink-onetouch",
+    "sourceNotes": "Official Jandy AquaLink OneTouch page lists owner manual, installation manual, quick review card, and troubleshooting manual.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "AquaLink RS Touch",
+    "name": "Jandy AquaLink RS Touch",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/product-archive/controls/touch",
+    "sourceNotes": "Official Jandy archive page lists AquaLink RS Touch installation and owner's manuals.",
+    "parts": []
+  },
+  {
+    "type": "Control System",
+    "typeId": "",
+    "make": "Jandy",
+    "makeId": "",
+    "model": "PureLink Power Center",
+    "name": "Jandy PureLink Power Center",
+    "manualPdfLink": "",
+    "productPageUrl": "https://www.jandy.com/en/products/pool-automation/power-centers/purelink-power-center",
+    "sourceNotes": "Official Jandy product page covers PureLink Power Center with AquaLink automation and AquaPure water purification resources.",
+    "parts": []
+  }
+]

@@ -5,10 +5,12 @@ import { query, collection, getDocs, doc, orderBy, updateDoc, getDoc } from "fir
 import { getAuth } from "firebase/auth";
 import { Link, useNavigate } from 'react-router-dom';
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 export default function ServiceLocations() {
     const navigate = useNavigate();
     const {name,recentlySelectedCompany} = useContext(Context);
+    const { can } = useCompanyPermissions();
     const [serviceLocationList, setServiceLocationList] = useState([]);    
     const [filterServiceLocationList, setFilterServiceLocationList] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
@@ -57,11 +59,13 @@ export default function ServiceLocations() {
             <h2 className="text-2xl font-bold mb-4">Service Locations</h2>
 
             <div className='py-2 flex justify-between'>
-                <Link 
-                className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
-                to={`/company/serviceLocations/createNew`}>
-                    Create New
-                </Link>
+                {can("42") && (
+                    <Link 
+                    className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
+                    to={`/company/serviceLocations/createNew`}>
+                        Create New
+                    </Link>
+                )}
                 <button 
                 // onClick={(e) => updateEquipment(e)} 
                 className="py-1 px-2 yellow-bg rounded-md text-[#000000]" >

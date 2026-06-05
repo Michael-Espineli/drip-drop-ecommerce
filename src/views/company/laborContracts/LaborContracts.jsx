@@ -29,7 +29,6 @@ const ContractCard = ({ contract, onClick }) => (
         <div className="mt-4 pt-4 border-t border-gray-200 text-sm text-gray-600 space-y-2">
             <p><span className="font-semibold">From:</span> {contract.senderName}</p>
             <p><span className="font-semibold">To:</span> {contract.receiverName}</p>
-            <p className="text-xs text-gray-400 pt-2">ID: {contract.id}</p>
         </div>
     </div>
 );

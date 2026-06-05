@@ -7,6 +7,8 @@ import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
 
+const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
+
 const purchaseFilters = [
   { value: "all", label: "All" },
   { value: "billable", label: "Billable" },
@@ -57,6 +59,21 @@ const purchaseSearchText = (item) =>
     .join(" ")
     .toLowerCase();
 
+const toSortableValue = (value) => {
+  if (value?.toDate) return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+  if (typeof value === "boolean") return value ? 1 : 0;
+  return String(value || "").toLowerCase();
+};
+
+const compareSortValues = (left, right) => {
+  if (left === right) return 0;
+  if (left === "" || left === null || left === undefined) return 1;
+  if (right === "" || right === null || right === undefined) return -1;
+  return left > right ? 1 : -1;
+};
+
 const PurchaseListView = () => {
   const navigate = useNavigate();
 
@@ -74,9 +91,11 @@ const PurchaseListView = () => {
   const [lastDocument, setLastDocument] = useState(null);
   const [hasMore, setHasMore] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
+  const [tableSort, setTableSort] = useState({ key: "date", direction: "desc" });
   const fileInputRef = useRef(null);
 
   const { recentlySelectedCompany } = useContext(Context);
+  const showAlphaWaterImport = recentlySelectedCompany === MURDOCK_COMPANY_ID;
 
   // Effect to fetch company users
   useEffect(() => {
@@ -160,7 +179,7 @@ const PurchaseListView = () => {
       constraints.push(startAfter(afterDoc));
     }
 
-    constraints.push(limit(25));
+    // constraints.push(limit(100));
     return query(itemsRef, ...constraints);
   };
 
@@ -228,14 +247,11 @@ const PurchaseListView = () => {
       const rows = filteredItems.map((eq) => {
 
         return {
-          "Purchase ID": eq?.id || "",
-          "Receipt ID": eq?.receiptId || "",
+          "Purchase": eq?.name || "Purchase",
+          "Receipt": eq?.receiptId ? "Linked receipt" : "",
           "Invoice Number": eq?.invoiceNum || "",
           Vendor: eq?.venderName || "",
-          "Vendor ID": eq?.venderId || "",
           Technician: eq?.techName || "",
-          "Technician ID": eq?.techId || "",
-          "Item ID": eq?.itemId || "",
           Name: eq?.name || "",
           Price: eq?.price || "",
           Quantity: eq?.quantityString || "",
@@ -245,11 +261,10 @@ const PurchaseListView = () => {
           "Invoiced (bool)": eq?.invoiced ?? "",
           "Returned (bool)": eq?.returned ?? "",
           Customer: eq?.customerName || "",
-          "Customer ID": eq?.customerId || "",
 
           Sku: eq?.sku || "",
           Notes: eq?.notes || "",
-          "Job Id": eq?.jobId || "",
+          Job: eq?.jobInternalId || eq?.jobName || (eq?.jobId ? "Linked job" : ""),
           "Billing Rate": eq?.billingRate || "",
         };
       });
@@ -301,6 +316,53 @@ const PurchaseListView = () => {
       billablePriceCents,
     };
   }, [filteredItems]);
+
+  const sortedItems = useMemo(() => {
+    const valueForKey = (item, key) => {
+      switch (key) {
+        case "status":
+          return item.billable ? (item.invoiced ? "invoiced" : "needs invoice") : "non-billable";
+        case "quantity":
+          return item.quantity;
+        case "total":
+          return item.total;
+        case "date":
+          return item.date;
+        default:
+          return item[key];
+      }
+    };
+
+    return [...filteredItems].sort((left, right) => {
+      const result = compareSortValues(
+        toSortableValue(valueForKey(left, tableSort.key)),
+        toSortableValue(valueForKey(right, tableSort.key))
+      );
+      return tableSort.direction === "asc" ? result : -result;
+    });
+  }, [filteredItems, tableSort]);
+
+  const setSort = (key) => {
+    setTableSort((current) => ({
+      key,
+      direction: current.key === key && current.direction === "asc" ? "desc" : "asc",
+    }));
+  };
+
+  const SortHeader = ({ label, keyName, className = "" }) => (
+    <th className={`p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider ${className}`}>
+      <button
+        type="button"
+        onClick={() => setSort(keyName)}
+        className="inline-flex items-center gap-1 text-left uppercase tracking-wider hover:text-gray-900"
+      >
+        {label}
+        <span className="text-xs text-gray-400">
+          {tableSort.key === keyName ? (tableSort.direction === "asc" ? "ASC" : "DESC") : "--"}
+        </span>
+      </button>
+    </th>
+  );
 
   const handleFileChange = (event) => {
     const file = event.target.files[0];
@@ -412,11 +474,26 @@ const PurchaseListView = () => {
       <div className="">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-3xl font-bold text-gray-800">Purchases</h2>
-          <Link to={'/company/purchased-items/createNew'}
-            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-          >
-            Create New Purchase
-          </Link>
+          <div className="flex flex-wrap justify-end gap-2">
+            {showAlphaWaterImport ? (
+              <Link
+                to="/company/purchased-items/alpha-water-import"
+                className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl shadow-sm hover:bg-indigo-100 transition"
+              >
+                Alpha Water Import
+              </Link>
+            ) : null}
+            <Link to={'/company/purchased-items/createNew'}
+              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+            >
+              Create New Receipt
+            </Link>
+            <Link to={'/company/receipts'}
+              className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-200 rounded-xl shadow-sm hover:bg-slate-50 transition"
+            >
+              View Receipts
+            </Link>
+          </div>
         </div>
         <div className="bg-white shadow-lg rounded-xl p-6">
           <div className='flex flex-col sm:flex-row justify-between items-center mb-4 gap-4'>
@@ -474,25 +551,38 @@ const PurchaseListView = () => {
                 <table className="min-w-full bg-white">
                   <thead className="bg-gray-100">
                     <tr>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Name</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Invoice #</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Date</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Sku</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Price</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Quantity</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Total</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Technician</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Customer Name</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Job Id</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
-                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider"></th>
+                      <SortHeader label="Status" keyName="status" />
+                      <SortHeader label="Name" keyName="name" />
+                      <SortHeader label="Invoice #" keyName="invoiceNum" />
+                      <SortHeader label="Date" keyName="date" />
+                      <SortHeader label="Sku" keyName="sku" />
+                      <SortHeader label="Price" keyName="price" />
+                      <SortHeader label="Quantity" keyName="quantity" />
+                      <SortHeader label="Total" keyName="total" />
+                      <SortHeader label="Technician" keyName="techName" />
+                      <SortHeader label="Customer Name" keyName="customerName" />
+                      <SortHeader label="Job" keyName="jobId" />
+                      <SortHeader label="Notes" keyName="notes" />
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
-                    {filteredItems.map(item => (
+                    {sortedItems.map(item => (
                       <tr key={item.id} className="hover:bg-gray-50 transition-colors"
                         onClick={() => navigate(`/company/purchased-items/detail/${item.id}`)}
                       >
+                        <td className="p-4 whitespace-nowrap text-gray-700">
+                          {
+                            item.billable && <>
+                              {
+                                item.invoiced ? <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800">
+                                  Invoiced
+                                </span> : <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800">
+                                  Needs invoice
+                                </span>
+                              }
+                            </>
+                          }
+                        </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.name}
                         </td>
@@ -528,19 +618,6 @@ const PurchaseListView = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.notes}
-                        </td>
-                        <td className="p-4 whitespace-nowrap text-gray-700">
-                          {
-                            item.billable && <>
-                              {
-                                item.invoiced ? <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-800">
-                                  Invoiced
-                                </span> : <span className="rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-800">
-                                  Needs invoice
-                                </span>
-                              }
-                            </>
-                          }
                         </td>
                       </tr>
                     ))}

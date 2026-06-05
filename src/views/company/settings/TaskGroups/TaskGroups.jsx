@@ -3,10 +3,12 @@ import { query, collection, getDocs } from "firebase/firestore";
 import { db } from "../../../../utils/config";
 import { Link, useNavigate } from "react-router-dom";
 import { Context } from "../../../../context/AuthContext";
+import useCompanyPermissions from "../../../../hooks/useCompanyPermissions";
 
 const TaskGroups = () => {
   const [companyUserList, setCompanyUserList] = useState([]);
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { can } = useCompanyPermissions();
 
   const navigate = useNavigate();
   useEffect(() => {
@@ -47,12 +49,14 @@ const TaskGroups = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            <Link
-              className="px-4 py-2 text-sm font-medium text-black-700 bg-black-50 border border-black-200 rounded-xl shadow-sm hover:bg-black-100 transition"
-              to="/company/taskGroups/createNew"
-            >
-              + Create New Task Group
-            </Link>
+            {can("822") && (
+              <Link
+                className="px-4 py-2 text-sm font-medium text-black-700 bg-black-50 border border-black-200 rounded-xl shadow-sm hover:bg-black-100 transition"
+                to="/company/taskGroups/createNew"
+              >
+                + Create New Task Group
+              </Link>
+            )}
           </div>
         </div>
 
@@ -104,6 +108,7 @@ const TaskGroups = () => {
                         <div className="text-sm text-slate-500 mt-1">
                           Create your first task group to reuse common workflows.
                         </div>
+                        {can("822") && (
                         <div className="mt-4">
                           <Link
                             className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white hover:bg-slate-800 transition"
@@ -112,6 +117,7 @@ const TaskGroups = () => {
                             + Create New Task Group
                           </Link>
                         </div>
+                        )}
                       </div>
                     </td>
                   </tr>

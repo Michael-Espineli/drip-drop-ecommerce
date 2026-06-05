@@ -6,6 +6,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const DetailItem = ({ label, value, children }) => (
     <div className="py-2">
@@ -44,6 +45,7 @@ const buildPersonalVehicleForm = (companyUser) => ({
 
 const CompanyUserDetails = () => {
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const { companyUserId } = useParams(); // This should be the userId
     const navigate = useNavigate();
 
@@ -100,6 +102,7 @@ const CompanyUserDetails = () => {
     };
 
     const handleSaveVehicleAccess = async () => {
+        if (!requirePermission("264", "update company users")) return;
         if (!recentlySelectedCompany || !user?.id) return;
 
         setIsSavingVehicleAccess(true);
@@ -158,7 +161,6 @@ const CompanyUserDetails = () => {
                 <div className="space-y-8">
                     <DetailCard title="User Information">
                         <DetailItem label="Full Name" value={user.userName} />
-                        <DetailItem label="User ID" value={user.userId} />
                         <DetailItem label="Worker Type" value={user.workerType} />
                         <DetailItem label="Date Created">
                             <p className="font-semibold text-gray-800">
@@ -169,7 +171,6 @@ const CompanyUserDetails = () => {
 
                     <DetailCard title="Role & Status">
                         <DetailItem label="Role" value={user.roleName} />
-                        <DetailItem label="Role ID" value={user.roleId} />
                         <DetailItem label="Status">
                             <span className={`text-sm font-bold px-3 py-1 rounded-full ${getStatusClass(user.status)}`}>
                                 {user.status}
@@ -180,7 +181,7 @@ const CompanyUserDetails = () => {
                     {user.workerType === 'Sub-Contractor' && (
                         <DetailCard title="Linked Company">
                             <DetailItem label="Company Name" value={user.linkedCompanyName} />
-                            <DetailItem label="Company ID" value={user.linkedCompanyId} />
+                            <DetailItem label="Company Reference" value={user.linkedCompanyName || (user.linkedCompanyId ? "Linked company" : "")} />
                         </DetailCard>
                     )}
 
@@ -192,6 +193,7 @@ const CompanyUserDetails = () => {
                                     Permit this technician to use a personal vehicle when starting or managing active routes.
                                 </p>
                             </div>
+                            {can("264") && (
                             <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
                                 <input
                                     type="checkbox"
@@ -201,6 +203,7 @@ const CompanyUserDetails = () => {
                                 />
                                 Allow personal vehicle
                             </label>
+                            )}
                         </div>
 
                         <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -209,6 +212,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.nickName}
                                     onChange={(event) => updatePersonalVehicleField("nickName", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="Mike's truck"
                                 />
@@ -218,6 +222,7 @@ const CompanyUserDetails = () => {
                                 <select
                                     value={personalVehicle.vehicalType}
                                     onChange={(event) => updatePersonalVehicleField("vehicalType", event.target.value)}
+                                    disabled={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                 >
                                     {VEHICLE_TYPES.map((type) => (
@@ -230,6 +235,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.year}
                                     onChange={(event) => updatePersonalVehicleField("year", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="2021"
                                 />
@@ -239,6 +245,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.make}
                                     onChange={(event) => updatePersonalVehicleField("make", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="Toyota"
                                 />
@@ -248,6 +255,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.model}
                                     onChange={(event) => updatePersonalVehicleField("model", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="Tacoma"
                                 />
@@ -257,6 +265,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.color}
                                     onChange={(event) => updatePersonalVehicleField("color", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="White"
                                 />
@@ -266,6 +275,7 @@ const CompanyUserDetails = () => {
                                 <input
                                     value={personalVehicle.plate}
                                     onChange={(event) => updatePersonalVehicleField("plate", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm uppercase focus:border-blue-500 focus:outline-none"
                                     placeholder="ABC123"
                                 />
@@ -278,12 +288,14 @@ const CompanyUserDetails = () => {
                                     step="1"
                                     value={personalVehicle.miles}
                                     onChange={(event) => updatePersonalVehicleField("miles", event.target.value)}
+                                    readOnly={!can("264")}
                                     className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
                                     placeholder="0"
                                 />
                             </label>
                         </div>
 
+                        {can("264") && (
                         <div className="mt-5 flex justify-end">
                             <button
                                 type="button"
@@ -294,6 +306,7 @@ const CompanyUserDetails = () => {
                                 {isSavingVehicleAccess ? "Saving..." : "Save Vehicle Access"}
                             </button>
                         </div>
+                        )}
                     </section>
                 </div>
             </div>

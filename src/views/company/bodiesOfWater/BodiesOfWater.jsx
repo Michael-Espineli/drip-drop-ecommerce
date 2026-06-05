@@ -1,16 +1,20 @@
 import React, { useState } from "react";
 import {Link } from 'react-router-dom';
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 export default function BodiesOfWater() {
    const [equipmentList, setEquipmentList] = useState([]);
+   const { can } = useCompanyPermissions();
     
     return (
         <div className='px-2 md:px-7 py-5'>
             <h2 className="text-2xl font-bold mb-4">Bodies Of Water - IP</h2>
 
-            <Link 
-            className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
-            to={`/company/bodiesOfWater/createNew`}>Create New</Link>
+            {can("52") && (
+                <Link 
+                className='py-1 px-2 yellow-bg rounded-md text-[#000000]'
+                to={`/company/bodiesOfWater/createNew`}>Create New</Link>
+            )}
 
             <div className='w-full rounded-md mt-3'>
                 <div className='relative overflow-x-auto'>

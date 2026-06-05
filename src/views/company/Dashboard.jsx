@@ -1,160 +1,374 @@
-import React, { useState, useContext, useEffect } from 'react';
-import { FaShoppingCart, FaUsers } from 'react-icons/fa';
-import { MdCurrencyExchange, MdConstruction } from 'react-icons/md';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { query, collection, getDocs, limit, orderBy, getCountFromServer, where } from "firebase/firestore";
+import {
+    collection,
+    getDocs,
+    query,
+    where,
+} from "firebase/firestore";
+import {
+    FaCreditCard,
+    FaFileContract,
+    FaFileInvoiceDollar,
+    FaHouseUser,
+    FaMoneyBillWave,
+    FaReceipt,
+    FaRoute,
+    FaTools,
+} from 'react-icons/fa';
+import { MdConstruction, MdOutlineLocalOffer } from 'react-icons/md';
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
+import { SalesAgreementSourceType, salesCollectionNames } from '../../utils/models/Sales';
+import { isOpenRepairRequestStatus } from '../../utils/models/RepairRequest';
 import RecentChatsWidget from '../dashboard/components/RecentChatsWidget';
 
-const Dashboard = () => {
-    const { recentlySelectedCompany, user } = useContext(Context);
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+});
 
-    const [customerCount, setCustomerCount] = useState(0);
-    const [techCount, setTechCount] = useState(0);
-    const [jobCount, setJobCount] = useState(0);
-    const [totalSales, setTotalSales] = useState(0);
-    const [workOrders, setWorkOrders] = useState([]);
+const appPaymentMethods = new Set(['stripeCard', 'stripeAch']);
+const activeJobStatuses = new Set(["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]);
+
+const toMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.toDate === 'function') return value.toDate().getTime();
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'number') return value;
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
+
+const formatDate = (value) => {
+    const millis = toMillis(value);
+    if (!millis) return 'Not set';
+    return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric' }).format(new Date(millis));
+};
+
+const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const invoiceBalanceCents = (invoice) => {
+    if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) return Number(invoice.amountDueCents) || 0;
+    const total = Number(invoice.totalAmountCents || 0);
+    const paid = Number(invoice.amountPaidCents || 0);
+    const writtenOff = Number(invoice.writeOffAmountCents || 0);
+    return Math.max(total - paid - writtenOff, 0);
+};
+
+const sortFresh = (records) => (
+    [...records].sort((left, right) => (
+        toMillis(right.updatedAt || right.receivedAt || right.createdAt || right.dateCreated || right.dueDate)
+        - toMillis(left.updatedAt || left.receivedAt || left.createdAt || left.dateCreated || left.dueDate)
+    ))
+);
+
+const StatTile = ({ icon: Icon, label, value, helper, to, tone = 'slate' }) => {
+    const tones = {
+        slate: 'bg-slate-100 text-slate-600',
+        blue: 'bg-blue-50 text-blue-700',
+        emerald: 'bg-emerald-50 text-emerald-700',
+        amber: 'bg-amber-50 text-amber-700',
+        rose: 'bg-rose-50 text-rose-700',
+    };
+
+    const content = (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-200">
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+                    <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+                </div>
+                <span className={`rounded-md p-2 ${tones[tone] || tones.slate}`}>
+                    <Icon />
+                </span>
+            </div>
+            {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
+        </div>
+    );
+
+    return to ? <Link to={to}>{content}</Link> : content;
+};
+
+const ListCard = ({ title, helper, to, children }) => (
+    <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
+            <div>
+                <h2 className="text-lg font-bold text-slate-950">{title}</h2>
+                {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
+            </div>
+            {to && <Link to={to} className="text-xs font-semibold text-blue-700 hover:text-blue-900">View all</Link>}
+        </div>
+        <div className="divide-y divide-slate-100">{children}</div>
+    </section>
+);
+
+const EmptyRow = ({ children }) => (
+    <div className="p-5 text-sm text-slate-500">{children}</div>
+);
+
+const Dashboard = () => {
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
+    const [loading, setLoading] = useState(true);
+    const [customers, setCustomers] = useState([]);
+    const [jobs, setJobs] = useState([]);
     const [leads, setLeads] = useState([]);
+    const [repairRequests, setRepairRequests] = useState([]);
+    const [invoices, setInvoices] = useState([]);
+    const [payments, setPayments] = useState([]);
+    const [subscriptions, setSubscriptions] = useState([]);
+    const [serviceAgreements, setServiceAgreements] = useState([]);
+    const [recurringServiceStops, setRecurringServiceStops] = useState([]);
 
     useEffect(() => {
-        if (recentlySelectedCompany && user) {
-            const getCounts = async () => {
-                const customerCol = query(collection(db, "companies", recentlySelectedCompany, "customers"), where("active", "==", true));
-                const customerSnapshot = await getCountFromServer(customerCol);
-                setCustomerCount(customerSnapshot.data().count);
-
-                const techCol = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"), where("status", "==", "Active"));
-                const techSnapshot = await getCountFromServer(techCol);
-                setTechCount(techSnapshot.data().count);
-
-                const jobCol = query(collection(db, "companies", recentlySelectedCompany, "workOrders"), where("operationStatus", "in", ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]));
-                const jobSnapshot = await getCountFromServer(jobCol);
-                setJobCount(jobSnapshot.data().count);
-            };
-
-            const getWorkOrders = async () => {
-                const jobsCol = collection(db, "companies", recentlySelectedCompany, "workOrders");
-                const q = query(jobsCol,
-                    where("operationStatus", "in", ["Estimate Pending", "Unscheduled", "Scheduled", "In Progress"]),
-                    orderBy("internalId", "desc"),
-                    limit(5));
-                const querySnapshot = await getDocs(q);
-                const orders = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setWorkOrders(orders);
-            };
-
-            const getLeads = async () => {
-                const leadsCol = collection(db, "homeownerServiceRequests");
-                const q = query(leadsCol,
-                    where("companyId", "==", recentlySelectedCompany),
-                    where("status", "==", "Pending"),
-                    orderBy("createdAt", "desc"),
-                    limit(5));
-                const querySnapshot = await getDocs(q);
-                const leadsData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setLeads(leadsData);
-            };
-
-            getCounts();
-            getWorkOrders();
-            getLeads();
+        if (!recentlySelectedCompany || !user) {
+            setLoading(false);
+            return;
         }
+
+        const loadDashboard = async () => {
+            setLoading(true);
+            try {
+                const [
+                    customersSnap,
+                    jobsSnap,
+                    leadsSnap,
+                    internalRepairsSnap,
+                    externalRepairsSnap,
+                    invoicesSnap,
+                    paymentsSnap,
+                    subscriptionsSnap,
+                    agreementsSnap,
+                    recurringStopsSnap,
+                ] = await Promise.all([
+                    getDocs(query(collection(db, "companies", recentlySelectedCompany, "customers"), where("active", "==", true))),
+                    getDocs(query(collection(db, "companies", recentlySelectedCompany, "workOrders"), where("operationStatus", "in", Array.from(activeJobStatuses)))),
+                    getDocs(query(collection(db, "homeownerServiceRequests"), where("companyId", "==", recentlySelectedCompany), where("status", "==", "Pending"))),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "repairRequests")),
+                    getDocs(query(collection(db, "homeownerRepairRequests"), where("companyId", "==", recentlySelectedCompany))),
+                    getDocs(query(collection(db, salesCollectionNames.invoices), where("companyId", "==", recentlySelectedCompany))),
+                    getDocs(query(collection(db, salesCollectionNames.payments), where("companyId", "==", recentlySelectedCompany))),
+                    getDocs(query(collection(db, salesCollectionNames.billingSubscriptions), where("companyId", "==", recentlySelectedCompany))),
+                    getDocs(query(collection(db, salesCollectionNames.agreements), where("companyId", "==", recentlySelectedCompany))),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "recurringServiceStop")),
+                ]);
+
+                setCustomers(customersSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setJobs(jobsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setLeads(leadsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setRepairRequests([
+                    ...internalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'internal', ...itemDoc.data() })),
+                    ...externalRepairsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, source: 'external', ...itemDoc.data() })),
+                ]);
+                setInvoices(invoicesSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setPayments(paymentsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setSubscriptions(subscriptionsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setServiceAgreements(agreementsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+                setRecurringServiceStops(recurringStopsSnap.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() })));
+            } catch (error) {
+                console.error("Error loading company dashboard:", error);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        loadDashboard();
     }, [recentlySelectedCompany, user]);
 
-    const stats = [
-        { id: 1, name: 'Total Sales', stat: `$${totalSales.toFixed(2)}`, icon: MdCurrencyExchange, link: '/company/reports' },
-        { id: 2, name: 'Active Customers', stat: customerCount, icon: FaUsers, link: '/company/customers' },
-        { id: 3, name: 'Technicians', stat: techCount, icon: FaUsers, link: '/company/companyUsers' },
-        { id: 4, name: 'Jobs', stat: jobCount, icon: MdConstruction, link: '/company/jobs' },
-    ]
+    const summary = useMemo(() => {
+        const activeRepairs = repairRequests.filter((request) => (
+            isOpenRepairRequestStatus(request.status)
+        ));
+        const issuedInvoiceCents = invoices
+            .filter((invoice) => !['draft', 'void'].includes(normalizeStatus(invoice.status)))
+            .reduce((total, invoice) => total + Number(invoice.totalAmountCents || 0), 0);
+        const openArCents = invoices
+            .filter((invoice) => ['open', 'partiallypaid', 'overdue'].includes(normalizeStatus(invoice.status)))
+            .reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0);
+        const postedPayments = payments.filter((payment) => normalizeStatus(payment.status) === 'posted');
+        const receivedCents = postedPayments.reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+        const paidThroughAppCents = postedPayments
+            .filter((payment) => appPaymentMethods.has(payment.method) || payment.stripePaymentIntentId || payment.stripeChargeId)
+            .reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+        const recurringCents = subscriptions
+            .filter((subscription) => ['active', 'trialing'].includes(normalizeStatus(subscription.stripeStatus || subscription.status)))
+            .reduce((total, subscription) => total + Number(subscription.amountCents || 0), 0);
+
+        return {
+            activeRepairs,
+            issuedInvoiceCents,
+            openArCents,
+            receivedCents,
+            paidThroughAppCents,
+            recurringCents,
+        };
+    }, [invoices, payments, repairRequests, subscriptions]);
+
+    const recurringStopsByServiceLocation = useMemo(() => {
+        const set = new Set();
+        recurringServiceStops.forEach((stop) => {
+            if (stop.serviceLocationId && (stop.techId || stop.tech) && (stop.day || stop.daysOfWeek)) {
+                set.add(stop.serviceLocationId);
+            }
+        });
+        return set;
+    }, [recurringServiceStops]);
+
+    const recurringStopsByCustomer = useMemo(() => {
+        const set = new Set();
+        recurringServiceStops.forEach((stop) => {
+            if (stop.customerId && (stop.techId || stop.tech) && (stop.day || stop.daysOfWeek)) {
+                set.add(stop.customerId);
+            }
+        });
+        return set;
+    }, [recurringServiceStops]);
+
+    const agreementsNeedRouting = useMemo(() => serviceAgreements.filter((agreement) => {
+        const status = normalizeStatus(agreement.status);
+        const sourceType = agreement.sourceType || '';
+        const isJobAgreement =
+            sourceType === SalesAgreementSourceType.oneOffJob ||
+            agreement.rateType === 'oneTime' ||
+            agreement.serviceCadence === 'oneTime' ||
+            Boolean(agreement.jobId || agreement.workOrderId);
+
+        if (status !== 'accepted' || isJobAgreement) return false;
+
+        const serviceLocationIds = Array.isArray(agreement.serviceLocationIds)
+            ? agreement.serviceLocationIds.filter(Boolean)
+            : [];
+        const hasLocationMatch = serviceLocationIds.some((serviceLocationId) => recurringStopsByServiceLocation.has(serviceLocationId));
+        const hasCustomerFallbackMatch = serviceLocationIds.length === 0 && agreement.customerId && recurringStopsByCustomer.has(agreement.customerId);
+
+        return !agreement.recurringServiceStopId && !hasLocationMatch && !hasCustomerFallbackMatch;
+    }), [recurringStopsByCustomer, recurringStopsByServiceLocation, serviceAgreements]);
+
+    const recentJobs = useMemo(() => sortFresh(jobs).slice(0, 5), [jobs]);
+    const recentLeads = useMemo(() => sortFresh(leads).slice(0, 5), [leads]);
+    const recentPayments = useMemo(() => sortFresh(payments.filter((payment) => normalizeStatus(payment.status) === 'posted')).slice(0, 5), [payments]);
+
+    if (loading) {
+        return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-500">Loading dashboard...</div>;
+    }
 
     return (
-        <div className="p-4 md:p-8">
-            <h1 className="text-2xl font-bold mb-4">Company Dashboard</h1>
-            <div>
-                <h3 className="text-base font-semibold leading-6 text-gray-900">Last 30 days</h3>
-                <dl className="mt-5 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-                    {stats.map((item) => (
-                        <div key={item.id} className="relative overflow-hidden rounded-lg bg-white px-4 pb-12 pt-5 shadow sm:px-6 sm:pt-6">
-                            <dt>
-                                <div className="absolute rounded-md bg-indigo-500 p-3">
-                                    <item.icon className="h-6 w-6 text-white" aria-hidden="true" />
-                                </div>
-                                <p className="ml-16 truncate text-sm font-medium text-gray-500">{item.name}</p>
-                            </dt>
-                            <div className="ml-16 flex items-baseline pb-6 sm:pb-7">
-                                <p className="text-2xl font-semibold text-gray-900">{item.stat}</p>
-                                <div className="absolute inset-x-0 bottom-0 bg-gray-50 px-4 py-4 sm:px-6">
-                                    <div className="text-sm">
+        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || 'Selected company'}</p>
+                            <h1 className="mt-2 text-3xl font-bold text-slate-950">Dashboard</h1>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                                Business overview across operations, sales, finance, customers, and team activity.
+                            </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <Link to="/company/operations-dashboard" className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">
+                                Operations
+                            </Link>
+                            <Link to="/company/sales" className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700">
+                                Sales Dashboard
+                            </Link>
+                        </div>
+                    </div>
+                </section>
 
-                                        <Link to={item.link} className="font-medium text-indigo-600 hover:text-indigo-500">
-                                            View all<span className="sr-only"> {item.name} stats</span>
-                                        </Link>
+                <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <StatTile icon={FaFileInvoiceDollar} label="Invoiced" value={formatCurrency(summary.issuedInvoiceCents)} helper="Issued sales invoices" to="/company/sales/invoices" tone="blue" />
+                    <StatTile icon={FaReceipt} label="Received" value={formatCurrency(summary.receivedCents)} helper={`${formatCurrency(summary.paidThroughAppCents)} paid in app`} to="/company/sales/payments" tone="emerald" />
+                    <StatTile icon={FaMoneyBillWave} label="Open AR" value={formatCurrency(summary.openArCents)} helper="Outstanding customer balance" to="/company/sales/invoices" tone="amber" />
+                    <StatTile icon={FaCreditCard} label="Recurring" value={formatCurrency(summary.recurringCents)} helper="Active subscription amount" to="/company/sales/subscriptions" tone="blue" />
+                    <StatTile icon={MdConstruction} label="Active Jobs" value={jobs.length} helper="Open operational work" to="/company/jobs" tone="amber" />
+                    <StatTile icon={MdOutlineLocalOffer} label="Pending Leads" value={leads.length} helper="New homeowner requests" to="/company/leads" tone="blue" />
+                    <StatTile icon={FaFileContract} label="Needs Routing" value={agreementsNeedRouting.length} helper="Accepted service agreements" to="/company/route-dashboard" tone={agreementsNeedRouting.length ? "amber" : "emerald"} />
+                    <StatTile icon={FaHouseUser} label="Customers" value={customers.length} helper="Active customer accounts" to="/company/customers" />
+                </section>
+
+                <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
+                    <div className="grid gap-6 lg:grid-cols-2">
+                        <ListCard title="Current Work" helper="Open jobs needing action" to="/company/jobs">
+                            {recentJobs.length === 0 ? (
+                                <EmptyRow>No current work orders.</EmptyRow>
+                            ) : recentJobs.map((job) => (
+                                <Link key={job.id} to={`/company/jobs/detail/${job.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-semibold text-slate-900">{job.internalId || job.customerName || 'Job'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">{job.customerName || job.description || 'No customer saved'}</p>
+                                        </div>
+                                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                                            {job.operationStatus || 'Open'}
+                                        </span>
+                                    </div>
+                                </Link>
+                            ))}
+                        </ListCard>
+
+                        <ListCard title="Recent Leads" helper="Pending homeowner requests" to="/company/leads">
+                            {recentLeads.length === 0 ? (
+                                <EmptyRow>No recent leads.</EmptyRow>
+                            ) : recentLeads.map((lead) => (
+                                <Link key={lead.id} to={`/company/leads/${lead.id}`} className="block px-5 py-4 transition hover:bg-slate-50">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-semibold text-slate-900">{lead.serviceName || 'Service request'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">{lead.homeownerName || lead.customerName || lead.email || 'Homeowner'}</p>
+                                        </div>
+                                        <span className="text-xs font-semibold text-slate-500">{formatDate(lead.createdAt)}</span>
+                                    </div>
+                                </Link>
+                            ))}
+                        </ListCard>
+
+                        <ListCard title="Recently Paid" helper="Posted customer payments" to="/company/sales/payments">
+                            {recentPayments.length === 0 ? (
+                                <EmptyRow>No payments posted yet.</EmptyRow>
+                            ) : recentPayments.map((payment) => (
+                                <div key={payment.id} className="px-5 py-4">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <p className="truncate text-sm font-semibold text-slate-900">{payment.customerName || 'Customer'}</p>
+                                            <p className="mt-1 text-sm text-slate-500">
+                                                {payment.method || 'payment'} · {formatDate(payment.receivedAt || payment.createdAt)}
+                                            </p>
+                                        </div>
+                                        <p className="text-sm font-bold text-slate-900">{formatCurrency(payment.amountCents)}</p>
                                     </div>
                                 </div>
-                            </div>
-                        </div>
-                    ))}
-                </dl>
-            </div>
+                            ))}
+                        </ListCard>
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mt-8">
-                <div className="lg:col-span-1">
-                    <h2 className="text-xl font-bold mb-4">Recent Leads</h2>
-                    <div className="bg-white rounded-lg shadow p-4">
-                        {leads.length > 0 ? (
-                            <ul className="divide-y divide-gray-200">
-                                {leads.map((lead) => (
-                                    <li key={lead.id} className="py-4">
-                                        <Link to={`/company/leads/${lead.id}`} className="flex space-x-3">
-                                            <div className="flex-1 space-y-1">
-                                                <div className="flex items-center justify-between">
-                                                    <h3 className="text-sm font-medium">{lead.serviceName || 'N/A'}</h3>
-                                                    <p className="text-sm text-gray-500">{lead.createdAt?.toDate().toLocaleDateString()}</p>
-                                                </div>
-                                                <p className="text-sm text-gray-500">{lead.homeownerName}</p>
-                                            </div>
-                                        </Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p>No recent leads.</p>
-                        )}
+                        <ListCard title="Operations Alerts" helper="Repairs and route pressure" to="/company/operations-dashboard">
+                            <div className="grid gap-3 p-5 sm:grid-cols-2">
+                                <Link to="/company/repair-requests" className="rounded-md border border-slate-200 bg-slate-50 p-3 transition hover:bg-blue-50">
+                                    <FaTools className="text-slate-500" />
+                                    <p className="mt-3 text-2xl font-bold text-slate-950">{summary.activeRepairs.length}</p>
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Open Repairs</p>
+                                </Link>
+                                <Link to="/company/route-day-management" className="rounded-md border border-slate-200 bg-slate-50 p-3 transition hover:bg-blue-50">
+                                    <FaRoute className="text-slate-500" />
+                                    <p className="mt-3 text-2xl font-bold text-slate-950">{jobs.filter((job) => job.operationStatus === 'Scheduled').length}</p>
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Scheduled Jobs</p>
+                                </Link>
+                            </div>
+                        </ListCard>
                     </div>
-                </div>
-                <div className="lg:col-span-1">
-                    <h2 className="text-xl font-bold mb-4">Current Work Orders</h2>
-                    <div className="bg-white rounded-lg shadow p-4">
-                        {workOrders.length > 0 ? (
-                            <ul className="divide-y divide-gray-200">
-                                {workOrders.map((order) => (
-                                    <li key={order.id} className="py-4">
-                                        <Link to={`/company/jobs/detail/${order.id}`} className="flex space-x-3">
-                                            <div className="flex-1 space-y-1">
-                                                <div className="flex items-center justify-between">
-                                                    <h3 className="text-sm font-medium">{order.customerName || 'Unnamed Job'}</h3>
-                                                    <p className="text-sm text-gray-500">{order.dateCreated?.toDate().toLocaleDateString()}</p>
-                                                </div>
-                                                <p className="text-sm text-gray-500">{order.operationStatus}•{order.billingStatus}</p>
-                                            </div>
-                                        </Link>
-                                    </li>
-                                ))}
-                            </ul>
-                        ) : (
-                            <p>No current work orders.</p>
-                        )}
-                    </div>
-                </div>
-                <div className="lg:col-span-1">
-                    <h2 className="text-xl font-bold mb-4">Recent Seller Messages</h2>
-                    <RecentChatsWidget />
-                </div>
+
+                    <ListCard title="Recent Messages" helper="Unread and recent conversations" to="/company/messages">
+                        <div className="p-4">
+                            <RecentChatsWidget />
+                        </div>
+                    </ListCard>
+                </section>
             </div>
         </div>
-    )
-}
+    );
+};
 
 export default Dashboard;

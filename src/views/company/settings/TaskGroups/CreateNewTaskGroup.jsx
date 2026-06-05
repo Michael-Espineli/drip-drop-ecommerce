@@ -7,11 +7,13 @@ import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
+import useCompanyPermissions from "../../../../hooks/useCompanyPermissions";
 
 const CreateNewTaskGroup = () => {
   const navigate = useNavigate();
 
   const { name, recentlySelectedCompany } = useContext(Context);
+  const { requirePermission } = useCompanyPermissions();
 
   const [groupName, setGroupName] = useState();
   const [groupDescription, setGroupDescription] = useState();
@@ -74,6 +76,8 @@ const CreateNewTaskGroup = () => {
 
   async function createNewTaskGroup(e) {
     e.preventDefault();
+    if (!requirePermission("822", "create task groups")) return;
+
     let taskGroupId = "com_set_tg_" + uuidv4();
     //Guard Statments
     //Create Task Group

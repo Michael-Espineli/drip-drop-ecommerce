@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate, Link, useParams } from "react-router-dom";
 import { db } from "../../../utils/config";
-import { collection, getDocs, query, where, orderBy, setDoc, doc, getDoc } from "firebase/firestore";
-import { RepairRequest } from "../../../utils/models/RepairRequest";
+import { collection, getDocs, query, where, orderBy, setDoc, doc, getDoc, updateDoc } from "firebase/firestore";
+import { REPAIR_REQUEST_STATUS, RepairRequest } from "../../../utils/models/RepairRequest";
+import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from "../../../utils/models/Equipment";
 import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const CreateNewRepairRequest = () => {
-  const { recentlySelectedCompany, user } = useContext(Context);
+  const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
+  const { requirePermission } = useCompanyPermissions();
   const navigate = useNavigate();
 
   const { customerId: customerIdParam, locationId: locationIdParam } = useParams();
@@ -22,6 +25,7 @@ const CreateNewRepairRequest = () => {
   const [selectedLocation, setSelectedLocation] = useState(null);
   const [selectedBodyOfWater, setSelectedBodyOfWater] = useState(null);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
+  const [equipmentStatusUpdate, setEquipmentStatusUpdate] = useState("");
 
   const [description, setDescription] = useState("");
   const [photos, setPhotos] = useState([]);
@@ -189,6 +193,7 @@ const CreateNewRepairRequest = () => {
         setEquipmentOptions([]);
         setSelectedBodyOfWater(null);
         setSelectedEquipment(null);
+        setEquipmentStatusUpdate("");
         return;
       }
 
@@ -212,7 +217,7 @@ const CreateNewRepairRequest = () => {
           const data = doc.data();
           return {
             value: doc.id,
-            label: data.name || data.nickName || `Body Of Water ${doc.id}`,
+            label: data.name || data.nickName || "Unnamed Body Of Water",
             ...data,
           };
         });
@@ -223,7 +228,7 @@ const CreateNewRepairRequest = () => {
             value: doc.id,
             label: data.name
               ? `${data.name}${data.model ? ` - ${data.model}` : ""}`
-              : data.model || `Equipment ${doc.id}`,
+              : data.model || "Unnamed Equipment",
             ...data,
           };
         });
@@ -232,6 +237,7 @@ const CreateNewRepairRequest = () => {
         setEquipmentOptions(equipmentList);
         setSelectedBodyOfWater(null);
         setSelectedEquipment(null);
+        setEquipmentStatusUpdate("");
       } catch (error) {
         console.error("Error fetching bodies of water / equipment:", error);
       }
@@ -253,16 +259,34 @@ const CreateNewRepairRequest = () => {
     setEquipmentOptions([]);
     setSelectedBodyOfWater(null);
     setSelectedEquipment(null);
+    setEquipmentStatusUpdate("");
   };
 
   const handleLocationChange = (location) => {
     setSelectedLocation(location);
     setSelectedBodyOfWater(null);
     setSelectedEquipment(null);
+    setEquipmentStatusUpdate("");
+  };
+
+  const handleEquipmentChange = (equipment) => {
+    setSelectedEquipment(equipment);
+    setEquipmentStatusUpdate(equipment ? EQUIPMENT_STATUS.NEEDS_REPAIR : "");
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!requirePermission("32", "create repair requests")) return;
+
+    if (!recentlySelectedCompany) {
+      alert("Please select a company before creating a repair request.");
+      return;
+    }
+
+    if (!user?.uid) {
+      alert("Please sign in before creating a repair request.");
+      return;
+    }
 
     if (!selectedCustomer || !description.trim()) {
       alert("Please select a customer and provide a description.");
@@ -270,7 +294,16 @@ const CreateNewRepairRequest = () => {
     }
 
     try {
-      const repairRequestId = "com_rep_req_" + uuidv4();
+      const repairRequestId = "com_rr_" + uuidv4();
+      const requesterName = [
+        dataBaseUser?.firstName,
+        dataBaseUser?.lastName,
+      ].filter(Boolean).join(" ").trim()
+        || dataBaseUser?.userName
+        || dataBaseUser?.displayName
+        || user.displayName
+        || user.email
+        || "Internal";
 
       // Placeholder until photo upload is implemented
       const photoUrls = [];
@@ -279,8 +312,8 @@ const CreateNewRepairRequest = () => {
         id: repairRequestId,
         customerId: selectedCustomer.value,
         customerName: selectedCustomer.label,
-        requesterId: user?.uid || "",
-        requesterName: user?.userName || user?.email || "",
+        requesterId: user.uid,
+        requesterName,
         description: description.trim(),
         locationId: selectedLocation ? selectedLocation.value : "",
         locationName: selectedLocation ? selectedLocation.label : "",
@@ -289,14 +322,21 @@ const CreateNewRepairRequest = () => {
         equipmentId: selectedEquipment ? selectedEquipment.value : "",
         equipmentName: selectedEquipment ? selectedEquipment.label : "",
         photoUrls,
-        status: "Pending",
-        userId: "",
+        status: REPAIR_REQUEST_STATUS.UNRESOLVED,
+        userId: user.uid,
       });
 
       await setDoc(
         doc(db, "companies", recentlySelectedCompany, "repairRequests", repairRequestId),
         newRepairRequest.toFirestore()
       );
+
+      if (selectedEquipment?.value && equipmentStatusUpdate) {
+        await updateDoc(
+          doc(db, "companies", recentlySelectedCompany, "equipment", selectedEquipment.value),
+          { status: equipmentStatusUpdate }
+        );
+      }
 
       navigate("/company/repair-requests");
     } catch (error) {
@@ -391,13 +431,33 @@ const CreateNewRepairRequest = () => {
               <Select
                 options={equipmentOptions}
                 value={selectedEquipment}
-                onChange={setSelectedEquipment}
+                onChange={handleEquipmentChange}
                 placeholder="Select equipment..."
                 isClearable
                 isDisabled={!selectedLocation}
                 styles={selectStyles}
               />
             </div>
+
+            {selectedEquipment && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Equipment Status
+                </label>
+                <select
+                  value={equipmentStatusUpdate}
+                  onChange={(e) => setEquipmentStatusUpdate(e.target.value)}
+                  className="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500"
+                >
+                  <option value="">Do not change status</option>
+                  {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                    <option key={statusOption} value={statusOption}>
+                      {statusOption}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Section 2: Request Details */}

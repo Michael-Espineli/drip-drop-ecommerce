@@ -1,15 +1,25 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, deleteDoc, collection, addDoc, getDocs, deleteDoc as deleteClauseDoc } from 'firebase/firestore';
+import { deleteDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ArrowLeftIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
+import {
+    deleteContractTerm,
+    getTerms,
+    getTermsTemplate,
+    saveContractTerm,
+    termsTemplateDoc,
+    updateTermsTemplate,
+} from '../../../utils/terms/termsTemplateFirestore';
 
 const TermsTemplateDetail = () => {
     const { templateId } = useParams();
     const navigate = useNavigate();
-    const db = getFirestore();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
 
     const [template, setTemplate] = useState(null);
     const [clauses, setClauses] = useState([]);
@@ -19,17 +29,14 @@ const TermsTemplateDetail = () => {
     const [newClause, setNewClause] = useState('');
 
     useEffect(() => {
-        if (!recentlySelectedCompany || !templateId) return;
+        if (!recentlySelectedCompany || !templateId) return undefined;
         
         const fetchTemplateAndClauses = async () => {
             setIsLoading(true);
-            const templateRef = doc(db, 'companies', recentlySelectedCompany, 'termsTemplates', templateId);
-            const clausesRef = collection(templateRef, 'clauses');
 
             try {
-                const templateSnap = await getDoc(templateRef);
-                if (templateSnap.exists()) {
-                    const templateData = templateSnap.data();
+                const templateData = await getTermsTemplate(recentlySelectedCompany, templateId);
+                if (templateData) {
                     setTemplate(templateData);
                     setEditedTemplate(templateData);
                 } else {
@@ -37,9 +44,8 @@ const TermsTemplateDetail = () => {
                     navigate("/company/settings/terms-templates");
                 }
 
-                const clausesSnap = await getDocs(clausesRef);
-                const clausesList = clausesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setClauses(clausesList);
+                const termsList = await getTerms(recentlySelectedCompany, templateId);
+                setClauses(termsList);
 
             } catch (error) {
                 console.error("Error fetching data: ", error);
@@ -50,13 +56,14 @@ const TermsTemplateDetail = () => {
         };
 
         fetchTemplateAndClauses();
-    }, [db, recentlySelectedCompany, templateId, navigate]);
+    }, [recentlySelectedCompany, templateId, navigate]);
 
     const handleUpdate = async (e) => {
         e.preventDefault();
-        const templateRef = doc(db, 'companies', recentlySelectedCompany, 'termsTemplates', templateId);
+        if (!requirePermission("884", "update terms templates")) return;
+
         try {
-            await updateDoc(templateRef, editedTemplate);
+            await updateTermsTemplate(recentlySelectedCompany, templateId, editedTemplate);
             setTemplate(editedTemplate);
             setIsEditing(false);
             toast.success("Template updated successfully!");
@@ -67,10 +74,11 @@ const TermsTemplateDetail = () => {
     };
 
     const handleDelete = async () => {
-        if (window.confirm('Are you sure you want to delete this template and all its clauses?')) {
-            const templateRef = doc(db, 'companies', recentlySelectedCompany,  'termsTemplates', templateId);
+        if (!requirePermission("886", "delete terms templates")) return;
+
+        if (window.confirm('Are you sure you want to delete this template and all its terms?')) {
             try {
-                await deleteDoc(templateRef);
+                await deleteDoc(termsTemplateDoc(recentlySelectedCompany, templateId));
                 toast.success("Template deleted successfully!");
                 navigate("/company/settings/terms-templates");
             } catch (error) {
@@ -82,14 +90,18 @@ const TermsTemplateDetail = () => {
 
     const handleAddClause = async (e) => {
         e.preventDefault();
+        if (!requirePermission("884", "update terms templates")) return;
         if (!newClause.trim()) return;
 
-        const clausesRef = collection(db, 'companies', recentlySelectedCompany, 'termsTemplates', templateId, 'terms');
         try {
-            const docRef = await addDoc(clausesRef, { text: newClause });
-            setClauses([...clauses, { id: docRef.id, text: newClause }]);
+            const savedTerm = await saveContractTerm(
+                recentlySelectedCompany,
+                templateId,
+                new ContractTerm({ description: newClause.trim() })
+            );
+            setClauses([...clauses, savedTerm]);
             setNewClause('');
-            toast.success("Clause added!");
+            toast.success("Term added!");
         } catch (error) {
             console.error("Error adding clause: ", error);
             toast.error("Failed to add clause.");
@@ -97,11 +109,12 @@ const TermsTemplateDetail = () => {
     };
 
     const handleDeleteClause = async (clauseId) => {
-        const clauseRef = doc(db, 'companies', recentlySelectedCompany, 'termsTemplates', templateId, 'terms', clauseId);
+        if (!requirePermission("886", "delete terms templates")) return;
+
         try {
-            await deleteClauseDoc(clauseRef);
+            await deleteContractTerm(recentlySelectedCompany, templateId, clauseId);
             setClauses(clauses.filter(c => c.id !== clauseId));
-            toast.success("Clause deleted!");
+            toast.success("Term deleted!");
         } catch (error) {
             console.error("Error deleting clause: ", error);
             toast.error("Failed to delete clause.");
@@ -153,8 +166,12 @@ const TermsTemplateDetail = () => {
                                 <p className="mt-2 text-sm text-gray-500 max-w-2xl">{template.description}</p>
                             </div>
                             <div className="flex items-center gap-4">
-                                <button onClick={() => setIsEditing(true)} className="p-2 text-blue-600 hover:text-blue-800"><PencilIcon className="h-5 w-5" /></button>
-                                <button onClick={handleDelete} className="p-2 text-red-600 hover:text-red-800"><TrashIcon className="h-5 w-5" /></button>
+                                {can("884") && (
+                                    <button onClick={() => setIsEditing(true)} className="p-2 text-blue-600 hover:text-blue-800"><PencilIcon className="h-5 w-5" /></button>
+                                )}
+                                {can("886") && (
+                                    <button onClick={handleDelete} className="p-2 text-red-600 hover:text-red-800"><TrashIcon className="h-5 w-5" /></button>
+                                )}
                             </div>
                         </div>
                         <div className="mt-6 border-t border-gray-200 pt-6">
@@ -165,26 +182,30 @@ const TermsTemplateDetail = () => {
                 )}
 
                  <div className="bg-white p-8 rounded-2xl shadow-lg">
-                     <h2 className="text-2xl font-bold text-gray-900 mb-6">Template Clauses</h2>
+                     <h2 className="text-2xl font-bold text-gray-900 mb-6">Template Terms</h2>
                      
+                    {can("884") && (
                     <form onSubmit={handleAddClause} className="flex gap-4 mb-6">
-                        <input type="text" value={newClause} onChange={e => setNewClause(e.target.value)} placeholder="Enter new clause text" className="flex-grow p-2 border rounded-md" />
+                        <input type="text" value={newClause} onChange={e => setNewClause(e.target.value)} placeholder="Enter new term" className="flex-grow p-2 border rounded-md" />
                         <button type="submit" className="px-4 py-2 bg-blue-600 text-white rounded-md inline-flex items-center"><PlusIcon className="h-5 w-5 mr-2"/>Add</button>
                     </form>
+                    )}
 
                     {clauses.length > 0 ? (
                         <ul className="divide-y divide-gray-200">
                             {clauses.map(clause => (
                                 <li key={clause.id} className="py-3 flex justify-between items-center">
-                                    <p className="text-gray-800">{clause.text}</p>
-                                    <button onClick={() => handleDeleteClause(clause.id)} className="text-red-500 hover:text-red-700">
-                                        <TrashIcon className="h-5 w-5" />
-                                    </button>
+                                    <p className="text-gray-800">{getTermDescription(clause)}</p>
+                                    {can("886") && (
+                                        <button onClick={() => handleDeleteClause(clause.id)} className="text-red-500 hover:text-red-700">
+                                            <TrashIcon className="h-5 w-5" />
+                                        </button>
+                                    )}
                                 </li>
                             ))}
                         </ul>
                     ) : (
-                        <p className="text-center text-gray-500 py-4">No clauses added yet.</p>
+                        <p className="text-center text-gray-500 py-4">No terms added yet.</p>
                     )}
                  </div>
             </div>

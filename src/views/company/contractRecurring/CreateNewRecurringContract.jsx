@@ -1209,7 +1209,7 @@ const CreateNewRecurringContract = () => {
                                                     </td>
                                                 </tr>
                                                 <tr>
-                                                    <td className="p-4 text-sm text-gray-700">Price Id</td>
+                                                    <td className="p-4 text-sm text-gray-700">Price</td>
                                                     <td className="p-4 text-sm font-medium text-gray-800">
                                                         {draftContractData.priceId || "—"}
                                                     </td>

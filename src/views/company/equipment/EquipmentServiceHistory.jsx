@@ -378,7 +378,7 @@ const HistoryStat = ({ label, value }) => (
 const ReferenceLine = ({ label, value }) => (
   value ? (
     <div className="mb-1">
-      <span className="font-semibold">{label}:</span> <span className="font-mono">{value}</span>
+      <span className="font-semibold">{label}:</span> <span>Linked {label.toLowerCase()}</span>
     </div>
   ) : null
 );

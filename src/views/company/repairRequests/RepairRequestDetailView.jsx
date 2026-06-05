@@ -1,40 +1,107 @@
 import React, { useEffect, useState, useContext } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
-import { doc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
+import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where } from 'firebase/firestore';
 import { db } from '../../../utils/config';
-import { RepairRequest } from '../../../utils/models/RepairRequest';
+import {
+  REPAIR_REQUEST_STATUS,
+  REPAIR_REQUEST_STATUS_OPTIONS,
+  RepairRequest,
+  displayRepairRequestStatus,
+  normalizeRepairRequestStatus,
+  repairRequestStatusForSelection,
+} from '../../../utils/models/RepairRequest';
+import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from '../../../utils/models/Equipment';
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { displayRecordReference, linkedReferenceText } from '../../../utils/displayReferences';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const { repairRequestId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const [repairRequest, setRepairRequest] = useState(null);
+  const [sourcePath, setSourcePath] = useState(location.state?.sourcePath || "company");
   const [loading, setLoading] = useState(true);
 
-  const [isEditing, setIsEditing] = useState(false);
   const [formData, setFormData] = useState({
-    status: 'Pending',
+    status: REPAIR_REQUEST_STATUS.UNRESOLVED,
   });
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [connectedEquipmentStatus, setConnectedEquipmentStatus] = useState(EQUIPMENT_STATUS.OPERATIONAL);
+  const [savingEquipmentStatus, setSavingEquipmentStatus] = useState(false);
 
   const [descriptionDraft, setDescriptionDraft] = useState("");
   const [savingDescription, setSavingDescription] = useState(false);
+  const [availableJobs, setAvailableJobs] = useState([]);
+  const [loadingJobs, setLoadingJobs] = useState(false);
+  const [selectedJobId, setSelectedJobId] = useState("");
+  const [connectingJob, setConnectingJob] = useState(false);
+  const repairRequestJobIdsKey = (repairRequest?.jobIds || []).join("|");
+
+  const getRequestRef = (path = sourcePath) => (
+    path === "homeowner"
+      ? doc(db, 'homeownerRepairRequests', repairRequestId)
+      : doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId)
+  );
+
+  const getConnectedEquipmentRef = () => {
+    if (!repairRequest?.equipmentId) return null;
+
+    return sourcePath === "homeowner"
+      ? doc(db, "homeownerEquipment", repairRequest.equipmentId)
+      : doc(db, "companies", recentlySelectedCompany, "equipment", repairRequest.equipmentId);
+  };
+
+  const getDateValue = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value.toDate === "function") return value.toDate();
+    if (typeof value === "number") return new Date(value);
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+
+  const getDateMillis = (value) => {
+    const date = getDateValue(value);
+    return date ? date.getTime() : 0;
+  };
+
+  const formatJobOption = (job) => {
+    const title = displayRecordReference(job, "Job");
+    const description = job.description || job.type || "No description";
+    const date = getDateValue(job.dateCreated || job.createdAt);
+    const dateLabel = date ? format(date, "MMM d, yyyy") : "No date";
+    const status = job.operationStatus || job.billingStatus || "No status";
+
+    return `${title} - ${description} (${status}, ${dateLabel})`;
+  };
 
   useEffect(() => {
     const fetchRepairRequest = async () => {
       if (recentlySelectedCompany && repairRequestId) {
         try {
-          const requestRef = doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId);
-          const docSnap = await getDoc(requestRef);
+          const preferredSourcePath = location.state?.sourcePath || "company";
+          const fallbackSourcePath = preferredSourcePath === "homeowner" ? "company" : "homeowner";
+          let docSnap = await getDoc(getRequestRef(preferredSourcePath));
+          let loadedSourcePath = preferredSourcePath;
+
+          if (!docSnap.exists()) {
+            docSnap = await getDoc(getRequestRef(fallbackSourcePath));
+            loadedSourcePath = fallbackSourcePath;
+          }
 
           if (docSnap.exists()) {
             const req = RepairRequest.fromFirestore(docSnap);
             setRepairRequest(req);
+            setSourcePath(loadedSourcePath);
             setDescriptionDraft(req.description || "");
             setFormData({
-              status: req.status || 'Unresolved',
+              status: repairRequestStatusForSelection(req.status),
             });
           } else {
             console.log("No such document!");
@@ -48,28 +115,176 @@ const RepairRequestDetailView = () => {
     };
 
     fetchRepairRequest();
-  }, [repairRequestId, recentlySelectedCompany]);
+  }, [repairRequestId, recentlySelectedCompany, location.state?.sourcePath]);
+
+  useEffect(() => {
+    const fetchCustomerJobs = async () => {
+      if (!recentlySelectedCompany || !repairRequest?.customerId) {
+        setAvailableJobs([]);
+        setSelectedJobId("");
+        return;
+      }
+
+      try {
+        setLoadingJobs(true);
+
+        const jobsSnap = await getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "workOrders"),
+            where("customerId", "==", repairRequest.customerId)
+          )
+        );
+
+        const jobs = jobsSnap.docs
+          .map((jobDoc) => ({
+            id: jobDoc.id,
+            ...jobDoc.data(),
+          }))
+          .sort((a, b) => getDateMillis(b.dateCreated || b.createdAt) - getDateMillis(a.dateCreated || a.createdAt));
+
+        const connectedIds = new Set(repairRequest.jobIds || []);
+        const firstAvailableJob = jobs.find((job) => !connectedIds.has(job.id));
+
+        setAvailableJobs(jobs);
+        setSelectedJobId((prev) => (
+          prev && jobs.some((job) => job.id === prev && !connectedIds.has(job.id))
+            ? prev
+            : firstAvailableJob?.id || ""
+        ));
+      } catch (error) {
+        console.error("Error fetching customer jobs:", error);
+        setAvailableJobs([]);
+        setSelectedJobId("");
+      } finally {
+        setLoadingJobs(false);
+      }
+    };
+
+    fetchCustomerJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlySelectedCompany, repairRequest?.customerId, repairRequestJobIdsKey]);
+
+  useEffect(() => {
+    const fetchConnectedEquipmentStatus = async () => {
+      const equipmentRef = getConnectedEquipmentRef();
+
+      if (!equipmentRef) {
+        setConnectedEquipmentStatus(EQUIPMENT_STATUS.OPERATIONAL);
+        return;
+      }
+
+      try {
+        const equipmentSnap = await getDoc(equipmentRef);
+        const equipmentStatus = equipmentSnap.exists()
+          ? equipmentSnap.data()?.status || EQUIPMENT_STATUS.OPERATIONAL
+          : EQUIPMENT_STATUS.OPERATIONAL;
+
+        setConnectedEquipmentStatus(equipmentStatus);
+      } catch (error) {
+        console.error("Error loading connected equipment status:", error);
+        setConnectedEquipmentStatus(EQUIPMENT_STATUS.OPERATIONAL);
+      }
+    };
+
+    fetchConnectedEquipmentStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repairRequest?.equipmentId, sourcePath, recentlySelectedCompany]);
 
   const handleCreateJob = () => {
-    navigate(`/company/jobs/createNew`, { state: { repairRequest } });
+    if (!requirePermission("22", "create jobs")) return;
+    navigate(`/company/jobs/createNew`, {
+      state: {
+        repairRequest: {
+          ...repairRequest,
+          sourcePath,
+        },
+        repairRequestSourcePath: sourcePath,
+      },
+    });
   };
 
-  const handleInputChange = (e) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({
+  const handleStatusChange = async (e) => {
+    const status = repairRequestStatusForSelection(e.target.value);
+    const previousStatus = repairRequestStatusForSelection(repairRequest?.status);
+
+    if (!requirePermission("34", "update repair requests")) return;
+
+    setFormData((prev) => ({
       ...prev,
-      [name]: value,
+      status,
     }));
+
+    if (!repairRequest || status === previousStatus || savingStatus) return;
+
+    try {
+      setSavingStatus(true);
+
+      await updateDoc(getRequestRef(), {
+        status,
+      });
+
+      if (
+        status === REPAIR_REQUEST_STATUS.RESOLVED &&
+        repairRequest?.equipmentId &&
+        connectedEquipmentStatus
+      ) {
+        try {
+          await updateDoc(getConnectedEquipmentRef(), {
+            status: connectedEquipmentStatus,
+          });
+        } catch (equipmentError) {
+          console.error("Error updating connected equipment status:", equipmentError);
+          alert("Repair request status was updated, but the connected equipment status could not be saved.");
+        }
+      }
+
+      setRepairRequest((prev) => ({
+        ...prev,
+        status,
+      }));
+    } catch (error) {
+      console.error("Error updating repair request status:", error);
+      alert("Failed to update repair request status.");
+      setFormData((prev) => ({
+        ...prev,
+        status: previousStatus,
+      }));
+    } finally {
+      setSavingStatus(false);
+    }
+  };
+
+  const handleConnectedEquipmentStatusChange = async (e) => {
+    const status = e.target.value;
+
+    setConnectedEquipmentStatus(status);
+
+    if (!requirePermission("34", "update repair requests")) return;
+    if (!repairRequest?.equipmentId || !status || savingEquipmentStatus) return;
+
+    try {
+      setSavingEquipmentStatus(true);
+      await updateDoc(getConnectedEquipmentRef(), {
+        status,
+      });
+    } catch (error) {
+      console.error("Error updating connected equipment status:", error);
+      alert("Failed to update connected equipment status.");
+    } finally {
+      setSavingEquipmentStatus(false);
+    }
   };
 
   const saveDescription = async () => {
+    if (!requirePermission("34", "update repair requests")) return;
+
     if (!repairRequest || savingDescription) return;
     if (descriptionDraft === (repairRequest.description || "")) return;
 
     try {
       setSavingDescription(true);
 
-      const requestRef = doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId);
+      const requestRef = getRequestRef();
 
       await updateDoc(requestRef, {
         description: descriptionDraft,
@@ -87,39 +302,63 @@ const RepairRequestDetailView = () => {
     }
   };
 
-  const handleSave = async () => {
+  const handleConnectExistingJob = async () => {
+    if (!selectedJobId || !repairRequest?.id || connectingJob) return;
+    if (!requirePermission("34", "update repair requests")) return;
+    if (!requirePermission("24", "update jobs")) return;
+
     try {
-      const requestRef = doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId);
+      setConnectingJob(true);
 
-      await updateDoc(requestRef, {
-        status: formData.status,
-      });
+      const requestRef = getRequestRef();
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", selectedJobId);
 
-      setRepairRequest(prev => ({
+      await Promise.all([
+        updateDoc(requestRef, {
+          jobIds: arrayUnion(selectedJobId),
+          status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+        }),
+        updateDoc(jobRef, {
+          repairRequestId: repairRequest.id,
+          repairRequestSourcePath: sourcePath,
+        }),
+      ]);
+
+      setRepairRequest((prev) => ({
         ...prev,
-        status: formData.status,
+        jobIds: Array.from(new Set([...(prev?.jobIds || []), selectedJobId])),
+        status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
       }));
-
-      setIsEditing(false);
+      setFormData((prev) => ({
+        ...prev,
+        status: REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB,
+      }));
+      setAvailableJobs((prev) => prev.map((job) => (
+        job.id === selectedJobId
+          ? {
+            ...job,
+            repairRequestId: repairRequest.id,
+            repairRequestSourcePath: sourcePath,
+          }
+          : job
+      )));
+      setSelectedJobId("");
     } catch (error) {
-      console.error('Error updating repair request:', error);
-      alert('Failed to update repair request.');
+      console.error("Error connecting job to repair request:", error);
+      alert("Failed to connect the job to this repair request.");
+    } finally {
+      setConnectingJob(false);
     }
   };
 
-  const handleCancel = () => {
-    setFormData({
-      status: repairRequest?.status || 'Unresolved',
-    });
-    setIsEditing(false);
-  };
-
   const handleDelete = async () => {
+    if (!requirePermission("36", "delete repair requests")) return;
+
     const confirmed = window.confirm('Are you sure you want to delete this repair request?');
     if (!confirmed) return;
 
     try {
-      const requestRef = doc(db, 'companies', recentlySelectedCompany, 'repairRequests', repairRequestId);
+      const requestRef = getRequestRef();
       await deleteDoc(requestRef);
       navigate('/company/repair-requests');
     } catch (error) {
@@ -142,6 +381,9 @@ const RepairRequestDetailView = () => {
 
   const photoUrls = repairRequest.photoUrls || [];
   const jobIds = repairRequest.jobIds || [];
+  const connectedJobIds = new Set(jobIds);
+  const connectableJobs = availableJobs.filter((job) => !connectedJobIds.has(job.id));
+  const availableJobsById = new Map(availableJobs.map((job) => [job.id, job]));
 
   return (
     <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
@@ -153,7 +395,7 @@ const RepairRequestDetailView = () => {
               className="text-sm font-semibold text-slate-600 hover:text-slate-900"
             >&larr; Back to Repair Requests</Link>
             <h2 className="text-3xl font-bold text-gray-800">Repair Request Details</h2>
-            <p className="text-sm text-gray-500">ID: {repairRequest.id}</p>
+            <p className="text-sm text-gray-500">{displayRepairRequestStatus(repairRequest.status)} request</p>
           </div>
         </div>
 
@@ -162,32 +404,6 @@ const RepairRequestDetailView = () => {
             <div className="bg-white shadow-lg rounded-xl p-6">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-800">Request Details</h3>
-                {!isEditing ? (
-                  <button
-                    onClick={() => setIsEditing(true)}
-                    className="py-2 px-4 bg-blue-100 text-blue-800 font-semibold rounded-lg hover:bg-blue-200 transition"
-                    type="button"
-                  >
-                    Edit
-                  </button>
-                ) : (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleCancel}
-                      className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
-                      type="button"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      onClick={handleSave}
-                      className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
-                      type="button"
-                    >
-                      Save Changes
-                    </button>
-                  </div>
-                )}
               </div>
 
               <div className="space-y-6">
@@ -196,19 +412,21 @@ const RepairRequestDetailView = () => {
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Description</p>
 
-                    <button
-                      type="button"
-                      onClick={saveDescription}
-                      disabled={savingDescription || descriptionDraft === (repairRequest.description || "")}
-                      className={[
-                        "px-3 py-1 rounded-lg text-sm font-semibold transition border",
-                        savingDescription || descriptionDraft === (repairRequest.description || "")
-                          ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
-                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100",
-                      ].join(" ")}
-                    >
-                      {savingDescription ? "Saving..." : "Save"}
-                    </button>
+                    {can("34") && (
+                      <button
+                        type="button"
+                        onClick={saveDescription}
+                        disabled={savingDescription || descriptionDraft === (repairRequest.description || "")}
+                        className={[
+                          "px-3 py-1 rounded-lg text-sm font-semibold transition border",
+                          savingDescription || descriptionDraft === (repairRequest.description || "")
+                            ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                            : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100",
+                        ].join(" ")}
+                      >
+                        {savingDescription ? "Saving..." : "Save"}
+                      </button>
+                    )}
                   </div>
 
                   <textarea
@@ -216,8 +434,9 @@ const RepairRequestDetailView = () => {
                     placeholder="Add repair request description..."
                     value={descriptionDraft}
                     onChange={(e) => setDescriptionDraft(e.target.value)}
+                    readOnly={!can("34")}
                     onBlur={() => {
-                      if (descriptionDraft !== (repairRequest.description || "")) {
+                      if (can("34") && descriptionDraft !== (repairRequest.description || "")) {
                         saveDescription();
                       }
                     }}
@@ -255,7 +474,7 @@ const RepairRequestDetailView = () => {
                           to={`/company/jobs/detail/${id}`}
                           className="block text-blue-600 hover:underline font-medium"
                         >
-                          {id}
+                          {linkedReferenceText("Job", id, displayRecordReference(availableJobsById.get(id), ""))}
                         </Link>
                       ))}
                     </div>
@@ -269,17 +488,62 @@ const RepairRequestDetailView = () => {
 
           <div className="space-y-6">
             <div className="bg-white shadow-lg rounded-xl p-6 space-y-4">
-              <button
-                onClick={handleCreateJob}
-                className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
-              >
-                Create Job from Request
-              </button>
+              {can("22") && (
+                <button
+                  onClick={handleCreateJob}
+                  className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
+                >
+                  Create Job from Request
+                </button>
+              )}
 
-              {isEditing && (
+              {(can("34") && can("24")) && (
+                <div className="border-t border-gray-200 pt-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-bold text-gray-800">Connect Existing Job</p>
+                    <p className="text-xs text-gray-500">Attach an already-created job to this request.</p>
+                  </div>
+
+                  <select
+                    value={selectedJobId}
+                    onChange={(event) => setSelectedJobId(event.target.value)}
+                    disabled={loadingJobs || connectingJob || connectableJobs.length === 0}
+                    className="w-full rounded-lg border border-gray-300 p-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    <option value="">
+                      {loadingJobs
+                        ? "Loading jobs..."
+                        : connectableJobs.length === 0
+                          ? "No unconnected jobs for this customer"
+                          : "Select a job"}
+                    </option>
+                    {connectableJobs.map((job) => (
+                      <option key={job.id} value={job.id}>
+                        {formatJobOption(job)}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={handleConnectExistingJob}
+                    disabled={!selectedJobId || connectingJob}
+                    className={[
+                      "w-full rounded-lg px-4 py-2 text-sm font-bold transition",
+                      selectedJobId && !connectingJob
+                        ? "bg-slate-900 text-white hover:bg-slate-800"
+                        : "bg-gray-100 text-gray-400 cursor-not-allowed",
+                    ].join(" ")}
+                  >
+                    {connectingJob ? "Connecting..." : "Connect Job"}
+                  </button>
+                </div>
+              )}
+
+              {can("36") && (
                 <button
                   onClick={handleDelete}
-                  className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
+                  className="w-full px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
                   type="button"
                 >
                   Delete Request
@@ -291,33 +555,37 @@ const RepairRequestDetailView = () => {
               <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
               <div className="space-y-3 text-gray-700">
                 <div>
-                  <strong>Status:</strong>{' '}
-                  {isEditing ? (
+                  <strong>Status:</strong>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
                     <select
                       name="status"
                       value={formData.status}
-                      onChange={handleInputChange}
-                      className="ml-2 p-2 border border-gray-300 rounded-lg"
+                      onChange={handleStatusChange}
+                      disabled={!can("34") || savingStatus}
+                      className="p-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 disabled:text-gray-400"
                     >
-                      <option value="Unresolved">Unresolved</option>
-                      <option value="In Progress">In Progress</option>
-                      <option value="Resolved">Resolved</option>
-                      <option value="Cancelled">Cancelled</option>
+                      {REPAIR_REQUEST_STATUS_OPTIONS.map((status) => (
+                        <option key={status} value={status}>{status}</option>
+                      ))}
                     </select>
-                  ) : (
                     <span
-                      className={`ml-2 px-3 py-1 text-sm font-bold rounded-full ${repairRequest.status?.toLowerCase() === 'resolved'
+                      className={`px-3 py-1 text-sm font-bold rounded-full ${normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)
                         ? 'bg-green-100 text-green-800'
-                        : repairRequest.status?.toLowerCase() === 'cancelled'
+                        : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED)
                           ? 'bg-red-100 text-red-800'
-                          : repairRequest.status?.toLowerCase() === 'in progress'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-yellow-100 text-yellow-800'
+                          : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)
+                            ? 'bg-gray-100 text-gray-700'
+                            : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-yellow-100 text-yellow-800'
                         }`}
                     >
-                      {repairRequest.status || 'Unresolved'}
+                      {displayRepairRequestStatus(repairRequest.status)}
                     </span>
-                  )}
+                    {savingStatus && (
+                      <span className="text-xs font-semibold text-gray-500">Saving...</span>
+                    )}
+                  </div>
                 </div>
 
                 <p>
@@ -337,19 +605,42 @@ const RepairRequestDetailView = () => {
 
                 {repairRequest.locationId && (
                   <Link to={`/company/customers/details/${repairRequest.customerId}/locations`}>
-                    <p><strong>Location ID:</strong> {repairRequest.locationId}</p>
+                    <p><strong>Location:</strong> {linkedReferenceText("Service Location", repairRequest.locationId, repairRequest.locationName || repairRequest.serviceLocationName)}</p>
                   </Link>
                 )}
 
                 {repairRequest.equipmentId && (
                   <Link to={`/company/equipment/detail/${repairRequest.equipmentId}`}>
-                    <p><strong>Equipment ID:</strong> {repairRequest.equipmentId}</p>
+                    <p><strong>Equipment:</strong> {linkedReferenceText("Equipment", repairRequest.equipmentId, repairRequest.equipmentName || repairRequest.equipmentModel)}</p>
                   </Link>
+                )}
+
+                {repairRequest.equipmentId && (
+                  <div>
+                    <strong>Equipment Status:</strong>
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <select
+                        value={connectedEquipmentStatus}
+                        onChange={handleConnectedEquipmentStatusChange}
+                        disabled={!can("34") || savingEquipmentStatus}
+                        className="p-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 disabled:text-gray-400"
+                      >
+                        {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                          <option key={statusOption} value={statusOption}>
+                            {statusOption}
+                          </option>
+                        ))}
+                      </select>
+                      {savingEquipmentStatus && (
+                        <span className="text-xs font-semibold text-gray-500">Saving...</span>
+                      )}
+                    </div>
+                  </div>
                 )}
 
                 {repairRequest.bodyOfWaterId && (
                   <Link to={`/company/bodiesOfWater/detail/${repairRequest.bodyOfWaterId}`}>
-                    <p><strong>Body Of Water ID:</strong> {repairRequest.bodyOfWaterId}</p>
+                    <p><strong>Body Of Water:</strong> {linkedReferenceText("Body Of Water", repairRequest.bodyOfWaterId, repairRequest.bodyOfWaterName)}</p>
                   </Link>
                 )}
               </div>
@@ -362,4 +653,3 @@ const RepairRequestDetailView = () => {
 };
 
 export default RepairRequestDetailView;
-

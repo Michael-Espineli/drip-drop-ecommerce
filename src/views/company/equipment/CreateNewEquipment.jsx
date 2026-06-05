@@ -7,10 +7,12 @@ import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const CreateNewEquipment = () => {
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const { customerId: customerIdParam, locationId: locationIdParam, bodyOfWaterId: bodyOfWaterIdParam } = useParams();
 
     // Form State
@@ -39,6 +41,7 @@ const CreateNewEquipment = () => {
     const [equipmentTypes, setEquipmentTypes] = useState([]);
     const [equipmentMakes, setEquipmentMakes] = useState([]);
     const [equipmentModels, setEquipmentModels] = useState([]);
+    const [selectedCatalogManualLink, setSelectedCatalogManualLink] = useState('');
 
     // Fetch initial data for selects
     useEffect(() => {
@@ -132,17 +135,86 @@ const CreateNewEquipment = () => {
             const fetchModels = async () => {
                 const q = query(collection(db, 'universal', 'equipment', 'equipment'), where('typeId', '==', category.id), where('makeId', '==', make.id));
                 const snapshot = await getDocs(q);
-                setEquipmentModels(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), value: doc.data().model, label: doc.data().model })));
+                setEquipmentModels(snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                    value: doc.id,
+                    label: doc.data().model || doc.data().name || 'Equipment Model',
+                })));
             };
             fetchModels();
         } else {
             setEquipmentModels([]);
             setModel(null);
+            setSelectedCatalogManualLink('');
         }
     }, [category, make]);
 
+    const handleCategoryChange = (selected) => {
+        setCategory(selected);
+        setMake(null);
+        setModel(null);
+        setCustomCategory('');
+        setCustomMake('');
+        setCustomModel('');
+        setSelectedCatalogManualLink('');
+    };
+
+    const handleMakeChange = (selected) => {
+        setMake(selected);
+        setModel(null);
+        setCustomMake('');
+        setCustomModel('');
+        setSelectedCatalogManualLink('');
+    };
+
+    const handleModelChange = (selected) => {
+        setModel(selected);
+        setCustomModel('');
+        setSelectedCatalogManualLink(selected?.manualPdfLink || '');
+
+        if (selected && selected.value !== 'Other') {
+            if (!name.trim()) setName(selected.name || selected.model || selected.label || '');
+            if (!selectedCatalogManualLink && selected.manualPdfLink) {
+                setSelectedCatalogManualLink(selected.manualPdfLink);
+            }
+        }
+    };
+
+    const copyCatalogPartsToEquipment = async (equipmentId, catalogEquipmentId) => {
+        if (!catalogEquipmentId || !recentlySelectedCompany) return;
+
+        const partsSnapshot = await getDocs(
+            collection(db, 'universal', 'equipment', 'equipment', catalogEquipmentId, 'parts')
+        );
+
+        const writes = partsSnapshot.docs.map((partDoc) => {
+            const part = partDoc.data();
+            const partId = 'com_equ_par_' + uuidv4();
+
+            return setDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'parts', partId),
+                {
+                    id: partId,
+                    name: part.name || '',
+                    sku: part.sku || '',
+                    make: part.make || ((make && make.value === 'Other') ? customMake : (make && make.label) || ''),
+                    model: part.model || ((model && model.value === 'Other') ? customModel : (model && model.label) || ''),
+                    manualPdfLink: part.manualPdfLink || '',
+                    universalPartId: part.id || partDoc.id,
+                    universalEquipmentId: catalogEquipmentId,
+                    createdAt: new Date(),
+                }
+            );
+        });
+
+        await Promise.all(writes);
+    };
+
     const handleCreate = async (e) => {
         e.preventDefault();
+        if (!requirePermission("62", "create equipment")) return;
+
         if (!recentlySelectedCompany || !selectedCustomer) {
             alert('A customer must be selected.');
             return;
@@ -150,15 +222,22 @@ const CreateNewEquipment = () => {
 
         try {
             const equipmentId = "com_equ_" + uuidv4()
+            const isCustomType = category?.value === 'Other';
+            const isCustomMake = make?.value === 'Other';
+            const isCustomModel = model?.value === 'Other';
+            const catalogEquipmentId = !isCustomModel ? (model?.id || '') : '';
+
             const newEquipment = {
                 id: equipmentId,
                 name,
-                type: (category && category.value === 'Other') ? customCategory : (category && category.label) || '',
-                typeId: (category && category.id) || '',
-                make: (make && make.value === 'Other') ? customMake : (make && make.label) || '',
-                makeId: (make && make.id) || '',
-                model: (model && model.value === 'Other') ? customModel : (model && model.label) || '',
-                modelId: (model && model.id) || '',
+                type: isCustomType ? customCategory : (category && category.label) || '',
+                typeId: isCustomType ? '' : (category && category.id) || '',
+                make: isCustomMake ? customMake : (make && make.label) || '',
+                makeId: isCustomMake ? '' : (make && make.id) || '',
+                model: isCustomModel ? customModel : (model && model.label) || '',
+                modelId: catalogEquipmentId,
+                universalEquipmentId: catalogEquipmentId,
+                manualPdfLink: isCustomModel ? '' : (model?.manualPdfLink || ''),
                 dateInstalled: new Date(dateInstalled),
                 cleanFilterPressure: cleanFilterPressure === '' ? null : Number(cleanFilterPressure),
                 serviceFrequency: serviceFrequencyEvery === '' ? null : Number(serviceFrequencyEvery),
@@ -176,6 +255,7 @@ const CreateNewEquipment = () => {
                 currentPressure: null
             };
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
+            await copyCatalogPartsToEquipment(equipmentId, catalogEquipmentId);
             navigate(`/company/equipment/detail/${equipmentId}`);
         } catch (error) {
             console.error("Error creating new equipment: ", error);
@@ -233,18 +313,28 @@ const CreateNewEquipment = () => {
                         <h3 className="text-lg font-semibold text-gray-700 md:col-span-3">Equipment Specifications</h3>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                            <Select options={[...equipmentTypes, { value: 'Other', label: 'Other' }]} value={category} onChange={setCategory} styles={selectStyles} placeholder="Select Category..." />
+                            <Select options={[...equipmentTypes, { value: 'Other', label: 'Custom Category' }]} value={category} onChange={handleCategoryChange} styles={selectStyles} placeholder="Select Category..." />
                             {category?.value === 'Other' && <input type="text" value={customCategory} onChange={e => setCustomCategory(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Category Name" />}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Make</label>
-                            <Select options={[...equipmentMakes, { value: 'Other', label: 'Other' }]} value={make} onChange={setMake} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
+                            <Select options={[...equipmentMakes, { value: 'Other', label: 'Custom Make' }]} value={make} onChange={handleMakeChange} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
                             {make?.value === 'Other' && <input type="text" value={customMake} onChange={e => setCustomMake(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Make Name" />}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                            <Select options={[...equipmentModels, { value: 'Other', label: 'Other' }]} value={model} onChange={setModel} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
+                            <Select options={[...equipmentModels, { value: 'Other', label: 'Custom Equipment' }]} value={model} onChange={handleModelChange} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
                             {model?.value === 'Other' && <input type="text" value={customModel} onChange={e => setCustomModel(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Model Name" />}
+                            {selectedCatalogManualLink && (
+                                <a
+                                    href={selectedCatalogManualLink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="mt-2 inline-block text-sm font-semibold text-blue-600 hover:text-blue-800"
+                                >
+                                    View catalog manual
+                                </a>
+                            )}
                         </div>
                     </div>
 

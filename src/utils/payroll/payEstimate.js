@@ -45,10 +45,16 @@ const calculateTotalAmountCents = ({ rateAmountCents, rateType, quantity, quanti
   }
 };
 
-const normalizeSettings = (settings = {}) => ({
-  routePaySource: settings.routePaySource || "serviceStopAndCompletedTasks",
-  taskPaySource: settings.taskPaySource || "technicianRateThenTaskContractedRate",
-});
+const normalizeSettings = (settings = {}) => {
+  const safeSettings = settings || {};
+
+  return {
+    payMode: safeSettings.payMode || "productionOnly",
+    routePaySource: safeSettings.routePaySource || "serviceStopAndCompletedTasks",
+    taskPaySource: safeSettings.taskPaySource || "technicianRateThenTaskContractedRate",
+    allowMultipleWorkTypesPerStop: safeSettings.allowMultipleWorkTypesPerStop !== false,
+  };
+};
 
 const userIdForRate = (worker) => worker?.userId || worker?.id || "";
 
@@ -72,6 +78,37 @@ const uniqueIds = (ids = []) => {
 const workTypeName = (workTypesById, workTypeId) =>
   workTypesById[workTypeId]?.name || "Service Work";
 
+const workTypeSuggestedPayBasis = (workType) => {
+  if (!workType) return "serviceStop";
+  if (workType.defaultRateType === "hourly") return "technicianHourly";
+
+  switch (workType.category) {
+    case "route":
+    case "serviceCall":
+    case "commercial":
+    case "startup":
+      return "serviceStop";
+    case "repair":
+    case "installation":
+    case "cleaning":
+    case "drainAndRefill":
+    case "extra":
+    case "custom":
+      return "serviceStopTask";
+    default:
+      return "serviceStop";
+  }
+};
+
+const otherProductionPayBasis = (payBasis) =>
+  payBasis === "serviceStopTask" ? "serviceStop" : "serviceStopTask";
+
+const payrollSourceIds = {
+  recurringServiceStop: "system_recurring_service_stop",
+  jobServiceStop: "system_job_service_stop",
+  unknownServiceStop: "system_unknown_service_stop",
+};
+
 const mappedWorkTypeIds = ({ mappings, sourceType, sourceId }) =>
   uniqueIds(
     (mappings || [])
@@ -87,16 +124,32 @@ const activeRate = ({
   preferredRateType,
   rates,
   date,
+  allowGeneralHourlyFallback = false,
 }) => {
   const candidates = (rates || [])
     .filter((rate) => {
       if (rate.companyId && rate.companyId !== companyId) return false;
       if (rate.technicianId !== technicianId) return false;
-      if (rate.payBasis !== payBasis) return false;
-      if ((rate.workTypeId || "") !== (workTypeId || "")) return false;
-      return rateIsCurrent(rate, date);
+      if (!rateIsCurrent(rate, date)) return false;
+
+      const exactPayBasisMatch = rate.payBasis === payBasis;
+      const hourlyPayBasisFallback =
+        allowGeneralHourlyFallback &&
+        rate.payBasis === "technicianHourly" &&
+        rate.rateType === "hourly";
+      if (!exactPayBasisMatch && !hourlyPayBasisFallback) return false;
+
+      const exactWorkTypeMatch = (rate.workTypeId || "") === (workTypeId || "");
+      const generalHourlyFallback =
+        allowGeneralHourlyFallback &&
+        !rate.workTypeId &&
+        rate.rateType === "hourly";
+
+      return exactWorkTypeMatch || generalHourlyFallback;
     })
     .sort((a, b) => {
+      if (a.workTypeId && !b.workTypeId) return -1;
+      if (!a.workTypeId && b.workTypeId) return 1;
       const bDate = dateFromValue(b.effectiveStartDate)?.getTime?.() || 0;
       const aDate = dateFromValue(a.effectiveStartDate)?.getTime?.() || 0;
       return bDate - aDate;
@@ -123,8 +176,11 @@ const lineFromRate = ({
   rates,
   workTypesById,
   date,
+  allowGeneralHourlyFallback = false,
+  debugContext = {},
+  fallbackPayBasis = "",
 }) => {
-  const rate = activeRate({
+  const primaryRate = activeRate({
     companyId,
     technicianId: userIdForRate(worker),
     workTypeId,
@@ -132,9 +188,45 @@ const lineFromRate = ({
     preferredRateType,
     rates,
     date,
+    allowGeneralHourlyFallback,
   });
+  const fallbackRate =
+    !primaryRate && fallbackPayBasis
+      ? activeRate({
+          companyId,
+          technicianId: userIdForRate(worker),
+          workTypeId,
+          payBasis: fallbackPayBasis,
+          preferredRateType,
+          rates,
+          date,
+          allowGeneralHourlyFallback,
+        })
+      : null;
+  const rate = primaryRate || fallbackRate;
 
   if (!rate) {
+    console.warn("[PayEstimate][missingRate]", {
+      companyId,
+      technicianId: userIdForRate(worker),
+      technicianName: userNameForRate(worker),
+      source,
+      sourceTaskId,
+      title,
+      workTypeId,
+      workTypeName: workTypeName(workTypesById, workTypeId),
+      payBasis,
+      fallbackPayBasis,
+      preferredRateType,
+      allowGeneralHourlyFallback,
+      activeRateCountForTechnician: (rates || []).filter((candidate) => {
+        if (candidate.companyId && candidate.companyId !== companyId) return false;
+        if (candidate.technicianId !== userIdForRate(worker)) return false;
+        return rateIsCurrent(candidate, date);
+      }).length,
+      debugContext,
+    });
+
     return {
       id: `estimate_missing_${source}_${sourceTaskId || workTypeId}`,
       source,
@@ -148,7 +240,7 @@ const lineFromRate = ({
       quantityUnit: "each",
       totalAmountCents: 0,
       calculationStatus: "needsReview",
-      notes: `No active technician rate found for ${userNameForRate(worker)}.`,
+      notes: `No active technician rate found for ${userNameForRate(worker)} and ${workTypeName(workTypesById, workTypeId)}.`,
     };
   }
 
@@ -171,6 +263,7 @@ const lineFromRate = ({
     title,
     rateAmountCents: cents(rate.amountCents),
     rateType: rate.rateType,
+    payBasis: rate.payBasis,
     quantity,
     quantityUnit,
     totalAmountCents: calculateTotalAmountCents({
@@ -180,9 +273,17 @@ const lineFromRate = ({
       quantityUnit,
     }),
     calculationStatus: rate.rateType === "percentage" ? "needsReview" : "calculated",
-    notes: "Estimated from technician rate.",
+    notes:
+      fallbackRate && !primaryRate
+        ? `Estimated from ${statusLabelForNote(rate.payBasis)} rate after ${statusLabelForNote(payBasis)} did not match.`
+        : "Estimated from technician rate.",
   };
 };
+
+const statusLabelForNote = (value) =>
+  String(value || "")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .replace(/\b\w/g, (letter) => letter.toUpperCase());
 
 const lineFromTaskContractedRate = ({ task, workTypeId, workTypesById }) => ({
   id: `estimate_task_${task.id}`,
@@ -222,7 +323,10 @@ export const totalPayCents = (lines = []) =>
 export const estimateServiceStopPay = ({
   companyId,
   settings,
+  serviceStop = null,
   serviceStopType,
+  serviceStopUseCaseSourceId = "",
+  serviceStopWorkTypeIds = null,
   tasks = [],
   worker,
   workTypes = [],
@@ -234,26 +338,76 @@ export const estimateServiceStopPay = ({
   const workTypesById = Object.fromEntries((workTypes || []).map((type) => [type.id, type]));
   const lines = [];
 
+  if (effectiveSettings.payMode === "hourlyOnly") {
+    return [];
+  }
+
   if (!worker || !userIdForRate(worker)) {
+    console.warn("[PayEstimate][missingWorker]", {
+      companyId,
+      serviceStopId: serviceStop?.id || "",
+      serviceStopTypeId: serviceStopType?.id || serviceStop?.typeId || "",
+      taskCount: tasks.length,
+    });
+
     return tasks.map((task) =>
       missingTaskLine({ task, notes: "Select a technician to estimate technician-rate pay." })
     );
   }
 
-  const stopWorkTypeIds = uniqueIds([
-    ...(serviceStopType?.defaultWorkTypeIds || []),
-    ...mappedWorkTypeIds({
-      mappings,
-      sourceType: "serviceStopType",
-      sourceId: serviceStopType?.id || "",
-    }),
-  ]);
+  const hasSelectedStopWorkTypes = Array.isArray(serviceStopWorkTypeIds);
+  const serviceStopTypeId = serviceStopType?.id || serviceStop?.typeId || "";
+  const inferredServiceStopSourceId =
+    serviceStopUseCaseSourceId ||
+    (serviceStop?.recurringServiceStopId
+      ? payrollSourceIds.recurringServiceStop
+      : serviceStop?.jobId
+        ? payrollSourceIds.jobServiceStop
+        : payrollSourceIds.unknownServiceStop);
+  const defaultStopWorkTypeIds = uniqueIds(serviceStopType?.defaultWorkTypeIds || []);
+  const explicitStopWorkTypeIds = mappedWorkTypeIds({
+    mappings,
+    sourceType: "serviceStopType",
+    sourceId: serviceStopTypeId,
+  });
+  const inferredStopWorkTypeIds = mappedWorkTypeIds({
+    mappings,
+    sourceType: "serviceStopType",
+    sourceId: inferredServiceStopSourceId,
+  });
+  const stopWorkTypeIds = hasSelectedStopWorkTypes
+    ? uniqueIds(serviceStopWorkTypeIds)
+    : defaultStopWorkTypeIds.length
+      ? defaultStopWorkTypeIds
+      : explicitStopWorkTypeIds.length
+        ? explicitStopWorkTypeIds
+        : inferredStopWorkTypeIds;
+
+  const debugContext = {
+    serviceStopId: serviceStop?.id || "",
+    serviceStopTypeId,
+    serviceStopTypeName: serviceStopType?.name || serviceStop?.type || "",
+    inferredServiceStopSourceId,
+    hasSelectedStopWorkTypes,
+    selectedStopWorkTypeIds: hasSelectedStopWorkTypes ? serviceStopWorkTypeIds : null,
+    defaultStopWorkTypeIds,
+    explicitStopWorkTypeIds,
+    inferredStopWorkTypeIds,
+    mappingCount: (mappings || []).length,
+    workTypeCount: (workTypes || []).length,
+    rateCount: (rates || []).length,
+    taskCount: tasks.length,
+  };
+
+  console.debug("[PayEstimate][serviceStopWorkTypeResolution]", debugContext);
 
   if (
     effectiveSettings.routePaySource === "serviceStop" ||
     effectiveSettings.routePaySource === "serviceStopAndCompletedTasks"
   ) {
     if (!stopWorkTypeIds.length) {
+      console.warn("[PayEstimate][missingServiceStopWorkType]", debugContext);
+
       lines.push({
         id: "estimate_stop_needs_review",
         source: "serviceStop",
@@ -267,10 +421,38 @@ export const estimateServiceStopPay = ({
         quantityUnit: "each",
         totalAmountCents: 0,
         calculationStatus: "needsReview",
-        notes: "No service stop work type is connected to this service stop type.",
+        notes: `No service stop work type is connected. typeId: ${serviceStopTypeId || "blank"}, inferredSourceId: ${inferredServiceStopSourceId}.`,
+      });
+    } else if (!effectiveSettings.allowMultipleWorkTypesPerStop && stopWorkTypeIds.length > 1) {
+      console.warn("[PayEstimate][multipleServiceStopWorkTypesBlocked]", {
+        ...debugContext,
+        stopWorkTypeIds,
+      });
+
+      lines.push({
+        id: "estimate_stop_multiple_work_types_needs_review",
+        source: "serviceStop",
+        sourceTaskId: null,
+        workTypeId: null,
+        workTypeName: null,
+        title: "Service Stop Pay",
+        rateAmountCents: 0,
+        rateType: "manual",
+        quantity: 0,
+        quantityUnit: "each",
+        totalAmountCents: 0,
+        calculationStatus: "needsReview",
+        notes: "Multiple work types matched this service stop, but company settings do not allow multiple work types per stop.",
       });
     } else {
       stopWorkTypeIds.forEach((workTypeId) => {
+        const workType = workTypesById[workTypeId];
+        const primaryPayBasis = workTypeSuggestedPayBasis(workType);
+        const fallbackPayBasis =
+          primaryPayBasis === "serviceStop" || primaryPayBasis === "serviceStopTask"
+            ? otherProductionPayBasis(primaryPayBasis)
+            : "serviceStop";
+
         lines.push(
           lineFromRate({
             companyId,
@@ -278,12 +460,15 @@ export const estimateServiceStopPay = ({
             source: "serviceStop",
             title: workTypeName(workTypesById, workTypeId),
             workTypeId,
-            payBasis: "serviceStop",
-            preferredRateType: workTypesById[workTypeId]?.defaultRateType,
+            payBasis: primaryPayBasis,
+            fallbackPayBasis,
+            preferredRateType: workType?.defaultRateType,
             estimatedMinutes: tasks.reduce((sum, task) => sum + Number(task.estimatedTime || 0), 0),
             rates,
             workTypesById,
             date,
+            allowGeneralHourlyFallback: true,
+            debugContext,
           })
         );
       });
@@ -299,6 +484,15 @@ export const estimateServiceStopPay = ({
       })[0];
 
       if (!workTypeId) {
+        console.warn("[PayEstimate][missingTaskWorkTypeMapping]", {
+          ...debugContext,
+          taskId: task.id,
+          taskType: task.type || "",
+          taskName: task.name || task.description || "Task",
+          sourceType: "jobTaskType",
+          sourceId: task.type || "",
+        });
+
         lines.push(
           missingTaskLine({
             task,
@@ -341,6 +535,12 @@ export const estimateServiceStopPay = ({
         rates,
         workTypesById,
         date,
+        allowGeneralHourlyFallback: payBasis === "technicianHourly",
+        debugContext: {
+          ...debugContext,
+          taskId: task.id,
+          taskType: task.type || "",
+        },
       });
 
       if (

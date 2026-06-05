@@ -56,6 +56,12 @@ const buildStopDataEvent = (stopData) => {
       previewList(dosages, (item) => `${item.name || "Dosage"} ${item.amount || ""}${item.UOM ? ` ${item.UOM}` : ""}`) ||
       observations.slice(0, 2).join(", "),
     date: validDate(stopData.date),
+    readings,
+    dosages,
+    observations,
+    bodyOfWaterId: stopData.bodyOfWaterId || "",
+    serviceLocationId: stopData.serviceLocationId || "",
+    serviceStopId: stopData.serviceStopId || "",
     target: stopData.serviceStopId ? `/company/serviceStops/details/${stopData.serviceStopId}` : "",
   };
 };
@@ -68,6 +74,12 @@ const buildEquipmentEvent = (equipment, history) => ({
   subtitle: compact([equipment.name, history.techName, history.performedBy]).join(" • "),
   detail: history.description || "",
   date: validDate(history.date),
+  equipmentId: equipment.id,
+  equipmentName: equipment.name || "",
+  equipmentType: equipment.type || "",
+  bodyOfWaterId: equipment.bodyOfWaterId || "",
+  serviceLocationId: equipment.serviceLocationId || "",
+  historyType: history.type || "",
   target: `/company/equipment/detail/${equipment.id}`,
 });
 
@@ -79,6 +91,10 @@ const buildWaterHistoryEvent = (bodyOfWater, history) => ({
   subtitle: compact([history.techName, history.gallons ? `${history.gallons} gal` : ""]).join(" • "),
   detail: history.description || "",
   date: validDate(history.date),
+  bodyOfWaterId: bodyOfWater.id,
+  bodyOfWaterName: bodyOfWater.name || "",
+  gallons: history.gallons || "",
+  historyType: history.type || "",
   target: `/company/bodiesOfWater/detail/${bodyOfWater.id}`,
 });
 
@@ -104,15 +120,27 @@ const buildWorkOrderCommentEvent = (job, comment) => ({
   target: `/company/jobs/detail/${job.id}`,
 });
 
+const buildToDoEvent = (toDo) => ({
+  id: `todo-${toDo.id}`,
+  type: "toDo",
+  label: toDo.status === "Finished" ? "Finished Follow-Up" : "Follow-Up",
+  title: toDo.title || "Follow-up",
+  subtitle: compact([toDo.assignedTechName, toDo.status]).join(" • "),
+  detail: toDo.description || "",
+  date: validDate(toDo.dateCreated),
+  target: toDo.linkedJobId ? `/company/jobs/detail/${toDo.linkedJobId}` : "",
+});
+
 export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   if (!db || !companyId || !customerId) return [];
 
-  const [serviceStopsSnap, stopDataSnap, equipmentSnap, bodiesOfWaterSnap, workOrdersSnap] = await Promise.all([
+  const [serviceStopsSnap, stopDataSnap, equipmentSnap, bodiesOfWaterSnap, workOrdersSnap, toDosSnap] = await Promise.all([
     getDocs(query(collection(db, "companies", companyId, "serviceStops"), where("customerId", "==", customerId))),
     getDocs(query(collection(db, "companies", companyId, "stopData"), where("customerId", "==", customerId))),
     getDocs(query(collection(db, "companies", companyId, "equipment"), where("customerId", "==", customerId))),
     getDocs(query(collection(db, "companies", companyId, "bodiesOfWater"), where("customerId", "==", customerId))),
     getDocs(query(collection(db, "companies", companyId, "workOrders"), where("customerId", "==", customerId))),
+    getDocs(query(collection(db, "companies", companyId, "toDos"), where("linkedCustomerId", "==", customerId))),
   ]);
 
   const serviceStops = serviceStopsSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
@@ -120,6 +148,7 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   const equipment = equipmentSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const bodiesOfWater = bodiesOfWaterSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const workOrders = workOrdersSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const toDos = toDosSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
 
   const equipmentEvents = (
     await Promise.all(
@@ -181,5 +210,6 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
       .map(buildStopDataEvent),
     ...equipmentEvents,
     ...waterEvents,
+    ...toDos.map(buildToDoEvent),
   ].sort((a, b) => b.date - a.date);
 };

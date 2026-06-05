@@ -73,9 +73,11 @@ const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApi
 //---------------- General Functions --------------------
 //send Grid
 const sendGridGeneral = require('./sendGrid/general');
+exports.sendServiceAgreementEmail = sendGridGeneral.sendServiceAgreementEmail;
 exports.sendServiceReportOnFinish = sendGridGeneral.sendServiceReportOnFinish;
 exports.sendJobEstimateEmail = sendGridGeneral.sendJobEstimateEmail;
 exports.sendInvoiceEmail = sendGridGeneral.sendInvoiceEmail;
+exports.sendSalesInvoiceEmail = sendGridGeneral.sendSalesInvoiceEmail;
 exports.sendPaymentConfirmationEmail = sendGridGeneral.sendPaymentConfirmationEmail;
 
 //-----------------General Callable----------------------------
@@ -133,6 +135,13 @@ exports.getUpcomingInvoice = stripeGeneral.getUpcomingInvoice;
 
 
 const connectedAcctFunc = require('./stripe/stripeCallableForConnectedAccounts');
+exports.verifyConnectedAccountBillingReadiness = connectedAcctFunc.verifyConnectedAccountBillingReadiness;
+exports.acceptSalesServiceAgreement = connectedAcctFunc.acceptSalesServiceAgreement;
+exports.createSalesBillingSubscriptionCheckoutSession = connectedAcctFunc.createSalesBillingSubscriptionCheckoutSession;
+exports.syncSalesBillingSubscriptionFromStripe = connectedAcctFunc.syncSalesBillingSubscriptionFromStripe;
+exports.cancelSalesBillingSubscription = connectedAcctFunc.cancelSalesBillingSubscription;
+exports.resumeSalesBillingSubscription = connectedAcctFunc.resumeSalesBillingSubscription;
+exports.updateSalesBillingSubscriptionStripeItems = connectedAcctFunc.updateSalesBillingSubscriptionStripeItems;
 exports.getProductList = connectedAcctFunc.getProductList;
 exports.createNewPrice = connectedAcctFunc.createNewPrice;
 exports.getPriceList = connectedAcctFunc.getPriceList;

@@ -125,7 +125,7 @@ export default function Leads() {
             return (
                 <div>
                     <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Customer linked</span>
-                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || lead.customerId}</div>
+                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || (lead.customerId ? "Linked customer" : "")}</div>
                 </div>
             );
         }

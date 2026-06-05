@@ -6,14 +6,24 @@ import {
     getDocs,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
-import { RepairRequest } from "../../../utils/models/RepairRequest";
+import {
+    DEFAULT_REPAIR_REQUEST_FILTER_STATUSES,
+    REPAIR_REQUEST_STATUS,
+    REPAIR_REQUEST_STATUS_OPTIONS,
+    RepairRequest,
+    displayRepairRequestStatus,
+    isOpenRepairRequestStatus,
+    normalizeRepairRequestStatus,
+} from "../../../utils/models/RepairRequest";
 import { Context } from "../../../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
 import { format, subDays } from "date-fns";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const RepairRequests = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const navigate = useNavigate();
+    const { can } = useCompanyPermissions();
 
     const [internalRequests, setInternalRequests] = useState([]);
     const [externalRequests, setExternalRequests] = useState([]);
@@ -23,10 +33,7 @@ const RepairRequests = () => {
     const [activeTab, setActiveTab] = useState("internal");
 
     const [searchTerm, setSearchTerm] = useState("");
-    const [selectedStatuses, setSelectedStatuses] = useState([
-        "In Progress",
-        "Unresolved",
-    ]);
+    const [selectedStatuses, setSelectedStatuses] = useState(DEFAULT_REPAIR_REQUEST_FILTER_STATUSES);
 
     const [startDate, setStartDate] = useState(() => {
         return format(subDays(new Date(), 60), "yyyy-MM-dd");
@@ -36,12 +43,7 @@ const RepairRequests = () => {
         return format(new Date(), "yyyy-MM-dd");
     });
 
-    const statusOptions = [
-        "Unresolved",
-        "In Progress",
-        "Resolved",
-        "Cancelled",
-    ];
+    const statusOptions = REPAIR_REQUEST_STATUS_OPTIONS;
 
     useEffect(() => {
         fetchRepairRequests();
@@ -126,18 +128,28 @@ const RepairRequests = () => {
                 !requestDate ||
                 ((!start || requestDate >= start) && (!end || requestDate <= end));
 
-            const requestStatus = request.status || "Unresolved";
+            const requestStatus = request.status || REPAIR_REQUEST_STATUS.UNRESOLVED;
+            const normalizedRequestStatus = normalizeRepairRequestStatus(requestStatus);
+            const selectedStatusSet = new Set(selectedStatuses.map(normalizeRepairRequestStatus));
 
             const matchesStatus =
                 selectedStatuses.length === 0 ||
-                selectedStatuses.includes(requestStatus);
+                selectedStatuses.includes(requestStatus) ||
+                (
+                    selectedStatusSet.has(normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.UNRESOLVED)) &&
+                    isOpenRepairRequestStatus(requestStatus)
+                ) ||
+                (
+                    selectedStatusSet.has(normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)) &&
+                    normalizedRequestStatus === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
+                );
 
             const searchable = [
                 request.customerName,
                 request.requesterName,
                 request.description,
                 request.notes,
-                request.status,
+                displayRepairRequestStatus(request.status),
                 request.serviceLocationName,
                 request.id,
             ]
@@ -154,24 +166,23 @@ const RepairRequests = () => {
 
     const internalNeedsActionCount = useMemo(() => {
         return internalRequests.filter((request) => {
-            const status = request.status || "Unresolved";
-            return status === "Unresolved" || status === "In Progress";
+            return isOpenRepairRequestStatus(request.status);
         }).length;
     }, [internalRequests]);
 
     const externalNeedsActionCount = useMemo(() => {
         return externalRequests.filter((request) => {
-            const status = request.status || "Unresolved";
-            return status === "Unresolved" || status === "In Progress";
+            return isOpenRepairRequestStatus(request.status);
         }).length;
     }, [externalRequests]);
 
     const getStatusClass = (status) => {
-        const value = (status || "Unresolved").toLowerCase();
+        const value = normalizeRepairRequestStatus(status);
 
-        if (value === "resolved") return "bg-green-100 text-green-800";
-        if (value === "cancelled" || value === "canceled") return "bg-red-100 text-red-800";
-        if (value === "in progress") return "bg-blue-100 text-blue-800";
+        if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)) return "bg-green-100 text-green-800";
+        if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED) || value === "canceled") return "bg-red-100 text-red-800";
+        if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)) return "bg-gray-100 text-gray-700";
+        if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)) return "bg-blue-100 text-blue-800";
 
         return "bg-yellow-100 text-yellow-800";
     };
@@ -281,7 +292,7 @@ const RepairRequests = () => {
                                     <span
                                         className={`inline-flex px-3 py-1 rounded-full text-xs font-bold ${getStatusClass(request.status)}`}
                                     >
-                                        {request.status || "Unresolved"}
+                                        {displayRepairRequestStatus(request.status)}
                                     </span>
                                 </td>
 
@@ -331,12 +342,14 @@ const RepairRequests = () => {
                         </div>
                     </div>
 
-                    <Link
-                        to="/company/repair-requests/create"
-                        className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 transition"
-                    >
-                        Create New
-                    </Link>
+                    {can("32") && (
+                        <Link
+                            to="/company/repair-requests/create"
+                            className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700 transition"
+                        >
+                            Create New
+                        </Link>
+                    )}
                 </div>
 
                 <div className="rounded-2xl bg-white shadow-lg border border-gray-100">

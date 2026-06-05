@@ -7,44 +7,110 @@ import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
-import { RepairRequest } from '../../../utils/models/RepairRequest';
+import { RepairRequest, displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { loadCustomerTimeline } from '../../../utils/customerTimeline';
-// Reusable Components
-const TabButton = ({ text, active, onClick }) => (
-    <button
-        onClick={onClick}
-        className={`relative inline-flex items-center justify-center whitespace-nowrap px-4 py-2 text-sm font-semibold transition
-            ${active
-                ? 'text-slate-900'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-        type="button"
-    >
-        {text}
-        <span
-            className={`absolute -bottom-[1px] left-3 right-3 h-[2px] rounded-full transition
-                ${active ? 'bg-blue-600' : 'bg-transparent'}
-            `}
-        />
-    </button>
-);
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import CustomerTimelineGraph from './CustomerTimelineGraph';
+import { salesCollectionNames } from '../../../utils/models/Sales';
 
+const customerSections = [
+    { id: 'profile', label: 'Profile', helper: 'Contact, billing address, notes, and account status' },
+    { id: 'locations', label: 'Service Locations', helper: 'Properties, bodies of water, equipment, and recent stops' },
+    { id: 'operations', label: 'Operations', helper: 'Jobs, repair requests, sales, recurring service, and leads' },
+    { id: 'history', label: 'History', helper: 'Service, job, chemistry, equipment, and notes timeline' },
+];
+const validCustomerTabs = customerSections.map((section) => section.id);
+
+// Reusable Components
 const InfoCard = ({ title, children, actions }) => (
-    <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg sm:text-xl font-semibold text-slate-900">{title}</h3>
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center justify-between gap-3">
+            <h3 className="text-lg font-bold text-slate-950">{title}</h3>
             {actions && <div className="flex-shrink-0">{actions}</div>}
         </div>
         <div className="space-y-4">{children}</div>
     </div>
 );
 
-// Small helper: uniform “chip” look used in Operations
-const StatChip = ({ children }) => (
-    <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
-        {children}
-    </span>
+const formatCurrency = (value) => {
+    const amount = Number(value);
+    return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "—";
+};
+
+const formatCents = (value) => {
+    const amount = Number(value || 0) / 100;
+    return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
+};
+
+const toMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (typeof value.toDate === 'function') return value.toDate().getTime();
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'number') return value;
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const formatDateValue = (value) => {
+    const millis = toMillis(value);
+    return millis ? format(new Date(millis), 'MMM d, yyyy') : 'Not set';
+};
+
+const labelize = (value) => {
+    if (!value) return 'Unknown';
+    return String(value)
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/[_-]/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const StatusBadge = ({ children, tone = 'slate' }) => {
+    const tones = {
+        blue: 'border-blue-200 bg-blue-50 text-blue-700',
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        amber: 'border-amber-200 bg-amber-50 text-amber-700',
+        rose: 'border-rose-200 bg-rose-50 text-rose-700',
+        slate: 'border-slate-200 bg-slate-50 text-slate-700',
+    };
+
+    return (
+        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${tones[tone] || tones.slate}`}>
+            {children}
+        </span>
+    );
+};
+
+const statusToneFor = (status) => {
+    const normalized = String(status || '').toLowerCase();
+    if (['accepted', 'active', 'paid', 'posted'].includes(normalized)) return 'emerald';
+    if (['sent', 'open', 'invoiced', 'viewed', 'estimate'].includes(normalized)) return 'blue';
+    if (['draft', 'pending', 'pastdue', 'past due', 'overdue'].includes(normalized)) return 'amber';
+    if (['rejected', 'canceled', 'cancelled', 'failed', 'void'].includes(normalized)) return 'rose';
+    return 'slate';
+};
+
+const getCustomerName = (customer = {}) => (
+    customer.displayAsCompany
+        ? customer.companyName
+        : `${customer.firstName || ''} ${customer.lastName || ''}`.trim()
 );
+
+const formatRecurringDays = (stop) => {
+    const days = stop.daysOfWeek ?? stop.day;
+
+    if (Array.isArray(days)) {
+        return days.filter(Boolean).join(', ') || 'Unscheduled';
+    }
+
+    if (typeof days === 'string') {
+        return days.split(',').map((day) => day.trim()).filter(Boolean).join(', ') || 'Unscheduled';
+    }
+
+    return 'Unscheduled';
+};
 
 const timelineTypeStyles = {
     serviceStop: {
@@ -79,13 +145,17 @@ const timelineTypeStyles = {
         dot: 'bg-emerald-500',
         chip: 'bg-emerald-50 text-emerald-700 border-emerald-100',
     },
+    toDo: {
+        dot: 'bg-slate-500',
+        chip: 'bg-slate-50 text-slate-700 border-slate-100',
+    },
 };
 
 const timelineFilters = [
     { id: 'all', label: 'All', types: [] },
     { id: 'service', label: 'Service', types: ['serviceStop'] },
     { id: 'jobs', label: 'Jobs', types: ['workOrder'] },
-    { id: 'notes', label: 'Notes', types: ['note'] },
+    { id: 'notes', label: 'Notes', types: ['note', 'toDo'] },
     { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
     { id: 'equipment', label: 'Equipment', types: ['equipmentMaintenance', 'equipmentRepair'] },
     { id: 'water', label: 'Water', types: ['waterFill', 'waterEmpty'] },
@@ -94,6 +164,7 @@ const timelineFilters = [
 // Profile Tab
 const ProfileTab = ({ customer }) => {
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
     const [isEditing, setIsEditing] = useState(false);
     const [formData, setFormData] = useState(customer);
@@ -104,6 +175,8 @@ const ProfileTab = ({ customer }) => {
     const handleBillingAddressChange = e => setFormData(prev => ({ ...prev, billingAddress: { ...prev.billingAddress, [e.target.name]: e.target.value } }));
 
     const handleSave = async () => {
+        if (!requirePermission("14", "update customer details")) return;
+
         const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id);
         try {
             await updateDoc(customerRef, formData);
@@ -119,7 +192,7 @@ const ProfileTab = ({ customer }) => {
             <div className="lg:col-span-2 space-y-8">
                 <InfoCard
                     title="Contact Information"
-                    actions={
+                    actions={can("14") &&
                         <button
                             onClick={() => setIsEditing(!isEditing)}
                             className="text-sm font-semibold text-blue-600 hover:text-blue-800"
@@ -404,7 +477,7 @@ const LocationDetails = ({ location, customerId }) => {
                                             {bow.name || "Unnamed Body of Water"}
                                         </h3>
                                         <p className="mt-1 text-sm text-slate-500">
-                                            ID: {bow.id}
+                                            Body of water profile
                                         </p>
                                     </div>
 
@@ -689,7 +762,7 @@ const ContractsTab = ({ customer }) => {
                                     <td className="py-3 px-4">
                                         <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">{c.status}</span>
                                     </td>
-                                    <td className="py-3 px-4">${c.rate.toFixed(2)}</td>
+                                    <td className="py-3 px-4">{formatCurrency(c.rate)}</td>
                                     <td className="py-3 px-4">{c.dateSent ? format(c.dateSent.toDate(), 'PPP') : 'N/A'}</td>
                                     <td className="py-3 px-4 text-right">
                                         <Link to={`/company/contract/detail/${c.id}`} className="font-semibold text-blue-600 hover:underline">View</Link>
@@ -787,7 +860,7 @@ const RecurringTab = ({ customer }) => {
                     <ul className="divide-y divide-gray-200">
                         {recurringContracts.map(rc => (
                             <li key={rc.id} className="py-2 flex justify-between">
-                                <span>{rc.status}</span> <span>${rc.rate.toFixed(2)}</span>
+                                <span>{rc.status || '—'}</span> <span>{formatCurrency(rc.rate)}</span>
                             </li>
                         ))}
                         {recurringContracts.length === 0 && <p className="text-gray-500">None found.</p>}
@@ -799,7 +872,7 @@ const RecurringTab = ({ customer }) => {
                     <ul className="divide-y divide-gray-200">
                         {recurringStops.map(rs => (
                             <li key={rs.id} className="py-2 flex justify-between">
-                                <span>{rs.frequency}</span> <span>{rs.daysOfWeek.join(', ')}</span>
+                                <span>{rs.frequency || '—'}</span> <span>{formatRecurringDays(rs)}</span>
                             </li>
                         ))}
                         {recurringStops.length === 0 && <p className="text-gray-500">None found.</p>}
@@ -884,22 +957,51 @@ const RepairRequestsSection = ({ customer }) => {
 
     const fetchInternalRepairRequests = async () => {
 
-        const requestsQuery = query(collection(db, 'companies', recentlySelectedCompany, 'repairRequests'));
+        const requestsQuery = query(collection(db, 'companies', recentlySelectedCompany, 'repairRequests'), where("customerId", "==", customer.id));
         const requestsSnapshot = await getDocs(requestsQuery);
 
-        const allRequests = requestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
+        const allRequests = requestsSnapshot.docs.map((requestDoc) => {
+            const request = RepairRequest.fromFirestore(requestDoc);
+            return { ...request, id: request.id || requestDoc.id };
+        });
 
         // TODO: add your internal repair request query here
         return allRequests;
     };
 
     const fetchExternalRepairRequests = async () => {
-        // TODO: add your external repair request query here
+        const requests = [
+            getDocs(query(
+                collection(db, 'homeownerRepairRequests'),
+                where("companyId", "==", recentlySelectedCompany),
+                where("customerId", "==", customer.id)
+            )),
+            customer.userId
+                ? getDocs(query(
+                    collection(db, 'homeownerRepairRequests'),
+                    where("companyId", "==", recentlySelectedCompany),
+                    where("userId", "==", customer.userId)
+                ))
+                : Promise.resolve({ docs: [] }),
+            customer.userId
+                ? getDocs(query(
+                    collection(db, 'homeownerRepairRequests'),
+                    where("companyId", "==", recentlySelectedCompany),
+                    where("requesterId", "==", customer.userId)
+                ))
+                : Promise.resolve({ docs: [] }),
+        ];
 
-        const customerRequestsQuery = query(collection(db, 'homeownerRepairRequests'), where("companyId", "==", recentlySelectedCompany));
-        const customerRequestsSnapshot = await getDocs(customerRequestsQuery);
+        const snapshots = await Promise.all(requests);
 
-        const customerRequests = customerRequestsSnapshot.docs.map(doc => RepairRequest.fromFirestore(doc));
+        const customerRequests = uniqueById(
+            snapshots
+                .flatMap((snapshot) => snapshot.docs)
+                .map((requestDoc) => {
+                    const request = RepairRequest.fromFirestore(requestDoc);
+                    return { ...request, id: request.id || requestDoc.id };
+                })
+        );
 
         return customerRequests;
     };
@@ -909,7 +1011,7 @@ const RepairRequestsSection = ({ customer }) => {
             <div className="min-w-0">
                 <p className="font-semibold text-gray-800 truncate">{request.title || request.description || 'Repair Request'}</p>
                 <p className="text-sm text-gray-600">
-                    Status: {request.status || 'N/A'}
+                    Status: {displayRepairRequestStatus(request.status)}
                 </p>
             </div>
             {request.id && (
@@ -966,27 +1068,238 @@ const RepairRequestsSection = ({ customer }) => {
     );
 };
 
+const uniqueById = (items) => {
+    const records = new Map();
+    items.forEach((item) => {
+        if (item?.id) records.set(item.id, item);
+    });
+    return [...records.values()];
+};
+
+const fetchCustomerSalesRecords = async ({ db, collectionName, companyId, customer }) => {
+    const snapshots = await Promise.all([
+        getDocs(query(
+            collection(db, collectionName),
+            where("companyId", "==", companyId),
+            where("customerId", "==", customer.id)
+        )),
+        customer.userId
+            ? getDocs(query(
+                collection(db, collectionName),
+                where("companyId", "==", companyId),
+                where("customerUserId", "==", customer.userId)
+            ))
+            : Promise.resolve({ docs: [] }),
+    ]);
+
+    return uniqueById(
+        snapshots
+            .flatMap((snapshot) => snapshot.docs)
+            .map((record) => ({ id: record.id, ...record.data() }))
+    ).sort((left, right) => toMillis(right.updatedAt || right.createdAt || right.sentAt || right.dueDate) - toMillis(left.updatedAt || left.createdAt || left.sentAt || left.dueDate));
+};
+
+const SalesRecordList = ({ title, children, empty }) => {
+    const visibleChildren = React.Children.toArray(children).filter(Boolean);
+
+    return (
+        <div>
+            <h4 className="mb-2 text-sm font-bold text-slate-900">{title}</h4>
+            <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
+                {visibleChildren.length > 0 ? visibleChildren : <div className="p-4 text-sm text-slate-500">{empty}</div>}
+            </div>
+        </div>
+    );
+};
+
+const SalesActivitySection = ({ customer }) => {
+    const [salesData, setSalesData] = useState({
+        billingProfiles: [],
+        agreements: [],
+        invoices: [],
+        payments: [],
+        subscriptions: [],
+    });
+    const [loading, setLoading] = useState(true);
+    const { recentlySelectedCompany } = useContext(Context);
+    const db = getFirestore();
+
+    useEffect(() => {
+        const fetchSalesActivity = async () => {
+            setLoading(true);
+            try {
+                const [billingProfiles, agreements, invoices, payments, subscriptions] = await Promise.all([
+                    fetchCustomerSalesRecords({ db, collectionName: salesCollectionNames.billingProfiles, companyId: recentlySelectedCompany, customer }),
+                    fetchCustomerSalesRecords({ db, collectionName: salesCollectionNames.agreements, companyId: recentlySelectedCompany, customer }),
+                    fetchCustomerSalesRecords({ db, collectionName: salesCollectionNames.invoices, companyId: recentlySelectedCompany, customer }),
+                    fetchCustomerSalesRecords({ db, collectionName: salesCollectionNames.payments, companyId: recentlySelectedCompany, customer }),
+                    fetchCustomerSalesRecords({ db, collectionName: salesCollectionNames.billingSubscriptions, companyId: recentlySelectedCompany, customer }),
+                ]);
+
+                setSalesData({ billingProfiles, agreements, invoices, payments, subscriptions });
+            } catch (error) {
+                console.error('Failed to fetch customer sales activity', error);
+                toast.error('Failed to fetch customer sales activity.');
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (customer.id && recentlySelectedCompany) fetchSalesActivity();
+    }, [customer, recentlySelectedCompany, db]);
+
+    const openInvoiceTotalCents = salesData.invoices
+        .filter((invoice) => ['open', 'partiallypaid', 'overdue'].includes(String(invoice.status || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase()))
+        .reduce((total, invoice) => total + Number(invoice.amountDueCents ?? invoice.totalAmountCents ?? 0), 0);
+    const postedPaymentCents = salesData.payments
+        .filter((payment) => String(payment.status || '').toLowerCase() === 'posted')
+        .reduce((total, payment) => total + Number(payment.amountCents || 0), 0);
+    const primaryBillingProfile = salesData.billingProfiles[0];
+    const latestAgreements = salesData.agreements.slice(0, 4);
+    const latestInvoices = salesData.invoices.slice(0, 4);
+    const latestSubscriptions = salesData.subscriptions.slice(0, 3);
+    const latestPayments = salesData.payments.slice(0, 4);
+
+    return (
+        <InfoCard title="Sales & Billing">
+            {loading ? (
+                <ClipLoader size={20} />
+            ) : (
+                <div className="space-y-5">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Billing Profiles</p>
+                            <p className="mt-1 text-base font-bold text-slate-900">{salesData.billingProfiles.length}</p>
+                        </div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Agreements</p>
+                            <p className="mt-1 text-base font-bold text-slate-900">{salesData.agreements.length}</p>
+                        </div>
+                        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Subscriptions</p>
+                            <p className="mt-1 text-base font-bold text-slate-900">{salesData.subscriptions.length}</p>
+                        </div>
+                        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-amber-800">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75">Open AR</p>
+                            <p className="mt-1 text-base font-bold">{formatCents(openInvoiceTotalCents)}</p>
+                        </div>
+                        <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2.5 text-emerald-800">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide opacity-75">Posted Payments</p>
+                            <p className="mt-1 text-base font-bold">{formatCents(postedPaymentCents)}</p>
+                        </div>
+                    </div>
+
+                    {primaryBillingProfile && (
+                        <div className="grid gap-3 rounded-md border border-slate-200 bg-white p-4 sm:grid-cols-2 xl:grid-cols-4">
+                            <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Billing Profile</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-900">{labelize(primaryBillingProfile.status)}</p>
+                            </div>
+                            <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Delivery</p>
+                                <p className="mt-1 text-sm text-slate-700">{labelize(primaryBillingProfile.invoiceDeliveryMethod)}</p>
+                            </div>
+                            <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Payment Terms</p>
+                                <p className="mt-1 text-sm text-slate-700">{labelize(primaryBillingProfile.paymentTerms)}</p>
+                            </div>
+                            <div>
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Stripe Customer</p>
+                                <p className="mt-1 truncate text-sm text-slate-700">{primaryBillingProfile.stripeCustomerId || 'Not linked'}</p>
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="grid gap-5 xl:grid-cols-2">
+                        <SalesRecordList title="Service Agreements" empty="No service agreements found.">
+                            {latestAgreements.length > 0 && <div className="mb-2 flex items-center justify-between gap-3 p-3">
+                                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Latest</span>
+                                <Link to="/company/sales/agreements" className="text-xs font-semibold text-blue-600 hover:text-blue-800">
+                                    View all
+                                </Link>
+                            </div>}
+                            {latestAgreements.length > 0 && latestAgreements.map((agreement) => (
+                                <Link
+                                    key={agreement.id}
+                                    to={`/company/sales/agreements/${agreement.id}`}
+                                    className="flex items-center justify-between gap-3 p-3 transition hover:bg-slate-50"
+                                >
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">{agreement.title || 'Service Agreement'}</p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            {formatDateValue(agreement.updatedAt || agreement.sentAt || agreement.createdAt)}
+                                            {agreement.totalAmountCents ? ` • ${formatCents(agreement.totalAmountCents)}` : ''}
+                                        </p>
+                                    </div>
+                                    <StatusBadge tone={statusToneFor(agreement.status)}>{labelize(agreement.status)}</StatusBadge>
+                                </Link>
+                            ))}
+                        </SalesRecordList>
+
+                        <SalesRecordList title="Invoices" empty="No invoices found.">
+                            {latestInvoices.length > 0 && latestInvoices.map((invoice) => (
+                                <div key={invoice.id} className="flex items-center justify-between gap-3 p-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">
+                                            {invoice.invoiceNumber || "Invoice"}
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            Due {formatDateValue(invoice.dueDate || invoice.dueAt)}
+                                        </p>
+                                    </div>
+                                    <div className="text-right">
+                                        <p className="text-sm font-bold text-slate-900">{formatCents(invoice.amountDueCents ?? invoice.totalAmountCents)}</p>
+                                        <StatusBadge tone={statusToneFor(invoice.status)}>{labelize(invoice.status)}</StatusBadge>
+                                    </div>
+                                </div>
+                            ))}
+                        </SalesRecordList>
+
+                        <SalesRecordList title="Subscriptions" empty="No billing subscriptions found.">
+                            {latestSubscriptions.length > 0 && latestSubscriptions.map((subscription) => (
+                                <div key={subscription.id} className="flex items-center justify-between gap-3 p-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">
+                                            {formatCents(subscription.amountCents)} / {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            Period ends {formatDateValue(subscription.currentPeriodEnd)}
+                                        </p>
+                                    </div>
+                                    <StatusBadge tone={statusToneFor(subscription.status)}>{labelize(subscription.status)}</StatusBadge>
+                                </div>
+                            ))}
+                        </SalesRecordList>
+
+                        <SalesRecordList title="Payments" empty="No payments found.">
+                            {latestPayments.length > 0 && latestPayments.map((payment) => (
+                                <div key={payment.id} className="flex items-center justify-between gap-3 p-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">
+                                            {formatCents(payment.amountCents)} via {labelize(payment.method)}
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            {formatDateValue(payment.receivedAt || payment.createdAt)}
+                                            {payment.referenceNumber ? ` • Ref ${payment.referenceNumber}` : ''}
+                                        </p>
+                                    </div>
+                                    <StatusBadge tone={statusToneFor(payment.status)}>{labelize(payment.status)}</StatusBadge>
+                                </div>
+                            ))}
+                        </SalesRecordList>
+                    </div>
+                </div>
+            )}
+        </InfoCard>
+    );
+};
+
 // Operations Tab
 const OperationsTab = ({ customer }) => {
     return (
         <div className="space-y-8">
-            <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                        <div className="text-sm font-semibold text-slate-900">Operations</div>
-                        <div className="text-sm text-slate-500 mt-1">
-                            Contracts, leads, work orders, recurring items, and repair requests for this customer.
-                        </div>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                        <StatChip>ID: {customer.id}</StatChip>
-                        <StatChip>{customer.active ? 'Active' : 'Inactive'}</StatChip>
-                        {customer.userId ? <StatChip>User Linked</StatChip> : <StatChip>No User</StatChip>}
-                    </div>
-                </div>
-            </div>
-
             <RepairRequestsSection customer={customer} />
+            <SalesActivitySection customer={customer} />
 
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
                 <div className="space-y-8">
@@ -1069,54 +1382,59 @@ const HistoryTab = ({ customer }) => {
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
                     No service, job, note, chemistry, equipment, or water history found yet.
                 </div>
-            ) : visibleTimeline.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                    No {selectedFilter.label.toLowerCase()} timeline events found yet.
-                </div>
             ) : (
-                <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
-                    {visibleTimeline.map((event) => {
-                        const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
-                        const content = (
-                            <div className="relative flex gap-4">
-                                <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
-                                <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                        <div className="min-w-0">
-                                            <p className="text-sm font-semibold text-slate-900">{event.title}</p>
-                                            <p className="mt-1 text-xs font-medium text-slate-500">
-                                                {format(event.date, 'PPP p')}
-                                            </p>
+                <div className="space-y-6">
+                    <CustomerTimelineGraph timeline={timeline} />
+                    {visibleTimeline.length === 0 ? (
+                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                            No {selectedFilter.label.toLowerCase()} timeline events found yet.
+                        </div>
+                    ) : (
+                        <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
+                            {visibleTimeline.map((event) => {
+                                const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
+                                const content = (
+                                    <div className="relative flex gap-4">
+                                        <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
+                                        <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                                <div className="min-w-0">
+                                                    <p className="text-sm font-semibold text-slate-900">{event.title}</p>
+                                                    <p className="mt-1 text-xs font-medium text-slate-500">
+                                                        {format(event.date, 'PPP p')}
+                                                    </p>
+                                                </div>
+                                                <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                                                    {event.label}
+                                                </span>
+                                            </div>
+
+                                            {event.subtitle && (
+                                                <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
+                                            )}
+
+                                            {event.detail && (
+                                                <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
+                                            )}
                                         </div>
-                                        <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
-                                            {event.label}
-                                        </span>
                                     </div>
+                                );
 
-                                    {event.subtitle && (
-                                        <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
-                                    )}
-
-                                    {event.detail && (
-                                        <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
-                                    )}
-                                </div>
-                            </div>
-                        );
-
-                        return (
-                            <li key={event.id}>
-                                {event.target ? (
-                                    <Link to={event.target} className="block hover:opacity-95 transition">
-                                        {content}
-                                    </Link>
-                                ) : (
-                                    content
-                                )}
-                            </li>
-                        );
-                    })}
-                </ol>
+                                return (
+                                    <li key={event.id}>
+                                        {event.target ? (
+                                            <Link to={event.target} className="block hover:opacity-95 transition">
+                                                {content}
+                                            </Link>
+                                        ) : (
+                                            content
+                                        )}
+                                    </li>
+                                );
+                            })}
+                        </ol>
+                    )}
+                </div>
             )}
         </InfoCard>
     );
@@ -1127,12 +1445,12 @@ export default function CustomerDetails() {
     const { customerId, tab } = useParams();
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
-    const validTabs = ['profile', 'locations', 'operations', 'history'];
     const getInitialTab = useCallback((tabValue) => {
-        return validTabs.includes(tabValue) ? tabValue : 'profile';
-    }, [validTabs]);
+        return validCustomerTabs.includes(tabValue) ? tabValue : 'profile';
+    }, []);
 
     const [customer, setCustomer] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -1174,10 +1492,10 @@ export default function CustomerDetails() {
     }, [customerId, recentlySelectedCompany, db]);
 
     useEffect(() => {
-        if (!tab || !validTabs.includes(tab)) {
+        if (!tab || !validCustomerTabs.includes(tab)) {
             navigate(`/company/customers/details/${customerId}/profile`, { replace: true });
         }
-    }, [tab, customerId, navigate, validTabs]);
+    }, [tab, customerId, navigate]);
 
     const handleTabChange = (nextTab) => {
         setActiveTab(nextTab);
@@ -1185,6 +1503,8 @@ export default function CustomerDetails() {
     };
 
     const handleDeleteCustomer = async () => {
+        if (!requirePermission("16", "delete customers")) return;
+
         try {
             // Delete subcollections first
             const slQ = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where("customerId", "==", customerId));
@@ -1220,6 +1540,8 @@ export default function CustomerDetails() {
     };
 
     const handleMakeInactive = async () => {
+        if (!requirePermission("14", "update customers")) return;
+
         try {
             const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
             await updateDoc(customerRef, { active: false });
@@ -1243,7 +1565,14 @@ export default function CustomerDetails() {
         return <div className="text-center p-12">Customer not found.</div>;
     }
 
-    const customerName = customer.displayAsCompany ? customer.companyName : `${customer.firstName} ${customer.lastName}`;
+    const customerName = getCustomerName(customer) || 'Customer';
+    const selectedSection = customerSections.find((section) => section.id === activeTab) || customerSections[0];
+    const billingAddress = [
+        customer.billingAddress?.streetAddress || customer.billingStreetAddress,
+        customer.billingAddress?.city || customer.billingCity,
+        customer.billingAddress?.state || customer.billingState,
+        customer.billingAddress?.zip || customer.billingZip,
+    ].filter(Boolean).join(', ');
 
     const ModalShell = ({ title, children, onClose, footer }) => (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
@@ -1268,60 +1597,124 @@ export default function CustomerDetails() {
     );
 
     return (
-        <div className="p-4 sm:p-6 lg:p-8 bg-slate-50 min-h-screen">
-            <div className="max-w-7xl mx-auto">
-                <div className="mb-8">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                            <Link
-                                to="/company/customers"
-                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
-                            >&larr; Back to Customers</Link>
-                            <h1 className="text-3xl font-semibold text-slate-900 mt-2">{customerName}</h1>
-                            <p className="text-sm text-slate-500">{customer.email}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Link
+                                    to="/company/customers"
+                                    className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                                >
+                                    Back to Customers
+                                </Link>
+                                <StatusBadge tone={customer.active ? 'emerald' : 'rose'}>
+                                    {customer.active ? 'Active' : 'Inactive'}
+                                </StatusBadge>
+                                {customer.userId ? (
+                                    <StatusBadge tone="blue">Homeowner Account Linked</StatusBadge>
+                                ) : (
+                                    <StatusBadge>No Homeowner Account</StatusBadge>
+                                )}
+                            </div>
+                            <h1 className="mt-3 text-3xl font-bold text-slate-950">{customerName}</h1>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                                {[customer.email, customer.phoneNumber].filter(Boolean).join(' · ') || 'No contact details saved'}
+                            </p>
                         </div>
 
-                        <div className="flex flex-wrap gap-3">
-                            <button
-                                onClick={() => setShowInactiveModal(true)}
-                                type="button"
-                                disabled={!customer.active}
-                                className={`px-4 py-2 text-sm font-medium rounded-xl shadow-sm border transition ${customer.active
-                                    ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
-                                    : 'text-slate-400 bg-slate-100 border-slate-200 cursor-not-allowed'
-                                    }`}
-                            >
-                                Make Inactive
-                            </button>
+                        <div className="flex flex-wrap gap-2">
+                            {can("14") && (
+                                <button
+                                    onClick={() => setShowInactiveModal(true)}
+                                    type="button"
+                                    disabled={!customer.active}
+                                    className={`rounded-md border px-4 py-2 text-sm font-semibold transition ${customer.active
+                                        ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                        : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                                        }`}
+                                >
+                                    Make Inactive
+                                </button>
+                            )}
 
-                            <button
-                                onClick={() => setShowDeleteModal(true)}
-                                type="button"
-                                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-                            >
-                                Delete Customer
-                            </button>
+                            {can("16") && (
+                                <button
+                                    onClick={() => setShowDeleteModal(true)}
+                                    type="button"
+                                    className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+                                >
+                                    Delete Customer
+                                </button>
+                            )}
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <div className="mb-8">
-                    <div className="rounded-2xl border border-slate-200 bg-white shadow-sm px-3">
-                        <nav className="flex gap-1 overflow-x-auto scrollbar-hide">
-                            <TabButton text="Profile" active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} />
-                            <TabButton text="Service Locations" active={activeTab === 'locations'} onClick={() => handleTabChange('locations')} />
-                            <TabButton text="Operations" active={activeTab === 'operations'} onClick={() => handleTabChange('operations')} />
-                            <TabButton text="History" active={activeTab === 'history'} onClick={() => handleTabChange('history')} />
-                        </nav>
-                    </div>
-                </div>
+                <section className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+                    <aside className="space-y-4">
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
+                            <div className="mt-3 space-y-2">
+                                {customerSections.map((section) => {
+                                    const active = section.id === activeTab;
+                                    return (
+                                        <button
+                                            key={section.id}
+                                            type="button"
+                                            onClick={() => handleTabChange(section.id)}
+                                            className={[
+                                                "w-full rounded-md border px-3 py-2 text-left transition",
+                                                active
+                                                    ? "border-blue-200 bg-blue-50 text-blue-800"
+                                                    : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                                            ].join(" ")}
+                                        >
+                                            <span className="text-sm font-semibold">{section.label}</span>
+                                            <span className="mt-1 block text-xs text-slate-500">{section.helper}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
 
-                <div>
-                    {activeTab === 'profile' && <ProfileTab customer={customer} />}
-                    {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
-                    {activeTab === 'operations' && <OperationsTab customer={customer} />}
-                    {activeTab === 'history' && <HistoryTab customer={customer} />}
-                </div>
+                        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                            <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Customer Snapshot</h2>
+                            <dl className="mt-3 space-y-3">
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Reference</dt>
+                                    <dd className="mt-1 font-semibold text-slate-900">
+                                        {customer.internalId || customer.company || customer.displayName || customer.email || "Customer"}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Email</dt>
+                                    <dd className="mt-1 break-all text-slate-700">{customer.email || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Phone</dt>
+                                    <dd className="mt-1 text-slate-700">{customer.phoneNumber || "Not set"}</dd>
+                                </div>
+                                <div className="border-t border-slate-200 pt-3">
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Address</dt>
+                                    <dd className="mt-1 text-slate-700">{billingAddress || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current View</dt>
+                                    <dd className="mt-1 font-semibold text-slate-900">{selectedSection.label}</dd>
+                                </div>
+                            </dl>
+                        </div>
+                    </aside>
+
+                    <main className="min-w-0 space-y-6">
+                        {activeTab === 'profile' && <ProfileTab customer={customer} />}
+                        {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
+                        {activeTab === 'operations' && <OperationsTab customer={customer} />}
+                        {activeTab === 'history' && <HistoryTab customer={customer} />}
+                    </main>
+                </section>
             </div>
 
             {showDeleteModal && (

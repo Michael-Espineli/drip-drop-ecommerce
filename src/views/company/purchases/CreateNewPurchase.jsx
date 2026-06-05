@@ -18,6 +18,7 @@ const CreateNewPurchase = () => {
     const [fileRef, setFileRef] = useState('');
     const [showSidebar, setShowSidebar] = useState(false);
     const [isLoading, setIsLoading] = useState(false);
+    const [isCreatingDatabaseItem, setIsCreatingDatabaseItem] = useState(false);
 
     const [refrence, setRefrence] = useState('');
     const [quantity, setQuantity] = useState('');
@@ -112,6 +113,67 @@ const CreateNewPurchase = () => {
         }).format(number || 0);
     }
 
+    const cleanDecimalInput = (value) => {
+        let cleanValue = String(value || '').replace(/[^\d.]/g, '');
+        const parts = cleanValue.split('.');
+
+        if (parts.length > 1) {
+            cleanValue = `${parts[0]}.${parts.slice(1).join('').slice(0, 2)}`;
+        }
+
+        return cleanValue;
+    };
+
+    const numberFromInput = (value) => {
+        const number = parseFloat(value);
+        return Number.isFinite(number) ? number : 0;
+    };
+
+    const getLineItemTotal = (item) => {
+        const unitPrice = numberFromInput(item.rate);
+        const itemQuantity = numberFromInput(item.quantityString ?? item.quantity);
+        return unitPrice * itemQuantity;
+    };
+
+    const updatePurchaseItem = (itemId, updates) => {
+        setPurchaseItemList((prev) =>
+            prev.map((item) => {
+                if (item.id !== itemId) return item;
+
+                const nextItem = { ...item, ...updates };
+                const nextTotal = getLineItemTotal(nextItem);
+
+                return {
+                    ...nextItem,
+                    quantity: numberFromInput(nextItem.quantityString ?? nextItem.quantity),
+                    totalCost: nextTotal.toFixed(2),
+                };
+            })
+        );
+    };
+
+    const setDatabaseItemDefaultSelections = (vendors = venderList, force = false) => {
+        const defaultVendor = vendors[0] || null;
+
+        if (force || !vender) {
+            setVender(defaultVendor);
+            setVenderName(defaultVendor?.label || defaultVendor?.name || '');
+            setVenderId(defaultVendor?.id || '');
+        }
+
+        if (force || !uom) {
+            setUom(uomList[0] || null);
+        }
+
+        if (force || !category) {
+            setCategory(categoryList[0] || null);
+        }
+    };
+
+    useEffect(() => {
+        setDatabaseItemDefaultSelections(venderList);
+    }, [venderList]);
+
     useEffect(() => {
         (async () => {
             try {
@@ -166,6 +228,10 @@ const CreateNewPurchase = () => {
 
                 const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
                 setVenderList(vendors);
+                const defaultVendor = vendors[0] || null;
+                setVender((prev) => prev || defaultVendor);
+                setVenderName((prev) => prev || defaultVendor?.label || defaultVendor?.name || '');
+                setVenderId((prev) => prev || defaultVendor?.id || '');
             } catch (error) {
                 console.log('Error');
                 console.log(error);
@@ -191,11 +257,13 @@ const CreateNewPurchase = () => {
 
     async function revealSideBar(e) {
         e.preventDefault();
+        setDatabaseItemDefaultSelections(venderList);
         setShowSidebar(true);
     }
 
     async function closeSideBar(e) {
         e.preventDefault();
+        if (isCreatingDatabaseItem) return;
         setShowSidebar(false);
     }
 
@@ -237,6 +305,14 @@ const CreateNewPurchase = () => {
         setPurchaseItemList(workingList);
     }
 
+    const handleItemRateChange = (itemId, value) => {
+        updatePurchaseItem(itemId, { rate: cleanDecimalInput(value) });
+    };
+
+    const handleItemQuantityChange = (itemId, value) => {
+        updatePurchaseItem(itemId, { quantityString: cleanDecimalInput(value) });
+    };
+
     async function submitReceipt(e) {
         e.preventDefault();
         if (!isLoading) {
@@ -248,9 +324,10 @@ const CreateNewPurchase = () => {
 
             for (let i = 0; i < purchaseItemlist.length; i++) {
                 let item = purchaseItemlist[i];
+                const lineTotal = getLineItemTotal(item);
 
-                cost = cost + parseFloat(item.totalCost);
-                let price = Math.floor(parseFloat(item.rate * 100));
+                cost = cost + lineTotal;
+                let price = Math.round(numberFromInput(item.rate) * 100);
                 let priceBillable = Math.floor(parseFloat(item.billingRate || 0));
 
                 purchaseItemIds.push(item.id);
@@ -277,6 +354,14 @@ const CreateNewPurchase = () => {
                     sku: item.sku,
                     notes: notes,
                     jobId: "",
+                    workOrderId: "",
+                    assignedJobId: "",
+                    assignedToJob: false,
+                    assignmentStatus: "unassigned",
+                    billingOwner: "purchasedItem",
+                    jobBillingStatus: "",
+                    jobBillable: false,
+                    jobBillingRate: 0,
                     billingRate: priceBillable,
                 };
 
@@ -318,9 +403,10 @@ const CreateNewPurchase = () => {
 
             for (let i = 0; i < purchaseItemlist.length; i++) {
                 let item = purchaseItemlist[i];
+                const lineTotal = getLineItemTotal(item);
 
-                cost = cost + parseFloat(item.totalCost);
-                let price = Math.floor(parseFloat(item.rate * 100));
+                cost = cost + lineTotal;
+                let price = Math.round(numberFromInput(item.rate) * 100);
                 let priceBillable = Math.floor(parseFloat(item.billingRate || 0));
 
                 purchaseItemIds.push(item.id);
@@ -345,6 +431,14 @@ const CreateNewPurchase = () => {
                     sku: item.sku,
                     notes: notes,
                     jobId: "",
+                    workOrderId: "",
+                    assignedJobId: "",
+                    assignedToJob: false,
+                    assignmentStatus: "unassigned",
+                    billingOwner: "purchasedItem",
+                    jobBillingStatus: "",
+                    jobBillable: false,
+                    jobBillingRate: 0,
                     billingRate: priceBillable,
                 };
 
@@ -432,6 +526,9 @@ const CreateNewPurchase = () => {
 
     async function createNewDataBaseItem(e) {
         e.preventDefault();
+        if (isCreatingDatabaseItem) return;
+
+        setIsCreatingDatabaseItem(true);
         try {
             let id = 'com_sett_db_' + uuidv4();
             let rateCents = Math.floor(parseFloat(rateUSD * 100));
@@ -465,15 +562,16 @@ const CreateNewPurchase = () => {
             setBillingRate('');
             setBillingRateUSD('0');
             setSku('');
-            setUom(null);
-            setCategory(null);
+            setUom(uomList[0] || null);
+            setCategory(categoryList[0] || null);
             setSubcategory(null);
             setColor('');
             setDescription('');
             setSize('');
-            setVender(null);
-            setVenderName('');
-            setVenderId('');
+            const defaultVendor = venderList[0] || null;
+            setVender(defaultVendor);
+            setVenderName(defaultVendor?.label || defaultVendor?.name || '');
+            setVenderId(defaultVendor?.id || '');
 
             let genericItemQuery = query(
                 collection(db, "companies", recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'),
@@ -511,6 +609,9 @@ const CreateNewPurchase = () => {
         } catch (error) {
             console.log('Error From Create New Data Base Item');
             console.log(error);
+            toast.error("Failed to create database item");
+        } finally {
+            setIsCreatingDatabaseItem(false);
         }
     }
 
@@ -525,7 +626,7 @@ const CreateNewPurchase = () => {
         fileInputRef.current.click();
     };
 
-    const totalEstimated = purchaseItemlist.reduce((sum, item) => sum + parseFloat(item.totalCost || 0), 0);
+    const totalEstimated = purchaseItemlist.reduce((sum, item) => sum + getLineItemTotal(item), 0);
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -655,9 +756,28 @@ const CreateNewPurchase = () => {
                                                     <td className="py-3 px-4">{item.sku}</td>
                                                     <td className="py-3 px-4 font-medium">{item.name}</td>
                                                     <td className="py-3 px-4">{item.description}</td>
-                                                    <td className="py-3 px-4">${item.rate}</td>
-                                                    <td className="py-3 px-4">{item.quantity}</td>
-                                                    <td className="py-3 px-4 font-semibold">${item.totalCost}</td>
+                                                    <td className="py-3 px-4">
+                                                        <div className="flex items-center min-w-28 border border-gray-300 rounded-lg px-2 bg-white focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-500">
+                                                            <span className="text-gray-500 mr-1">$</span>
+                                                            <input
+                                                                className="w-full py-2 outline-none"
+                                                                value={item.rate}
+                                                                onChange={(e) => handleItemRateChange(item.id, e.target.value)}
+                                                                inputMode="decimal"
+                                                                aria-label={`Cost for ${item.name}`}
+                                                            />
+                                                        </div>
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        <input
+                                                            className="w-24 py-2 px-3 border border-gray-300 rounded-lg focus:ring-blue-100 focus:border-blue-500"
+                                                            value={item.quantityString}
+                                                            onChange={(e) => handleItemQuantityChange(item.id, e.target.value)}
+                                                            inputMode="decimal"
+                                                            aria-label={`Quantity for ${item.name}`}
+                                                        />
+                                                    </td>
+                                                    <td className="py-3 px-4 font-semibold">{formatCurrency(getLineItemTotal(item))}</td>
                                                     <td className="py-3 px-4">
                                                         <button
                                                             onClick={(e) => removeItem(e, item.id)}
@@ -788,7 +908,12 @@ const CreateNewPurchase = () => {
                             <h3 className="text-2xl font-bold text-gray-800">Create New Database Item</h3>
                             <button
                                 onClick={closeSideBar}
-                                className="py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
+                                disabled={isCreatingDatabaseItem}
+                                className={`py-2 px-4 font-semibold rounded-lg transition ${
+                                    isCreatingDatabaseItem
+                                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                                        : "bg-gray-100 text-gray-800 hover:bg-gray-200"
+                                }`}
                             >
                                 Close
                             </button>
@@ -957,9 +1082,14 @@ const CreateNewPurchase = () => {
                             <div className="md:col-span-2">
                                 <button
                                     onClick={createNewDataBaseItem}
-                                    className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
+                                    disabled={isCreatingDatabaseItem}
+                                    className={`w-full py-3 px-4 text-white font-bold rounded-lg shadow-md transition ${
+                                        isCreatingDatabaseItem
+                                            ? "bg-blue-400 cursor-not-allowed"
+                                            : "bg-blue-600 hover:bg-blue-700"
+                                    }`}
                                 >
-                                    Create New Item
+                                    {isCreatingDatabaseItem ? "Creating..." : "Create New Item"}
                                 </button>
                             </div>
                         </div>

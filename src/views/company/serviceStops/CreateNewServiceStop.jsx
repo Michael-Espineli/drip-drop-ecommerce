@@ -14,11 +14,18 @@ import {
     estimateServiceStopPaySummary,
     formatPayRate,
 } from "../../../utils/payroll/payEstimate";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+    debugServiceStopTypeWrite,
+    resolveServiceStopTypeFields,
+    SERVICE_STOP_TYPE_USE_CASES,
+} from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 
 const CreateNewServiceStop = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const { jobId } = useParams();
     const plannedStopId = new URLSearchParams(location.search).get("plannedStopId") || "";
 
@@ -39,6 +46,8 @@ const CreateNewServiceStop = () => {
     const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
     const [workTypeMappings, setWorkTypeMappings] = useState([]);
     const [technicianRates, setTechnicianRates] = useState([]);
+    const [selectedManualServiceStopType, setSelectedManualServiceStopType] = useState(null);
+    const [selectedPayWorkType, setSelectedPayWorkType] = useState(null);
 
     const moneyFromCents = (value) =>
         new Intl.NumberFormat("en-US", {
@@ -60,9 +69,49 @@ const CreateNewServiceStop = () => {
         );
     }, [companyServiceStopTypes]);
 
-    const selectedServiceStopType = useMemo(
-        () => getPlannedStopType(selectedPlannedStop),
-        [selectedPlannedStop, getPlannedStopType]
+    const serviceStopTypeOptions = useMemo(
+        () =>
+            companyServiceStopTypes
+                .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+                .map((type) => ({
+                    ...type,
+                    value: type.id,
+                    label: type.name || "Unnamed Service Stop Type",
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label)),
+        [companyServiceStopTypes]
+    );
+
+    const defaultJobServiceStopType = {
+        id: "system_job_service_stop",
+        name: "Job Visit",
+        imageName: "briefcase",
+        defaultWorkTypeIds: [],
+        value: "system_job_service_stop",
+        label: "Job Visit",
+    };
+
+    const selectedServiceStopType = useMemo(() => {
+        if (selectedPlannedStop) return getPlannedStopType(selectedPlannedStop);
+        return selectedManualServiceStopType || serviceStopTypeOptions[0] || defaultJobServiceStopType;
+    }, [
+        selectedPlannedStop,
+        getPlannedStopType,
+        selectedManualServiceStopType,
+        serviceStopTypeOptions,
+    ]);
+
+    const workTypeOptions = useMemo(
+        () =>
+            companyWorkTypes
+                .filter((type) => type.status !== "Inactive" && type.active !== false)
+                .map((type) => ({
+                    ...type,
+                    value: type.id,
+                    label: type.name || type.workTypeName || "Unnamed Work Type",
+                }))
+                .sort((a, b) => a.label.localeCompare(b.label)),
+        [companyWorkTypes]
     );
 
     const selectedPaySummary = useMemo(() => {
@@ -72,6 +121,8 @@ const CreateNewServiceStop = () => {
             companyId: recentlySelectedCompany,
             settings: paySettings,
             serviceStopType: selectedServiceStopType,
+            serviceStopUseCaseSourceId: "system_job_service_stop",
+            serviceStopWorkTypeIds: selectedPayWorkType?.id ? [selectedPayWorkType.id] : null,
             tasks: selectedTasks,
             worker: selectedUser,
             workTypes: companyWorkTypes,
@@ -83,6 +134,7 @@ const CreateNewServiceStop = () => {
         recentlySelectedCompany,
         paySettings,
         selectedServiceStopType,
+        selectedPayWorkType,
         selectedTasks,
         selectedUser,
         companyWorkTypes,
@@ -103,6 +155,7 @@ const CreateNewServiceStop = () => {
             companyId: recentlySelectedCompany,
             settings: paySettings,
             serviceStopType: getPlannedStopType(selectedPlannedStop),
+            serviceStopUseCaseSourceId: "system_job_service_stop",
             tasks,
             companyUsers: userList,
             workTypes: companyWorkTypes,
@@ -214,6 +267,18 @@ const CreateNewServiceStop = () => {
         setEstimatedDuration(duration);
     }, [selectedTasks]);
 
+    useEffect(() => {
+        if (selectedManualServiceStopType || selectedPlannedStop || !serviceStopTypeOptions.length) return;
+
+        const suggestedType =
+            serviceStopTypeOptions.find((type) => {
+                const name = String(type.name || "").toLowerCase();
+                return name === "job visit" || name === "service call" || name.includes("job");
+            }) || serviceStopTypeOptions[0];
+
+        setSelectedManualServiceStopType(suggestedType);
+    }, [selectedManualServiceStopType, selectedPlannedStop, serviceStopTypeOptions]);
+
     const toggleTaskSelection = (task) => {
         if (task.status === 'Scheduled' || task.status === 'Finished') {
             toast.error("Task is already scheduled or finished.");
@@ -227,6 +292,8 @@ const CreateNewServiceStop = () => {
     };
 
     const createServiceStop = async () => {
+        if (!requirePermission("242", "create service stops")) return;
+
         if (!selectedUser || selectedTasks.length === 0) {
             alert("Please select a technician and at least one task.");
             return;
@@ -258,6 +325,32 @@ const CreateNewServiceStop = () => {
         let rate = 0
 
         const internalId = "SS" + String(serviceStopCount)
+        const payWorkTypeId = selectedPayWorkType?.id || "";
+        const payWorkTypeName = selectedPayWorkType?.name || selectedPayWorkType?.label || "";
+        const resolvedTypeFields = resolveServiceStopTypeFields({
+            companyServiceStopTypes,
+            selectedType: selectedServiceStopType,
+            selectedTypeId: selectedPlannedStop?.serviceStopTypeId || selectedPlannedStop?.typeId || "",
+            fallbackName: selectedPlannedStop?.serviceStopTypeName || selectedPlannedStop?.type || "Job Visit",
+            fallbackImage: selectedPlannedStop?.serviceStopTypeImage || "",
+            useCase: SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+            context: "CreateNewServiceStop.createServiceStop",
+        });
+
+        if (selectedPaySummary.needsReview) {
+            console.warn("[CreateNewServiceStop][payEstimateNeedsReview]", {
+                jobId,
+                selectedUserId: selectedUser.userId,
+                selectedUserName: selectedUser.userName,
+                selectedServiceStopTypeId: resolvedTypeFields.typeId,
+                selectedServiceStopTypeName: resolvedTypeFields.type,
+                selectedPayWorkTypeId: payWorkTypeId,
+                selectedPayWorkTypeName: payWorkTypeName,
+                totalAmountCents: selectedPaySummary.totalAmountCents,
+                lines: selectedPaySummary.lines,
+            });
+        }
+
         const newServiceStop = {
             id: serviceStopId,
             address: serviceLocation.address,
@@ -289,17 +382,27 @@ const CreateNewServiceStop = () => {
             includeReadings: true,
             estimatedPayCents: selectedPaySummary.totalAmountCents,
             estimatedPayLines: selectedPaySummary.lines,
+            payWorkTypeId,
+            payWorkTypeName,
+            workTypeId: payWorkTypeId,
+            workTypeName: payWorkTypeName,
+            defaultWorkTypeIds: resolvedTypeFields.defaultWorkTypeIds,
             plannedServiceStopId: selectedPlannedStop?.id || "",
             rate: rate ?? 0,
             recurringServiceStopId: "",
-            type: selectedServiceStopType?.name || selectedPlannedStop?.serviceStopTypeName || "",
-            typeId: selectedServiceStopType?.id || selectedPlannedStop?.serviceStopTypeId || "",
-            typeImage: selectedServiceStopType?.imageName || selectedPlannedStop?.serviceStopTypeImage || "",
-            duration: 15
+            type: resolvedTypeFields.type,
+            typeId: resolvedTypeFields.typeId,
+            typeImage: resolvedTypeFields.typeImage,
+            serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+            duration: estimatedDuration || 15
 
 
         };
 
+        debugServiceStopTypeWrite({
+            context: "CreateNewServiceStop.createServiceStop",
+            payload: newServiceStop,
+        });
         await setDoc(serviceStopRef, newServiceStop);
 
         for (const task of selectedTasks) {
@@ -311,12 +414,35 @@ const CreateNewServiceStop = () => {
                 workerId: selectedUser.userId,
                 workerName: selectedUser.userName,
                 status: 'Scheduled',
-                serviceStopId: serviceStopId,
+                serviceStopId: {
+                    id: serviceStopId,
+                    internalId,
+                },
+                jobId: {
+                    id: jobId,
+                    internalId: job?.internalId || "",
+                },
+                recurringServiceStopId: {
+                    id: "",
+                    internalId: "",
+                },
+                jobTaskId: task.id,
+                workTypeId: task.workTypeId || payWorkTypeId,
+                workTypeName: task.workTypeName || payWorkTypeName,
                 workOrderTaskId: task.id,
             });
-            rate += task.rate
+            rate += Number(task.rate || task.contractedRate || 0)
             const workOrderTaskRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId, 'tasks', task.id);
-            await updateDoc(workOrderTaskRef, { status: 'Scheduled', workerId: selectedUser.userId, workerName: selectedUser.userName, serviceStopId: serviceStopId });
+            await updateDoc(workOrderTaskRef, {
+                status: 'Scheduled',
+                workerId: selectedUser.userId,
+                workerName: selectedUser.userName,
+                serviceStopId: {
+                    id: serviceStopId,
+                    internalId,
+                },
+                serviceStopIdString: serviceStopId,
+            });
         }
         await updateDoc(serviceStopRef, { rate: rate });
 
@@ -324,17 +450,31 @@ const CreateNewServiceStop = () => {
         if (jobId !== "") {
 
             const jobRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId);
-            await updateDoc(jobRef, { serviceStopIds: arrayUnion(serviceStopId) });
+            const jobUpdates = {
+                serviceStopIds: arrayUnion(serviceStopId),
+                operationStatus: "Scheduled",
+            };
+
+            if (!job.billingStatus || job.billingStatus === "Draft") {
+                jobUpdates.billingStatus = "In Progress";
+            }
+
+            await updateDoc(jobRef, jobUpdates);
         }
-        navigate(`/company/serviceStops/detail/${serviceStopId}`);
+        navigate(`/company/jobs/detail/${jobId}`, {
+            state: {
+                scheduledServiceStopId: serviceStopId,
+                scheduledServiceStopInternalId: internalId,
+            },
+        });
     };
 
     const renderTabContent = () => {
         switch (activeTab) {
-            case 'site-info': return <SiteInfoTab job={job} location={serviceLocation} description={description} setDescription={setDescription} plannedServiceStops={plannedServiceStops} selectedPlannedStop={selectedPlannedStop} setSelectedPlannedStop={setSelectedPlannedStop} taskList={taskList} setSelectedTasks={setSelectedTasks} selectedPlannedStopPayRange={selectedPlannedStopPayRange} moneyFromCents={moneyFromCents} />;
-            case 'assign-tech': return <AssignTechTab users={userList} selectedUser={selectedUser} setSelectedUser={setSelectedUser} date={serviceDate} setDate={setServiceDate} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
+            case 'site-info': return <SiteInfoTab job={job} location={serviceLocation} description={description} setDescription={setDescription} plannedServiceStops={plannedServiceStops} selectedPlannedStop={selectedPlannedStop} setSelectedPlannedStop={setSelectedPlannedStop} taskList={taskList} setSelectedTasks={setSelectedTasks} selectedPlannedStopPayRange={selectedPlannedStopPayRange} moneyFromCents={moneyFromCents} serviceStopTypeOptions={serviceStopTypeOptions} selectedServiceStopType={selectedServiceStopType} selectedManualServiceStopType={selectedManualServiceStopType} setSelectedManualServiceStopType={setSelectedManualServiceStopType} />;
+            case 'assign-tech': return <AssignTechTab users={userList} selectedUser={selectedUser} setSelectedUser={setSelectedUser} date={serviceDate} setDate={setServiceDate} workTypeOptions={workTypeOptions} selectedPayWorkType={selectedPayWorkType} setSelectedPayWorkType={setSelectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
             case 'select-tasks': return <TasksTab tasks={taskList} selectedTasks={selectedTasks} toggleTask={toggleTaskSelection} estimatedDuration={estimatedDuration} />;
-            case 'review': return <ReviewTab job={job} location={serviceLocation} tech={selectedUser?.userName} date={serviceDate} tasks={selectedTasks} duration={estimatedDuration} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
+            case 'review': return <ReviewTab job={job} location={serviceLocation} tech={selectedUser?.userName} date={serviceDate} tasks={selectedTasks} duration={estimatedDuration} selectedServiceStopType={selectedServiceStopType} selectedPayWorkType={selectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
             default: return null;
         }
     };
@@ -383,6 +523,10 @@ const SiteInfoTab = ({
     setSelectedTasks,
     selectedPlannedStopPayRange,
     moneyFromCents,
+    serviceStopTypeOptions,
+    selectedServiceStopType,
+    selectedManualServiceStopType,
+    setSelectedManualServiceStopType,
 }) => {
     const plannedStopOptions = plannedServiceStops.map((stop) => ({
         ...stop,
@@ -405,10 +549,39 @@ const SiteInfoTab = ({
             ? `${moneyFromCents(selectedPlannedStopPayRange.minAmountCents)} - ${moneyFromCents(selectedPlannedStopPayRange.maxAmountCents)}`
             : moneyFromCents(selectedPlannedStopPayRange?.maxAmountCents || 0);
 
+    const selectedServiceStopOption = selectedServiceStopType
+        ? {
+            ...selectedServiceStopType,
+            value: selectedServiceStopType.id,
+            label: selectedServiceStopType.name || selectedServiceStopType.label || "Service Stop Type",
+        }
+        : null;
+
     return (
     <div className="space-y-4">
-        <InfoCard title="Job Details" data={job ? { ID: job.internalId, Customer: job.customerName, Type: job.type } : {}} />
+        <InfoCard title="Job Details" data={job ? { Job: job.internalId || "Job", Customer: job.customerName, Type: job.type } : {}} />
         <InfoCard title="Service Location" data={location ? { Name: location.nickName, Address: `${location.address.streetAddress}, ${location.address.city}` } : {}} />
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">
+                Service Stop Type
+            </label>
+            <Select
+                options={serviceStopTypeOptions}
+                value={selectedPlannedStop ? selectedServiceStopOption : selectedManualServiceStopType || selectedServiceStopOption}
+                onChange={setSelectedManualServiceStopType}
+                placeholder="Select service stop type"
+                isDisabled={Boolean(selectedPlannedStop)}
+                styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
+            />
+            <p className="mt-2 text-xs text-gray-500">
+                This classifies the stop. Payroll work types are derived from this unless you set a pay override later.
+            </p>
+            {selectedPlannedStop && (
+                <p className="mt-1 text-xs font-semibold text-blue-700">
+                    Using the service stop type from the planned service stop.
+                </p>
+            )}
+        </div>
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
             <label className="block text-sm font-semibold text-gray-700 mb-1">
                 Planned Service Stop
@@ -460,7 +633,7 @@ const InfoCard = ({ title, data }) => (
 );
 
 const PaySummaryCard = ({ selectedPaySummary, moneyFromCents }) => (
-    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-2">
+    <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-full">
         <div className="flex items-start justify-between gap-3">
             <div>
                 <p className="text-sm font-semibold text-gray-800">Expected Technician Pay</p>
@@ -504,8 +677,19 @@ const PaySummaryCard = ({ selectedPaySummary, moneyFromCents }) => (
     </div>
 );
 
-const AssignTechTab = ({ users, selectedUser, setSelectedUser, date, setDate, selectedPaySummary, moneyFromCents }) => (
-    <div className="grid md:grid-cols-2 gap-6">
+const AssignTechTab = ({
+    users,
+    selectedUser,
+    setSelectedUser,
+    date,
+    setDate,
+    workTypeOptions,
+    selectedPayWorkType,
+    setSelectedPayWorkType,
+    selectedPaySummary,
+    moneyFromCents,
+}) => (
+    <div className="grid md:grid-cols-3 gap-6">
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Assign Technician</label>
             <Select options={users} value={selectedUser} onChange={setSelectedUser} placeholder="Select a technician..." styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }} />
@@ -513,6 +697,20 @@ const AssignTechTab = ({ users, selectedUser, setSelectedUser, date, setDate, se
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Service Date</label>
             <DatePicker selected={date} onChange={setDate} className="w-full p-2 border border-gray-300 rounded-lg" />
+        </div>
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Pay Work Type Override</label>
+            <Select
+                options={workTypeOptions}
+                value={selectedPayWorkType}
+                onChange={setSelectedPayWorkType}
+                placeholder="Use mapped/default type"
+                isClearable
+                styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+                Overrides service stop pay for this scheduled stop.
+            </p>
         </div>
         <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
     </div>
@@ -551,7 +749,7 @@ const TasksTab = ({ tasks, selectedTasks, toggleTask, estimatedDuration }) => (
     </div>
 );
 
-const ReviewTab = ({ job, location, tech, date, tasks, duration, selectedPaySummary, moneyFromCents }) => (
+const ReviewTab = ({ job, location, tech, date, tasks, duration, selectedServiceStopType, selectedPayWorkType, selectedPaySummary, moneyFromCents }) => (
     <div className="space-y-4">
         <h3 className="text-xl font-semibold">Review & Confirm</h3>
         <div className="p-4 border rounded-lg space-y-2">
@@ -559,6 +757,8 @@ const ReviewTab = ({ job, location, tech, date, tasks, duration, selectedPaySumm
             <p><strong>Location:</strong> {location?.nickName} at {location?.address.streetAddress}</p>
             <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>
             <p><strong>Service Date:</strong> {date.toLocaleDateString()}</p>
+            <p><strong>Service Stop Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || "Job Visit"}</p>
+            <p><strong>Pay Work Type Override:</strong> {selectedPayWorkType?.label || "Using service stop type defaults"}</p>
             <p><strong>Total Duration:</strong> {duration} minutes</p>
             <p><strong>Expected Pay:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
             <div>
