@@ -16,7 +16,8 @@ class Company {
         exp,
         inBusinessSince,
         lastVerified,
-        needToVerify
+        needToVerify,
+        hideFromBrowse = false
     ) {
         this.id = id;
         this.ownerId = ownerId;
@@ -35,6 +36,7 @@ class Company {
         this.inBusinessSince = inBusinessSince;
         this.lastVerified = lastVerified;
         this.needToVerify = needToVerify;
+        this.hideFromBrowse = hideFromBrowse;
     }
 
     static fromFirestore(doc) {
@@ -56,7 +58,8 @@ class Company {
             data.exp,
             data.inBusinessSince ? data.inBusinessSince.toDate() : null, // Convert Firestore Timestamp to Date
             data.lastVerified ? data.lastVerified.toDate() : null, // Convert Firestore Timestamp to Date
-            data.needToVerify
+            data.needToVerify,
+            data.hideFromBrowse === true
         );
     }
 

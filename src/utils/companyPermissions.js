@@ -124,3 +124,144 @@ export const companyPermissionsByCategory = companyPermissions.reduce((acc, perm
   acc[permission.category].push(permission);
   return acc;
 }, {});
+
+const childPermissionPrefixes = ["Create", "Update", "Delete", "Respond"];
+
+const normalizePermissionName = (value = "") =>
+  value.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const stripChildPermissionPrefix = (name = "") => {
+  const prefix = childPermissionPrefixes.find((candidate) =>
+    name.toLowerCase().startsWith(`${candidate.toLowerCase()} `)
+  );
+
+  return prefix ? name.slice(prefix.length).trim() : "";
+};
+
+const permissionById = companyPermissions.reduce((acc, permission) => {
+  acc[permission.id] = permission;
+  return acc;
+}, {});
+
+const permissionByNormalizedName = companyPermissions.reduce((acc, permission) => {
+  acc[normalizePermissionName(permission.name)] = permission;
+  return acc;
+}, {});
+
+export const getPermissionParent = (permission) => {
+  if (!permission) return null;
+
+  const parentName = stripChildPermissionPrefix(permission.name);
+  if (!parentName) return null;
+
+  return permissionByNormalizedName[normalizePermissionName(parentName)] || null;
+};
+
+export const getPermissionChildren = (permission) => {
+  if (!permission) return [];
+
+  return companyPermissions.filter((candidate) => {
+    const parent = getPermissionParent(candidate);
+    return parent?.id === permission.id;
+  });
+};
+
+export const getPermissionGroupIds = (permission) => {
+  if (!permission) return [];
+
+  const children = getPermissionChildren(permission);
+  if (children.length > 0) {
+    return [permission.id, ...children.map((child) => child.id)];
+  }
+
+  return [permission.id];
+};
+
+const orderPermissionIds = (ids) => {
+  const selected = new Set(ids);
+  const orderedIds = companyPermissions
+    .filter((permission) => selected.has(permission.id))
+    .map((permission) => permission.id);
+  const unknownIds = [...selected].filter((id) => !permissionById[id]).sort();
+
+  return [...orderedIds, ...unknownIds];
+};
+
+export const normalizePermissionSelection = (ids = []) => {
+  return orderPermissionIds(new Set(ids));
+};
+
+export const getPermissionSelectionState = (permission, selectedIds = []) => {
+  const selected = new Set(selectedIds);
+  const children = getPermissionChildren(permission);
+
+  if (selected.has(permission.id)) return "selected";
+  if (children.length === 0) return "empty";
+
+  const childIds = children.map((child) => child.id);
+  const selectedChildren = childIds.filter((id) => selected.has(id));
+
+  if (selectedChildren.length > 0) return "partial";
+  return "empty";
+};
+
+export const togglePermissionSelection = (permissionId, selectedIds = []) => {
+  const permission = permissionById[permissionId];
+  if (!permission) return selectedIds;
+
+  const selected = new Set(selectedIds);
+  if (selected.has(permission.id)) selected.delete(permission.id);
+  else selected.add(permission.id);
+
+  return orderPermissionIds(selected);
+};
+
+export const companyPermissionCategoryGroups = Object.keys(companyPermissionsByCategory).map((category) => {
+  const categoryPermissions = companyPermissionsByCategory[category];
+  const childIds = new Set();
+
+  categoryPermissions.forEach((permission) => {
+    const parent = getPermissionParent(permission);
+    if (parent && parent.category === category) {
+      childIds.add(permission.id);
+    }
+  });
+
+  const groups = categoryPermissions
+    .filter((permission) => !childIds.has(permission.id))
+    .map((permission) => ({
+      parent: permission,
+      children: getPermissionChildren(permission).filter((child) => child.category === category),
+    }));
+
+  return {
+    category,
+    permissions: categoryPermissions,
+    groups,
+  };
+});
+
+export const getCategorySelectionState = (categoryGroup, selectedIds = []) => {
+  const selected = new Set(selectedIds);
+  const categoryIds = categoryGroup.permissions.map((permission) => permission.id);
+  const selectedCount = categoryIds.filter((id) => selected.has(id)).length;
+
+  if (selectedCount === 0) return "empty";
+  if (selectedCount === categoryIds.length) return "selected";
+  return "partial";
+};
+
+export const togglePermissionCategorySelection = (category, selectedIds = []) => {
+  const categoryGroup = companyPermissionCategoryGroups.find((group) => group.category === category);
+  if (!categoryGroup) return selectedIds;
+
+  const selected = new Set(selectedIds);
+  const shouldSelectCategory = getCategorySelectionState(categoryGroup, selectedIds) !== "selected";
+
+  categoryGroup.permissions.forEach((permission) => {
+    if (shouldSelectCategory) selected.add(permission.id);
+    else selected.delete(permission.id);
+  });
+
+  return normalizePermissionSelection(orderPermissionIds(selected));
+};

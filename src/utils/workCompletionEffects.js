@@ -12,6 +12,7 @@ import { recordBodyOfWaterTaskHistory } from "./bodyOfWaterHistory";
 import { EQUIPMENT_STATUS } from "./models/Equipment";
 
 const EQUIPMENT_HISTORY_TYPES = {
+  INSTALL: "Install",
   MAINTENANCE: "Maintenance",
   REPAIR: "Repair",
 };
@@ -503,20 +504,49 @@ const updateReplacementEquipmentLinks = async ({
 
   if (!replacementSnap.exists()) return;
 
+  const sourceTaskId = sourceTaskIdFor(task);
+  const serviceStopId = serviceStopIdFor({ task });
+  const replacementData = replacementSnap.data() || {};
+
   await updateDoc(replacementRef, {
     isActive: true,
     active: true,
-    status: replacementSnap.data().status || EQUIPMENT_STATUS.OPERATIONAL,
-    dateInstalled: replacementSnap.data().dateInstalled || completedAt,
-    customerId: replacementSnap.data().customerId || oldEquipment.customerId || task?.customerId || "",
-    customerName: replacementSnap.data().customerName || oldEquipment.customerName || task?.customerName || "",
+    status: replacementData.status || EQUIPMENT_STATUS.OPERATIONAL,
+    dateInstalled: replacementData.dateInstalled || completedAt,
+    customerId: replacementData.customerId || oldEquipment.customerId || task?.customerId || "",
+    customerName: replacementData.customerName || oldEquipment.customerName || task?.customerName || "",
     serviceLocationId:
-      replacementSnap.data().serviceLocationId || oldEquipment.serviceLocationId || task?.serviceLocationId || "",
-    bodyOfWaterId: replacementSnap.data().bodyOfWaterId || oldEquipment.bodyOfWaterId || task?.bodyOfWaterId || "",
+      replacementData.serviceLocationId || oldEquipment.serviceLocationId || task?.serviceLocationId || "",
+    bodyOfWaterId: replacementData.bodyOfWaterId || oldEquipment.bodyOfWaterId || task?.bodyOfWaterId || "",
     replacesEquipmentId: oldEquipment.id || "",
     installedFromJobId: jobId || "",
-    installedFromTaskId: sourceTaskIdFor(task),
+    installedFromTaskId: sourceTaskId,
   });
+
+  const installHistory = {
+    id: `auto_equ_install_${cleanId(sourceTaskId)}`,
+    name: `Installed ${replacementData.name || task?.installedEquipmentName || "equipment"}`,
+    type: EQUIPMENT_HISTORY_TYPES.INSTALL,
+    date: completedAt,
+    description: `Auto-created from finished ${normalizeTaskType(task?.type) || "replacement"} task.`,
+    performedBy: performedByForWorkerType(task?.workerType),
+    addedBy: "Auto",
+    techId: task?.workerId || "",
+    techName: task?.workerName || "",
+    jobId: jobId || "",
+    sourceTaskId,
+    taskId: sourceTaskId,
+    serviceStopId,
+    replacedEquipmentId: oldEquipment.id || "",
+    installedPurchasedItemId: task?.installedPurchasedItemId || task?.purchasedItemId || "",
+    installedShoppingListItemId: task?.shoppingListItemId || "",
+  };
+
+  await setDoc(
+    doc(replacementRef, "serviceHistory", installHistory.id),
+    installHistory,
+    { merge: true }
+  );
 };
 
 export const syncCompletedServiceStopTaskToJobTask = async ({

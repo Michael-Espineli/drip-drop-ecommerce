@@ -22,7 +22,7 @@ const formatCurrency = (amount) => {
 };
 
 const SubscriptionPicker = () => {
-    const { dataBaseUser, recentlySelectedCompany, stripeId } = useContext(Context);
+    const { user, dataBaseUser, recentlySelectedCompany, stripeId } = useContext(Context);
     const [subscriptionList, setSubscriptionList] = useState([]);
     const [activeSubscription, setActiveSubscription] = useState(null);
     const [loading, setLoading] = useState(true);
@@ -109,7 +109,7 @@ const SubscriptionPicker = () => {
         }
 
         // SCENARIO 1: User has an active subscription and is changing plans.
-        if (activeSubscription.stripeSubscriptionId) {
+        if (activeSubscription?.stripeSubscriptionId) {
             setIsPreviewLoading(true);
             const toastId = toast.loading('Generating preview...');
 
@@ -138,9 +138,12 @@ const SubscriptionPicker = () => {
             // SCENARIO 2: User is on a free plan or has no subscription.
             const toastId = toast.loading('Redirecting to checkout...');
             try {
-                if (!stripeId || !dataBaseUser?.id || !recentlySelectedCompany) {
+                const billingUserId = dataBaseUser?.id || user?.uid;
+                const stripeCustomerId = activeSubscription?.stripeCustomerId || stripeId;
+
+                if (!billingUserId || !recentlySelectedCompany) {
                     navigate('/company/settings/subscriptions/picker');
-                    throw new Error("User, company, or Stripe customer information is missing.");
+                    throw new Error("User or company information is missing.");
                 }
                 const successUrl = `${window.location.origin}/company/settings/subscriptions?success=true`;
                 const cancelUrl = `${window.location.origin}/company/settings/subscriptions/picker?canceled=true`;
@@ -148,8 +151,9 @@ const SubscriptionPicker = () => {
                 const createSubscriptionCheckoutSession = httpsCallable(functions, 'createSubscriptionCheckoutSession');
                 const result = await createSubscriptionCheckoutSession({
                     stripePriceId: selectedPlan.stripePriceId,
-                    stripeId: stripeId,
-                    userId: dataBaseUser.id,
+                    stripeCustomerId,
+                    stripeId: stripeCustomerId,
+                    userId: billingUserId,
                     companyId: recentlySelectedCompany,
                     successUrl: successUrl,
                     cancelUrl: cancelUrl,

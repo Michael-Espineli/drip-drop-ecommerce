@@ -7,6 +7,7 @@ import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
 import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
+import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 
 const Sidebar = ({ showSidebar, setShowSidebar }) => {
     const auth = getAuth();
@@ -14,6 +15,15 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0 });
+
+    const featureFlagsEnabledForItem = (item) => {
+        const featureFlagIds = [
+            item.featureFlagId,
+            ...(Array.isArray(item.featureFlagIds) ? item.featureFlagIds : []),
+        ].filter(Boolean);
+
+        return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
+    };
 
     useEffect(() => {
         if (role) {
@@ -24,7 +34,7 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
                     item.role !== "Company" ||
                     (
                         (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
-                        (!item.featureFlagId || (featureFlagsLoaded && isFeatureEnabled(item.featureFlagId)))
+                        featureFlagsEnabledForItem(item)
                     )
                 ));
 
@@ -53,11 +63,6 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             where("status", "==", "Pending")
         );
 
-        const messagesQuery = query(
-            collection(db, "chats"),
-            where("participantIds", "array-contains", user.uid)
-        );
-
         const shoppingQuery = query(
             collection(db, "companies", recentlySelectedCompany, "shoppingList"),
             where("status", "==", "Need to Purchase")
@@ -84,13 +89,21 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             setCounts(prev => ({ ...prev, leads: snapshot.size }));
         });
 
-        const unsubscribeMessages = onSnapshot(messagesQuery, snapshot => {
-            const unreadCount = snapshot.docs.filter((chatDoc) => {
-                const data = chatDoc.data();
-                return data.userWhoHaveNotRead?.includes(user.uid) || data.unreadMessages?.includes(user.uid);
-            }).length;
+        const unsubscribeMessages = listenVisibleChats({
+            db,
+            userId: user.uid,
+            companyId: recentlySelectedCompany,
+            onChange: (visibleChats) => {
+                const unreadCount = visibleChats.filter((chat) => (
+                    isChatUnreadFor(chat, user.uid, recentlySelectedCompany)
+                )).length;
 
-            setCounts(prev => ({ ...prev, messages: unreadCount }));
+                setCounts(prev => ({ ...prev, messages: unreadCount }));
+            },
+            onError: (error) => {
+                console.error("Error loading message count:", error);
+                setCounts(prev => ({ ...prev, messages: 0 }));
+            },
         });
 
         const unsubscribeShopping = onSnapshot(shoppingQuery, snapshot => {

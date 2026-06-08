@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getFirestore, doc, setDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
@@ -18,21 +18,45 @@ export default function HomeOwnerSignUp() {
     });
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
+    const location = useLocation();
 
     const handleChange = (e) => {
         const { name, value } = e.target;
         setFormData((prev) => ({ ...prev, [name]: value }));
     };
-    const { user } = useContext(Context);
+    const { user, accountType } = useContext(Context);
+
+    useEffect(() => {
+        const queryParams = new URLSearchParams(location.search);
+        const inviteEmail = queryParams.get('email') || '';
+
+        if (inviteEmail) {
+            setFormData((prev) => ({
+                ...prev,
+                email: prev.email || inviteEmail,
+            }));
+        }
+    }, [location.search]);
+
     useEffect(() => {
         if (!user) return;
-        if (user.accountType === 'Company') {
+        const queryParams = new URLSearchParams(location.search);
+        const redirectPath = queryParams.get('redirect');
+
+        if (accountType === 'Company') {
             navigate('/company/dashboard');
-        } else if (user.accountType === 'Client') {
-            navigate('/client/dashboard');
+        } else if (accountType === 'Client') {
+            navigate(redirectPath || '/client/dashboard');
         }
 
-    }, [user]);
+    }, [accountType, location.search, navigate, user]);
+
+    const queryParams = new URLSearchParams(location.search);
+    const redirectPath = queryParams.get('redirect');
+    const signInLink = redirectPath
+        ? `/homeownerSignIn?redirect=${encodeURIComponent(redirectPath)}`
+        : '/homeownerSignIn';
+
     const handleSignUp = async (e) => {
         e.preventDefault();
         const { firstName, lastName, email, password, confirmPassword } = formData;
@@ -71,8 +95,8 @@ export default function HomeOwnerSignUp() {
             await setDoc(doc(db, 'users', user.uid), homeowner);
             toast.success('Profile created!');
 
-            // 3. Navigate to the dashboard
-            navigate('/client/dashboard');
+            // 3. Navigate to the invite or dashboard
+            navigate(redirectPath || '/client/dashboard');
         } catch (error) {
             console.error("Homeowner sign-up failed:", error);
             switch (error.code) {
@@ -118,7 +142,7 @@ export default function HomeOwnerSignUp() {
                             </button>
 
                             <p className="text-center text-sm pt-4">
-                                Already have an account? <Link to="/homeownerSignIn" className="font-medium text-blue-600">Sign In</Link>
+                                Already have an account? <Link to={signInLink} className="font-medium text-blue-600">Sign In</Link>
                             </p>
                         </form>
                     </div>

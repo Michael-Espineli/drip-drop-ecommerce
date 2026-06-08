@@ -1602,7 +1602,7 @@ const Payroll = ({ mode = "payroll" }) => {
               <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
               <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
               <Link
-                to="/company/payroll/setup"
+                to="/company/settings/payroll-setup"
                 className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
               >
                 Payroll Setup

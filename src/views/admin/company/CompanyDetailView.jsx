@@ -7,14 +7,14 @@ import {
   doc,
   getDoc,
 } from "firebase/firestore";
-import { db } from "../../../utils/config";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { db, functions } from "../../../utils/config";
+import { httpsCallable } from "firebase/functions";
 import { Company } from "../../../utils/models/Company";
 import { FaStar, FaStarHalfAlt, FaRegStar } from "react-icons/fa";
 import { format } from "date-fns/format";
 import { Context } from "../../../context/AuthContext";
-
-const functions = getFunctions();
+import toast from "react-hot-toast";
+import { getCallableAuthPayload } from "../../../utils/callableAuth";
 
 const CompanyDetailView = () => {
   const ADMIN_YELLOW = "#debf44";
@@ -39,6 +39,7 @@ const CompanyDetailView = () => {
   const [tag, setTag] = useState("");
   const [tagList, setTagList] = useState([]);
   const [needsResolved, setNeedsResolved] = useState(false);
+  const [isSavingCompanyFlags, setIsSavingCompanyFlags] = useState(false);
 
   useEffect(() => {
     const fetchCompany = async () => {
@@ -204,6 +205,48 @@ const CompanyDetailView = () => {
       });
   }
 
+  async function updateCompanyAdminFlags(fields, successMessage) {
+    setIsSavingCompanyFlags(true);
+
+    try {
+      const updateCompanyAdminFlagsCallable = httpsCallable(functions, "updateCompanyAdminFlags");
+      const authPayload = await getCallableAuthPayload();
+      const result = await updateCompanyAdminFlagsCallable({
+        companyId,
+        ...fields,
+        ...authPayload,
+      });
+
+      const updatedFields = result.data?.company || fields;
+      setCompany((current) => ({
+        ...current,
+        ...updatedFields,
+        lastVerified: updatedFields.lastVerified?.toDate?.()
+          ? updatedFields.lastVerified.toDate()
+          : current.lastVerified,
+      }));
+      toast.success(successMessage);
+    } catch (error) {
+      console.error("Failed to update company admin flags:", error);
+      toast.error(error.message || "Failed to update company.");
+    } finally {
+      setIsSavingCompanyFlags(false);
+    }
+  }
+
+  async function verifyCompany(e) {
+    e.preventDefault();
+    await updateCompanyAdminFlags({ verified: true }, "Company verified.");
+  }
+
+  async function updateHideFromBrowse(e) {
+    const hideFromBrowse = e.target.checked;
+    await updateCompanyAdminFlags(
+      { hideFromBrowse },
+      hideFromBrowse ? "Company hidden from browse pages." : "Company visible on browse pages."
+    );
+  }
+
   // --- Theme helpers ---
   const pageWrap = "px-2 md:px-7 py-5 bg-slate-900 min-h-screen";
   const panel =
@@ -256,6 +299,33 @@ const CompanyDetailView = () => {
                   </span>
                 )}
               </div>
+
+              <button
+                type="button"
+                onClick={(e) => verifyCompany(e)}
+                disabled={isSavingCompanyFlags || company.verified}
+                className="mt-1 rounded-md px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60"
+                style={{ backgroundColor: ADMIN_YELLOW, color: "#020617" }}
+              >
+                Verify
+              </button>
+
+              <label className="mt-3 flex items-center justify-between gap-4 rounded-lg border border-slate-800/60 bg-slate-900/40 p-3">
+                <span>
+                  <span className="block text-sm font-semibold text-slate-200">Hide From Browse</span>
+                  <span className="block text-xs text-slate-500">
+                    Hidden companies do not show on Browse Companies pages.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={company.hideFromBrowse === true}
+                  onChange={(e) => updateHideFromBrowse(e)}
+                  disabled={isSavingCompanyFlags}
+                  className="h-5 w-5 rounded border-slate-700 bg-slate-900"
+                  style={{ accentColor: ADMIN_YELLOW }}
+                />
+              </label>
 
               <div className="flex items-center gap-2">
                 <span className={label}>Rating:</span>

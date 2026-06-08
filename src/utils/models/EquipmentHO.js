@@ -9,6 +9,7 @@ export class EquipmentHO {
     cleanFilterPressure = 0,
     currentPressure = 0,
     userId = "",
+    customerName = "",
     dateInstalled = null,
     lastServiceDate = null,
     make = "",
@@ -31,6 +32,7 @@ export class EquipmentHO {
     this.cleanFilterPressure = cleanFilterPressure;
     this.currentPressure = currentPressure;
     this.userId = userId;
+    this.customerName = customerName;
     this.dateInstalled = dateInstalled;
     this.lastServiceDate = lastServiceDate;
     this.isActive = isActive;
@@ -84,6 +86,7 @@ export class EquipmentHO {
       cleanFilterPressure: data.cleanFilterPressure || 0,
       currentPressure: data.currentPressure || 0,
       userId: data.userId || "",
+      customerName: data.customerName || "",
       dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
       lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,
       make: data.make || "",

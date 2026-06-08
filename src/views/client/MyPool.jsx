@@ -2,9 +2,9 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../utils/config';
-import { query, collection, getDocs, where, orderBy } from 'firebase/firestore';
+import { query, collection, getDocs, where, orderBy, doc, updateDoc, writeBatch } from 'firebase/firestore';
 import { Context } from '../../context/AuthContext';
-import { PlusIcon, ChevronRightIcon, WrenchScrewdriverIcon, TruckIcon, DocumentTextIcon, BeakerIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, ChevronRightIcon, WrenchScrewdriverIcon, TruckIcon, DocumentTextIcon, BeakerIcon, PencilSquareIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
@@ -33,6 +33,18 @@ const MyPool = () => {
 
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
+    const [locationActionError, setLocationActionError] = useState(null);
+    const [savingLocation, setSavingLocation] = useState(false);
+    const [editingLocation, setEditingLocation] = useState(null);
+    const [locationForm, setLocationForm] = useState({
+        nickName: '',
+        streetAddress: '',
+        city: '',
+        state: '',
+        zip: '',
+        gateCode: '',
+        notes: '',
+    });
 
     useEffect(() => {
         if (!user || !initialLoad) return;
@@ -127,6 +139,111 @@ const MyPool = () => {
         setSelectedLocation(newLocationId);
     };
 
+    const selectedLocationRecord = serviceLocations.find(location => location.id === selectedLocation);
+
+    const openEditLocation = (location) => {
+        setLocationActionError(null);
+        setEditingLocation(location);
+        setLocationForm({
+            nickName: location.nickName || '',
+            streetAddress: location.address?.streetAddress || '',
+            city: location.address?.city || '',
+            state: location.address?.state || '',
+            zip: location.address?.zip || '',
+            gateCode: location.gateCode || '',
+            notes: location.notes || '',
+        });
+    };
+
+    const closeEditLocation = () => {
+        setEditingLocation(null);
+        setLocationActionError(null);
+    };
+
+    const handleLocationFormChange = (field, value) => {
+        setLocationForm(prev => ({ ...prev, [field]: value }));
+    };
+
+    const handleSaveLocation = async (event) => {
+        event.preventDefault();
+        if (!editingLocation) return;
+        if (!locationForm.streetAddress.trim()) {
+            setLocationActionError('Street address is required.');
+            return;
+        }
+
+        setSavingLocation(true);
+        setLocationActionError(null);
+        try {
+            const updatedLocation = {
+                nickName: locationForm.nickName.trim(),
+                gateCode: locationForm.gateCode.trim(),
+                notes: locationForm.notes.trim(),
+                address: {
+                    ...(editingLocation.address || {}),
+                    streetAddress: locationForm.streetAddress.trim(),
+                    city: locationForm.city.trim(),
+                    state: locationForm.state.trim(),
+                    zip: locationForm.zip.trim(),
+                },
+            };
+
+            await updateDoc(doc(db, 'homeownerServiceLocations', editingLocation.id), updatedLocation);
+            setServiceLocations(prev => prev.map(location => (
+                location.id === editingLocation.id
+                    ? { ...location, ...updatedLocation }
+                    : location
+            )));
+            closeEditLocation();
+        } catch (error) {
+            console.error('Error updating homeowner service location:', error);
+            setLocationActionError('Failed to update service location.');
+        } finally {
+            setSavingLocation(false);
+        }
+    };
+
+    const handleDeleteLocation = async (location) => {
+        const label = getLocationLabel(location);
+        if (!window.confirm(`Delete ${label}? This will also remove its pools, equipment, service stops, service requests, and repair requests.`)) return;
+
+        setSavingLocation(true);
+        setLocationActionError(null);
+        try {
+            const relatedQueries = [
+                query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
+                query(collection(db, 'homeownerEquipment'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
+                query(collection(db, 'homeownerServiceStops'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
+                query(collection(db, 'homeownerRepairRequests'), where('locationId', '==', location.id), where('userId', '==', user.uid)),
+                query(collection(db, 'homeownerServiceRequests'), where('homeownerServiceLocationId', '==', location.id), where('homeownerId', '==', user.uid)),
+            ];
+
+            const snapshots = await Promise.all(relatedQueries.map(getDocs));
+            const batch = writeBatch(db);
+            snapshots.forEach(snapshot => {
+                snapshot.docs.forEach(relatedDoc => batch.delete(relatedDoc.ref));
+            });
+            batch.delete(doc(db, 'homeownerServiceLocations', location.id));
+            await batch.commit();
+
+            setServiceLocations(prev => prev.filter(item => item.id !== location.id));
+            setAllData(prev => ({
+                ...prev,
+                bodiesOfWater: prev.bodiesOfWater.filter(item => item.serviceLocationId !== location.id),
+                equipment: prev.equipment.filter(item => item.serviceLocationId !== location.id),
+                serviceStops: prev.serviceStops.filter(item => item.serviceLocationId !== location.id),
+                repairRequests: prev.repairRequests.filter(item => item.locationId !== location.id),
+            }));
+            setSelectedLocation('all');
+            closeEditLocation();
+        } catch (error) {
+            console.error('Error deleting homeowner service location:', error);
+            setLocationActionError('Failed to delete service location.');
+        } finally {
+            setSavingLocation(false);
+        }
+    };
+
     if (initialLoad) {
         return <div className="p-8">Loading pools...</div>;
     }
@@ -142,6 +259,15 @@ const MyPool = () => {
                     locations={serviceLocations}
                     selected={selectedLocation}
                     onSelect={handleLocationChange}
+                />
+                <ServiceLocationManager
+                    locations={serviceLocations}
+                    selectedLocation={selectedLocation}
+                    selectedLocationRecord={selectedLocationRecord}
+                    onEdit={openEditLocation}
+                    onDelete={handleDeleteLocation}
+                    disabled={savingLocation}
+                    error={locationActionError}
                 />
 
                 {loading ? (
@@ -164,9 +290,26 @@ const MyPool = () => {
                     </div>
                 )}
             </div>
+            {editingLocation && (
+                <EditServiceLocationModal
+                    form={locationForm}
+                    saving={savingLocation}
+                    error={locationActionError}
+                    onChange={handleLocationFormChange}
+                    onClose={closeEditLocation}
+                    onSubmit={handleSaveLocation}
+                />
+            )}
         </div>
     );
 };
+
+const getLocationLabel = (location) => (
+    location?.nickName ||
+    location?.address?.streetAddress ||
+    location?.name ||
+    'Service Location'
+);
 
 const Header = ({ locations, selected, onSelect }) => (
     <div className="flex flex-col md:flex-row justify-between md:items-center mb-8 gap-4">
@@ -179,7 +322,7 @@ const Header = ({ locations, selected, onSelect }) => (
             >
                 <option value="all">All Locations</option>
                 {locations.map(loc => (
-                    <option key={loc.id} value={loc.id}>{loc.address.streetAddress || loc.name}</option>
+                    <option key={loc.id} value={loc.id}>{getLocationLabel(loc)}</option>
                 ))}
             </select>
             <Link to="/serviceLocation/create" className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700">
@@ -189,6 +332,88 @@ const Header = ({ locations, selected, onSelect }) => (
         </div>
     </div>
 );
+
+const ServiceLocationManager = ({ locations, selectedLocation, selectedLocationRecord, onEdit, onDelete, disabled, error }) => {
+    const locationsToShow = selectedLocationRecord ? [selectedLocationRecord] : locations;
+
+    return (
+        <div className="bg-white rounded-lg shadow-md mb-8">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 p-4 border-b">
+                <div>
+                    <h2 className="text-xl font-bold text-gray-800">Service Locations</h2>
+                    <p className="text-sm text-gray-500">Manage address, access notes, and saved service location details.</p>
+                </div>
+            </div>
+            {error && <p className="mx-4 mt-4 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+            <div className="divide-y divide-gray-100">
+                {locationsToShow.map(location => (
+                    <div key={location.id} className="p-4 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                        <div>
+                            <p className="font-semibold text-gray-900">{getLocationLabel(location)}</p>
+                            <p className="text-sm text-gray-600">
+                                {[location.address?.streetAddress, location.address?.city, location.address?.state, location.address?.zip].filter(Boolean).join(', ') || 'No address saved'}
+                            </p>
+                            {(location.gateCode || location.notes) && (
+                                <p className="text-xs text-gray-500 mt-1">
+                                    {location.gateCode ? `Gate: ${location.gateCode}` : ''}
+                                    {location.gateCode && location.notes ? ' · ' : ''}
+                                    {location.notes || ''}
+                                </p>
+                            )}
+                        </div>
+                        <div className="flex gap-2">
+                            <button type="button" onClick={() => onEdit(location)} disabled={disabled} className="inline-flex items-center gap-2 px-3 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 disabled:opacity-50">
+                                <PencilSquareIcon className="w-4 h-4" />
+                                Edit
+                            </button>
+                            <button type="button" onClick={() => onDelete(location)} disabled={disabled} className="inline-flex items-center gap-2 px-3 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50">
+                                <TrashIcon className="w-4 h-4" />
+                                Delete
+                            </button>
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+};
+
+const EditServiceLocationModal = ({ form, saving, error, onChange, onClose, onSubmit }) => {
+    const formInputClasses = "w-full px-4 py-2 bg-white border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500";
+
+    return (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center px-4">
+            <form onSubmit={onSubmit} className="w-full max-w-2xl bg-white rounded-lg shadow-xl">
+                <div className="flex items-center justify-between p-5 border-b">
+                    <h2 className="text-xl font-bold text-gray-900">Edit Service Location</h2>
+                    <button type="button" onClick={onClose} className="p-2 text-gray-500 hover:bg-gray-100 rounded-full">
+                        <XMarkIcon className="w-5 h-5" />
+                    </button>
+                </div>
+                <div className="p-5 space-y-4">
+                    <input type="text" placeholder="Location nickname" value={form.nickName} onChange={(e) => onChange('nickName', e.target.value)} className={formInputClasses} />
+                    <input type="text" placeholder="Street address" value={form.streetAddress} onChange={(e) => onChange('streetAddress', e.target.value)} className={formInputClasses} />
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <input type="text" placeholder="City" value={form.city} onChange={(e) => onChange('city', e.target.value)} className={formInputClasses} />
+                        <input type="text" placeholder="State" value={form.state} onChange={(e) => onChange('state', e.target.value)} className={formInputClasses} />
+                        <input type="text" placeholder="Zip" value={form.zip} onChange={(e) => onChange('zip', e.target.value)} className={formInputClasses} />
+                    </div>
+                    <input type="text" placeholder="Gate code" value={form.gateCode} onChange={(e) => onChange('gateCode', e.target.value)} className={formInputClasses} />
+                    <textarea placeholder="Location notes" value={form.notes} onChange={(e) => onChange('notes', e.target.value)} className={`${formInputClasses} h-24`} />
+                    {error && <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">{error}</p>}
+                </div>
+                <div className="flex justify-end gap-3 p-5 border-t bg-gray-50">
+                    <button type="button" onClick={onClose} className="px-4 py-2 border border-gray-300 text-gray-700 rounded-lg hover:bg-white">
+                        Cancel
+                    </button>
+                    <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 disabled:bg-gray-400">
+                        {saving ? 'Saving...' : 'Save Location'}
+                    </button>
+                </div>
+            </form>
+        </div>
+    );
+};
 
 const NoPoolsView = () => (
     <div className="flex items-center justify-center h-screen -mt-20">
@@ -229,7 +454,7 @@ const Widget = ({ title, icon: Icon, linkTo, addLinkTo, children }) => (
 );
 
 const BodiesOfWaterWidget = ({ bodiesOfWater }) => (
-    <Widget title="Pools & Spas" icon={BeakerIcon} linkTo="/client/pools-spas" addLinkTo="/client/pools-spas/new">
+    <Widget title="Pools & Spas" icon={BeakerIcon} addLinkTo="/client/pools-spas/new">
         {bodiesOfWater.length > 0 ? (
             bodiesOfWater.map(item => (
                 <Link to={`/client/pools-spas/${item.id}`} key={item.id} className="flex justify-between items-center p-3 hover:bg-gray-50 rounded-lg -m-2">

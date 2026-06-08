@@ -15,6 +15,8 @@ const UniversalEquipment = lazy(() => import("../../views/admin/universalEquipme
 const DripDropWorkflowArchitectureDocsPage = lazy(() => import("../../views/admin/documentation/DripDropWorkflowArchitectureDocsPage"))
 const FeatureFlags = lazy(() => import("../../views/admin/featureFlags/FeatureFlags"))
 const Complaints = lazy(() => import("../../views/admin/complaints/Complaints"))
+const ProductFeedback = lazy(() => import("../../views/admin/feedback/ProductFeedback"))
+const ReachOutMessages = lazy(() => import("../../views/admin/messages/ReachOutMessages"))
 const DeactivatedSellers = lazy(() => import("../../views/admin/sellers/DeactivatedSellers"))
 const SellerRequests = lazy(() => import("../../views/admin/sellers/SellerRequests"))
 const LiveChat = lazy(() => import("../../views/admin/liveChat/LiveChat"))
@@ -106,6 +108,18 @@ export const adminRoutes = [
     {
         path: '/admin/feature-flags',
         element: <FeatureFlags />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/product-feedback',
+        element: <ProductFeedback />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/reach-out-messages',
+        element: <ReachOutMessages />,
         role: 'Admin'
     }
     ,

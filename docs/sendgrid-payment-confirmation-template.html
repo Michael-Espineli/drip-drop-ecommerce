@@ -1,0 +1,98 @@
+<!--
+SendGrid Dynamic Template: Payment Confirmation
+
+Subject line:
+{{subject}}
+
+Expected dynamic data comes from sendPaymentConfirmationEmail:
+invoiceId, receiverCompany, senderCompany, terms, total, lineItems.
+Line item fields: description, quantity, induvidualCost, total.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Payment Confirmation</title>
+</head>
+<body style="margin:0; padding:0; background-color:#F5F7FB; font-family:Arial, sans-serif; color:#172033;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">{{preHeader}}</div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F5F7FB; margin:0; padding:24px 0;">
+    <tr>
+      <td align="center" style="padding:0 12px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; background-color:#FFFFFF; border-radius:12px; overflow:hidden;">
+          <tr>
+            <td style="background-color:#0F766E; padding:30px 34px;">
+              <p style="margin:0 0 8px; color:#CCFBF1; font-size:13px; line-height:18px; font-weight:700; text-transform:uppercase;">Payment Received</p>
+              <h1 style="margin:0; color:#FFFFFF; font-size:28px; line-height:36px; font-weight:700;">Thank you for your payment</h1>
+              <p style="margin:12px 0 0; color:#DDFCF6; font-size:15px; line-height:23px;">
+                Payment for invoice {{invoiceId}} has been recorded.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 34px 16px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F0FDFA; border:1px solid #99F6E4; border-radius:10px;">
+                <tr>
+                  <td style="padding:18px;">
+                    <div style="color:#0F766E; font-size:13px; line-height:18px; font-weight:700; text-transform:uppercase;">Amount</div>
+                    <div style="color:#134E4A; font-size:34px; line-height:42px; font-weight:700; margin-top:4px;">${{total}}</div>
+                    <p style="margin:10px 0 0; color:#475569; font-size:14px; line-height:21px;">
+                      {{senderCompany}} payment confirmation for {{receiverCompany}}.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:4px 34px 26px;">
+              <h2 style="margin:0 0 12px; color:#0F766E; font-size:20px; line-height:26px;">Paid Items</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E7EB; border-radius:10px; overflow:hidden;">
+                <tr>
+                  <th align="left" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Description</th>
+                  <th align="center" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Qty</th>
+                  <th align="right" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Total</th>
+                </tr>
+                {{#each lineItems}}
+                <tr>
+                  <td style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#1F2937; font-size:14px; line-height:20px;">{{this.description}}</td>
+                  <td align="center" style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#1F2937; font-size:14px; line-height:20px;">{{this.quantity}}</td>
+                  <td align="right" style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#111827; font-size:14px; line-height:20px; font-weight:700;">${{this.total}}</td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 34px 26px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#FFF9EA; border:1px solid #F1D58A; border-radius:10px;">
+                <tr>
+                  <td style="padding:16px 18px; color:#4B5565; font-size:14px; line-height:21px;">
+                    Keep this confirmation for your records. Contact {{senderCompany}} if anything looks off.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#172033; padding:24px 34px; color:#D8DEE9; font-size:13px; line-height:20px;">
+              This payment confirmation was sent through DripDrop.<br><br>
+              <a href="<%asm_group_unsubscribe_raw_url%>" style="color:#E0AE36; text-decoration:none;">Unsubscribe</a>
+              &nbsp;|&nbsp;
+              <a href="<%asm_preferences_raw_url%>" style="color:#E0AE36; text-decoration:none;">Preferences</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+

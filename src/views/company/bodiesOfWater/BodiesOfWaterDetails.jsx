@@ -1,12 +1,14 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { db } from "../../../utils/config";
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
 import { BodyOfWater } from "../../../utils/models/BodyOfWater";
-import { fetchBodyOfWaterHistory } from "../../../utils/bodyOfWaterHistory";
+import { WATER_HISTORY_TYPES, fetchBodyOfWaterHistory } from "../../../utils/bodyOfWaterHistory";
 import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import toast from "react-hot-toast";
+import { v4 as uuidv4 } from "uuid";
 
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-blue-500 focus:border-blue-500";
@@ -25,9 +27,23 @@ const InfoCard = ({ label, value }) => (
   </div>
 );
 
+const datetimeLocalValue = () => {
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  return now.toISOString().slice(0, 16);
+};
+
+const toDisplayDate = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (value instanceof Date) return value;
+  return new Date(value);
+};
+
 const BodiesOfWaterDetails = () => {
   const { bodyOfWaterId } = useParams();
-  const { recentlySelectedCompany } = useContext(Context);
+  const authContext = useContext(Context);
+  const { recentlySelectedCompany } = authContext;
   const { can, requirePermission } = useCompanyPermissions();
 
   const [bodyOfWater, setBodyOfWater] = useState(null);
@@ -35,12 +51,30 @@ const BodiesOfWaterDetails = () => {
   const [error, setError] = useState("");
   const [edit, setEdit] = useState(false);
   const [waterHistory, setWaterHistory] = useState([]);
+  const [equipment, setEquipment] = useState([]);
+  const [manualHistory, setManualHistory] = useState({
+    type: WATER_HISTORY_TYPES.FILL,
+    date: datetimeLocalValue(),
+    gallons: "",
+    performedBy: "",
+    description: "",
+  });
+  const [savingHistory, setSavingHistory] = useState(false);
 
   // Model fields state for editing
   const [name, setName] = useState("");
   const [gallons, setGallons] = useState("");
   const [material, setMaterial] = useState("");
   const [notes, setNotes] = useState("");
+
+  const loadWaterHistory = useCallback(async () => {
+    const history = await fetchBodyOfWaterHistory({
+      db,
+      companyId: recentlySelectedCompany,
+      bodyOfWaterId,
+    });
+    setWaterHistory(history);
+  }, [bodyOfWaterId, recentlySelectedCompany]);
 
   useEffect(() => {
     if (!recentlySelectedCompany || !bodyOfWaterId) return;
@@ -55,12 +89,17 @@ const BodiesOfWaterDetails = () => {
           const bowData = BodyOfWater.fromFirestore(docSnap);
           setBodyOfWater(bowData);
 
-          const history = await fetchBodyOfWaterHistory({
-            db,
-            companyId: recentlySelectedCompany,
-            bodyOfWaterId,
-          });
-          setWaterHistory(history);
+          await loadWaterHistory();
+
+          const equipmentQuery = query(
+            collection(db, "companies", recentlySelectedCompany, "equipment"),
+            where("bodyOfWaterId", "==", bodyOfWaterId)
+          );
+          const equipmentSnap = await getDocs(equipmentQuery);
+          setEquipment(equipmentSnap.docs.map((equipmentDoc) => ({
+            id: equipmentDoc.id,
+            ...equipmentDoc.data(),
+          })));
 
           setName(bowData.name || "");
           setGallons(bowData.gallons || "");
@@ -78,7 +117,7 @@ const BodiesOfWaterDetails = () => {
     };
 
     fetchBodyOfWater();
-  }, [bodyOfWaterId, recentlySelectedCompany]);
+  }, [bodyOfWaterId, loadWaterHistory, recentlySelectedCompany]);
 
   const handleCancel = () => {
     setEdit(false);
@@ -112,10 +151,62 @@ const BodiesOfWaterDetails = () => {
     }
   };
 
+  const handleManualHistoryChange = (event) => {
+    const { name, value } = event.target;
+    setManualHistory((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleAddManualHistory = async (event) => {
+    event.preventDefault();
+    if (!requirePermission("54", "update bodies of water")) return;
+    if (!recentlySelectedCompany || !bodyOfWaterId || !bodyOfWater) return;
+
+    setSavingHistory(true);
+    try {
+      const historyDate = manualHistory.date ? new Date(manualHistory.date) : new Date();
+      const historyId = `manual_bow_hist_${uuidv4()}`;
+      const history = {
+        id: historyId,
+        type: manualHistory.type,
+        date: historyDate,
+        description: manualHistory.description,
+        addedBy: "Manual",
+        performedBy: manualHistory.performedBy,
+        techName: authContext.name || "",
+        gallons: manualHistory.gallons || bodyOfWater.gallons || "",
+      };
+
+      const bodyOfWaterRef = doc(db, "companies", recentlySelectedCompany, "bodiesOfWater", bodyOfWaterId);
+      await setDoc(doc(bodyOfWaterRef, "waterHistory", historyId), history, { merge: true });
+
+      if (manualHistory.type === WATER_HISTORY_TYPES.FILL) {
+        await updateDoc(bodyOfWaterRef, { lastFilled: historyDate });
+        setBodyOfWater((prev) => ({ ...prev, lastFilled: historyDate }));
+      }
+
+      setWaterHistory((prev) => [history, ...prev].sort((a, b) => (
+        toDisplayDate(b.date)?.getTime() - toDisplayDate(a.date)?.getTime()
+      )));
+      setManualHistory({
+        type: WATER_HISTORY_TYPES.FILL,
+        date: datetimeLocalValue(),
+        gallons: "",
+        performedBy: "",
+        description: "",
+      });
+      toast.success("Water history added.");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to add water history.");
+    } finally {
+      setSavingHistory(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full">
           <div className="bg-white shadow-lg rounded-xl p-6 text-gray-600">Loading...</div>
         </div>
       </div>
@@ -125,7 +216,7 @@ const BodiesOfWaterDetails = () => {
   if (error) {
     return (
       <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full">
           <div className="bg-white shadow-lg rounded-xl p-6 text-red-600">Error: {error}</div>
         </div>
       </div>
@@ -135,7 +226,7 @@ const BodiesOfWaterDetails = () => {
   if (!bodyOfWater) {
     return (
       <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-        <div className="max-w-5xl mx-auto">
+        <div className="w-full">
           <div className="bg-white shadow-lg rounded-xl p-6 text-gray-600">No Body of Water found.</div>
         </div>
       </div>
@@ -144,7 +235,7 @@ const BodiesOfWaterDetails = () => {
 
   return (
     <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="max-w-5xl mx-auto space-y-6">
+      <div className="w-full space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <div>
 
@@ -258,10 +349,94 @@ const BodiesOfWaterDetails = () => {
         <div className="bg-white shadow-lg rounded-xl p-6">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
+              <h3 className="text-xl font-bold text-gray-800">Equipment</h3>
+              <p className="text-sm text-gray-500">Equipment assigned to this body of water.</p>
+            </div>
+
+            <Link
+              to={`/company/equipment/createNew/${bodyOfWater.customerId}/${bodyOfWater.serviceLocationId}/${bodyOfWater.id}`}
+              className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+            >
+              Add Equipment
+            </Link>
+          </div>
+
+          {equipment.length === 0 ? (
+            <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-gray-500">
+              No equipment assigned yet.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {equipment.map((item) => (
+                <Link
+                  key={item.id}
+                  to={`/company/equipment/detail/${item.id}`}
+                  className="rounded-xl border border-gray-200 bg-gray-50 p-4 hover:border-blue-200 hover:bg-white transition"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-gray-900">{item.name || "Unnamed Equipment"}</p>
+                      <p className="text-sm text-gray-500">{item.type || "Unknown Type"}</p>
+                    </div>
+                    <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-semibold text-gray-600">
+                      {item.status || "Unknown"}
+                    </span>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                    <InfoCard label="Make" value={item.make || "—"} />
+                    <InfoCard label="Model" value={item.model || "—"} />
+                    <InfoCard label="Pressure" value={`${item.currentPressure ?? "—"} PSI`} />
+                    <InfoCard label="Last Service" value={toDisplayDate(item.lastServiceDate) ? format(toDisplayDate(item.lastServiceDate), "MMM d, yyyy") : "—"} />
+                  </div>
+                </Link>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <div>
               <h3 className="text-xl font-bold text-gray-800">Water History</h3>
-              <p className="text-sm text-gray-500">Fill and empty events created from completed tasks.</p>
+              <p className="text-sm text-gray-500">Fill and drain events from tasks or manual entries.</p>
             </div>
           </div>
+
+          <form onSubmit={handleAddManualHistory} className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <Field label="Event">
+                <select name="type" value={manualHistory.type} onChange={handleManualHistoryChange} className={inputBase}>
+                  <option value={WATER_HISTORY_TYPES.FILL}>Fill</option>
+                  <option value={WATER_HISTORY_TYPES.EMPTY}>Drain</option>
+                </select>
+              </Field>
+
+              <Field label="Date">
+                <input type="datetime-local" name="date" value={manualHistory.date} onChange={handleManualHistoryChange} className={inputBase} />
+              </Field>
+
+              <Field label="Gallons">
+                <input name="gallons" value={manualHistory.gallons} onChange={handleManualHistoryChange} className={inputBase} placeholder={bodyOfWater.gallons || "Optional"} />
+              </Field>
+
+              <Field label="Performed By">
+                <input name="performedBy" value={manualHistory.performedBy} onChange={handleManualHistoryChange} className={inputBase} placeholder="Company, contractor, customer" />
+              </Field>
+
+              <div className="flex items-end">
+                <button disabled={savingHistory} className="w-full py-3 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition disabled:opacity-60" type="submit">
+                  {savingHistory ? "Adding..." : "Add"}
+                </button>
+              </div>
+
+              <div className="md:col-span-5">
+                <Field label="Notes">
+                  <textarea name="description" value={manualHistory.description} onChange={handleManualHistoryChange} className={inputBase} rows={2} />
+                </Field>
+              </div>
+            </div>
+          </form>
 
           {waterHistory.length === 0 ? (
             <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-gray-500">

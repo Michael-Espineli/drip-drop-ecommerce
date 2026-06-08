@@ -6,6 +6,22 @@ import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { WrenchScrewdriverIcon, PlusIcon, ChevronRightIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
 
+const formatDate = (value) => {
+    if (!value) return 'Not set';
+    if (typeof value?.toDate === 'function') return value.toDate().toLocaleDateString();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 'Not set' : parsed.toLocaleDateString();
+};
+
+const getEquipmentType = (item) => item.category || item.type || 'Equipment';
+
+const getServiceCadence = (item) => {
+    if (!item.needsService) return 'No regular service set';
+    const frequency = item.serviceFrequency || '';
+    const unit = item.serviceFrequencyEvery || '';
+    return [frequency, unit].filter(Boolean).join(' ') || 'Regular service';
+};
+
 const EquipmentList = () => {
     const navigate = useNavigate();
     const { user } = useContext(Context);
@@ -78,7 +94,7 @@ const EquipmentList = () => {
                     <div className="space-y-8 mt-8">
                         {bodiesOfWater.map(bow => (
                             (groupedEquipment[bow.id]?.length > 0) &&
-                            <EquipmentGroup key={bow.id} title={bow.name} equipment={groupedEquipment[bow.id]} />
+                            <EquipmentGroup key={bow.id} title={bow.name} equipment={groupedEquipment[bow.id]} bodyName={bow.name} />
                         ))}
                         {(groupedEquipment.unassigned.length > 0) &&
                             <EquipmentGroup title="Unassigned Equipment" equipment={groupedEquipment.unassigned} />
@@ -116,24 +132,43 @@ const NoEquipmentView = ({ onNew }) => (
     </div>
 );
 
-const EquipmentGroup = ({ title, equipment }) => (
+const EquipmentGroup = ({ title, equipment, bodyName = '' }) => (
     <div className="bg-white rounded-lg shadow-md">
         <h2 className="text-xl font-bold text-gray-800 p-4 border-b">{title}</h2>
         <ul className="divide-y divide-gray-200">
-            {equipment.map(item => <EquipmentItem key={item.id} item={item} />)}
+            {equipment.map(item => <EquipmentItem key={item.id} item={item} bodyName={bodyName} />)}
         </ul>
     </div>
 );
 
-const EquipmentItem = ({ item }) => (
+const EquipmentItem = ({ item, bodyName }) => (
     <li>
-        <Link to={`/equipment/${item.id}`} className="block p-4 hover:bg-gray-50">
-            <div className="flex items-center justify-between">
-                <div>
-                    <p className="font-semibold text-gray-900">{item.name}</p>
-                    <p className="text-sm text-gray-600">{item.make} {item.model}</p>
+        <Link to={`/client/equipment/${item.id}`} className="block p-4 hover:bg-gray-50">
+            <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="font-semibold text-gray-900">{item.name || getEquipmentType(item)}</p>
+                        <span className="px-2 py-0.5 text-xs font-semibold rounded-full bg-blue-50 text-blue-700">{getEquipmentType(item)}</span>
+                        <span className={`px-2 py-0.5 text-xs font-semibold rounded-full ${item.isActive === false ? 'bg-gray-100 text-gray-600' : 'bg-green-50 text-green-700'}`}>
+                            {item.isActive === false ? 'Inactive' : 'Active'}
+                        </span>
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                        {[item.make, item.model].filter(Boolean).join(' ') || 'Make and model not set'}
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mt-3 text-xs text-gray-500">
+                        <p><span className="font-semibold text-gray-700">Status:</span> {item.status || 'Not set'}</p>
+                        <p><span className="font-semibold text-gray-700">Service:</span> {getServiceCadence(item)}</p>
+                        <p><span className="font-semibold text-gray-700">Installed:</span> {formatDate(item.dateInstalled)}</p>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2">
+                        <span className="font-semibold text-gray-700">Pool/Spa:</span> {bodyName || 'Unassigned'}
+                    </p>
+                    {item.notes && (
+                        <p className="text-xs text-gray-500 mt-2 line-clamp-2">{item.notes}</p>
+                    )}
                 </div>
-                <ChevronRightIcon className="w-5 h-5 text-gray-400" />
+                <ChevronRightIcon className="w-5 h-5 text-gray-400 mt-1 flex-shrink-0" />
             </div>
         </Link>
     </li>

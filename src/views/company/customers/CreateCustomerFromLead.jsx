@@ -1,10 +1,155 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { Context } from '../../../context/AuthContext';
+import { functions } from '../../../utils/config';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
-import { v4 as uuidv4 } from 'uuid';
+
+const firstText = (...values) => {
+    for (const value of values) {
+        const text = String(value || '').trim();
+        if (text) return text;
+    }
+
+    return '';
+};
+
+const splitName = (name = '') => {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+
+    return {
+        firstName: parts[0] || '',
+        lastName: parts.slice(1).join(' '),
+    };
+};
+
+const getLeadHomeownerId = (lead = {}) => (
+    lead.homeownerId ||
+    lead.customerUserId ||
+    lead.homeownerUserId ||
+    lead.userId ||
+    ''
+);
+
+const getRequesterName = (lead = {}, userProfile = {}) => firstText(
+    lead.homeownerName,
+    lead.creatorName,
+    lead.customerName,
+    userProfile.displayName,
+    userProfile.name,
+    `${userProfile.firstName || ''} ${userProfile.lastName || ''}`
+);
+
+const getRequesterEmail = (lead = {}, userProfile = {}) => firstText(
+    lead.homeownerEmail,
+    lead.creatorEmail,
+    lead.customerEmail,
+    lead.email,
+    userProfile.email
+);
+
+const getRequesterPhone = (lead = {}, userProfile = {}) => firstText(
+    lead.homeownerPhone,
+    lead.creatorPhone,
+    lead.customerPhone,
+    lead.phoneNumber,
+    lead.phone,
+    userProfile.phoneNumber,
+    userProfile.phone
+);
+
+const formatAddress = (address = {}) => [
+    address.streetAddress || address.address,
+    address.city,
+    address.state,
+    address.zip || address.zipCode,
+].filter(Boolean).join(', ');
+
+const normalizeDogName = (value) => (
+    Array.isArray(value) ? value.filter(Boolean).join(', ') : String(value || '')
+);
+
+const mapHomeownerEquipmentToForm = (equipment = {}) => ({
+    id: equipment.id || '',
+    homeownerEquipmentId: equipment.id || '',
+    linkedHomeownerEquipmentId: equipment.id || '',
+    sourceHomeownerBodyOfWaterId: equipment.bodyOfWaterId || '',
+    name: equipment.name || equipment.category || equipment.type || 'Equipment',
+    type: equipment.type || equipment.category || '',
+    typeId: equipment.typeId || '',
+    make: equipment.make || '',
+    makeId: equipment.makeId || '',
+    model: equipment.model || '',
+    modelId: equipment.modelId || equipment.universalEquipmentId || '',
+    universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
+    manualPdfLink: equipment.manualPdfLink || '',
+    cleanFilterPressure: equipment.cleanFilterPressure ?? null,
+    currentPressure: equipment.currentPressure ?? null,
+    serviceFrequency: equipment.serviceFrequency ?? null,
+    serviceFrequencyEvery: equipment.serviceFrequencyEvery || '',
+    dateInstalled: equipment.dateInstalled || null,
+    lastServiceDate: equipment.lastServiceDate || null,
+    nextServiceDate: equipment.nextServiceDate || null,
+    notes: equipment.notes || '',
+    needsService: Boolean(equipment.needsService),
+    status: equipment.status || 'Operational',
+    verified: Boolean(equipment.verified),
+    photoUrls: Array.isArray(equipment.photoUrls) ? equipment.photoUrls : [],
+});
+
+const defaultBodyOfWaterData = {
+    name: 'Main Pool',
+    gallons: '15000',
+    waterType: 'Chlorine',
+    material: 'Plaster',
+    notes: '',
+};
+
+const defaultEquipmentData = [
+    { name: 'Pump', type: 'Pump', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: false },
+    { name: 'Filter', type: 'Filter', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: true },
+];
+
+const blankEquipmentData = {
+    name: '',
+    type: '',
+    typeId: '',
+    make: '',
+    makeId: '',
+    model: '',
+    modelId: '',
+    manualPdfLink: '',
+    notes: '',
+    needsService: false,
+};
+
+const mapHomeownerBodyOfWaterToForm = (bodyOfWater = {}) => ({
+    id: bodyOfWater.id || '',
+    homeownerBodyOfWaterId: bodyOfWater.id || '',
+    linkedHomeownerBodyOfWaterId: bodyOfWater.id || '',
+    name: bodyOfWater.name || 'Main Pool',
+    gallons: bodyOfWater.gallons || '',
+    waterType: bodyOfWater.waterType || 'Chlorine',
+    material: bodyOfWater.material || '',
+    notes: bodyOfWater.notes || '',
+    shape: bodyOfWater.shape || '',
+    length: bodyOfWater.length ?? '',
+    depth: bodyOfWater.depth ?? '',
+    width: bodyOfWater.width ?? '',
+});
+
+const createBodyOfWaterEntry = ({ data = {}, equipmentData = [] } = {}) => ({
+    data: {
+        ...defaultBodyOfWaterData,
+        ...data,
+    },
+    equipmentData: equipmentData.length ? equipmentData : [],
+});
+
+const equipmentOptionKey = (bodyIndex, equipmentIndex) => `${bodyIndex}:${equipmentIndex}`;
 
 const CreateCustomerFromLead = () => {
     const { leadId } = useParams();
@@ -13,6 +158,13 @@ const CreateCustomerFromLead = () => {
     const db = getFirestore();
 
     const [lead, setLead] = useState(null);
+    const [homeownerAssets, setHomeownerAssets] = useState({
+        serviceLocation: null,
+        bodyOfWater: null,
+        bodiesOfWater: [],
+        equipment: [],
+        previewLoaded: false,
+    });
     const [loading, setLoading] = useState(true);
     const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -35,17 +187,12 @@ const CreateCustomerFromLead = () => {
     const [addEquipment, setAddEquipment] = useState(false);
 
     const [serviceLocationData, setServiceLocationData] = useState({ nickName: 'Main', gateCode: '', dogName: '', notes: '', preText: false });
-    const [bodyOfWaterData, setBodyOfWaterData] = useState({ name: 'Main Pool', gallons: '15000', material: 'Plaster', notes: '' });
-    const [equipmentData, setEquipmentData] = useState([
-        { name: 'Pump', type: 'Pump', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: false },
-        { name: 'Filter', type: 'Filter', typeId: '', make: '', makeId: '', model: '', modelId: '', manualPdfLink: '', notes: '', needsService: true }
+    const [bodyOfWaterEntries, setBodyOfWaterEntries] = useState([
+        createBodyOfWaterEntry({ equipmentData: defaultEquipmentData })
     ]);
     const [equipmentTypes, setEquipmentTypes] = useState([]);
-    const [equipmentMakes, setEquipmentMakes] = useState([[], []]);
-    const [equipmentModels, setEquipmentModels] = useState([[], []]);
-    const equipmentLookupKey = equipmentData
-        .map(equipment => `${equipment.typeId || ''}:${equipment.makeId || ''}`)
-        .join('|');
+    const [equipmentMakes, setEquipmentMakes] = useState({});
+    const [equipmentModels, setEquipmentModels] = useState({});
 
     useEffect(() => {
         if (!leadId || !recentlySelectedCompany) return;
@@ -56,17 +203,130 @@ const CreateCustomerFromLead = () => {
                 const docSnap = await getDoc(leadRef);
                 if (docSnap.exists()) {
                     const leadData = { id: docSnap.id, ...docSnap.data() };
-                    setLead(leadData);
-                    // Pre-fill form
-                    const nameParts = (leadData.homeownerName || '').split(' ');
+                    const homeownerId = getLeadHomeownerId(leadData);
+                    let requesterProfile = {};
+
+                    if (homeownerId) {
+                        try {
+                            const userSnap = await getDoc(doc(db, 'users', homeownerId));
+                            requesterProfile = userSnap.exists() ? userSnap.data() : {};
+                        } catch (profileError) {
+                            console.warn('Unable to load homeowner profile for lead conversion preview.', profileError);
+                        }
+                    }
+
+                    const enhancedLead = { ...leadData, requesterProfile };
+                    setLead(enhancedLead);
+
+                    const requesterName = getRequesterName(leadData, requesterProfile);
+                    const nameParts = splitName(requesterName);
                     setFormData({
-                        firstName: nameParts[0] || '',
-                        lastName: nameParts.slice(1).join(' ') || '',
-                        email: leadData.homeownerEmail || '',
-                        phone: leadData.homeownerPhone || '',
+                        firstName: leadData.firstName || nameParts.firstName,
+                        lastName: leadData.lastName || nameParts.lastName,
+                        email: getRequesterEmail(leadData, requesterProfile),
+                        phone: getRequesterPhone(leadData, requesterProfile),
                         companyName: '', billingNotes: ''
                     });
 
+                    const assets = {
+                        serviceLocation: null,
+                        bodyOfWater: null,
+                        bodiesOfWater: [],
+                        equipment: [],
+                        previewLoaded: true,
+                    };
+
+                    try {
+                        const homeownerServiceLocationId = leadData.homeownerServiceLocationId || leadData.serviceLocationId || '';
+                        const homeownerBodyOfWaterIds = [
+                            leadData.homeownerBodyOfWaterId,
+                            ...(Array.isArray(leadData.homeownerBodyOfWaterIds) ? leadData.homeownerBodyOfWaterIds : []),
+                        ].filter(Boolean);
+                        const homeownerEquipmentIds = [
+                            leadData.homeownerEquipmentId,
+                            ...(Array.isArray(leadData.homeownerEquipmentIds) ? leadData.homeownerEquipmentIds : []),
+                        ].filter(Boolean);
+
+                        if (homeownerServiceLocationId) {
+                            const locationSnap = await getDoc(doc(db, 'homeownerServiceLocations', homeownerServiceLocationId));
+                            if (locationSnap.exists()) {
+                                assets.serviceLocation = { id: locationSnap.id, ...locationSnap.data() };
+                                setServiceLocationData((prev) => ({
+                                    ...prev,
+                                    nickName: assets.serviceLocation.nickName || assets.serviceLocation.name || prev.nickName,
+                                    gateCode: assets.serviceLocation.gateCode || prev.gateCode,
+                                    dogName: normalizeDogName(assets.serviceLocation.dogName) || prev.dogName,
+                                    notes: assets.serviceLocation.notes || prev.notes,
+                                    preText: Boolean(assets.serviceLocation.preText),
+                                }));
+                            }
+                        }
+
+                        if (homeownerBodyOfWaterIds.length) {
+                            const bodyDocs = await Promise.all(
+                                [...new Set(homeownerBodyOfWaterIds)].map(async (bodyId) => {
+                                    const bodySnap = await getDoc(doc(db, 'homeownerBodiesOfWater', bodyId));
+                                    return bodySnap.exists() ? { id: bodySnap.id, ...bodySnap.data() } : null;
+                                })
+                            );
+                            assets.bodiesOfWater = bodyDocs.filter(Boolean);
+                            assets.bodyOfWater = assets.bodiesOfWater[0] || null;
+                        }
+
+                        if (homeownerEquipmentIds.length) {
+                            const equipmentDocs = await Promise.all(
+                                [...new Set(homeownerEquipmentIds)].map(async (equipmentId) => {
+                                    const equipmentSnap = await getDoc(doc(db, 'homeownerEquipment', equipmentId));
+                                    return equipmentSnap.exists() ? { id: equipmentSnap.id, ...equipmentSnap.data() } : null;
+                                })
+                            );
+                            assets.equipment = equipmentDocs.filter(Boolean);
+                        } else if (homeownerBodyOfWaterIds.length) {
+                            const equipmentSnapshots = await Promise.all(
+                                [...new Set(homeownerBodyOfWaterIds)].map((bodyId) => {
+                                    const equipmentQuery = query(
+                                        collection(db, 'homeownerEquipment'),
+                                        where('bodyOfWaterId', '==', bodyId),
+                                        where('userId', '==', homeownerId)
+                                    );
+                                    return getDocs(equipmentQuery);
+                                })
+                            );
+                            assets.equipment = equipmentSnapshots.flatMap((equipmentSnap) => (
+                                equipmentSnap.docs.map(equipmentDoc => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
+                            ));
+                        }
+
+                        if (assets.bodiesOfWater.length) {
+                            setAddEquipment(assets.equipment.length > 0);
+                            setAddBodyOfWater(true);
+                            setBodyOfWaterEntries(
+                                assets.bodiesOfWater.map((bodyOfWater, bodyIndex) => {
+                                    const bodyEquipment = assets.equipment
+                                        .filter((equipment) => (
+                                            equipment.bodyOfWaterId === bodyOfWater.id ||
+                                            (!equipment.bodyOfWaterId && bodyIndex === 0)
+                                        ))
+                                        .map(mapHomeownerEquipmentToForm);
+
+                                    return createBodyOfWaterEntry({
+                                        data: mapHomeownerBodyOfWaterToForm(bodyOfWater),
+                                        equipmentData: bodyEquipment,
+                                    });
+                                })
+                            );
+                        } else if (assets.equipment.length) {
+                            const importedEquipment = assets.equipment.map(mapHomeownerEquipmentToForm);
+                            setAddEquipment(true);
+                            setBodyOfWaterEntries([
+                                createBodyOfWaterEntry({ equipmentData: importedEquipment })
+                            ]);
+                        }
+                    } catch (assetError) {
+                        console.warn('Unable to load homeowner pool data for lead conversion preview. The callable will still import it when possible.', assetError);
+                    } finally {
+                        setHomeownerAssets(assets);
+                    }
                 } else {
                     toast.error("Lead not found.");
                     navigate('/company/leads');
@@ -92,38 +352,48 @@ const CreateCustomerFromLead = () => {
     useEffect(() => {
         if (!equipmentTypes.length) return;
 
-        setEquipmentData(currentEquipment => currentEquipment.map(equipment => {
-            if (equipment.typeId) return equipment;
+        setBodyOfWaterEntries(currentEntries => {
+            let changed = false;
+            const nextEntries = currentEntries.map((entry) => ({
+                ...entry,
+                equipmentData: entry.equipmentData.map((equipment) => {
+                    if (equipment.typeId) return equipment;
 
-            const matchedType = equipmentTypes.find(type => type.name === equipment.type);
-            if (!matchedType) return equipment;
+                    const matchedType = equipmentTypes.find(type => type.name === equipment.type);
+                    if (!matchedType) return equipment;
 
-            return {
-                ...equipment,
-                typeId: matchedType.id,
-            };
-        }));
+                    changed = true;
+                    return {
+                        ...equipment,
+                        typeId: matchedType.id,
+                    };
+                }),
+            }));
+
+            return changed ? nextEntries : currentEntries;
+        });
     }, [equipmentTypes]);
 
     useEffect(() => {
         const loadEquipmentOptions = async () => {
-            const makesByIndex = [[], []];
-            const modelsByIndex = [[], []];
-            const selectedLookups = equipmentLookupKey
-                .split('|')
-                .map(value => {
-                    const [typeId = '', makeId = ''] = value.split(':');
-                    return { typeId, makeId };
-                });
+            const makesByKey = {};
+            const modelsByKey = {};
+            const selectedLookups = bodyOfWaterEntries.flatMap((entry, bodyIndex) => (
+                entry.equipmentData.map((equipment, equipmentIndex) => ({
+                    key: equipmentOptionKey(bodyIndex, equipmentIndex),
+                    typeId: equipment.typeId || '',
+                    makeId: equipment.makeId || '',
+                }))
+            ));
 
-            await Promise.all(selectedLookups.map(async (equipment, index) => {
+            await Promise.all(selectedLookups.map(async (equipment) => {
                 if (!equipment.typeId) return;
 
                 const makesSnap = await getDocs(
                     query(collection(db, 'universal', 'equipment', 'equipmentMakes'), where('types', 'array-contains', equipment.typeId))
                 );
                 const makes = makesSnap.docs.map(makeDoc => ({ id: makeDoc.id, ...makeDoc.data() }));
-                makesByIndex[index] = makes;
+                makesByKey[equipment.key] = makes;
 
                 if (!equipment.makeId) return;
 
@@ -134,15 +404,15 @@ const CreateCustomerFromLead = () => {
                         where('makeId', '==', equipment.makeId)
                     )
                 );
-                modelsByIndex[index] = modelsSnap.docs.map(modelDoc => ({ id: modelDoc.id, ...modelDoc.data() }));
+                modelsByKey[equipment.key] = modelsSnap.docs.map(modelDoc => ({ id: modelDoc.id, ...modelDoc.data() }));
             }));
 
-            setEquipmentMakes(makesByIndex);
-            setEquipmentModels(modelsByIndex);
+            setEquipmentMakes(makesByKey);
+            setEquipmentModels(modelsByKey);
         };
 
         loadEquipmentOptions();
-    }, [db, equipmentLookupKey]);
+    }, [db, bodyOfWaterEntries]);
 
     const handleInputChange = (e, setter, nestedField) => {
         const { name, value, type, checked } = e.target;
@@ -154,41 +424,160 @@ const CreateCustomerFromLead = () => {
         }
     };
 
-    const handleEquipmentListChange = (index, e) => {
+    const handleAddBodyOfWaterToggle = (checked) => {
+        setAddBodyOfWater(checked);
+        if (checked && !bodyOfWaterEntries.length) {
+            setBodyOfWaterEntries([createBodyOfWaterEntry()]);
+        }
+        if (!checked) {
+            setAddEquipment(false);
+        }
+    };
+
+    const handleAddEquipmentToggle = (checked) => {
+        setAddEquipment(checked);
+        if (checked) {
+            setAddBodyOfWater(true);
+            setBodyOfWaterEntries((currentEntries) => {
+                const entries = currentEntries.length ? currentEntries : [createBodyOfWaterEntry()];
+                const hasEquipment = entries.some((entry) => entry.equipmentData.length > 0);
+                if (hasEquipment) return entries;
+
+                return entries.map((entry, index) => (
+                    index === 0
+                        ? { ...entry, equipmentData: [...defaultEquipmentData] }
+                        : entry
+                ));
+            });
+        }
+    };
+
+    const addBodyOfWaterEntry = () => {
+        setAddBodyOfWater(true);
+        setBodyOfWaterEntries((currentEntries) => ([
+            ...currentEntries,
+            createBodyOfWaterEntry({
+                data: {
+                    ...defaultBodyOfWaterData,
+                    name: `Pool / Spa ${currentEntries.length + 1}`,
+                    gallons: '',
+                    material: '',
+                },
+            }),
+        ]));
+    };
+
+    const removeBodyOfWaterEntry = (bodyIndex) => {
+        if (bodyOfWaterEntries.length <= 1) {
+            setAddBodyOfWater(false);
+            setAddEquipment(false);
+        }
+
+        setBodyOfWaterEntries((currentEntries) => (
+            currentEntries.filter((_, index) => index !== bodyIndex)
+        ));
+    };
+
+    const handleBodyOfWaterChange = (bodyIndex, e) => {
+        const { name, value } = e.target;
+        setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => (
+            index === bodyIndex
+                ? {
+                    ...entry,
+                    data: {
+                        ...entry.data,
+                        [name]: value,
+                    },
+                }
+                : entry
+        )));
+    };
+
+    const addEquipmentToBody = (bodyIndex) => {
+        setAddEquipment(true);
+        setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => (
+            index === bodyIndex
+                ? {
+                    ...entry,
+                    equipmentData: [
+                        ...entry.equipmentData,
+                        { ...blankEquipmentData },
+                    ],
+                }
+                : entry
+        )));
+    };
+
+    const removeEquipmentFromBody = (bodyIndex, equipmentIndex) => {
+        const currentEquipmentCount = bodyOfWaterEntries.reduce(
+            (count, entry) => count + entry.equipmentData.length,
+            0
+        );
+
+        if (currentEquipmentCount <= 1) {
+            setAddEquipment(false);
+        }
+
+        setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => (
+            index === bodyIndex
+                ? {
+                    ...entry,
+                    equipmentData: entry.equipmentData.filter((_, currentEquipmentIndex) => (
+                        currentEquipmentIndex !== equipmentIndex
+                    )),
+                }
+                : entry
+        )));
+    };
+
+    const handleEquipmentListChange = (bodyIndex, equipmentIndex, e) => {
         const { name, value, type, checked } = e.target;
         const fieldValue = type === 'checkbox' ? checked : value;
-        const newList = [...equipmentData];
-        const nextEquipment = { ...newList[index], [name]: fieldValue };
+        const optionKey = equipmentOptionKey(bodyIndex, equipmentIndex);
 
-        if (name === 'typeId') {
-            const selectedType = equipmentTypes.find(type => type.id === fieldValue);
-            nextEquipment.type = selectedType?.name || '';
-            nextEquipment.make = '';
-            nextEquipment.makeId = '';
-            nextEquipment.model = '';
-            nextEquipment.modelId = '';
-            nextEquipment.manualPdfLink = '';
-        }
+        setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => {
+            if (index !== bodyIndex) return entry;
 
-        if (name === 'makeId') {
-            const selectedMake = equipmentMakes[index]?.find(make => make.id === fieldValue);
-            nextEquipment.make = selectedMake?.name || '';
-            nextEquipment.model = '';
-            nextEquipment.modelId = '';
-            nextEquipment.manualPdfLink = '';
-        }
+            const nextEquipmentData = entry.equipmentData.map((equipment, currentEquipmentIndex) => {
+                if (currentEquipmentIndex !== equipmentIndex) return equipment;
 
-        if (name === 'modelId') {
-            const selectedModel = equipmentModels[index]?.find(model => model.id === fieldValue);
-            nextEquipment.model = selectedModel?.model || selectedModel?.name || '';
-            nextEquipment.manualPdfLink = selectedModel?.manualPdfLink || '';
-            if (!nextEquipment.name && selectedModel) {
-                nextEquipment.name = selectedModel.name || selectedModel.model || '';
-            }
-        }
+                const nextEquipment = { ...equipment, [name]: fieldValue };
 
-        newList[index] = nextEquipment;
-        setEquipmentData(newList);
+                if (name === 'typeId') {
+                    const selectedType = equipmentTypes.find(type => type.id === fieldValue);
+                    nextEquipment.type = selectedType?.name || '';
+                    nextEquipment.make = '';
+                    nextEquipment.makeId = '';
+                    nextEquipment.model = '';
+                    nextEquipment.modelId = '';
+                    nextEquipment.manualPdfLink = '';
+                }
+
+                if (name === 'makeId') {
+                    const selectedMake = equipmentMakes[optionKey]?.find(make => make.id === fieldValue);
+                    nextEquipment.make = selectedMake?.name || '';
+                    nextEquipment.model = '';
+                    nextEquipment.modelId = '';
+                    nextEquipment.manualPdfLink = '';
+                }
+
+                if (name === 'modelId') {
+                    const selectedModel = equipmentModels[optionKey]?.find(model => model.id === fieldValue);
+                    nextEquipment.model = selectedModel?.model || selectedModel?.name || '';
+                    nextEquipment.manualPdfLink = selectedModel?.manualPdfLink || '';
+                    if (!nextEquipment.name && selectedModel) {
+                        nextEquipment.name = selectedModel.name || selectedModel.model || '';
+                    }
+                }
+
+                return nextEquipment;
+            });
+
+            return {
+                ...entry,
+                equipmentData: nextEquipmentData,
+            };
+        }));
     };
 
     const normalizeAddress = (address = {}) => ({
@@ -201,42 +590,6 @@ const CreateCustomerFromLead = () => {
         longitude: address.longitude ?? null,
     });
 
-    const getCustomerDisplayName = () => (
-        displayAsCompany
-            ? formData.companyName.trim()
-            : `${formData.firstName} ${formData.lastName}`.trim()
-    );
-
-    const copyCatalogPartsToEquipment = async (equipmentId, catalogEquipmentId, equipment) => {
-        if (!catalogEquipmentId || !recentlySelectedCompany) return;
-
-        const partsSnapshot = await getDocs(
-            collection(db, 'universal', 'equipment', 'equipment', catalogEquipmentId, 'parts')
-        );
-
-        const writes = partsSnapshot.docs.map((partDoc) => {
-            const part = partDoc.data();
-            const partId = 'com_equ_par_' + uuidv4();
-
-            return setDoc(
-                doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'parts', partId),
-                {
-                    id: partId,
-                    name: part.name || '',
-                    sku: part.sku || '',
-                    make: part.make || equipment.make || '',
-                    model: part.model || equipment.model || '',
-                    manualPdfLink: part.manualPdfLink || '',
-                    universalPartId: part.id || partDoc.id,
-                    universalEquipmentId: catalogEquipmentId,
-                    createdAt: new Date(),
-                }
-            );
-        });
-
-        await Promise.all(writes);
-    };
-
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSubmitting || !lead) return;
@@ -244,162 +597,131 @@ const CreateCustomerFromLead = () => {
         setIsSubmitting(true);
         const toastId = toast.loading('Creating customer and assets...');
 
-        const customerId = 'com_cus_' + uuidv4();
-        const serviceLocationId = 'com_sl_' + uuidv4();
-        const bodyOfWaterId = 'com_bow_' + uuidv4();
-        const equipmentIds = [];
-
-        const serviceAddress = normalizeAddress(lead.serviceLocationAddress);
-        const finalBillingAddress = useDifferentBillingAddress ? normalizeAddress(billingAddress) : serviceAddress;
-        const customerName = getCustomerDisplayName();
-
         try {
-            // 1. Create Customer
-            const customerData = {
-                id: customerId,
-                createdAt: new Date(),
-                firstName: formData.firstName,
-                lastName: formData.lastName,
-                company: displayAsCompany ? formData.companyName : '',
-                displayAsCompany,
-                active: true,
-                email: formData.email,
-                phoneNumber: formData.phone,
-                phoneLabel: "",
-                billingAddress: finalBillingAddress,
-                billingNotes: formData.billingNotes,
-                hireDate: new Date(),
-                linkedCustomerIds: [],
-                linkedInviteId: ""
-            };
-            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customerId), customerData);
-
-            // 2. Create Service Location (if checked)
-            if (addServiceLocation) {
-                await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), {
-                    id: serviceLocationId,
-                    nickName: serviceLocationData.nickName,
-                    address: serviceAddress,
-                    gateCode: serviceLocationData.gateCode,
-                    dogName: serviceLocationData.dogName ? [serviceLocationData.dogName] : [],
-                    estimatedTime: 15,
-                    mainContact: {
-                        id: 'com_cus_con_' + uuidv4(),
-                        name: customerName,
-                        email: formData.email,
-                        phoneNumber: formData.phone,
-                        notes: '',
-                    },
-                    notes: serviceLocationData.notes,
-                    bodiesOfWaterId: addBodyOfWater ? [bodyOfWaterId] : [],
-                    rateType: "",
-                    laborType: "",
-                    chemicalCost: "",
-                    laborCost: "",
-                    rate: "",
-                    customerId,
-                    customerName,
-                    backYardTree: [],
-                    backYardBushes: [],
-                    backYardOther: [],
-                    preText: serviceLocationData.preText,
-                    verified: false,
-                    photoUrls: [],
-                    isActive: true,
-                });
-
-                // 3. Create Body of Water (if checked)
-                if (addBodyOfWater) {
-                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', bodyOfWaterId), {
-                        id: bodyOfWaterId,
-                        name: bodyOfWaterData.name,
-                        gallons: bodyOfWaterData.gallons,
-                        waterType: bodyOfWaterData.waterType || 'Chlorine',
-                        material: bodyOfWaterData.material,
-                        customerId,
-                        serviceLocationId,
-                        notes: bodyOfWaterData.notes || '',
-                        shape: bodyOfWaterData.shape || '',
-                        length: null,
-                        depth: null,
-                        width: null,
-                        photoUrls: [],
-                        lastFilled: new Date(),
-                        isActive: true,
-                    });
-
-                    // 4. Create Equipment (if checked)
-                    if (addEquipment) {
-                        for (const equip of equipmentData) {
-                            if (equip.name) { // Only add if name is present
-                                const equipmentId = 'com_equ_' + uuidv4();
-                                equipmentIds.push(equipmentId);
-                                const catalogEquipmentId = equip.modelId || '';
-                                const equipmentRecord = {
-                                    id: equipmentId,
-                                    name: equip.name,
-                                    type: equip.type || '',
-                                    typeId: equip.typeId || '',
-                                    make: equip.make || '',
-                                    makeId: equip.makeId || '',
-                                    model: equip.model || '',
-                                    modelId: catalogEquipmentId,
-                                    universalEquipmentId: catalogEquipmentId,
-                                    manualPdfLink: equip.manualPdfLink || '',
-                                    dateInstalled: new Date(),
-                                    cleanFilterPressure: null,
-                                    currentPressure: null,
-                                    serviceFrequency: null,
-                                    serviceFrequencyEvery: '',
-                                    notes: equip.notes || '',
-                                    customerId,
-                                    customerName,
-                                    serviceLocationId,
-                                    bodyOfWaterId,
-                                    lastServiceDate: null,
-                                    nextServiceDate: null,
-                                    isActive: true,
-                                    needsService: Boolean(equip.needsService),
-                                    status: 'Operational',
-                                    verified: false,
-                                    photoUrls: [],
-                                };
-                                await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
-                                    ...equipmentRecord
-                                });
-                                await copyCatalogPartsToEquipment(equipmentId, catalogEquipmentId, equipmentRecord);
-                            }
-                        }
-                    }
-                }
+            if (!recentlySelectedCompany) {
+                throw new Error('Please select a company before converting this lead.');
             }
 
-            // 5. Update Lead
-            await updateDoc(doc(db, 'homeownerServiceRequests', leadId), {
-                customerId,
-                customerName,
-                serviceLocationId: addServiceLocation ? serviceLocationId : '',
-                bodyOfWaterId: addServiceLocation && addBodyOfWater ? bodyOfWaterId : '',
-                equipmentIds,
+            const authPayload = await getCallableAuthPayload();
+            const convertLead = httpsCallable(functions, 'convertHomeownerServiceRequestToCompanyCustomer');
+            const bodyOfWaterEntriesPayload = addBodyOfWater
+                ? bodyOfWaterEntries.map((entry) => ({
+                    ...entry.data,
+                    equipmentData: addEquipment ? entry.equipmentData : [],
+                }))
+                : [];
+            const primaryBodyOfWaterEntry = bodyOfWaterEntriesPayload[0] || {};
+            const result = await convertLead({
+                ...authPayload,
+                auth: authPayload,
+                companyId: recentlySelectedCompany,
+                leadId,
+                displayAsCompany,
+                useDifferentBillingAddress,
+                formData,
+                billingAddress: normalizeAddress(billingAddress),
+                serviceLocationData,
+                bodyOfWaterData: primaryBodyOfWaterEntry,
+                equipmentData: primaryBodyOfWaterEntry.equipmentData || [],
+                bodyOfWaterEntries: bodyOfWaterEntriesPayload,
+                addServiceLocation,
+                addBodyOfWater,
+                addEquipment,
             });
-            //6. Update lead to add customerId and customerName
+
+            const response = result.data || {};
+            if (response.status && response.status !== 200) {
+                throw new Error(response.error || 'Conversion failed.');
+            }
 
             toast.success('Successfully converted lead to customer!', { id: toastId });
             navigate(`/company/leads/${leadId}`);
 
         } catch (error) {
             console.error("Error creating customer from lead:", error);
-            toast.error('Conversion failed.', { id: toastId });
+            toast.error(error.message || 'Conversion failed.', { id: toastId });
             setIsSubmitting(false);
         }
     };
 
     if (loading) return <div className="flex justify-center items-center h-screen"><ClipLoader size={50} /></div>;
 
+    const requesterProfile = lead?.requesterProfile || {};
+    const requesterName = getRequesterName(lead, requesterProfile);
+    const requesterEmail = getRequesterEmail(lead, requesterProfile);
+    const requesterPhone = getRequesterPhone(lead, requesterProfile);
+    const sourceAddress = homeownerAssets.serviceLocation?.address || lead?.serviceLocationAddress || {};
+    const sourceAddressText = formatAddress(sourceAddress);
+    const sourceBodiesOfWater = homeownerAssets.bodiesOfWater?.length
+        ? homeownerAssets.bodiesOfWater
+        : homeownerAssets.bodyOfWater
+            ? [homeownerAssets.bodyOfWater]
+            : [];
+    const sourceEquipment = homeownerAssets.equipment || [];
+    const hasHomeownerServiceLocation = Boolean(homeownerAssets.serviceLocation);
+    const hasHomeownerBodyOfWater = sourceBodiesOfWater.length > 0;
+    const hasHomeownerEquipment = sourceEquipment.length > 0;
+    const serviceLocationCopyLabel = hasHomeownerServiceLocation
+        ? 'Copy homeowner service location into company account'
+        : 'Create company service location from lead address';
+    const bodyOfWaterCopyLabel = hasHomeownerBodyOfWater
+        ? `Copy ${sourceBodiesOfWater.length} homeowner body of water record${sourceBodiesOfWater.length === 1 ? '' : 's'} into company account`
+        : 'Add company body of water manually';
+    const equipmentCopyLabel = hasHomeownerEquipment
+        ? `Copy ${sourceEquipment.length} homeowner equipment record${sourceEquipment.length === 1 ? '' : 's'} into company account`
+        : 'Add company equipment manually';
+
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50">
             <div className="max-w-4xl mx-auto">
                 <h1 className="text-3xl font-bold text-gray-900 mb-6">Create Customer from Lead</h1>
+
+                <div className="mb-6 rounded-2xl border border-blue-200 bg-blue-50 p-5">
+                    <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                        <div>
+                            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Submitted customer data</p>
+                            <h2 className="mt-1 text-xl font-bold text-gray-900">{requesterName || 'Homeowner request'}</h2>
+                            <p className="mt-1 text-sm text-gray-700">
+                                This information comes from the homeowner service request and will be used to pre-fill the company customer record. Checked pool sections below create linked company-side copies; they do not edit the homeowner's original records.
+                            </p>
+                        </div>
+                        <div className="rounded-lg bg-white px-3 py-2 text-sm font-semibold text-blue-700">
+                            {lead?.source || 'Lead'} lead
+                        </div>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                        <div className="rounded-lg bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Contact</p>
+                            <p className="mt-2 text-sm text-gray-900">{requesterName || 'No name submitted'}</p>
+                            <p className="mt-1 text-sm text-gray-700 break-words">{requesterEmail || 'No email submitted'}</p>
+                            <p className="mt-1 text-sm text-gray-700">{requesterPhone || 'No phone submitted'}</p>
+                        </div>
+
+                        <div className="rounded-lg bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Property</p>
+                            <p className="mt-2 text-sm text-gray-900">{sourceAddressText || 'No service address submitted'}</p>
+                            {sourceBodiesOfWater.length > 0 && (
+                                <p className="mt-1 text-sm text-gray-700">
+                                    Bodies of water: {sourceBodiesOfWater.map(body => body.name || 'Pool / Spa').join(', ')}
+                                </p>
+                            )}
+                            {sourceEquipment.length > 0 && (
+                                <p className="mt-1 text-sm text-gray-700">
+                                    Equipment: {sourceEquipment.map(equipment => equipment.name || equipment.category || equipment.type || 'Equipment').join(', ')}
+                                </p>
+                            )}
+                        </div>
+                    </div>
+
+                    {lead?.serviceDescription && (
+                        <div className="mt-4 rounded-lg bg-white p-4">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Shared request description</p>
+                            <p className="mt-2 whitespace-pre-wrap text-sm text-gray-700">{lead.serviceDescription}</p>
+                        </div>
+                    )}
+                </div>
+
                 <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg space-y-8">
 
                     {/* Customer Details */}
@@ -417,7 +739,7 @@ const CreateCustomerFromLead = () => {
                             </div>
                         )}
                         <div className="grid md:grid-cols-2 gap-4 mt-4">
-                            <div><label className="block text-sm font-medium">Email</label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" required /></div>
+                            <div><label className="block text-sm font-medium">Email <span className="text-xs font-normal text-gray-500">(optional)</span></label><input type="email" name="email" value={formData.email} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
                             <div><label className="block text-sm font-medium">Phone</label><input type="tel" name="phone" value={formData.phone} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
                         </div>
                         <div className="mt-4"><label className="block text-sm font-medium">Billing Notes</label><textarea name="billingNotes" value={formData.billingNotes} onChange={handleInputChange} className="w-full mt-1 p-2 border rounded-md" /></div>
@@ -437,46 +759,125 @@ const CreateCustomerFromLead = () => {
 
                     {/* Service Location, BOW, Equipment */}
                     <div className="border-b pb-6">
-                        <label className="flex items-center font-bold"><input type="checkbox" checked={addServiceLocation} onChange={e => setAddServiceLocation(e.target.checked)} className="mr-2 h-5 w-5" />Add Service Location</label>
+                        <label className="flex items-center font-bold"><input type="checkbox" checked={addServiceLocation} onChange={e => setAddServiceLocation(e.target.checked)} className="mr-2 h-5 w-5" />{serviceLocationCopyLabel}</label>
                         {addServiceLocation && (
                             <div className="pl-6 mt-4 space-y-4">
-                                <p className="p-4 bg-blue-50 rounded-lg">Service Address will be pre-filled from the lead: <br /><b>{lead?.serviceLocationAddress?.streetAddress}, {lead?.serviceLocationAddress?.city}</b></p>
+                                <p className="p-4 bg-blue-50 rounded-lg">
+                                    {hasHomeownerServiceLocation
+                                        ? 'A linked service location was found on the homeowner account and will be copied into the company account.'
+                                        : 'No linked homeowner service location was found, so this will create a company location from the submitted lead address.'}
+                                    <br />
+                                    <b>{sourceAddressText || 'No service address submitted'}</b>
+                                </p>
                                 <div><label className="block text-sm font-medium">Location Nickname</label><input type="text" name="nickName" value={serviceLocationData.nickName} onChange={e => handleInputChange(e, setServiceLocationData)} className="w-full mt-1 p-2 border rounded-md" /></div>
 
-                                <label className="flex items-center font-semibold"><input type="checkbox" checked={addBodyOfWater} onChange={e => setAddBodyOfWater(e.target.checked)} className="mr-2 h-5 w-5" />Add Body of Water</label>
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <label className="flex items-center font-semibold"><input type="checkbox" checked={addBodyOfWater} onChange={e => handleAddBodyOfWaterToggle(e.target.checked)} className="mr-2 h-5 w-5" />{bodyOfWaterCopyLabel}</label>
+                                    <button
+                                        type="button"
+                                        onClick={addBodyOfWaterEntry}
+                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                                    >
+                                        + Add Body of Water
+                                    </button>
+                                </div>
                                 {addBodyOfWater && (
                                     <div className="pl-6 mt-2 space-y-4 p-4 border-l-2">
-                                        <div><label className="block text-sm font-medium">Pool Name</label><input type="text" name="name" value={bodyOfWaterData.name} onChange={e => handleInputChange(e, setBodyOfWaterData)} className="w-full mt-1 p-2 border rounded-md" /></div>
-                                        <div><label className="block text-sm font-medium">Volume (Gallons)</label><input type="number" name="gallons" value={bodyOfWaterData.gallons} onChange={e => handleInputChange(e, setBodyOfWaterData)} className="w-full mt-1 p-2 border rounded-md" /></div>
+                                        <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
+                                            {hasHomeownerBodyOfWater
+                                                ? 'Body of water fields are pre-filled from the homeowner account and will be saved as company-side copies linked back to homeowner records when available.'
+                                                : 'This body of water is being added as a new company-side record because no homeowner body of water was attached to the lead.'}
+                                        </p>
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                            <label className="flex items-center font-semibold"><input type="checkbox" checked={addEquipment} onChange={e => handleAddEquipmentToggle(e.target.checked)} className="mr-2 h-5 w-5" />{equipmentCopyLabel}</label>
+                                        </div>
 
-                                        <label className="flex items-center font-semibold"><input type="checkbox" checked={addEquipment} onChange={e => setAddEquipment(e.target.checked)} className="mr-2 h-5 w-5" />Add Equipment</label>
-                                        {addEquipment && (
-                                            <div className="pl-6 mt-2 space-y-4 p-4 border-l-2">
-                                                {[0, 1].map(index => (
-                                                    <div key={index} className="p-2 border rounded-md">
-                                                        <h4 className="font-medium mb-1">Equipment #{index + 1}</h4>
-                                                        <input placeholder="Name (e.g., Pump)" name="name" value={equipmentData[index].name} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md" />
-                                                        <select name="typeId" value={equipmentData[index].typeId} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                            <option value="">Select Category</option>
-                                                            {equipmentTypes.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}
-                                                        </select>
-                                                        <select name="makeId" value={equipmentData[index].makeId} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                            <option value="">Select Make</option>
-                                                            {equipmentMakes[index]?.map(make => <option key={make.id} value={make.id}>{make.name}</option>)}
-                                                        </select>
-                                                        <select name="modelId" value={equipmentData[index].modelId} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                            <option value="">Select Model</option>
-                                                            {equipmentModels[index]?.map(model => <option key={model.id} value={model.id}>{model.model || model.name}</option>)}
-                                                        </select>
-                                                        <textarea placeholder="Notes" name="notes" value={equipmentData[index].notes} onChange={e => handleEquipmentListChange(index, e)} className="w-full mb-2 p-2 border rounded-md" />
-                                                        <label className="flex items-center">
-                                                            <input type="checkbox" name="needsService" checked={equipmentData[index].needsService} onChange={e => handleEquipmentListChange(index, e)} className="mr-2 h-4 w-4" />
-                                                            Needs Service
-                                                        </label>
+                                        {bodyOfWaterEntries.map((entry, bodyIndex) => (
+                                            <div key={`body-${bodyIndex}`} className="space-y-4 rounded-lg border border-gray-200 bg-white p-4">
+                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                                    <div>
+                                                        <h4 className="font-semibold text-gray-900">Body of Water #{bodyIndex + 1}</h4>
+                                                        <p className="text-sm text-gray-600">
+                                                            {sourceBodiesOfWater[bodyIndex]
+                                                                ? `Copied from homeowner record: ${sourceBodiesOfWater[bodyIndex].name || 'Pool / Spa'}`
+                                                                : 'New company-side body of water.'}
+                                                        </p>
                                                     </div>
-                                                ))}
+                                                    {bodyOfWaterEntries.length > 1 && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => removeBodyOfWaterEntry(bodyIndex)}
+                                                            className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+                                                        >
+                                                            Remove
+                                                        </button>
+                                                    )}
+                                                </div>
+
+                                                <div><label className="block text-sm font-medium">Pool / Spa Name</label><input type="text" name="name" value={entry.data.name} onChange={e => handleBodyOfWaterChange(bodyIndex, e)} className="w-full mt-1 p-2 border rounded-md" /></div>
+                                                <div className="grid gap-4 md:grid-cols-3">
+                                                    <div><label className="block text-sm font-medium">Volume (Gallons)</label><input type="number" name="gallons" value={entry.data.gallons} onChange={e => handleBodyOfWaterChange(bodyIndex, e)} className="w-full mt-1 p-2 border rounded-md" /></div>
+                                                    <div><label className="block text-sm font-medium">Water Type</label><input type="text" name="waterType" value={entry.data.waterType || ''} onChange={e => handleBodyOfWaterChange(bodyIndex, e)} className="w-full mt-1 p-2 border rounded-md" /></div>
+                                                    <div><label className="block text-sm font-medium">Material</label><input type="text" name="material" value={entry.data.material || ''} onChange={e => handleBodyOfWaterChange(bodyIndex, e)} className="w-full mt-1 p-2 border rounded-md" /></div>
+                                                </div>
+                                                <div><label className="block text-sm font-medium">Notes</label><textarea name="notes" value={entry.data.notes || ''} onChange={e => handleBodyOfWaterChange(bodyIndex, e)} className="w-full mt-1 p-2 border rounded-md" /></div>
+
+                                                {addEquipment && (
+                                                    <div className="space-y-4 border-t border-gray-200 pt-4">
+                                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                                            <p className="text-sm text-gray-700">
+                                                                {entry.equipmentData.length
+                                                                    ? `${entry.equipmentData.length} equipment record${entry.equipmentData.length === 1 ? '' : 's'} for this body of water.`
+                                                                    : 'No equipment added for this body of water yet.'}
+                                                            </p>
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => addEquipmentToBody(bodyIndex)}
+                                                                className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                                                            >
+                                                                + Add Equipment
+                                                            </button>
+                                                        </div>
+
+                                                        {entry.equipmentData.map((equipment, equipmentIndex) => {
+                                                            const optionKey = equipmentOptionKey(bodyIndex, equipmentIndex);
+                                                            return (
+                                                                <div key={`equipment-${bodyIndex}-${equipmentIndex}`} className="rounded-md border border-gray-200 p-3">
+                                                                    <div className="mb-2 flex items-center justify-between gap-3">
+                                                                        <h5 className="font-medium">Equipment #{equipmentIndex + 1}</h5>
+                                                                        <button
+                                                                            type="button"
+                                                                            onClick={() => removeEquipmentFromBody(bodyIndex, equipmentIndex)}
+                                                                            className="rounded-md border border-rose-200 bg-rose-50 px-2 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                                                                        >
+                                                                            Remove
+                                                                        </button>
+                                                                    </div>
+                                                                    <input placeholder="Name (e.g., Pump)" name="name" value={equipment.name} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md" />
+                                                                    <select name="typeId" value={equipment.typeId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
+                                                                        <option value="">Select Category</option>
+                                                                        {equipmentTypes.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}
+                                                                    </select>
+                                                                    <select name="makeId" value={equipment.makeId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
+                                                                        <option value="">Select Make</option>
+                                                                        {equipmentMakes[optionKey]?.map(make => <option key={make.id} value={make.id}>{make.name}</option>)}
+                                                                    </select>
+                                                                    <select name="modelId" value={equipment.modelId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
+                                                                        <option value="">Select Model</option>
+                                                                        {equipmentModels[optionKey]?.map(model => <option key={model.id} value={model.id}>{model.model || model.name}</option>)}
+                                                                    </select>
+                                                                    <textarea placeholder="Notes" name="notes" value={equipment.notes} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md" />
+                                                                    <label className="flex items-center">
+                                                                        <input type="checkbox" name="needsService" checked={equipment.needsService} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="mr-2 h-4 w-4" />
+                                                                        Needs Service
+                                                                    </label>
+                                                                </div>
+                                                            );
+                                                        })}
+                                                    </div>
+                                                )}
                                             </div>
-                                        )}
+                                        ))}
                                     </div>
                                 )}
                             </div>

@@ -140,6 +140,7 @@ const CreateNewCustomer = () => {
 
     const useCustomerAsMainContact = () => {
         setMainContact({
+            id: mainContact.id || "com_cus_con_" + uuidv4(),
             name: displayAsCompany ? formData.company : `${formData.firstName} ${formData.lastName}`,
             email: formData.email,
             phoneNumber: formData.phoneNumber,
@@ -158,6 +159,14 @@ const CreateNewCustomer = () => {
             const bodyOfWaterId = 'com_bow_' + uuidv4();
 
             const finalBillingAddress = useDifferentBillingAddress ? billingAddress : serviceAddress;
+            const customerName = displayAsCompany ? formData.company : `${formData.firstName} ${formData.lastName}`;
+            const serviceLocationMainContact = {
+                id: mainContact.id || "com_cus_con_" + uuidv4(),
+                name: mainContact.name,
+                email: mainContact.email,
+                phoneNumber: mainContact.phoneNumber,
+                notes: mainContact.notes
+            };
 
             // 1. Create Customer
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customerId), {
@@ -175,10 +184,13 @@ const CreateNewCustomer = () => {
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), {
                 id: serviceLocationId,
                 customerId,
+                customerName,
                 address: serviceAddress,
-                mainContact, ...serviceLocationDetails,
+                mainContact: serviceLocationMainContact,
+                ...serviceLocationDetails,
                 bodiesOfWaterId: [bodyOfWaterId],
-                dogName: [dogName]
+                dogName: [dogName],
+                isActive: true
             });
 
             // 3. Create Body of Water
@@ -205,7 +217,7 @@ const CreateNewCustomer = () => {
                         customerId,
                         serviceLocationId,
                         bodyOfWaterId,
-                        customerName: displayAsCompany ? formData.company : `${formData.firstName} ${formData.lastName}`,
+                        customerName,
                         dateInstalled: new Date(), active: true, status: 'Operational'
                     });
                 }
@@ -247,10 +259,16 @@ const CreateNewCustomer = () => {
                             <FormInput label="Phone" name="phoneNumber" type="tel" value={formData.phoneNumber} onChange={e => handleStateChange(setFormData, 'phoneNumber', e.target.value)} />
                         </div>
                         <FormTextarea label="Billing Notes" name="billingNotes" value={formData.billingNotes} onChange={e => handleStateChange(setFormData, 'billingNotes', e.target.value)} />
+                        <label className="flex items-center mb-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={(e) => setUseDifferentBillingAddress(e.target.checked)} className="mr-2" />Use different billing address</label>
+                        {useDifferentBillingAddress && (
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                <h3 className="mb-3 text-lg font-semibold text-gray-900">Billing Address</h3>
+                                <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'billing')} customClasses={inputClasses} />
+                            </div>
+                        )}
                     </InfoSection>
 
                     <InfoSection title="Service Location">
-                        <label className="flex items-center mb-4"><input type="checkbox" checked={useDifferentBillingAddress} onChange={(e) => setUseDifferentBillingAddress(e.target.checked)} className="mr-2" />Use different billing address</label>
                         <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'service')} customClasses={inputClasses} />
                         <FormInput label="Nick Name" name="nickName" value={serviceLocationDetails.nickName} onChange={e => handleStateChange(setServiceLocationDetails, 'nickName', e.target.value)} />
 
@@ -263,7 +281,7 @@ const CreateNewCustomer = () => {
 
                         <div className="mt-6">
                             <div className="flex justify-between items-center mb-2">
-                                <h3 class="text-lg font-semibold">Main Contact</h3>
+                                <h3 className="text-lg font-semibold">Main Contact</h3>
                                 <button type="button" onClick={useCustomerAsMainContact} className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700">Use Customer Details</button>
                             </div>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
@@ -276,12 +294,6 @@ const CreateNewCustomer = () => {
                             </div>
                         </div>
                     </InfoSection>
-
-                    {useDifferentBillingAddress && (
-                        <InfoSection title="Billing Address">
-                            <AddressAutocomplete onAddressSelect={(p) => handlePlaceSelected(p, 'billing')} customClasses={inputClasses} />
-                        </InfoSection>
-                    )}
 
                     <InfoSection title="Body of Water">
                         <div className='grid md:grid-cols-2 gap-4'>

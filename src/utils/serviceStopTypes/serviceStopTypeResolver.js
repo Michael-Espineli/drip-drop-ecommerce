@@ -2,6 +2,7 @@ export const SERVICE_STOP_TYPE_USE_CASES = {
     jobVisit: "jobVisit",
     recurringRoute: "recurringRoute",
     estimate: "estimate",
+    serviceEstimate: "serviceEstimate",
     unknown: "unknown",
 };
 
@@ -21,6 +22,11 @@ const FALLBACKS = {
         type: "Estimate",
         typeImage: "doc.text.magnifyingglass",
     },
+    serviceEstimate: {
+        typeId: "system_service_estimate_stop",
+        type: "Service Estimate",
+        typeImage: "doc.text.magnifyingglass",
+    },
     unknown: {
         typeId: "system_unknown_service_stop",
         type: "Unknown Service Stop",
@@ -31,7 +37,8 @@ const FALLBACKS = {
 const CANDIDATE_NAMES = {
     jobVisit: ["Job Visit", "Service Call", "Job"],
     recurringRoute: ["Weekly Route", "Residential Route", "Recurring Service Stop", "Standard Route", "Pool Route", "Route", "Routes"],
-    estimate: ["Estimate", "Initial Estimate Visit", "Pre Estimate Visit"],
+    estimate: ["Estimate", "Initial Estimate Visit", "Pre Estimate Visit", "Service Estimate"],
+    serviceEstimate: ["Service Estimate", "Estimate Visit", "Initial Estimate Visit", "Pre Estimate Visit", "Estimate"],
     unknown: [],
 };
 

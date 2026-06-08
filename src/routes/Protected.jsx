@@ -8,6 +8,10 @@ export function Protected({ route, children }) {
     const { user, accountType, recentlySelectedCompany, companySubscription, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const location = useLocation();
     const routeRole = String(route.role || "").toLowerCase();
+    const requiredFeatureFlagIds = [
+        route.featureFlagId,
+        ...(Array.isArray(route.featureFlagIds) ? route.featureFlagIds : []),
+    ].filter(Boolean);
 
     if (!user) {
         console.log('no user')
@@ -23,12 +27,12 @@ export function Protected({ route, children }) {
                 return <Navigate to='/' replace />
             }
         } else if (accountType === 'Company') {
-            if (routeRole === 'company' && route.featureFlagId) {
+            if (routeRole === 'company' && requiredFeatureFlagIds.length > 0) {
                 if (!featureFlagsLoaded) {
                     return null;
                 }
 
-                if (!isFeatureEnabled(route.featureFlagId)) {
+                if (!requiredFeatureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId))) {
                     return <Navigate to='/company/dashboard' replace />
                 }
             }

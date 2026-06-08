@@ -179,6 +179,8 @@ export class SalesBillingProfile {
     companyId,
     customerId,
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
     customerName = '',
     email = '',
     phoneNumber = '',
@@ -198,6 +200,8 @@ export class SalesBillingProfile {
     this.companyId = companyId;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
     this.customerName = customerName;
     this.email = email;
     this.phoneNumber = phoneNumber;
@@ -233,6 +237,8 @@ export class SalesAgreement {
     companyName = '',
     customerId,
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
     customerName = '',
     email = '',
     serviceLocationIds = [],
@@ -284,6 +290,8 @@ export class SalesAgreement {
     this.companyName = companyName;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
     this.customerName = customerName;
     this.email = email;
     this.serviceLocationIds = serviceLocationIds;
@@ -357,6 +365,8 @@ export class SalesBillingSubscription {
     companyId,
     customerId,
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
     customerName = '',
     email = '',
     serviceLocationIds = [],
@@ -401,6 +411,8 @@ export class SalesBillingSubscription {
     this.companyId = companyId;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
     this.customerName = customerName;
     this.email = email;
     this.serviceLocationIds = serviceLocationIds;
@@ -495,6 +507,8 @@ export class SalesInvoice {
     companyName = '',
     customerId,
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
     customerName = '',
     email = '',
     serviceLocationIds = [],
@@ -535,6 +549,8 @@ export class SalesInvoice {
     this.companyName = companyName;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
     this.customerName = customerName;
     this.email = email;
     this.serviceLocationIds = serviceLocationIds;
@@ -601,6 +617,9 @@ export class SalesPayment {
     companyId,
     customerId = '',
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
+    email = '',
     invoiceId = '',
     billingProfileId = '',
     billingSubscriptionId = '',
@@ -625,6 +644,9 @@ export class SalesPayment {
     this.companyId = companyId;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
+    this.email = email;
     this.invoiceId = invoiceId;
     this.billingProfileId = billingProfileId;
     this.billingSubscriptionId = billingSubscriptionId;
@@ -664,6 +686,9 @@ export class SalesPaymentEvent {
     companyId,
     customerId = '',
     customerUserId = null,
+    relationshipId = '',
+    customerCompanyRelationshipId = '',
+    email = '',
     invoiceId = '',
     billingSubscriptionId = '',
     stripeConnectedAccountId = '',
@@ -680,6 +705,9 @@ export class SalesPaymentEvent {
     this.companyId = companyId;
     this.customerId = customerId;
     this.customerUserId = customerUserId;
+    this.relationshipId = relationshipId;
+    this.customerCompanyRelationshipId = customerCompanyRelationshipId || relationshipId;
+    this.email = email;
     this.invoiceId = invoiceId;
     this.billingSubscriptionId = billingSubscriptionId;
     this.stripeConnectedAccountId = stripeConnectedAccountId;

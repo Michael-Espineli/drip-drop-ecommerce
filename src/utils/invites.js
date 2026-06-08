@@ -1,6 +1,8 @@
 import { doc, updateDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, functions } from "./config";
+import { getCallableAuthPayload } from "./callableAuth";
+import { normalizeEmail } from "./email";
 
 /**
  * Accepts a company invitation and performs all necessary database operations in a single batch.
@@ -14,13 +16,15 @@ export const acceptInvite = async (invite, userId, firstName, lastName, email) =
     }
 
     const acceptTechInvite = httpsCallable(functions, "acceptTechInvite");
+    const authPayload = await getCallableAuthPayload();
     const result = await acceptTechInvite({
         inviteId: invite.id,
         userId,
+        ...authPayload,
         profile: {
             firstName: firstName || invite.firstName || "",
             lastName: lastName || invite.lastName || "",
-            email: email || invite.email || "",
+            email: normalizeEmail(email || invite.email),
             accountType: "Company",
             photoUrl: null,
             profileImagePath: null,
@@ -46,5 +50,5 @@ export const declineInvite = async (invite) => {
         throw new Error("Invite must be provided.");
     }
     const inviteRef = doc(db, "invites", invite.id);
-    await updateDoc(inviteRef, { status: 'Declined' });
+    await updateDoc(inviteRef, { status: 'rejected' });
 };

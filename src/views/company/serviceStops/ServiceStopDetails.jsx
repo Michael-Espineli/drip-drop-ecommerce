@@ -19,6 +19,13 @@ import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { runWorkCompletionEffects } from "../../../utils/workCompletionEffects";
 import { promptForReplacementInstallDetails } from "../../../utils/replacementTasks";
+import {
+    buildStopDataRecord,
+    fetchStopDataForServiceStop,
+    normalizeDosageForStopData,
+    normalizeReadingForStopData,
+    saveStopDataRecord,
+} from "../../../utils/stopData";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const jobTaskTypeOptions = [
@@ -55,6 +62,14 @@ const ServiceStopDetails = () => {
     const [taskList, setTaskList] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
+    const [readingTemplates, setReadingTemplates] = useState([]);
+    const [dosageTemplates, setDosageTemplates] = useState([]);
+    const [stopDataRecords, setStopDataRecords] = useState([]);
+    const [selectedBodyOfWaterId, setSelectedBodyOfWaterId] = useState("");
+    const [readingDrafts, setReadingDrafts] = useState({});
+    const [dosageDrafts, setDosageDrafts] = useState({});
+    const [observationDraft, setObservationDraft] = useState("");
+    const [savingStopData, setSavingStopData] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
@@ -118,6 +133,30 @@ const ServiceStopDetails = () => {
                     }));
                     setTaskList(tasks);
 
+                    const [readingTemplatesSnapshot, dosageTemplatesSnapshot, loadedStopData] = await Promise.all([
+                        getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings")),
+                        getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages")),
+                        fetchStopDataForServiceStop({
+                            db,
+                            companyId: recentlySelectedCompany,
+                            serviceStopId,
+                        }),
+                    ]);
+
+                    setReadingTemplates(
+                        readingTemplatesSnapshot.docs.map((readingDoc) => ({
+                            id: readingDoc.id,
+                            ...readingDoc.data(),
+                        }))
+                    );
+                    setDosageTemplates(
+                        dosageTemplatesSnapshot.docs.map((dosageDoc) => ({
+                            id: dosageDoc.id,
+                            ...dosageDoc.data(),
+                        }))
+                    );
+                    setStopDataRecords(loadedStopData);
+
                     if (stopData.serviceLocationId) {
                         const bodyOfWaterQuery = query(
                             collection(
@@ -177,6 +216,95 @@ const ServiceStopDetails = () => {
 
         fetchServiceStopDetails();
     }, [recentlySelectedCompany, serviceStopId]);
+
+    useEffect(() => {
+        if (selectedBodyOfWaterId || !bodiesOfWater.length) return;
+        setSelectedBodyOfWaterId(bodiesOfWater[0].id);
+    }, [bodiesOfWater, selectedBodyOfWaterId]);
+
+    useEffect(() => {
+        if (!selectedBodyOfWaterId) {
+            setReadingDrafts({});
+            setDosageDrafts({});
+            setObservationDraft("");
+            return;
+        }
+
+        const currentStopData = stopDataRecords.find((record) => record.bodyOfWaterId === selectedBodyOfWaterId);
+        const readingsByTemplateId = new Map(
+            (currentStopData?.readings || []).map((reading) => [reading.templateId || reading.universalTemplateId, reading])
+        );
+        const dosagesByTemplateId = new Map(
+            (currentStopData?.dosages || []).map((dosage) => [dosage.templateId || dosage.universalTemplateId, dosage])
+        );
+
+        setReadingDrafts(
+            Object.fromEntries(
+                readingTemplates.map((template) => {
+                    const reading = readingsByTemplateId.get(template.id) || readingsByTemplateId.get(template.readingsTemplateId);
+                    return [template.id, reading?.amount || ""];
+                })
+            )
+        );
+        setDosageDrafts(
+            Object.fromEntries(
+                dosageTemplates.map((template) => {
+                    const dosage = dosagesByTemplateId.get(template.id) || dosagesByTemplateId.get(template.dosageTemplateId);
+                    return [template.id, dosage?.amount || ""];
+                })
+            )
+        );
+        setObservationDraft((currentStopData?.observation || []).join("\n"));
+    }, [dosageTemplates, readingTemplates, selectedBodyOfWaterId, stopDataRecords]);
+
+    const selectedStopDataRecord = stopDataRecords.find((record) => record.bodyOfWaterId === selectedBodyOfWaterId) || null;
+
+    const saveStopData = async () => {
+        if (!requirePermission("244", "update service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !selectedBodyOfWaterId) return;
+
+        try {
+            setSavingStopData(true);
+            const readings = readingTemplates.map((template) =>
+                normalizeReadingForStopData(template, readingDrafts[template.id] || "", selectedBodyOfWaterId)
+            );
+            const dosages = dosageTemplates.map((template) =>
+                normalizeDosageForStopData(template, dosageDrafts[template.id] || "", selectedBodyOfWaterId)
+            );
+            const observation = observationDraft
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const stopData = buildStopDataRecord({
+                existingStopData: selectedStopDataRecord,
+                serviceStop,
+                serviceStopId,
+                bodyOfWaterId: selectedBodyOfWaterId,
+                readings,
+                dosages,
+                observation,
+                userId: serviceStop.techId || "",
+                date: new Date(),
+            });
+
+            const savedStopData = await saveStopDataRecord({
+                db,
+                companyId: recentlySelectedCompany,
+                stopData,
+            });
+
+            setStopDataRecords((current) => {
+                const others = current.filter((record) => record.id !== savedStopData.id);
+                return [savedStopData, ...others];
+            });
+            toast.success("Stop data saved");
+        } catch (error) {
+            console.error("Failed to save stop data:", error);
+            toast.error("Failed to save stop data");
+        } finally {
+            setSavingStopData(false);
+        }
+    };
 
     const getStatusClass = (status) => {
         const normalized = String(status || "").toLowerCase();
@@ -734,15 +862,142 @@ const ServiceStopDetails = () => {
                             </div>
                         </div>
 
-                        {serviceStop.includeReadings && (
+                        {(serviceStop.includeReadings || serviceStop.includeDosages || readingTemplates.length || dosageTemplates.length) && (
                             <div className="bg-white shadow-lg rounded-xl p-6">
-                                <h3 className="text-xl font-bold text-gray-800">Chemical Readings</h3>
-                            </div>
-                        )}
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-gray-800">Stop Data</h3>
+                                        <p className="text-sm text-gray-600 mt-1">Readings, dosages, and observations for this service stop.</p>
+                                    </div>
+                                    <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700">
+                                        {selectedStopDataRecord ? "Saved" : "Not saved"}
+                                    </span>
+                                </div>
 
-                        {serviceStop.includeDosages && (
-                            <div className="bg-white shadow-lg rounded-xl p-6">
-                                <h3 className="text-xl font-bold text-gray-800">Chemical Dosages</h3>
+                                {bodiesOfWater.length ? (
+                                    <div className="mt-5 space-y-5">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                Body of Water
+                                            </label>
+                                            <select
+                                                value={selectedBodyOfWaterId}
+                                                onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
+                                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
+                                            >
+                                                {bodiesOfWater.map((body) => (
+                                                    <option key={body.id} value={body.id}>
+                                                        {body.name || body.type || "Unnamed Body Of Water"}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        {serviceStop.includeReadings !== false && readingTemplates.length > 0 && (
+                                            <div>
+                                                <div className="mb-3 flex items-center justify-between gap-3">
+                                                    <h4 className="font-semibold text-gray-800">Readings</h4>
+                                                    <span className="text-xs font-semibold text-gray-500">
+                                                        {Object.values(readingDrafts).filter(Boolean).length}/{readingTemplates.length}
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    {readingTemplates.map((template) => (
+                                                        <label key={template.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                                                            <span className="block text-sm font-semibold text-gray-700">
+                                                                {template.name || "Reading"}
+                                                            </span>
+                                                            <div className="mt-2 flex items-center gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={readingDrafts[template.id] || ""}
+                                                                    onChange={(event) =>
+                                                                        setReadingDrafts((current) => ({
+                                                                            ...current,
+                                                                            [template.id]: event.target.value,
+                                                                        }))
+                                                                    }
+                                                                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm"
+                                                                    placeholder="Amount"
+                                                                />
+                                                                {template.UOM && (
+                                                                    <span className="shrink-0 text-xs font-semibold text-gray-500">
+                                                                        {template.UOM}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        {serviceStop.includeDosages !== false && dosageTemplates.length > 0 && (
+                                            <div>
+                                                <div className="mb-3 flex items-center justify-between gap-3">
+                                                    <h4 className="font-semibold text-gray-800">Dosages</h4>
+                                                    <span className="text-xs font-semibold text-gray-500">
+                                                        {Object.values(dosageDrafts).filter(Boolean).length}/{dosageTemplates.length}
+                                                    </span>
+                                                </div>
+                                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                                    {dosageTemplates.map((template) => (
+                                                        <label key={template.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                                                            <span className="block text-sm font-semibold text-gray-700">
+                                                                {template.name || "Dosage"}
+                                                            </span>
+                                                            <div className="mt-2 flex items-center gap-2">
+                                                                <input
+                                                                    type="text"
+                                                                    value={dosageDrafts[template.id] || ""}
+                                                                    onChange={(event) =>
+                                                                        setDosageDrafts((current) => ({
+                                                                            ...current,
+                                                                            [template.id]: event.target.value,
+                                                                        }))
+                                                                    }
+                                                                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm"
+                                                                    placeholder="Amount"
+                                                                />
+                                                                {template.UOM && (
+                                                                    <span className="shrink-0 text-xs font-semibold text-gray-500">
+                                                                        {template.UOM}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        </label>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
+                                        <label className="block">
+                                            <span className="block text-sm font-semibold text-gray-600 mb-1">Observations</span>
+                                            <textarea
+                                                value={observationDraft}
+                                                onChange={(event) => setObservationDraft(event.target.value)}
+                                                rows={3}
+                                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                                placeholder="One observation per line"
+                                            />
+                                        </label>
+
+                                        <div className="flex justify-end">
+                                            <button
+                                                type="button"
+                                                onClick={saveStopData}
+                                                disabled={savingStopData || !selectedBodyOfWaterId}
+                                                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                            >
+                                                {savingStopData ? "Saving..." : "Save Stop Data"}
+                                            </button>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
+                                        Add a body of water to this service location before recording stop data.
+                                    </div>
+                                )}
                             </div>
                         )}
 

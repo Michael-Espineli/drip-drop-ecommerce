@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo, useRef } from 'react';
-import { collection, query, where, orderBy, getDocs, limit, startAfter } from 'firebase/firestore';
+import { collection, query, where, orderBy, getDocs, startAfter } from 'firebase/firestore';
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { Link, useNavigate } from 'react-router-dom';
@@ -48,6 +48,8 @@ const purchaseSearchText = (item) =>
     item.customerName,
     item.sku,
     item.name,
+    item.category,
+    item.subCategory,
     item.invoiceNum,
     item.techName,
     item.venderName,
@@ -253,6 +255,8 @@ const PurchaseListView = () => {
           Vendor: eq?.venderName || "",
           Technician: eq?.techName || "",
           Name: eq?.name || "",
+          Category: eq?.category || "Uncategorized",
+          Subcategory: eq?.subCategory || "",
           Price: eq?.price || "",
           Quantity: eq?.quantityString || "",
           "Date": eq?.date ? format(eq.date, "yyyy-MM-dd") : "",
@@ -553,6 +557,7 @@ const PurchaseListView = () => {
                     <tr>
                       <SortHeader label="Status" keyName="status" />
                       <SortHeader label="Name" keyName="name" />
+                      <SortHeader label="Category" keyName="category" />
                       <SortHeader label="Invoice #" keyName="invoiceNum" />
                       <SortHeader label="Date" keyName="date" />
                       <SortHeader label="Sku" keyName="sku" />
@@ -585,6 +590,9 @@ const PurchaseListView = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.name}
+                        </td>
+                        <td className="p-4 whitespace-nowrap text-gray-700">
+                          {item.category || "Uncategorized"}
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.invoiceNum || 'N/A'}

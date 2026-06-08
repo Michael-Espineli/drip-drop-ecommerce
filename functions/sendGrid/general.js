@@ -10,6 +10,7 @@ const admin = require("firebase-admin");
 const { title } = require("process");
 
 const sgMail = require("@sendgrid/mail");
+const { ensureCustomerAccountInvite } = require("../customerAccountInvites");
 if (process.env.SEND_GRID_API_KEY && process.env.SEND_GRID_API_KEY.startsWith('SG.')) {
     sgMail.setApiKey(process.env.SEND_GRID_API_KEY);
 }
@@ -59,7 +60,7 @@ const defaultServiceStopCategoryEmailSetting = (category, companyName = "Your Po
         },
     };
 
-    const defaults = defaultByCategory[category] || defaultByCategory[SERVICE_STOP_CATEGORIES.customerRelationship];
+    const defaults = defaultByCategory[category] || defaultByCategory[SERVICE_STOP_CATEGORIES.route];
 
     return {
         category,
@@ -118,7 +119,8 @@ const inferServiceStopCategory = (serviceStopData = {}) => {
         return SERVICE_STOP_CATEGORIES.jobEstimate;
     }
 
-    return SERVICE_STOP_CATEGORIES.customerRelationship;
+    // Legacy service stops predate categories; keep them on the original route email flow.
+    return SERVICE_STOP_CATEGORIES.route;
 };
 
 const resolveServiceStopCategoryEmailSetting = ({
@@ -226,6 +228,180 @@ const getCompanyCustomerEmail = async ({ companyId, customerId }) => {
     );
 };
 
+const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const getFirstLinkedCustomerId = (customer = {}) => (
+    Array.isArray(customer.linkedCustomerIds)
+        ? customer.linkedCustomerIds.find(Boolean) || ""
+        : ""
+);
+
+const getCustomerUserIdFromRecord = (record = {}) => (
+    record.customerUserId ||
+    record.userId ||
+    record.homeownerUserId ||
+    record.homeownerId ||
+    record.linkedCustomerUserId ||
+    record.linkedHomeownerUserId ||
+    getFirstLinkedCustomerId(record) ||
+    ""
+);
+
+const getCustomerRelationshipIdFromRecord = (record = {}) => (
+    record.relationshipId ||
+    record.customerCompanyRelationshipId ||
+    record.linkedRelationshipId ||
+    ""
+);
+
+const resolveCustomerRelationshipContext = async ({
+    companyId,
+    customerId,
+    record = {},
+    email = "",
+}) => {
+    const context = {
+        companyId: companyId || record.companyId || "",
+        customerId: customerId || record.customerId || record.companyCustomerId || "",
+        customerUserId: getCustomerUserIdFromRecord(record),
+        relationshipId: getCustomerRelationshipIdFromRecord(record),
+        customerCompanyRelationshipId: record.customerCompanyRelationshipId || record.relationshipId || "",
+        linkedInviteId: record.linkedInviteId || record.inviteId || "",
+        customerEmail: normalizeEmail(email || record.email || record.customerEmail || record.homeownerEmail),
+    };
+
+    if (context.companyId && context.customerId) {
+        try {
+            const customerDoc = await db
+                .collection("companies")
+                .doc(context.companyId)
+                .collection("customers")
+                .doc(context.customerId)
+                .get();
+
+            if (customerDoc.exists) {
+                const customer = customerDoc.data() || {};
+                context.customerUserId = context.customerUserId || getCustomerUserIdFromRecord(customer);
+                context.relationshipId = context.relationshipId || getCustomerRelationshipIdFromRecord(customer);
+                context.customerCompanyRelationshipId = (
+                    context.customerCompanyRelationshipId ||
+                    customer.customerCompanyRelationshipId ||
+                    customer.relationshipId ||
+                    context.relationshipId ||
+                    ""
+                );
+                context.linkedInviteId = context.linkedInviteId || customer.linkedInviteId || "";
+                context.customerEmail = context.customerEmail || normalizeEmail(
+                    customer.email ||
+                    customer.billingEmail ||
+                    customer.mainContact?.email ||
+                    customer.contact?.email
+                );
+            }
+        } catch (error) {
+            console.warn("Unable to resolve customer relationship context", error.message);
+        }
+    }
+
+    context.customerCompanyRelationshipId = context.customerCompanyRelationshipId || context.relationshipId || "";
+    context.hasLinkedCustomerAccount = Boolean(context.customerUserId || context.relationshipId);
+
+    return context;
+};
+
+const getAppBaseUrl = (preferredBaseUrl = "") => (
+    String(preferredBaseUrl || process.env.APP_BASE_URL || "https://dripdrop-poolapp.com")
+        .trim()
+        .replace(/\/+$/, "")
+);
+
+const buildUrl = (baseUrl, path, query = {}) => {
+    const cleanBaseUrl = getAppBaseUrl(baseUrl);
+    const cleanPath = String(path || "").startsWith("/") ? path : `/${path || ""}`;
+    const params = new URLSearchParams();
+
+    Object.entries(query).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && String(value).trim() !== "") {
+            params.set(key, String(value));
+        }
+    });
+
+    const queryString = params.toString();
+    return `${cleanBaseUrl}${cleanPath}${queryString ? `?${queryString}` : ""}`;
+};
+
+const buildCustomerAccessTemplateData = async ({
+    companyId,
+    customerId,
+    email = "",
+    record = {},
+    actionUrl = "",
+    baseUrl = "",
+}) => {
+    const relationshipContext = await resolveCustomerRelationshipContext({
+        companyId,
+        customerId,
+        record,
+        email,
+    });
+    const appBaseUrl = getAppBaseUrl(baseUrl);
+    let claimAccountUrl = "";
+    let customerAccountInviteId = relationshipContext.linkedInviteId || "";
+
+    if (!relationshipContext.hasLinkedCustomerAccount && relationshipContext.companyId && relationshipContext.customerId) {
+        try {
+            const invite = await ensureCustomerAccountInvite({
+                companyId: relationshipContext.companyId,
+                customerId: relationshipContext.customerId,
+                createdByUserId: "sendgrid-email",
+                source: "customerEmail",
+                baseUrl: appBaseUrl,
+                email: relationshipContext.customerEmail,
+            });
+
+            if (invite.status === 200) {
+                claimAccountUrl = invite.inviteUrl || invite.claimAccountUrl || "";
+                customerAccountInviteId = invite.inviteId || customerAccountInviteId;
+            } else {
+                console.warn("Unable to create customer account invite link", invite.error);
+            }
+        } catch (error) {
+            console.warn("Unable to create customer account invite link", error.message);
+        }
+    }
+
+    if (!claimAccountUrl && relationshipContext.companyId && relationshipContext.customerId) {
+        claimAccountUrl = buildUrl(appBaseUrl, "/client/connect-to-company", {
+            companyId: relationshipContext.companyId,
+            customerId: relationshipContext.customerId,
+            email: relationshipContext.customerEmail,
+        });
+    }
+    const homeownerSignInUrl = buildUrl(appBaseUrl, "/homeownerSignIn");
+    const homeownerSignUpUrl = buildUrl(appBaseUrl, "/homeownerSignUp", {
+        email: relationshipContext.customerEmail,
+    });
+    const customerPortalUrl = relationshipContext.hasLinkedCustomerAccount
+        ? buildUrl(appBaseUrl, "/client/dashboard")
+        : "";
+    const customerActionUrl = actionUrl || customerPortalUrl || claimAccountUrl || homeownerSignInUrl;
+
+    return {
+        ...relationshipContext,
+        linkedInviteId: customerAccountInviteId,
+        customerAccountInviteId,
+        customerActionUrl,
+        customerPortalUrl,
+        claimAccountUrl: relationshipContext.hasLinkedCustomerAccount ? "" : claimAccountUrl,
+        homeownerSignInUrl,
+        homeownerSignUpUrl,
+        primaryCustomerUrl: relationshipContext.hasLinkedCustomerAccount
+            ? customerActionUrl
+            : claimAccountUrl || customerActionUrl,
+        shouldShowClaimAccountLink: !relationshipContext.hasLinkedCustomerAccount && Boolean(claimAccountUrl),
+    };
+};
+
 const userHasCompanyAccess = async (uid, companyId) => {
     if (!uid || !companyId) return false;
 
@@ -313,6 +489,7 @@ const buildServiceAgreementTemplateData = ({
     agreement,
     companyData,
     agreementUrl,
+    customerAccess = {},
 }) => {
     const companyName = agreement.companyName || companyData.name || companyData.companyName || "Your Pool Company";
     const location = normalizeAgreementLocation(agreement);
@@ -328,6 +505,7 @@ const buildServiceAgreementTemplateData = ({
         agreementNumber: agreement.id || "",
         agreementStatus: labelize(agreement.status || "sent"),
         agreementUrl,
+        ...customerAccess,
         sentDate: formatDate(new Date()),
         expiresAt: formatDate(agreement.expiresAt),
         address01: location.streetAddress || "",
@@ -446,11 +624,20 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
     const agreementUrl = `${agreementBaseUrl.replace(/\/$/, "")}/client/service-agreements/${agreementId}`;
+    const customerAccess = await buildCustomerAccessTemplateData({
+        companyId,
+        customerId: agreement.customerId || "",
+        email: agreement.email,
+        record: agreement,
+        actionUrl: agreementUrl,
+        baseUrl: agreementBaseUrl,
+    });
     const emailDelivery = await resolveEmailDeliveryRecipient(agreement.email);
     const dynamicTemplateData = buildServiceAgreementTemplateData({
         agreement,
         companyData,
         agreementUrl,
+        customerAccess,
     });
 
     const msg = {
@@ -466,6 +653,9 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
 
     await agreementRef.set({
         status: "sent",
+        customerUserId: agreement.customerUserId || customerAccess.customerUserId || null,
+        relationshipId: agreement.relationshipId || customerAccess.relationshipId || "",
+        customerCompanyRelationshipId: agreement.customerCompanyRelationshipId || customerAccess.customerCompanyRelationshipId || "",
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
         sentByUserId: callableAuth.uid,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -478,6 +668,10 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
             replyTo: replyToEmail,
             messageId,
             agreementUrl,
+            customerActionUrl: customerAccess.customerActionUrl,
+            customerPortalUrl: customerAccess.customerPortalUrl,
+            claimAccountUrl: customerAccess.claimAccountUrl,
+            hasLinkedCustomerAccount: customerAccess.hasLinkedCustomerAccount,
             testMode: emailDelivery.testMode,
             realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
             realEmailsEnabled: emailDelivery.realEmailsEnabled,
@@ -500,6 +694,7 @@ const buildSalesInvoiceTemplateData = ({
     invoice,
     companyData,
     invoiceUrl,
+    customerAccess = {},
 }) => {
     const companyName = invoice.companyName || companyData.name || companyData.companyName || "Your Pool Company";
     const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
@@ -515,6 +710,7 @@ const buildSalesInvoiceTemplateData = ({
         invoiceNumber: invoice.invoiceNumber || invoice.id || "",
         invoiceStatus: labelize(invoice.status || "open"),
         invoiceUrl,
+        ...customerAccess,
         sentDate: formatDate(new Date()),
         dueDate: formatDate(invoice.dueDate),
         address01: firstLocation.streetAddress || "",
@@ -553,6 +749,7 @@ const buildSalesInvoiceFallbackText = (templateData) => {
         templateData.dueDate ? `Due date: ${templateData.dueDate}` : "",
         "",
         `Review invoice: ${templateData.invoiceUrl}`,
+        templateData.claimAccountUrl ? `Create or link your homeowner account: ${templateData.claimAccountUrl}` : "",
     ];
 
     return lines.filter((line) => line !== "").join("\n");
@@ -597,6 +794,7 @@ const buildSalesInvoiceFallbackHtml = (templateData) => {
                         </table>
                     ` : ""}
                     <a href="${escapeHtml(templateData.invoiceUrl)}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:6px;padding:12px 18px;font-weight:700;">Review Invoice</a>
+                    ${templateData.claimAccountUrl ? `<p style="margin:16px 0 0;color:#475569;font-size:14px;">Need to link your homeowner account? <a href="${escapeHtml(templateData.claimAccountUrl)}" style="color:#2563eb;font-weight:700;">Connect your account</a>.</p>` : ""}
                     ${templateData.memo ? `<p style="margin:20px 0 0;color:#475569;">${escapeHtml(templateData.memo)}</p>` : ""}
                     <p style="margin:24px 0 0;color:#94a3b8;font-size:12px;">This message was sent by ${escapeHtml(templateData.companyName)} through DripDrop.</p>
                 </div>
@@ -683,11 +881,20 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "mespineli@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
     const invoiceUrl = `${invoiceBaseUrl.replace(/\/$/, "")}/client/billing/invoices/${invoiceId}`;
+    const customerAccess = await buildCustomerAccessTemplateData({
+        companyId,
+        customerId: invoice.customerId || "",
+        email: invoice.email,
+        record: invoice,
+        actionUrl: invoiceUrl,
+        baseUrl: invoiceBaseUrl,
+    });
     const emailDelivery = await resolveEmailDeliveryRecipient(invoice.email);
     const dynamicTemplateData = buildSalesInvoiceTemplateData({
         invoice,
         companyData,
         invoiceUrl,
+        customerAccess,
     });
     const invoiceTemplateData = addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery);
     const templateMode = templateId ? "sendGridDynamicTemplate" : "fallbackHtml";
@@ -712,6 +919,9 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
 
     await invoiceRef.set({
         status: invoice.status === "paid" ? "paid" : "open",
+        customerUserId: invoice.customerUserId || customerAccess.customerUserId || null,
+        relationshipId: invoice.relationshipId || customerAccess.relationshipId || "",
+        customerCompanyRelationshipId: invoice.customerCompanyRelationshipId || customerAccess.customerCompanyRelationshipId || "",
         sentAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         emailDelivery: {
@@ -724,6 +934,10 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
             replyTo: replyToEmail,
             messageId,
             invoiceUrl,
+            customerActionUrl: customerAccess.customerActionUrl,
+            customerPortalUrl: customerAccess.customerPortalUrl,
+            claimAccountUrl: customerAccess.claimAccountUrl,
+            hasLinkedCustomerAccount: customerAccess.hasLinkedCustomerAccount,
             testMode: emailDelivery.testMode,
             realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
             realEmailsEnabled: emailDelivery.realEmailsEnabled,
@@ -903,6 +1117,20 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
                 customerId: serviceStopData.customerId || stopData.customerId || "",
             })
         );
+        const serviceReportBaseUrl = data?.data?.serviceReportBaseUrl || data?.serviceReportBaseUrl || process.env.SERVICE_REPORT_BASE_URL || process.env.APP_BASE_URL || "";
+        const serviceReportUrl = buildUrl(serviceReportBaseUrl, `/serviceStop/detail/${serviceStopId}`);
+        const customerAccess = await buildCustomerAccessTemplateData({
+            companyId,
+            customerId: serviceStopData.customerId || stopData.customerId || "",
+            email: customerEmail,
+            record: {
+                ...serviceStopData,
+                ...stopData,
+                customerId: serviceStopData.customerId || stopData.customerId || "",
+            },
+            actionUrl: serviceReportUrl,
+            baseUrl: serviceReportBaseUrl,
+        });
         const emailDelivery = await resolveEmailDeliveryRecipient(customerEmail);
 
         // Helpers
@@ -1041,6 +1269,7 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
             emailBody: categoryEmailSetting.emailBody || "",
             emailFooter: categoryEmailSetting.emailFooter || "",
             categoryMessage: categoryEmailSetting.emailBody || "",
+            ...customerAccess,
 
             stopData: emailStopData,
 
@@ -1074,6 +1303,8 @@ exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context)
             status: 200,
             account: "Successfully Sent",
             category: categoryEmailSetting.category,
+            customerActionUrl: customerAccess.customerActionUrl,
+            claimAccountUrl: customerAccess.claimAccountUrl,
             to: emailDelivery.actualTo,
             intendedTo: emailDelivery.intendedTo,
             testMode: emailDelivery.testMode
@@ -1142,12 +1373,23 @@ exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
                 customerId: serviceStopData.customerId || "",
             })
         );
+        const estimateBaseUrl = payload.estimateBaseUrl || process.env.JOB_ESTIMATE_BASE_URL || process.env.APP_BASE_URL || "";
+        const estimateUrl = buildUrl(estimateBaseUrl, `/serviceStop/detail/${serviceStopId}`);
+        const customerAccess = await buildCustomerAccessTemplateData({
+            companyId,
+            customerId: serviceStopData.customerId || "",
+            email: customerEmail,
+            record: serviceStopData,
+            actionUrl: estimateUrl,
+            baseUrl: estimateBaseUrl,
+        });
         const emailDelivery = await resolveEmailDeliveryRecipient(customerEmail);
         const templateData = addDeliveryModeTemplateData({
             subject: companyName + " Job Estiamte",
             preHeader: "Pre-header",
             customer: serviceStopData.customerName,
             customerId: serviceStopData.customerId,
+            ...customerAccess,
             technician: serviceStopData.tech,
             technicianId: serviceStopData.techId,
             stopData: {},
@@ -1173,6 +1415,8 @@ exports.sendJobEstimateEmail = functions.https.onCall(async (data, context) => {
         return {
             status: 200,
             account: "Successfully Sent",
+            customerActionUrl: customerAccess.customerActionUrl,
+            claimAccountUrl: customerAccess.claimAccountUrl,
             to: emailDelivery.actualTo,
             intendedTo: emailDelivery.intendedTo,
             testMode: emailDelivery.testMode

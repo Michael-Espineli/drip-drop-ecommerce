@@ -142,7 +142,8 @@ const BulkCustomerUpload = () => {
             customerName : customerName,
             preText: false,
             verified: false,
-            photoUrls:[]
+            photoUrls:[],
+            isActive: true
           }
           let bodyOfWaterModel = {
             id:bodyOfWaterId,
@@ -359,7 +360,8 @@ const BulkCustomerUpload = () => {
           customerName : customerName,
           preText: false,
           verified: false,
-          photoUrls:[]
+          photoUrls:[],
+          isActive: true
         }
         let bodyOfWaterModel = {
           id:bodyOfWaterId,

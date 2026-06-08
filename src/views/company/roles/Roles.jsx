@@ -1,149 +1,177 @@
 import React, { useState, useEffect, useContext } from "react";
 import { query, collection, getDocs } from "firebase/firestore";
-import { db } from "../../../utils/config";
 import { useNavigate } from "react-router-dom";
+import {
+  ArrowRightIcon,
+  BuildingOffice2Icon,
+  ShieldCheckIcon,
+  Squares2X2Icon,
+} from "@heroicons/react/24/outline";
+import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 
 const Roles = () => {
   const navigate = useNavigate();
   const [roleList, setRoleList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const { name, recentlySelectedCompany } = useContext(Context);
 
   useEffect(() => {
-    (async () => {
+    if (!recentlySelectedCompany) {
+      setRoleList([]);
+      setLoading(false);
+      return;
+    }
+
+    const fetchRoles = async () => {
+      setLoading(true);
+      setError("");
+
       try {
-        let q = query(collection(db, "companies", recentlySelectedCompany, "roles"));
+        const q = query(collection(db, "companies", recentlySelectedCompany, "roles"));
         const querySnapshot = await getDocs(q);
-        setRoleList([]);
-        querySnapshot.forEach((doc) => {
-          const roleData = doc.data();
-          const role = {
-            id: roleData.id,
-            color: roleData.color,
-            description: roleData.description,
-            listOfUserIdsToManage: roleData.listOfUserIdsToManage,
-            name: roleData.name,
-            permissionIdList: roleData.permissionIdList,
-          };
-          setRoleList((roleList) => [...roleList, role]);
-        });
-      } catch (error) {
-        console.log("Error");
+        const roles = querySnapshot.docs
+          .map((doc) => {
+            const roleData = doc.data();
+            return {
+              id: roleData.id || doc.id,
+              color: roleData.color,
+              description: roleData.description,
+              listOfUserIdsToManage: roleData.listOfUserIdsToManage || [],
+              name: roleData.name,
+              permissionIdList: roleData.permissionIdList || [],
+            };
+          })
+          .sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+
+        setRoleList(roles);
+      } catch (fetchError) {
+        console.error("Failed to load roles:", fetchError);
+        setError("Failed to load company roles.");
+      } finally {
+        setLoading(false);
       }
-    })();
-  }, []);
+    };
+
+    fetchRoles();
+  }, [recentlySelectedCompany]);
+
+  const totalPermissions = roleList.reduce(
+    (total, role) => total + (role.permissionIdList?.length || 0),
+    0
+  );
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
-      <div className="mx-auto max-w-5xl space-y-6">
-        {/* Header */}
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+    <div className="min-h-screen w-full bg-slate-50 px-4 py-6 text-slate-950 sm:px-6 lg:px-8">
+      <div className="w-full space-y-6">
+        <header className="flex flex-col gap-4 border-b border-slate-200 pb-5 lg:flex-row lg:items-center lg:justify-between">
           <div>
-            <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">Roles</h2>
-            <p className="text-sm text-slate-500 mt-1">
-              View and manage your company roles{recentlySelectedCompany ? "." : "."}
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">User Roles</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Review access levels for {name || "the selected company"}.
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <div className="hidden sm:flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              <span className="font-medium">Active Company</span>
-              <span className="text-slate-400">•</span>
-              <span className="truncate max-w-[220px]">{name || "—"}</span>
-            </div>
+          <div className="grid grid-cols-2 gap-3 sm:flex">
+            <SummaryPill
+              icon={<Squares2X2Icon className="h-4 w-4" />}
+              label="Roles"
+              value={roleList.length}
+            />
+            <SummaryPill
+              icon={<ShieldCheckIcon className="h-4 w-4" />}
+              label="Permissions"
+              value={totalPermissions}
+            />
+            <SummaryPill
+              icon={<BuildingOffice2Icon className="h-4 w-4" />}
+              label="Company"
+              value={name || "Selected"}
+              wide
+            />
           </div>
-        </div>
+        </header>
 
-        {/* List */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          {/* Table header */}
-          <div className="px-5 py-4 border-b border-slate-200 bg-slate-50">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-slate-700">Role Name</div>
-              <div className="text-sm text-slate-500">{roleList.length} total</div>
-            </div>
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="grid grid-cols-[1.2fr_120px_1fr_44px] gap-4 border-b border-slate-200 bg-slate-100 px-5 py-3 text-xs font-semibold uppercase text-slate-500 max-md:hidden">
+            <div>Role</div>
+            <div>Permissions</div>
+            <div>Description</div>
+            <div />
           </div>
 
-          {/* Rows */}
-          <div className="divide-y divide-slate-200">
-            {roleList?.map((role) => (
-              <button
-                key={role.id}
-                onClick={() => navigate(`/company/roles/${role.id}`)}
-                className="w-full text-left px-5 py-4 hover:bg-slate-50 transition flex items-center gap-4"
-              >
-                {/* Color dot */}
-                <span
-                  className="h-3 w-3 rounded-full border border-slate-200 shrink-0"
-                  style={{ backgroundColor: role.color || "#94a3b8" }}
-                />
-
-                {/* Main */}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <div className="font-semibold text-slate-900 truncate">{role.name}</div>
-                    {role.permissionIdList?.length ? (
-                      <span className="text-xs font-medium text-slate-600 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">
-                        {role.permissionIdList.length} perms
-                      </span>
-                    ) : (
-                      <span className="text-xs font-medium text-slate-500 bg-slate-100 border border-slate-200 rounded-full px-2 py-0.5">
-                        No perms
-                      </span>
-                    )}
-                  </div>
-
-                  {role.description ? (
-                    <div className="text-sm text-slate-500 truncate mt-0.5">
-                      {role.description}
-                    </div>
-                  ) : (
-                    <div className="text-sm text-slate-400 truncate mt-0.5">
-                      No description
-                    </div>
-                  )}
-                </div>
-
-                {/* Chevron */}
-                <div className="text-slate-400">
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    className="h-5 w-5"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                  >
-                    <path
-                      fillRule="evenodd"
-                      d="M7.21 14.77a.75.75 0 01.02-1.06L10.94 10 7.23 6.29a.75.75 0 111.06-1.06l4.24 4.24a.75.75 0 010 1.06l-4.24 4.24a.75.75 0 01-1.06.02z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                </div>
-              </button>
-            ))}
-
-            {/* Empty state */}
-            {(!roleList || roleList.length === 0) && (
-              <div className="px-6 py-10 text-center">
-                <div className="mx-auto max-w-sm">
-                  <div className="text-sm font-semibold text-slate-800">No roles found</div>
-                  <div className="text-sm text-slate-500 mt-1">
-                    Roles will appear here once they’re created.
-                  </div>
-                </div>
+          {loading ? (
+            <div className="p-8 text-sm font-semibold text-slate-600">Loading roles...</div>
+          ) : error ? (
+            <div className="p-8 text-sm font-semibold text-red-700">{error}</div>
+          ) : roleList.length === 0 ? (
+            <div className="p-8">
+              <div className="text-sm font-semibold text-slate-800">No roles found</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Roles will appear after they are created for this company.
               </div>
-            )}
-          </div>
-        </div>
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-200">
+              {roleList.map((role) => (
+                <button
+                  key={role.id}
+                  onClick={() => navigate(`/company/roles/${role.id}`)}
+                  className="grid w-full grid-cols-1 gap-3 px-5 py-4 text-left transition hover:bg-slate-50 md:grid-cols-[1.2fr_120px_1fr_44px] md:items-center md:gap-4"
+                >
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span
+                      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-200 text-white shadow-sm"
+                      style={{ backgroundColor: role.color || "#0ea5e9" }}
+                    >
+                      <ShieldCheckIcon className="h-5 w-5" />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold text-slate-950">
+                        {role.name || "Untitled Role"}
+                      </div>
+                      <div className="text-xs text-slate-500 md:hidden">
+                        {role.permissionIdList?.length || 0} permissions
+                      </div>
+                    </div>
+                  </div>
 
-        {/* Mobile hint */}
-        <div className="text-xs text-slate-500">
-          Tip: Click a role to view details and permissions.
-        </div>
+                  <div className="hidden md:block">
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                      {role.permissionIdList?.length || 0}
+                    </span>
+                  </div>
+
+                  <div className="line-clamp-2 text-sm text-slate-500">
+                    {role.description || "No description"}
+                  </div>
+
+                  <div className="hidden justify-end text-slate-400 md:flex">
+                    <ArrowRightIcon className="h-5 w-5" />
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </section>
       </div>
     </div>
   );
 };
+
+const SummaryPill = ({ icon, label, value, wide = false }) => (
+  <div
+    className={`flex min-w-0 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm ${
+      wide ? "col-span-2 sm:min-w-[220px]" : "sm:min-w-[130px]"
+    }`}
+  >
+    <span className="shrink-0 text-slate-500">{icon}</span>
+    <div className="min-w-0">
+      <div className="text-xs font-semibold uppercase text-slate-500">{label}</div>
+      <div className="truncate text-sm font-semibold text-slate-900">{value}</div>
+    </div>
+  </div>
+);
 
 export default Roles;

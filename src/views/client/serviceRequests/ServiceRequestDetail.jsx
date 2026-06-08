@@ -4,6 +4,25 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
+import CompanySummaryCard, { getCompanySummary } from './CompanySummaryCard';
+
+const dateFromFirestore = (value) => {
+    if (!value) return null;
+    if (typeof value.toDate === 'function') return value.toDate();
+    if (value.seconds) return new Date(value.seconds * 1000);
+    if (value instanceof Date) return value;
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const statusClassFor = (status) => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'pending') return 'bg-yellow-100 text-yellow-800';
+    if (normalized === 'approved' || normalized === 'completed' || normalized === 'in progress') return 'bg-green-100 text-green-800';
+    if (normalized === 'cancelled' || normalized === 'canceled' || normalized === 'declined' || normalized === 'rejected') return 'bg-red-100 text-red-800';
+    return 'bg-gray-100 text-gray-700';
+};
 
 const ServiceRequestDetail = () => {
     const { requestId } = useParams();
@@ -11,6 +30,7 @@ const ServiceRequestDetail = () => {
     const navigate = useNavigate();
     const [request, setRequest] = useState(null);
     const [serviceLocation, setServiceLocation] = useState(null);
+    const [company, setCompany] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -22,36 +42,64 @@ const ServiceRequestDetail = () => {
 
         const docRef = doc(db, 'homeownerServiceRequests', requestId);
 
+        let isActive = true;
+
         const unsubscribe = onSnapshot(docRef, async (docSnap) => {
             if (docSnap.exists()) {
                 const requestData = { id: docSnap.id, ...docSnap.data() };
 
                 if (requestData.homeownerId !== user.uid) {
-                    setError("You don't have permission to view this request.");
-                    setLoading(false);
+                    if (isActive) {
+                        setError("You don't have permission to view this request.");
+                        setLoading(false);
+                    }
                     return;
                 }
 
-                setRequest(requestData);
+                if (isActive) {
+                    setRequest(requestData);
+                    setServiceLocation(null);
+                    setCompany(getCompanySummary({
+                        ...requestData.companySummary,
+                        id: requestData.companyId,
+                        name: requestData.companyName,
+                    }));
+                }
 
                 if (requestData.homeownerServiceLocationId) {
                     const locRef = doc(db, 'homeownerServiceLocations', requestData.homeownerServiceLocationId);
                     const locSnap = await getDoc(locRef);
-                    if (locSnap.exists()) {
+                    if (isActive && locSnap.exists()) {
                         setServiceLocation(locSnap.data());
                     }
                 }
+
+                if (requestData.companyId) {
+                    try {
+                        const companySnap = await getDoc(doc(db, 'companies', requestData.companyId));
+                        if (isActive && companySnap.exists()) {
+                            setCompany({ id: companySnap.id, ...companySnap.data() });
+                        }
+                    } catch (companyError) {
+                        console.error("Error fetching company for service request:", companyError);
+                    }
+                }
             } else {
-                setError('Service request not found.');
+                if (isActive) setError('Service request not found.');
             }
-            setLoading(false);
+            if (isActive) setLoading(false);
         }, (err) => {
             console.error("Error fetching service request:", err);
-            setError('Failed to load the service request.');
-            setLoading(false);
+            if (isActive) {
+                setError('Failed to load the service request.');
+                setLoading(false);
+            }
         });
 
-        return () => unsubscribe();
+        return () => {
+            isActive = false;
+            unsubscribe();
+        };
     }, [requestId, user, navigate]);
 
     const handleDelete = async () => {
@@ -82,24 +130,28 @@ const ServiceRequestDetail = () => {
         return <div className="p-8">No request details to display.</div>;
     }
 
-    const { companyName, createdAt, serviceDescription, status, homeownerId } = request;
+    const { createdAt, dateCreated, serviceDescription, status, homeownerId, companyId, companyName, requestType } = request;
+    const requestedDate = dateFromFirestore(createdAt || dateCreated);
+    const title = requestType === 'repair' ? 'Repair / Issue Request' : 'Service Request';
 
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
-            <div className="max-w-4xl mx-auto">
+            <div className="max-w-4xl mx-auto space-y-6">
+                <CompanySummaryCard
+                    company={company || { ...request.companySummary, id: companyId, name: companyName }}
+                    companyId={companyId}
+                />
+
                 <div className="bg-white rounded-lg shadow-md p-8 mb-6">
                     <div className="flex justify-between items-start mb-4">
                         <div>
-                            <h1 className="text-3xl font-bold text-gray-900">{companyName}</h1>
+                            <h1 className="text-3xl font-bold text-gray-900">{title}</h1>
                             <p className="text-sm text-gray-500">
-                                Requested on: {createdAt ? new Date(createdAt.seconds * 1000).toLocaleDateString() : 'N/A'}
+                                Requested on: {requestedDate ? requestedDate.toLocaleDateString() : 'N/A'}
                             </p>
                         </div>
-                        <span className={`px-4 py-2 text-sm font-semibold rounded-full ${status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                            status === 'approved' ? 'bg-green-100 text-green-800' :
-                                'bg-red-100 text-red-800'
-                            }`}>
-                            {status}
+                        <span className={`px-4 py-2 text-sm font-semibold rounded-full ${statusClassFor(status)}`}>
+                            {status || 'Pending'}
                         </span>
                     </div>
 

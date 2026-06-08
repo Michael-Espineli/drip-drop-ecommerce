@@ -1,16 +1,23 @@
-import React, { useContext, useMemo, useState } from "react";
+import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { endOfMonth, format, startOfMonth } from "date-fns";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import {
+  customerHasAnyTag,
+  filterCustomersByRoleTagAccess,
+  filterRecordsByCustomerTags,
+  getCustomerTagOptions,
+  getRoleCustomerTagAccess,
+} from "../../../utils/customerTags";
 
 const reportCatalog = [
   { value: "readings", label: "Readings", status: "Ready", source: "stopData readings" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages" },
   { value: "waste", label: "Waste", status: "Ready", source: "dosages and chemical purchases" },
   { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll" },
-  { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and databaseItems" },
+  { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items" },
   { value: "pnl", label: "P.N.L.", status: "Ready", source: "jobs, purchases, payroll" },
   { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll" },
   { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes" },
@@ -130,9 +137,22 @@ const purchasePreTaxCents = (item) => {
   return Math.round(cents(item.priceCents ?? item.price ?? item.unitCostCents) * quantity);
 };
 
+const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
+
 const purchaseCategory = (item, databaseItemById) => {
-  const databaseItem = databaseItemById.get(item.itemId) || databaseItemById.get(item.dataBaseItemId);
-  return item.category || databaseItem?.category || "Uncategorized";
+  const databaseItem =
+    databaseItemById.get(item.itemId) ||
+    databaseItemById.get(item.dataBaseItemId) ||
+    databaseItemById.get(item.databaseItemId) ||
+    databaseItemById.get(item.templateId) ||
+    null;
+
+  return normalizePurchaseCategory(
+    item.category ||
+      item.itemCategory ||
+      item.materialCategory ||
+      databaseItem?.category
+  );
 };
 
 const jobRevenueCents = (job) => cents(job.revenueCents ?? job.invoiceTotalCents ?? job.totalCents ?? job.rate ?? job.amount ?? 0);
@@ -143,6 +163,11 @@ const normalizeDocs = (snapshot) => snapshot.docs.map((docSnap) => ({ id: docSna
 
 const getCollection = async (companyId, collectionName) => {
   const snap = await getDocs(collection(db, "companies", companyId, collectionName));
+  return normalizeDocs(snap);
+};
+
+const getDatabaseItems = async (companyId) => {
+  const snap = await getDocs(collection(db, "companies", companyId, "settings", "dataBase", "dataBase"));
   return normalizeDocs(snap);
 };
 
@@ -303,6 +328,24 @@ const buildPurchaseReport = ({ purchases, databaseItemById, mode, groupBy }) => 
     }
   });
 
+  const resultGroups = [...groups.values()].map((group) => ({
+    ...group,
+    footerRow:
+      mode === "summary"
+        ? {
+            name: "Total",
+            count: group.metrics.items || 0,
+            totalCents: group.metrics.spend || 0,
+          }
+        : {
+            date: "Total",
+            name: "",
+            category: "",
+            quantity: "",
+            totalCents: group.metrics.spend || 0,
+          },
+  }));
+
   return {
     title: "Purchases Report",
     stats: [
@@ -323,7 +366,12 @@ const buildPurchaseReport = ({ purchases, databaseItemById, mode, groupBy }) => 
           { key: "quantity", label: "Qty", align: "right" },
           { key: "totalCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.totalCents) },
         ],
-    groups: [...groups.values()],
+    total: {
+      label: "Purchases Total",
+      value: moneyFromCents(totalCents),
+      subtitle: `${purchases.length.toLocaleString()} purchase line(s)`,
+    },
+    groups: resultGroups,
   };
 };
 
@@ -650,7 +698,7 @@ const ReportCatalogCard = ({ report, selected, onSelect }) => (
   </button>
 );
 
-const ReportTable = ({ columns, rows }) => (
+const ReportTable = ({ columns, rows, footerRow }) => (
   <div className="mt-4 overflow-x-auto">
     <table className="min-w-full text-sm">
       <thead>
@@ -675,6 +723,17 @@ const ReportTable = ({ columns, rows }) => (
           </tr>
         )}
       </tbody>
+      {footerRow ? (
+        <tfoot>
+          <tr className="border-t-2 border-slate-200 bg-slate-50 font-bold text-slate-900">
+            {columns.map((column) => (
+              <td key={column.key} className={`py-3 pr-4 ${column.align === "right" ? "text-right" : ""}`}>
+                {column.render ? column.render(footerRow) : footerRow[column.key] || (column.key === columns[0].key ? "Total" : "")}
+              </td>
+            ))}
+          </tr>
+        </tfoot>
+      ) : null}
     </table>
   </div>
 );
@@ -682,10 +741,6 @@ const ReportTable = ({ columns, rows }) => (
 const GeneratedReportView = ({ data }) => {
   if (!data) {
     return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Generate a report to see results.</div>;
-  }
-
-  if (!data.groups.length) {
-    return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No data found for this date range.</div>;
   }
 
   return (
@@ -696,30 +751,44 @@ const GeneratedReportView = ({ data }) => {
         ))}
       </div>
 
-      <div className="grid gap-4">
-        {data.groups.map((group) => (
-          <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div>
-              <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
-              {Object.keys(group.metrics || {}).length ? (
-                <p className="mt-1 text-sm text-slate-500">
-                  {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
-                </p>
-              ) : null}
+      {data.total ? (
+        <div className="rounded-lg border border-slate-300 bg-slate-900 p-5 text-white shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">{data.total.label}</p>
+          <p className="mt-1 text-3xl font-bold">{data.total.value}</p>
+          {data.total.subtitle ? <p className="mt-1 text-sm text-slate-300">{data.total.subtitle}</p> : null}
+        </div>
+      ) : null}
+
+      {data.groups.length ? (
+        <div className="grid gap-4">
+          {data.groups.map((group) => (
+            <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
+                {Object.keys(group.metrics || {}).length ? (
+                  <p className="mt-1 text-sm text-slate-500">
+                    {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
+                  </p>
+                ) : null}
+              </div>
+              <ReportTable columns={data.columns} rows={group.rows} footerRow={group.footerRow} />
             </div>
-            <ReportTable columns={data.columns} rows={group.rows} />
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No data found for this date range.</div>
+      )}
     </div>
   );
 };
 
 const Reports = () => {
-  const { recentlySelectedCompany } = useContext(Context);
+  const { recentlySelectedCompany, companyRole } = useContext(Context);
   const [reportType, setReportType] = useState("readings");
   const [mode, setMode] = useState("summary");
   const [groupBy, setGroupBy] = useState("company");
+  const [availableCustomerTags, setAvailableCustomerTags] = useState([]);
+  const [selectedCustomerTags, setSelectedCustomerTags] = useState([]);
   const [dateRange, setDateRange] = useState({
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
@@ -732,9 +801,43 @@ const Reports = () => {
     [reportType]
   );
 
+  const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setAvailableCustomerTags([]);
+      setSelectedCustomerTags([]);
+      return;
+    }
+
+    const fetchCustomerTags = async () => {
+      try {
+        const customers = await getCollection(recentlySelectedCompany, "customers");
+        const visibleCustomers = filterCustomersByRoleTagAccess(customers, companyRole);
+        setAvailableCustomerTags(getCustomerTagOptions(visibleCustomers));
+        setSelectedCustomerTags((currentTags) =>
+          currentTags.filter((tag) => getCustomerTagOptions(visibleCustomers).includes(tag))
+        );
+      } catch (error) {
+        console.error("Failed to load customer tags for reports:", error);
+      }
+    };
+
+    fetchCustomerTags();
+  }, [recentlySelectedCompany, companyRole]);
+
   const handleReportSelect = (value) => {
     setReportType(value);
     setReportData(null);
+  };
+
+  const toggleCustomerTagFilter = (tag) => {
+    setReportData(null);
+    setSelectedCustomerTags((currentTags) =>
+      currentTags.includes(tag)
+        ? currentTags.filter((currentTag) => currentTag !== tag)
+        : [...currentTags, tag]
+    );
   };
 
   const handleGenerateReport = async () => {
@@ -749,12 +852,23 @@ const Reports = () => {
     try {
       const startDate = new Date(`${dateRange.start}T00:00:00`);
       const endDate = new Date(`${dateRange.end}T23:59:59`);
-      const [stopDataSnap, readingsSnap, dosagesSnap] = await Promise.all([
+      const [stopDataSnap, readingsSnap, dosagesSnap, customersRaw] = await Promise.all([
         getDocs(query(collection(db, "companies", recentlySelectedCompany, "stopData"), where("date", ">=", startDate), where("date", "<=", endDate))),
         getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings")),
         getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages")),
+        getCollection(recentlySelectedCompany, "customers"),
       ]);
-      const stopData = normalizeDocs(stopDataSnap);
+      const visibleCustomers = filterCustomersByRoleTagAccess(customersRaw, companyRole);
+      const reportCustomers = selectedCustomerTags.length
+        ? visibleCustomers.filter((customer) => customerHasAnyTag(customer, selectedCustomerTags))
+        : visibleCustomers;
+      const customersById = new Map(reportCustomers.map((customer) => [customer.id, customer]));
+      const tagFilterContext = { customersById, role: companyRole, selectedTags: selectedCustomerTags };
+
+      const stopData = filterRecordsByCustomerTags({
+        records: normalizeDocs(stopDataSnap),
+        ...tagFilterContext,
+      });
       const readingTemplates = normalizeDocs(readingsSnap);
       const dosageTemplates = normalizeDocs(dosagesSnap);
 
@@ -775,7 +889,7 @@ const Reports = () => {
         activeRoutesRaw,
       ] = await Promise.all([
         needsPurchases ? getCollection(recentlySelectedCompany, "purchasedItems") : Promise.resolve([]),
-        needsPurchases ? getCollection(recentlySelectedCompany, "databaseItems") : Promise.resolve([]),
+        needsPurchases ? getDatabaseItems(recentlySelectedCompany) : Promise.resolve([]),
         needsJobs ? getCollection(recentlySelectedCompany, "workOrders") : Promise.resolve([]),
         needsPayroll ? getCollection(recentlySelectedCompany, "technicianPayLineItems") : Promise.resolve([]),
         needsUsers ? getCollection(recentlySelectedCompany, "serviceStops") : Promise.resolve([]),
@@ -784,10 +898,22 @@ const Reports = () => {
         needsFleet ? getCollection(recentlySelectedCompany, "activeRoutes") : Promise.resolve([]),
       ]);
 
-      const purchases = purchasesRaw.filter((item) => inRange(item, startDate, endDate, ["date", "createdAt", "dateCreated"]));
-      const jobs = jobsRaw.filter((item) => inRange(item, startDate, endDate, ["invoiceDate", "dateCreated", "createdAt", "completedAt"]));
-      const payrollLines = payrollLinesRaw.filter((item) => inRange(item, startDate, endDate, ["completedDate", "createdAt", "paidAt"]));
-      const serviceStops = serviceStopsRaw.filter((item) => inRange(item, startDate, endDate, ["serviceDate", "date", "createdAt"]));
+      const purchases = filterRecordsByCustomerTags({
+        records: purchasesRaw.filter((item) => inRange(item, startDate, endDate, ["date", "createdAt", "dateCreated"])),
+        ...tagFilterContext,
+      });
+      const jobs = filterRecordsByCustomerTags({
+        records: jobsRaw.filter((item) => inRange(item, startDate, endDate, ["invoiceDate", "dateCreated", "createdAt", "completedAt"])),
+        ...tagFilterContext,
+      });
+      const payrollLines = filterRecordsByCustomerTags({
+        records: payrollLinesRaw.filter((item) => inRange(item, startDate, endDate, ["completedDate", "createdAt", "paidAt"])),
+        ...tagFilterContext,
+      });
+      const serviceStops = filterRecordsByCustomerTags({
+        records: serviceStopsRaw.filter((item) => inRange(item, startDate, endDate, ["serviceDate", "date", "createdAt"])),
+        ...tagFilterContext,
+      });
       const activeRoutes = activeRoutesRaw.filter((item) => inRange(item, startDate, endDate, ["date", "routeDate", "startTime", "createdAt"]));
       const databaseItemById = new Map(databaseItemsRaw.map((item) => [item.id, item]));
 
@@ -825,6 +951,7 @@ const Reports = () => {
         stats: [
           ...(nextReport.stats || []),
           { label: "Date Range", value: `${dateRange.start} - ${dateRange.end}` },
+          { label: "Customer Tags", value: selectedCustomerTags.length ? selectedCustomerTags.join(", ") : roleTagAccess.length ? roleTagAccess.join(", ") : "All" },
         ],
       });
       toast.success(`${selectedReport.label} report generated.`, { id: toastId });
@@ -878,6 +1005,52 @@ const Reports = () => {
                     <option key={option.value} value={option.value}>{option.label}</option>
                   ))}
                 </select>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between gap-3">
+                  <label className="block text-sm font-semibold text-slate-700">Customer Tags</label>
+                  {selectedCustomerTags.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedCustomerTags([]);
+                        setReportData(null);
+                      }}
+                      className="text-xs font-semibold text-slate-500 hover:text-slate-800"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+                {roleTagAccess.length > 0 ? (
+                  <p className="mt-1 text-xs text-blue-700">
+                    Role limited to {roleTagAccess.join(", ")}.
+                  </p>
+                ) : null}
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {availableCustomerTags.length > 0 ? (
+                    availableCustomerTags.map((tag) => {
+                      const selected = selectedCustomerTags.includes(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => toggleCustomerTagFilter(tag)}
+                          className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                            selected
+                              ? "border-blue-600 bg-blue-600 text-white"
+                              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })
+                  ) : (
+                    <p className="text-sm text-slate-500">No customer tags found.</p>
+                  )}
+                </div>
               </div>
 
               <div>

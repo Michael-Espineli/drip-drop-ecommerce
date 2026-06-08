@@ -17,7 +17,6 @@ import { SalesAgreementStatus, SalesInvoiceStatus, salesCollectionNames } from '
 import {
     REPAIR_REQUEST_STATUS,
     displayRepairRequestStatus,
-    normalizeRepairRequestStatus,
 } from '../../utils/models/RepairRequest';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -28,6 +27,28 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
 
 const normalizeSalesStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const timestampMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === 'number') return value;
+    if (typeof value.seconds === 'number') return value.seconds * 1000;
+    return 0;
+};
+
+const serviceRequestStatusText = (status) => String(status || 'Pending');
+
+const serviceRequestStatusClass = (status) => {
+    const normalizedStatus = String(status || '').trim().toLowerCase();
+    if (['completed', 'complete', 'approved', 'accepted'].includes(normalizedStatus)) {
+        return 'text-green-600 bg-green-100';
+    }
+    if (['cancelled', 'canceled', 'declined', 'rejected'].includes(normalizedStatus)) {
+        return 'text-red-600 bg-red-100';
+    }
+    return 'text-yellow-600 bg-yellow-100';
+};
 
 const invoiceBalanceCents = (invoice) => {
     if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) return Number(invoice.amountDueCents) || 0;
@@ -365,16 +386,17 @@ const ServiceRequestsWidget = () => {
             return;
         }
 
-        const requestsRef = collection(db, 'serviceRequests');
+        const requestsRef = collection(db, 'homeownerServiceRequests');
         const q = query(
             requestsRef,
-            where('userId', '==', user.uid),
-            orderBy('createdAt', 'desc'),
-            limit(3)
+            where('homeownerId', '==', user.uid)
         );
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
-            const fetchedRequests = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const fetchedRequests = snapshot.docs
+                .map(doc => ({ id: doc.id, ...doc.data() }))
+                .sort((left, right) => timestampMillis(right.createdAt) - timestampMillis(left.createdAt))
+                .slice(0, 3);
             setRequests(fetchedRequests);
             setLoading(false);
         }, () => setLoading(false));
@@ -400,13 +422,13 @@ const ServiceRequestsWidget = () => {
                 {loading ? renderSkeleton() : requests.length > 0 ? (
                     <ul className="space-y-3">
                         {requests.map(req => (
-                            <li key={req.id} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg">
-                                <p className="text-gray-700 font-medium truncate">{req.companyName}</p>
-                                <span className={`text-sm font-semibold px-2 py-1 rounded-full ${
-                                    normalizeRepairRequestStatus(req.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)
-                                        ? 'text-green-600 bg-green-100'
-                                        : 'text-yellow-600 bg-yellow-100'
-                                }`}>{displayRepairRequestStatus(req.status)}</span>
+                            <li key={req.id}>
+                                <Link to={`/client/service-requests/${req.id}`} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg hover:bg-blue-50 transition-colors">
+                                    <p className="text-gray-700 font-medium truncate">{req.companyName || 'Service Request'}</p>
+                                    <span className={`text-sm font-semibold px-2 py-1 rounded-full ${serviceRequestStatusClass(req.status)}`}>
+                                        {serviceRequestStatusText(req.status)}
+                                    </span>
+                                </Link>
                             </li>
                         ))}
                     </ul>

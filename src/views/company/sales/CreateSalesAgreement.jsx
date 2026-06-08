@@ -67,6 +67,22 @@ const customerAddressLine = (customer = {}) => {
     .join(' ');
 };
 
+const customerUserId = (customer = {}) => (
+  customer.customerUserId ||
+  customer.userId ||
+  customer.linkedCustomerUserId ||
+  customer.linkedHomeownerUserId ||
+  (Array.isArray(customer.linkedCustomerIds) ? customer.linkedCustomerIds[0] : null) ||
+  null
+);
+
+const customerRelationshipId = (customer = {}) => (
+  customer.relationshipId ||
+  customer.customerCompanyRelationshipId ||
+  customer.linkedRelationshipId ||
+  ''
+);
+
 const locationAddress = (location = {}) => {
   const address = location.address || location.billingAddress || {};
   return {
@@ -491,7 +507,9 @@ const CreateSalesAgreement = () => {
         companyId: recentlySelectedCompany,
         companyName: selectedCompanyName,
         customerId: form.customerId,
-        customerUserId: selectedCustomer?.customerUserId || selectedCustomer?.userId || null,
+        customerUserId: customerUserId(selectedCustomer),
+        relationshipId: customerRelationshipId(selectedCustomer),
+        customerCompanyRelationshipId: customerRelationshipId(selectedCustomer),
         customerName: selectedCustomer ? customerDisplayName(selectedCustomer) : '',
         email: form.email.trim(),
         serviceLocationIds: form.serviceLocationIds,

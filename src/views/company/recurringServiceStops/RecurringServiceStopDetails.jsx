@@ -18,6 +18,7 @@ import Select from "react-select";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { Description } from "@headlessui/react";
+import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
@@ -319,6 +320,11 @@ const RecurringServiceStopDetails = () => {
       await callable({
         stopId: recurringServiceStopId,
         companyId: recentlySelectedCompany,
+      });
+      await removeRecurringServiceStopFromPlannedRoutes({
+        db,
+        companyId: recentlySelectedCompany,
+        recurringServiceStopId,
       });
 
       toast.success("Deleted");

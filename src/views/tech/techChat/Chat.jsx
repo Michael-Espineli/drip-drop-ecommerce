@@ -1,57 +1,78 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, getDocs, orderBy, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { PlusIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { timeSince } from '../../../utils/timeFormatter';
+import {
+    getChatAvatarText,
+    getChatDisplayTitle,
+    getChatPreview,
+    isChatUnreadFor,
+    listenVisibleChats,
+    markChatAsRead,
+} from '../../../utils/chatMessaging';
 import NewChat from './NewChat';
 
 const Chat = () => {
-    const { user } = useContext(Context);
+    const { user, recentlySelectedCompany } = useContext(Context);
     const [chats, setChats] = useState([]);
     const [searchTerm, setSearchTerm] = useState('');
     const [isNewChatOpen, setIsNewChatOpen] = useState(false);
+    const [loading, setLoading] = useState(true);
     const navigate = useNavigate();
 
     useEffect(() => {
-        if (!user) return;
+        if (!user?.uid) {
+            setLoading(false);
+            return undefined;
+        }
 
-        const chatsRef = collection(db, 'chats');
-        const q = query(
-            chatsRef, 
-            where('participantIds', 'array-contains', user.uid),
-            orderBy('mostRecentChat', 'desc')
-        );
-
-        const unsubscribe = onSnapshot(q, (querySnapshot) => {
-            const chatList = querySnapshot.docs.map(doc => {
-                const data = doc.data();
-                const otherParticipant = data.participants.find(p => p.userId !== user.uid);
-                
-                return {
-                    id: doc.id,
-                    ...data,
-                    otherParticipantName: otherParticipant ? otherParticipant.userName : 'Unknown User',
-                    otherParticipantImage: otherParticipant ? otherParticipant.userImage : null,
-                };
-            });
-            setChats(chatList);
+        setLoading(true);
+        const unsubscribe = listenVisibleChats({
+            db,
+            userId: user.uid,
+            companyId: recentlySelectedCompany || '',
+            onChange: (visibleChats) => {
+                setChats(visibleChats);
+                setLoading(false);
+            },
+            onError: (error) => {
+                console.error('Error fetching company chats:', error);
+                setLoading(false);
+            },
         });
 
         return () => unsubscribe();
-    }, [user]);
+    }, [recentlySelectedCompany, user]);
 
-    const filteredChats = chats.filter(chat => 
-        chat.otherParticipantName.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredChats = useMemo(() => (
+        chats.filter((chat) => {
+            const title = getChatDisplayTitle(chat, user?.uid, {
+                companyId: recentlySelectedCompany,
+                audience: 'company',
+            });
+
+            return title.toLowerCase().includes(searchTerm.toLowerCase())
+                || getChatPreview(chat).toLowerCase().includes(searchTerm.toLowerCase());
+        })
+    ), [chats, recentlySelectedCompany, searchTerm, user]);
 
     const handleChatClick = async (chat) => {
-        if (chat.userWhoHaveNotRead && chat.userWhoHaveNotRead.includes(user.uid)) {
-            const chatDocRef = doc(db, "chats", chat.id);
-            await updateDoc(chatDocRef, {
-                userWhoHaveNotRead: chat.userWhoHaveNotRead.filter(id => id !== user.uid)
-            });
+        try {
+            if (isChatUnreadFor(chat, user.uid, recentlySelectedCompany)) {
+                await markChatAsRead({
+                    db,
+                    chatId: chat.id,
+                    chat,
+                    userId: user.uid,
+                    companyId: recentlySelectedCompany || '',
+                });
+            }
+        } catch (error) {
+            console.error('Error marking chat as read:', error);
         }
+
         navigate(`/companies-chat/detail/${chat.id}`);
     };
 
@@ -60,8 +81,8 @@ const Chat = () => {
             <div className="max-w-7xl mx-auto">
                 <div className="flex justify-between items-center mb-8">
                     <h1 className="text-3xl font-bold text-gray-900">Chats</h1>
-                    <button 
-                        onClick={() => setIsNewChatOpen(true)} 
+                    <button
+                        onClick={() => setIsNewChatOpen(true)}
                         className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 transition-colors"
                     >
                         <PlusIcon className="w-6 h-6" />
@@ -73,7 +94,7 @@ const Chat = () => {
 
                 <div className="relative mb-6">
                     <MagnifyingGlassIcon className="absolute top-1/2 left-4 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                    <input 
+                    <input
                         type="text"
                         placeholder="Search chats..."
                         value={searchTerm}
@@ -84,26 +105,17 @@ const Chat = () => {
 
                 <div className="bg-white rounded-lg shadow-md overflow-hidden">
                     <ul className="divide-y divide-gray-200">
-                        {filteredChats.length > 0 ? (
+                        {loading ? (
+                            <p className="p-6 text-center text-gray-500">Loading chats...</p>
+                        ) : filteredChats.length > 0 ? (
                             filteredChats.map(chat => (
-                                <li key={chat.id} onClick={() => handleChatClick(chat)} className="p-4 hover:bg-gray-50 cursor-pointer">
-                                    <div className="flex items-center">
-                                        <div className="w-12 h-12 bg-gray-200 rounded-full flex-shrink-0 overflow-hidden">
-                                            {chat.otherParticipantImage ? (
-                                                <img src={chat.otherParticipantImage} alt={chat.otherParticipantName} className="w-full h-full object-cover" />
-                                            ) : null}
-                                        </div>
-                                        <div className="ml-4 flex-1">
-                                            <div className="flex justify-between items-start">
-                                                <div>
-                                                    <p className={`font-semibold text-gray-800 ${chat.userWhoHaveNotRead?.includes(user.uid) ? 'font-bold' : ''}`}>{chat.otherParticipantName}</p>
-                                                    <p className="text-sm text-gray-500 truncate max-w-xs md:max-w-md">{chat.lastMessage}</p>
-                                                </div>
-                                                <p className="text-xs text-gray-400 whitespace-nowrap">{new Date(chat.mostRecentChat.seconds * 1000).toLocaleDateString()}</p>
-                                            </div>
-                                        </div>
-                                    </div>
-                                </li>
+                                <ChatListItem
+                                    key={chat.id}
+                                    chat={chat}
+                                    userId={user.uid}
+                                    companyId={recentlySelectedCompany}
+                                    onClick={() => handleChatClick(chat)}
+                                />
                             ))
                         ) : (
                             <p className="p-6 text-center text-gray-500">No chats found.</p>
@@ -112,6 +124,35 @@ const Chat = () => {
                 </div>
             </div>
         </div>
+    );
+};
+
+const ChatListItem = ({ chat, userId, companyId, onClick }) => {
+    const title = getChatDisplayTitle(chat, userId, { companyId, audience: 'company' });
+    const preview = getChatPreview(chat);
+    const unread = isChatUnreadFor(chat, userId, companyId);
+    const avatarText = getChatAvatarText(chat, userId, { companyId, audience: 'company' });
+
+    return (
+        <li onClick={onClick} className="p-4 hover:bg-gray-50 cursor-pointer">
+            <div className="flex items-center">
+                <div className="relative flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-100 text-sm font-bold text-blue-700">
+                    {avatarText}
+                    {unread && (
+                        <span className="absolute right-0 top-0 block h-3 w-3 rounded-full border-2 border-white bg-red-500" />
+                    )}
+                </div>
+                <div className="ml-4 min-w-0 flex-1">
+                    <div className="flex justify-between items-start gap-4">
+                        <div className="min-w-0">
+                            <p className={`truncate font-semibold text-gray-800 ${unread ? 'font-bold' : ''}`}>{title}</p>
+                            <p className={`truncate text-sm ${unread ? 'font-semibold text-gray-700' : 'text-gray-500'}`}>{preview}</p>
+                        </div>
+                        <p className="shrink-0 text-xs text-gray-400 whitespace-nowrap">{timeSince(chat.mostRecentChat)}</p>
+                    </div>
+                </div>
+            </div>
+        </li>
     );
 };
 

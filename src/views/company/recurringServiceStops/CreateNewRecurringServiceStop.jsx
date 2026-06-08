@@ -18,6 +18,7 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
     suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
+import { addRecurringServiceStopToPlannedRoute } from '../../../utils/recurringRouteSync';
 
 const functions = getFunctions();
 
@@ -400,6 +401,14 @@ const CreateNewRecurringServiceStop = () => {
                 await Promise.all(setupWrites);
             }
 
+            await addRecurringServiceStopToPlannedRoute({
+                db,
+                companyId: recentlySelectedCompany,
+                recurringServiceStop: {
+                    ...newRSSData,
+                    id: rssId,
+                },
+            });
 
             console.log(rssId)
             toast.success('Successfully created recurring stop!', { id: toastId });

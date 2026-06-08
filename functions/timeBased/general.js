@@ -54,15 +54,65 @@ async function processCompanyRecurringStops(companyId) {
 
   for (const rssDoc of rssSnap.docs) {
     const rssData = rssDoc.data();
-    await expandRecurringServiceStop({ companyId, rssData });
+    try {
+      await expandRecurringServiceStop({
+        companyId,
+        rssData: {
+          ...rssData,
+          id: rssData.id || rssDoc.id,
+        },
+      });
+    } catch (error) {
+      console.error(`    RSS ${rssDoc.id} failed`, error);
+    }
   }
 }
 
 // ---------- Core Expander ----------
 async function expandRecurringServiceStop({ companyId, rssData }) {
+  const db = getFirestore();
   const now = new Date();
   const horizon = new Date(now);
   horizon.setDate(horizon.getDate() + 28); // rolling 4-week lookahead
+  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
+  const recurringServiceStopTypeFields = normalizeServiceStopTypeFields(
+    rssData,
+    "weeklySundayRSSCreate.expandRecurringServiceStop"
+  );
+
+  if (
+    rssData.typeId !== recurringServiceStopTypeFields.typeId ||
+    rssData.type !== recurringServiceStopTypeFields.type ||
+    rssData.typeImage !== recurringServiceStopTypeFields.typeImage
+  ) {
+    await rssRef.set(recurringServiceStopTypeFields, { merge: true });
+    rssData = {
+      ...rssData,
+      ...recurringServiceStopTypeFields,
+    };
+  }
+
+  const startDate = normalizeToNoon(parseDate(rssData.startDate) || now);
+  const endDate = parseDate(rssData.endDate);
+  const noEndDate = Boolean(rssData.noEndDate);
+  let effectiveHorizon = normalizeToNoon(horizon);
+
+  if (!noEndDate && endDate) {
+    const normalizedEndDate = normalizeToNoon(endDate);
+    if (normalizedEndDate < startDate) {
+      console.log(`RSS ${rssData.id}: endDate is before startDate. Skipping.`);
+      return;
+    }
+
+    if (normalizedEndDate < effectiveHorizon) {
+      effectiveHorizon = normalizedEndDate;
+    }
+  }
+
+  if (startDate > effectiveHorizon) {
+    console.log(`RSS ${rssData.id}: startDate is beyond the 4-week horizon. Skipping.`);
+    return;
+  }
 
   const lastCreated = parseDate(rssData.lastCreated);
   if (!lastCreated) {
@@ -71,28 +121,28 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
     console.log(`RSS ${rssData.id}: missing lastCreated`);
   } else {
     // Stop early if already ahead
-    if (lastCreated >= horizon) return;
+    if (normalizeToNoon(lastCreated) >= effectiveHorizon) return;
   }
 
   switch (rssData.frequency) {
     case "Daily":
-      await createDailyStops(companyId, rssData, lastCreated, horizon);
+      await createDailyStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     case "Week Day":
-      await createWeekdayStops(companyId, rssData, lastCreated, horizon);
+      await createWeekdayStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     case "Weekly":
-      await createWeeklyStops(companyId, rssData, lastCreated, horizon, 7);
+      await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
       break;
 
     case "Bi-Weekly":
-      await createWeeklyStops(companyId, rssData, lastCreated, horizon, 14);
+      await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 14);
       break;
 
     case "Monthly":
-      // iOS monthly helper is currently broken (infinite loop). If you fix iOS monthly, we can implement it here too.
+      await createMonthlyStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     default:
@@ -104,6 +154,13 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
 function parseDate(d) {
   if (!d) return null;
   if (typeof d?.toDate === "function") return d.toDate(); // Firestore Timestamp
+  if (typeof d?._seconds === "number") return new Date(d._seconds * 1000);
+  if (typeof d?.seconds === "number") return new Date(d.seconds * 1000);
+  if (typeof d === "number") return new Date(d);
+  if (typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+    const [year, month, day] = d.split("-").map(Number);
+    return new Date(year, month - 1, day, 12, 0, 0, 0);
+  }
   const dt = new Date(d);
   return isNaN(dt.getTime()) ? null : dt;
 }
@@ -114,14 +171,47 @@ function addDays(date, days) {
   return d;
 }
 
+function addMonths(date, months) {
+  const d = new Date(date);
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+function normalizeToNoon(date) {
+  const d = new Date(date);
+  d.setHours(12, 0, 0, 0);
+  return d;
+}
+
 function isWeekend(date) {
   const dow = date.getDay(); // 0=Sun ... 6=Sat
   return dow === 0 || dow === 6;
 }
 
 const weekdayArry = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+function normalizeDayName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_-]/g, "");
+}
+
 function dayNameToIndex(name) {
-  return weekdayArry.indexOf(name);
+  const normalized = normalizeDayName(name);
+  return weekdayArry.findIndex((day) => normalizeDayName(day) === normalized);
+}
+
+function alignDateToDayOnOrAfter(date, dayName) {
+  const targetDow = dayNameToIndex(dayName);
+
+  if (targetDow < 0) {
+    throw new Error(`Invalid rssData.day: ${dayName}`);
+  }
+
+  const aligned = normalizeToNoon(date);
+  const diff = (targetDow - aligned.getDay() + 7) % 7;
+  aligned.setDate(aligned.getDate() + diff);
+  return aligned;
 }
 
 function normalizeServiceStopTypeFields(source, contextLabel) {
@@ -190,40 +280,47 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
   );
 
   return {
-    id: idss,                       // iOS: "comp_ss_" + UUID
-    internalId: internalId,         // iOS: "S" + count (weekly uses SettingsManager, others use settings doc)
-    companyId: companyId,           // iOS includes companyId in the model
+    id: idss,
+    internalId: internalId,
+    companyId: companyId,
     companyName: "",
 
-    customerId: rssData.customerId,
-    customerName: rssData.customerName,
-    address: rssData.address,
+    customerId: rssData.customerId ?? "",
+    customerName: rssData.customerName ?? "",
+    address: {
+      city: rssData.address?.city ?? "",
+      state: rssData.address?.state ?? "",
+      streetAddress: rssData.address?.streetAddress ?? "",
+      zip: rssData.address?.zip ?? "",
+      latitude: rssData.address?.latitude ?? 0,
+      longitude: rssData.address?.longitude ?? 0,
+    },
 
     dateCreated: new Date(),
-    serviceDate: serviceDate,
+    serviceDate: normalizeToNoon(serviceDate),
 
     startTime: null,
     endTime: null,
 
-    duration: rssData.estimatedTime ?? 0,          // closer to iOS daily helper (uses estimatedTime)
-    estimatedDuration: rssData.estimatedTime ?? 0, // iOS has estimatedDuration
+    duration: rssData.estimatedTime ?? 15,
+    estimatedDuration: rssData.estimatedTime ?? 15,
 
-    tech: rssData.tech,
-    techId: rssData.techId,
+    tech: rssData.tech ?? "",
+    techId: rssData.techId ?? "",
 
-    recurringServiceStopId: rssData.id,
+    recurringServiceStopId: rssData.id ?? "",
 
-    description: rssData.description,
-    serviceLocationId: rssData.serviceLocationId,
+    description: rssData.description ?? "",
+    serviceLocationId: rssData.serviceLocationId ?? "",
 
     typeId: serviceStopTypeFields.typeId,
     type: serviceStopTypeFields.type,
     typeImage: serviceStopTypeFields.typeImage,
 
     jobId: "",
-    jobName: "", // iOS standard
+    jobName: "",
 
-    operationStatus: "Not Started", // iOS is enum .notFinished; DB string used elsewhere
+    operationStatus: "Not Finished",
     billingStatus: "Not Invoiced",
 
     includeReadings: true,
@@ -239,137 +336,178 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
   };
 }
 
+async function loadRecurringServiceStopTasks(db, companyId, rssData) {
+  const recurringTasksSnap = await db
+    .collection("companies")
+    .doc(companyId)
+    .collection("recurringServiceStop")
+    .doc(rssData.id)
+    .collection("tasks")
+    .get();
+
+  if (!recurringTasksSnap.empty) {
+    return recurringTasksSnap.docs.map((taskDoc) => ({
+      id: taskDoc.id,
+      ...taskDoc.data(),
+    }));
+  }
+
+  const taskGroupId = "com_set_tg_recurring_service_stops";
+  const taskGroupSnap = await db.collection("companies")
+    .doc(companyId)
+    .collection("settings")
+    .doc("taskGroup")
+    .collection("taskGroup")
+    .doc(taskGroupId)
+    .collection("taskItems")
+    .get();
+
+  return taskGroupSnap.docs.map((taskDoc) => ({
+    id: taskDoc.id,
+    taskGroupId,
+    taskGroupTaskId: taskDoc.id,
+    ...taskDoc.data(),
+  }));
+}
+
+function buildServiceStopTask({ task, serviceStop, rssData }) {
+  const serviceStopTaskId = "com_ss_tas_" + uuidv4();
+
+  return {
+    id: serviceStopTaskId,
+    name: String(task.name || "").trim(),
+    type: task.type,
+    status: task.status || "Not Finished",
+    contractedRate: Number(task.contractedRate || 0),
+    estimatedTime: Number(task.estimatedTime || 0),
+
+    customerApproval: false,
+    actualTime: 0,
+
+    workerId: "",
+    workerType: "",
+    workerName: "",
+
+    laborContractId: "",
+
+    serviceStopId: {
+      id: serviceStop.id,
+      internalId: serviceStop.internalId || "",
+    },
+
+    jobId: {
+      id: "",
+      internalId: "",
+    },
+
+    recurringServiceStopId: {
+      id: rssData.id ?? "",
+      internalId: rssData.internalId || "",
+    },
+
+    jobTaskId: "",
+    recurringServiceStopTaskId: task.id,
+
+    equipmentId: "",
+    serviceLocationId: serviceStop.serviceLocationId || rssData.serviceLocationId || "",
+    bodyOfWaterId: "",
+    shoppingListItemId: "",
+  };
+}
+
+async function uploadServiceStopFromRss({ db, companyId, rssData, serviceDate, internalId, taskList }) {
+  const serviceStopsCol = `companies/${companyId}/serviceStops`;
+  const idss = "com_ss_" + uuidv4();
+  const serviceStop = buildServiceStopIOSShape({
+    companyId,
+    rssData,
+    serviceDate,
+    idss,
+    internalId,
+  });
+  const serviceStopRef = db.collection(serviceStopsCol).doc(idss);
+
+  await serviceStopRef.set(serviceStop);
+
+  for (const task of taskList) {
+    const serviceStopTask = buildServiceStopTask({ task, serviceStop, rssData });
+    await serviceStopRef.collection("tasks").doc(serviceStopTask.id).set(serviceStopTask);
+  }
+
+  return serviceStop;
+}
+
 // ---------- Daily ----------
 async function createDailyStops(companyId, rssData, lastCreated, horizon) {
   const db = getFirestore();
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
   const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
 
   // Next date is lastCreated + 1 day; if lastCreated missing, start at startDate
-  const startBase = lastCreated ? new Date(lastCreated) : (parseDate(rssData.startDate) || new Date());
+  const startBase = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
   let cursor = lastCreated ? addDays(startBase, 1) : new Date(startBase);
 
   // Collect dates to create up to horizon
   const dates = [];
-  while (cursor <= horizon) {
-    dates.push(new Date(cursor));
+  while (normalizeToNoon(cursor) <= horizon) {
+    dates.push(normalizeToNoon(cursor));
     cursor = addDays(cursor, 1);
   }
   if (dates.length === 0) return;
 
   // Allocate internal IDs in one transaction
   const internalIds = await allocateInternalIds(db, companyId, dates.length);
+  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
 
   let last = lastCreated ? new Date(lastCreated) : null;
 
   // Write stops sequentially
   for (let i = 0; i < dates.length; i++) {
-    const serviceDate = dates[i];
-    const idss = "comp_ss_" + uuidv4();
-
-    const serviceStop = buildServiceStopIOSShape({
+    await uploadServiceStopFromRss({
+      db,
       companyId,
       rssData,
-      serviceDate,
-      idss,
+      serviceDate: dates[i],
       internalId: internalIds[i],
+      taskList,
     });
 
-    await db.collection(serviceStopsCol).doc(idss).set(serviceStop);
-    //upload tasks
-    //Get task group settings
-    // get tasks from task subcollection
-    let taskGroupId = "com_set_tg_recurring_service_stops"
-    const taskGroupRef = db.collection("companies").doc(companyId).collection("settings").doc("taskGroup").collection("taskGroup").doc(taskGroupId);
-
-    const tasksRef = taskGroupRef.collection("tasks");
-    const tasksDoc = await tasksRef.get();
-
-    //Add Tasks to Task Group
-    for (let i = 0; i < tasksDoc.length; i++) {
-      let task = tasksDoc[i];
-
-      const serviceStopTaskId = "com_ss_tas_" + uuidv4();
-      const serviceStopTask = {
-        id: serviceStopTaskId,
-        name: task.name.trim(),
-        type: task.type,
-        status: task.status || "Not Finished",
-        contractedRate: Number(task.contractedRate || 0),
-        estimatedTime: Number(task.estimatedTime || 0),
-        customerApproval: false,
-        actualTime: 0,
-
-        workerId: "",
-        workerType: "",
-        workerName: "",
-
-        laborContractId: "",
-
-        serviceStopId: {
-          id: idss,
-          internalId: stop.internalId || "",
-        },
-        jobId: {
-          id: "",
-          internalId: "",
-        },
-        recurringServiceStopId: {
-          id: rssData.id,
-          internalId: rssData.internalId || "",
-        },
-        jobTaskId: "",
-        recurringServiceStopTaskId: task.id,
-        equipmentId: "",
-        serviceLocationId: stop.serviceLocationId || rssData.serviceLocationId || "",
-        bodyOfWaterId: "",
-        shoppingListItemId: "",
-      };
-      await setDoc(
-        db.collection("companies").doc(companyId).collection("serviceStops").doc(idss).collection("tasks").doc(serviceStopTaskId).set(serviceStopTask)
-      );
-    }
-
-    last = serviceDate;
+    last = dates[i];
   }
 
-  if (last) await rssRef.update({ lastCreated: new Date() });
+  if (last) await rssRef.update({ lastCreated: last });
 }
 
 // ---------- Weekday ----------
 async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
   const db = getFirestore();
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
   const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
 
-  const startBase = lastCreated ? new Date(lastCreated) : (parseDate(rssData.startDate) || new Date());
+  const startBase = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
   let cursor = lastCreated ? addDays(startBase, 1) : new Date(startBase);
 
   const dates = [];
-  while (cursor <= horizon) {
-    if (!isWeekend(cursor)) dates.push(new Date(cursor));
+  while (normalizeToNoon(cursor) <= horizon) {
+    if (!isWeekend(cursor)) dates.push(normalizeToNoon(cursor));
     cursor = addDays(cursor, 1);
   }
   if (dates.length === 0) return;
 
   const internalIds = await allocateInternalIds(db, companyId, dates.length);
+  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
 
   let last = lastCreated ? new Date(lastCreated) : null;
 
   for (let i = 0; i < dates.length; i++) {
-    const serviceDate = dates[i];
-    const idss = "comp_ss_" + uuidv4();
-
-    const serviceStop = buildServiceStopIOSShape({
+    await uploadServiceStopFromRss({
+      db,
       companyId,
       rssData,
-      serviceDate,
-      idss,
+      serviceDate: dates[i],
       internalId: internalIds[i],
+      taskList,
     });
 
-    await db.collection(serviceStopsCol).doc(idss).set(serviceStop);
-    last = serviceDate;
+    last = dates[i];
   }
 
   if (last) await rssRef.update({ lastCreated: last });
@@ -378,69 +516,109 @@ async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
 // ---------- Weekly / Biweekly ----------
 async function createWeeklyStops(companyId, rssData, lastCreated, horizon, intervalDays) {
   const db = getFirestore();
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
   const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
 
   // Base cursor: lastCreated + interval, or align from startDate if lastCreated missing
   let serviceDate;
 
   if (lastCreated) {
-    serviceDate = new Date(lastCreated);
-    console.log('      [creakWeeklyStops] lastCreated: ' + lastCreated)
+    const nextAlignedDate = alignDateToDayOnOrAfter(addDays(lastCreated, 1), rssData.day);
+    serviceDate = addDays(nextAlignedDate, -intervalDays);
+    console.log('      [createWeeklyStops] lastCreated: ' + lastCreated)
   } else {
-    // Align first date to rssData.day on/after startDate (iOS intended behavior)
-    const startDate = parseDate(rssData.startDate) || new Date();
+    const startDate = normalizeToNoon(parseDate(rssData.startDate) || new Date());
+    const alignedStartDate = alignDateToDayOnOrAfter(startDate, rssData.day);
     const targetDow = dayNameToIndex(rssData.day);
-    if (targetDow < 0) throw new Error(`Invalid rssData.day: ${rssData.day}`);
 
-    const startDow = startDate.getDay();
-    let diff = targetDow - startDow;
-    if (diff < 0) diff += 7;
-    console.log('      [creakWeeklyStops] targetDow: ' + targetDow)
-    console.log('      [creakWeeklyStops] startDow: ' + startDow)
-    console.log('      [creakWeeklyStops] diff: ' + diff)
-    serviceDate = addDays(startDate, diff);
-    // We want to CREATE this first aligned occurrence if it's not beyond horizon.
-    // So set lastCreated to "serviceDate - interval" so loop creates serviceDate first.
-    serviceDate = addDays(serviceDate, -intervalDays);
+    if (alignedStartDate.getTime() !== startDate.getTime()) {
+      console.warn("Weekly RSS startDate day does not match selected day", {
+        recurringServiceStopId: rssData.id || "",
+        rssDay: rssData.day,
+        targetDow,
+        startDow: startDate.getDay(),
+        alignedDow: alignedStartDate.getDay(),
+        startDate: startDate.toISOString(),
+        alignedStartDate: alignedStartDate.toISOString(),
+      });
+    }
+
+    console.log('      [createWeeklyStops] targetDow: ' + targetDow)
+    console.log('      [createWeeklyStops] startDow: ' + startDate.getDay())
+    serviceDate = addDays(alignedStartDate, -intervalDays);
   }
 
   // Collect dates to create up to horizon
   const dates = [];
 
-  console.log('      [creakWeeklyStops] serviceDate: ' + serviceDate)
+  console.log('      [createWeeklyStops] serviceDate: ' + serviceDate)
   while (true) {
-    console.log('      [creakWeeklyStops] horizon: ' + horizon)
+    console.log('      [createWeeklyStops] horizon: ' + horizon)
     serviceDate = addDays(serviceDate, intervalDays);
-    console.log('      [creakWeeklyStops] serviceDate: ' + serviceDate)
-    if (serviceDate > horizon) break;
-    dates.push(new Date(serviceDate));
+    console.log('      [createWeeklyStops] serviceDate: ' + serviceDate)
+    const normalizedServiceDate = normalizeToNoon(serviceDate);
+    if (normalizedServiceDate > horizon) break;
+    dates.push(normalizedServiceDate);
   }
   if (dates.length === 0) {
-    console.log('      [creakWeeklyStops] dates.length: Empty')
+    console.log('      [createWeeklyStops] dates.length: Empty')
     return;
   }
   const internalIds = await allocateInternalIds(db, companyId, dates.length);
+  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
 
   let last = lastCreated ? new Date(lastCreated) : null;
-  console.log('      [creakWeeklyStops] dates.length: ' + dates.length)
+  console.log('      [createWeeklyStops] dates.length: ' + dates.length)
   for (let i = 0; i < dates.length; i++) {
-    const d = dates[i];
-    const idss = "comp_ss_" + uuidv4();
-
-    const serviceStop = buildServiceStopIOSShape({
+    await uploadServiceStopFromRss({
+      db,
       companyId,
       rssData,
-      serviceDate: d,
-      idss,
+      serviceDate: dates[i],
       internalId: internalIds[i],
+      taskList,
     });
 
-    await db.collection(serviceStopsCol).doc(idss).set(serviceStop);
-
-    last = d;
+    last = dates[i];
   }
-  console.log('      [creakWeeklyStops] Last Created: ' + last)
+  console.log('      [createWeeklyStops] Last Created: ' + last)
+  if (last) await rssRef.update({ lastCreated: last });
+}
+
+// ---------- Monthly ----------
+async function createMonthlyStops(companyId, rssData, lastCreated, horizon) {
+  const db = getFirestore();
+  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
+  let cursor = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
+
+  if (lastCreated) {
+    cursor = addMonths(cursor, 1);
+  }
+
+  const dates = [];
+  while (normalizeToNoon(cursor) <= horizon) {
+    dates.push(normalizeToNoon(cursor));
+    cursor = addMonths(cursor, 1);
+  }
+
+  if (dates.length === 0) return;
+
+  const internalIds = await allocateInternalIds(db, companyId, dates.length);
+  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
+  let last = lastCreated ? new Date(lastCreated) : null;
+
+  for (let i = 0; i < dates.length; i++) {
+    await uploadServiceStopFromRss({
+      db,
+      companyId,
+      rssData,
+      serviceDate: dates[i],
+      internalId: internalIds[i],
+      taskList,
+    });
+
+    last = dates[i];
+  }
+
   if (last) await rssRef.update({ lastCreated: last });
 }
 

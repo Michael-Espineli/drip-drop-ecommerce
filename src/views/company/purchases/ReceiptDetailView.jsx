@@ -130,6 +130,7 @@ const ReceiptDetailView = () => {
                     return {
                         id: purchaseData.id || docSnap.id,
                         name: purchaseData.name,
+                        category: purchaseData.category || "Uncategorized",
                         invoiceNum: purchaseData.invoiceNum,
                         price,
                         quantityString: purchaseData.quantityString,
@@ -562,6 +563,7 @@ const ReceiptDetailView = () => {
                                         <thead className="text-sm text-gray-600 border-b border-gray-200">
                                             <tr>
                                                 <th className="py-3 px-4">Name</th>
+                                                <th className="py-3 px-4">Category</th>
                                                 <th className="py-3 px-4">Price</th>
                                                 <th className="py-3 px-4">Quantity</th>
                                                 <th className="py-3 px-4">Total</th>
@@ -578,6 +580,9 @@ const ReceiptDetailView = () => {
                                                         >
                                                             {item.name}
                                                         </Link>
+                                                    </td>
+                                                    <td className="py-3 px-4">
+                                                        {item.category || "Uncategorized"}
                                                     </td>
                                                     <td className="py-3 px-4">
                                                         {formatCurrency(item.price)}

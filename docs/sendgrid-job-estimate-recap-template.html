@@ -1,0 +1,129 @@
+<!--
+SendGrid Dynamic Template: Job Estimate Recap
+
+Subject line:
+{{subject}}
+
+Expected dynamic data comes from the legacy sendJobEstimateEmail callable:
+customer, companyName, technician, address01, city, state, zip, serviceDate,
+serviceTime, customerActionUrl, claimAccountUrl, shouldShowClaimAccountLink,
+photoUrls.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Job Estimate Recap</title>
+</head>
+<body style="margin:0; padding:0; background-color:#F5F7FB; font-family:Arial, sans-serif; color:#172033;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">{{preHeader}}</div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F5F7FB; margin:0; padding:24px 0;">
+    <tr>
+      <td align="center" style="padding:0 12px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; background-color:#FFFFFF; border-radius:12px; overflow:hidden;">
+          <tr>
+            <td style="background-color:#1D2E76; padding:30px 34px;">
+              <p style="margin:0 0 8px; color:#E0AE36; font-size:13px; line-height:18px; font-weight:700; text-transform:uppercase;">Job Estimate</p>
+              <h1 style="margin:0; color:#FFFFFF; font-size:28px; line-height:36px; font-weight:700;">Your estimate recap is ready</h1>
+              <p style="margin:12px 0 0; color:#DCE4F6; font-size:15px; line-height:23px;">
+                Hi {{customer}}, here is the visit recap from {{companyName}}.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:28px 34px 10px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px;">
+                <tr>
+                  <td style="padding:18px;">
+                    <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Service Location</div>
+                    <div style="color:#111827; font-size:18px; line-height:26px; font-weight:700; margin-top:4px;">{{address01}}</div>
+                    <div style="color:#475569; font-size:15px; line-height:22px;">{{city}}, {{state}} {{zip}}</div>
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px; border-top:1px solid #E5E7EB;">
+                      <tr>
+                        <td width="50%" style="padding:14px 8px 0 0;">
+                          <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Technician</div>
+                          <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{technician}}</div>
+                        </td>
+                        <td width="50%" style="padding:14px 0 0 8px;">
+                          <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Visit</div>
+                          <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{serviceDate}} {{#if serviceTime}}at {{serviceTime}}{{/if}}</div>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 34px 8px;">
+              <table cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="background-color:#E0AE36; border-radius:8px;">
+                    <a href="{{customerActionUrl}}" target="_blank" style="display:inline-block; padding:14px 24px; color:#111827; font-size:15px; line-height:20px; font-weight:700; text-decoration:none;">
+                      View Estimate Recap
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          {{#if shouldShowClaimAccountLink}}
+          <tr>
+            <td style="padding:4px 34px 20px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#EEF6FF; border:1px solid #BFDBFE; border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 16px; color:#1E3A8A; font-size:14px; line-height:21px;">
+                    Connect your homeowner account to keep estimates, service history, and invoices together:
+                    <a href="{{claimAccountUrl}}" target="_blank" style="color:#1D4ED8; font-weight:700; text-decoration:none;">Connect account</a>.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          {{#if photoUrls}}
+          <tr>
+            <td style="padding:8px 34px 24px;">
+              <h2 style="margin:0 0 12px; color:#1D2E76; font-size:20px; line-height:26px;">Visit Photos</h2>
+              {{#each photoUrls}}
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:12px; border:1px solid #E5E7EB; border-radius:10px; overflow:hidden;">
+                <tr>
+                  <td>
+                    <img src="{{this.imageUrl}}" alt="{{this.description}}" width="572" style="display:block; width:100%; max-width:572px; height:auto; border:0;">
+                  </td>
+                </tr>
+                {{#if this.description}}
+                <tr>
+                  <td style="padding:12px 14px; background-color:#F8FAFC; color:#475569; font-size:14px; line-height:20px;">{{this.description}}</td>
+                </tr>
+                {{/if}}
+              </table>
+              {{/each}}
+            </td>
+          </tr>
+          {{/if}}
+
+          <tr>
+            <td style="background-color:#172033; padding:24px 34px; color:#D8DEE9; font-size:13px; line-height:20px;">
+              <strong style="color:#FFFFFF;">{{companyName}}</strong><br>
+              <br>
+              <a href="<%asm_group_unsubscribe_raw_url%>" style="color:#E0AE36; text-decoration:none;">Unsubscribe</a>
+              &nbsp;|&nbsp;
+              <a href="<%asm_preferences_raw_url%>" style="color:#E0AE36; text-decoration:none;">Preferences</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+

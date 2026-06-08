@@ -1,15 +1,24 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { doc, getDoc, collection, getDocs, query, where, serverTimestamp, setDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
+import {
+    CONVERSATION_LINK_TYPES,
+    getUserDisplayName,
+    isChatVisibleTo,
+    sendChatMessage,
+} from '../../../utils/chatMessaging';
+import CompanySummaryCard, { getCompanySummary } from './CompanySummaryCard';
 
 const NewRequest = () => {
     const { companyId } = useParams();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const { user, dataBaseUser } = useContext(Context);
+    const sourceChatId = searchParams.get('chatId') || '';
 
     const [company, setCompany] = useState(null);
     const [userLocations, setUserLocations] = useState([]);
@@ -59,7 +68,7 @@ const NewRequest = () => {
     // Effect to fetch bodies of water when location changes
     useEffect(() => {
         const fetchBodiesOfWater = async () => {
-            if (!selectedLocation) {
+            if (!selectedLocation || !user?.uid) {
                 setBodiesOfWater([]);
                 setSelectedBodyOfWater('');
                 return;
@@ -71,12 +80,12 @@ const NewRequest = () => {
         };
 
         fetchBodiesOfWater();
-    }, [selectedLocation, user.uid]);
+    }, [selectedLocation, user?.uid]);
 
     // Effect to fetch equipment when body of water changes
     useEffect(() => {
         const fetchEquipment = async () => {
-            if (!selectedBodyOfWater) {
+            if (!selectedBodyOfWater || !user?.uid) {
                 setEquipment([]);
                 setSelectedEquipment('');
                 return;
@@ -88,7 +97,7 @@ const NewRequest = () => {
         };
 
         fetchEquipment();
-    }, [selectedBodyOfWater, user.uid]);
+    }, [selectedBodyOfWater, user?.uid]);
 
 
     const handleSubmit = async (e) => {
@@ -104,6 +113,12 @@ const NewRequest = () => {
         try {
             const location = userLocations.find(loc => loc.id === selectedLocation);
             const serviceLocationAddress = location ? location.address : {};
+            const companySummary = getCompanySummary(company || { id: companyId });
+            const requestCompanySummary = {
+                ...companySummary,
+                bio: companySummary.bio.slice(0, 280),
+                services: companySummary.services.slice(0, 8),
+            };
             let requestId = "hosr_" + uuidv4();
             await setDoc(doc(db, 'homeownerServiceRequests', requestId), {
                 id: requestId,
@@ -111,7 +126,8 @@ const NewRequest = () => {
                 status: 'Pending', //Pending, In Progress, Completed, Cancelled
                 createdAt: serverTimestamp(),
                 companyId,
-                companyName: company.name,
+                companyName: companySummary.name,
+                companySummary: requestCompanySummary,
                 serviceDescription: issueDescription,
                 serviceName: '',
                 serviceLocationAddress,
@@ -132,6 +148,44 @@ const NewRequest = () => {
                 requestType,
             });
 
+            if (sourceChatId) {
+                try {
+                    const chatSnap = await getDoc(doc(db, 'chats', sourceChatId));
+                    if (chatSnap.exists()) {
+                        const chatData = { id: chatSnap.id, ...chatSnap.data() };
+                        const chatCompanyId = chatData.companyId || chatData.receiverCompanyId || '';
+                        const chatMatchesRequest = chatCompanyId === companyId && isChatVisibleTo(chatData, user.uid);
+
+                        if (chatMatchesRequest) {
+                            await sendChatMessage({
+                                db,
+                                chatId: sourceChatId,
+                                chat: chatData,
+                                text: 'I submitted a service request.',
+                                link: {
+                                    type: CONVERSATION_LINK_TYPES.serviceRequest,
+                                    recordId: requestId,
+                                    title: requestType === 'repair' ? 'Repair / Issue Request' : 'Service Request',
+                                    subtitle: issueDescription,
+                                    companyId,
+                                    customerUserId: user.uid,
+                                    collectionPath: 'homeownerServiceRequests',
+                                    clientWebPath: `/client/service-requests/${requestId}`,
+                                    companyWebPath: `/company/leads/${requestId}`,
+                                },
+                                senderId: user.uid,
+                                senderName: getUserDisplayName(dataBaseUser, user),
+                            });
+
+                            navigate(`/client/chat/details/${sourceChatId}`);
+                            return;
+                        }
+                    }
+                } catch (chatError) {
+                    console.error("Error linking service request to chat: ", chatError);
+                }
+            }
+
             navigate('/client/service-requests');
 
         } catch (err) {
@@ -151,11 +205,17 @@ const NewRequest = () => {
 
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
-            <div className="max-w-4xl mx-auto bg-white p-8 rounded-lg shadow-md">
-                <h1 className="text-3xl font-bold text-gray-900 mb-2">Service Request From</h1>
-                <h2 className="text-2xl font-semibold text-blue-600 mb-6">{company?.name}</h2>
+            <div className="max-w-4xl mx-auto space-y-6">
+                <div>
+                    <h1 className="text-3xl font-bold text-gray-900">Service Request</h1>
+                </div>
 
-                <form onSubmit={handleSubmit} className="space-y-6">
+                {company && (
+                    <CompanySummaryCard company={company} companyId={companyId} />
+                )}
+
+                <form onSubmit={handleSubmit} className="space-y-6 bg-white p-8 rounded-lg shadow-md">
+                    <h2 className="text-xl font-semibold text-gray-900">Request Details</h2>
                     <div>
                         <label htmlFor="serviceLocation" className="block text-sm font-medium text-gray-700 mb-1">
                             Service Location

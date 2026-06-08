@@ -1,5 +1,5 @@
 export class PurchasedItem {
-    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate, assignmentStatus = "unassigned", assignedToJob = false, assignedJobId = "", billingOwner = "purchasedItem", jobBillingStatus = "", jobBillable = false, jobBillingRate = 0) {
+    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate, assignmentStatus = "unassigned", assignedToJob = false, assignedJobId = "", billingOwner = "purchasedItem", jobBillingStatus = "", jobBillable = false, jobBillingRate = 0, category = "Uncategorized", subCategory = "") {
         this.id = id;
         this.receiptId = receiptId;
         this.invoiceNum = invoiceNum;
@@ -28,6 +28,8 @@ export class PurchasedItem {
         this.jobBillingStatus = jobBillingStatus;
         this.jobBillable = jobBillable;
         this.jobBillingRate = jobBillingRate;
+        this.category = category;
+        this.subCategory = subCategory;
     }
 
     get quantity() {
@@ -64,7 +66,9 @@ export class PurchasedItem {
             data.billingOwner || (data.jobId || data.workOrderId ? "job" : "purchasedItem"),
             data.jobBillingStatus || (data.jobId || data.workOrderId ? "handledByJob" : ""),
             Boolean(data.jobBillable),
-            data.jobBillingRate || 0
+            data.jobBillingRate || 0,
+            data.category || "Uncategorized",
+            data.subCategory || ""
         );
     }
 
@@ -116,6 +120,8 @@ export class PurchasedItem {
             jobBillingStatus: this.jobBillingStatus,
             jobBillable: this.jobBillable,
             jobBillingRate: this.jobBillingRate,
+            category: this.category,
+            subCategory: this.subCategory,
         };
     }
 }

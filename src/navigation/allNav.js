@@ -32,7 +32,7 @@ import {
     FaCreditCard,
     FaClipboardList
 } from "react-icons/fa";
-import { MdPayment, MdOutlineLocalOffer, MdEmail, MdShoppingCart } from "react-icons/md";
+import { MdPayment, MdEmail, MdShoppingCart } from "react-icons/md";
 import { IoIosChatbubbles, IoIosPeople, IoIosPricetags } from "react-icons/io";
 import { FaGear, FaWrench, FaFileContract, FaFileInvoiceDollar, FaRegBuilding, FaRegMap } from "react-icons/fa6";
 import { IoDocumentTextOutline } from "react-icons/io5";
@@ -42,16 +42,18 @@ import { GoAlertFill, GoTools } from "react-icons/go";
 
 export const allNav = [
     // --- Admin Routes ---
-    { id: 1, title: 'Dashboard', icon: <AiOutlineDashboard />, role: 'Admin', path: '/admin/dashboard' },
-    { id: 2, title: 'Companies', icon: <AiOutlineShoppingCart />, role: 'Admin', path: '/admin/company' },
-    { id: 3, title: 'Subscriptions', icon: <BiCategory />, role: 'Admin', path: '/admin/subscriptions' },
-    { id: 4, title: 'Universal Equipment', icon: <FaUsers />, role: 'Admin', path: '/admin/universal-equipment' },
-    { id: 5, title: 'Feature Flags', icon: <AiOutlineApi />, role: 'Admin', path: '/admin/feature-flags' },
-    { id: 6, title: 'Complaints', icon: <AiOutlineException />, role: 'Admin', path: '/admin/dashboard/payment-request' },
-    { id: 7, title: 'Deactivated Sellers', icon: <FaUserTimes />, role: 'Admin', path: '/admin/dashboard/deactive-sellers' },
-    { id: 8, title: 'Seller Requests', icon: <FaCode />, role: 'Admin', path: '/admin/dashboard/sellers-request' },
-    { id: 9, title: 'Live Chat', icon: <IoIosChatbubbles />, role: 'Admin', path: '/admin/dashboard/chat-seller' },
-    { id: 10, title: 'Documentation', icon: <AiOutlineFileText />, role: 'Admin', path: '/admin/documentation' },
+    { id: 1, title: 'Dashboard', icon: <AiOutlineDashboard />, role: 'Admin', path: '/admin/dashboard', category: 'NA' },
+    { id: 4, title: 'Universal Equipment', icon: <FaUsers />, role: 'Admin', path: '/admin/universal-equipment', category: 'Development' },
+    { id: 5, title: 'Feature Flags', icon: <AiOutlineApi />, role: 'Admin', path: '/admin/feature-flags', category: 'Development' },
+    { id: 10, title: 'Product Feedback', icon: <GiBugNet />, role: 'Admin', path: '/admin/product-feedback', category: 'Development' },
+    { id: 12, title: 'Documentation', icon: <AiOutlineFileText />, role: 'Admin', path: '/admin/documentation', category: 'Development' },
+    { id: 2, title: 'Companies', icon: <AiOutlineShoppingCart />, role: 'Admin', path: '/admin/company', category: 'Management' },
+    { id: 3, title: 'Subscriptions', icon: <BiCategory />, role: 'Admin', path: '/admin/subscriptions', category: 'Management' },
+    { id: 6, title: 'Complaints', icon: <AiOutlineException />, role: 'Admin', path: '/admin/dashboard/payment-request', category: 'Management' },
+    { id: 7, title: 'Deactivated Sellers', icon: <FaUserTimes />, role: 'Admin', path: '/admin/dashboard/deactive-sellers', category: 'Management' },
+    { id: 8, title: 'Seller Requests', icon: <FaCode />, role: 'Admin', path: '/admin/dashboard/sellers-request', category: 'Management' },
+    { id: 9, title: 'Live Chat', icon: <IoIosChatbubbles />, role: 'Admin', path: '/admin/dashboard/chat-seller', category: 'Management' },
+    { id: 11, title: 'Reach Out Messages', icon: <MdEmail />, role: 'Admin', path: '/admin/reach-out-messages', category: 'Management' },
 
     // --- Company Routes ---
     // Main Navigation
@@ -102,7 +104,9 @@ export const allNav = [
     { id: 103, title: 'Receipts', icon: <IoDocumentTextOutline />, role: 'Company', path: '/company/receipts', category: 'Auditing', permissionId: '400' },
     { id: 116, title: 'Work Logs', icon: <AiOutlineException />, role: 'Company', path: '/company/workLogs', category: 'Auditing', permissionId: '280' },
     { id: 117, title: 'Payroll', icon: <MdPayment />, role: 'Company', path: '/company/payroll', category: 'Auditing', permissionId: '400', featureFlagId: 'feature_flag_006' },
-    { id: 118, title: 'Payroll Setup', icon: <MdOutlineLocalOffer />, role: 'Company', path: '/company/payroll/setup', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_006' },
+
+    // Migration
+    { id: 118, title: 'Skimmer Dosages Upload', icon: <FaRegFileAlt />, role: 'Company', path: '/company/migration/skimmer-previous-dosages-upload', category: 'Migration', permissionId: '800', featureFlagIds: ['feature_flag_008', 'feature_flag_009'] },
 
     // Settings
     { id: 100, title: 'Settings', icon: <FaGear />, role: 'Company', path: '/company/Settings', category: 'Settings', permissionId: '800' },

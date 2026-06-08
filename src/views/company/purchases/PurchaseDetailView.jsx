@@ -19,6 +19,9 @@ import Select from "react-select";
 import { format } from "date-fns";
 import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
 
+const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
+const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
+
 const PurchaseDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { purchaseId } = useParams();
@@ -38,6 +41,8 @@ const PurchaseDetailView = () => {
         invoiceNum: "",
         quantityString: "",
         description: "",
+        category: "Uncategorized",
+        subCategory: "",
         notes: "",
         billable: false,
         invoiced: false,
@@ -105,6 +110,28 @@ const PurchaseDetailView = () => {
                     const formattedDate = purchaseData.date?.toDate
                         ? format(purchaseData.date.toDate(), "MM / d / yyyy")
                         : "";
+                    let databaseItemData = {};
+                    if (purchaseData.itemId) {
+                        const databaseItemSnap = await getDoc(
+                            doc(
+                                db,
+                                "companies",
+                                recentlySelectedCompany,
+                                "settings",
+                                "dataBase",
+                                "dataBase",
+                                purchaseData.itemId
+                            )
+                        );
+                        databaseItemData = databaseItemSnap.exists()
+                            ? databaseItemSnap.data()
+                            : {};
+                    }
+                    const resolvedCategory = normalizePurchaseCategory(
+                        purchaseData.category || databaseItemData.category
+                    );
+                    const resolvedSubCategory =
+                        purchaseData.subCategory || databaseItemData.subCategory || "";
 
                     const purchaseObj = {
                         id: purchaseData.id,
@@ -126,6 +153,8 @@ const PurchaseDetailView = () => {
                         venderName: purchaseData.venderName || "",
                         date: formattedDate,
                         itemId: purchaseData.itemId || "",
+                        category: resolvedCategory,
+                        subCategory: resolvedSubCategory,
                         notes: purchaseData.notes || "",
                         description: purchaseData.description || "",
                         invoiced: !!purchaseData.invoiced,
@@ -153,6 +182,8 @@ const PurchaseDetailView = () => {
                         invoiceNum: purchaseData.invoiceNum || "",
                         quantityString: purchaseData.quantityString || "",
                         description: purchaseData.description || "",
+                        category: resolvedCategory,
+                        subCategory: resolvedSubCategory,
                         notes: purchaseData.notes || "",
                         billable: !!purchaseData.billable,
                         invoiced: !!purchaseData.invoiced,
@@ -246,6 +277,8 @@ const PurchaseDetailView = () => {
             invoiceNum: purchase.invoiceNum || "",
             quantityString: purchase.quantityString || "",
             description: purchase.description || "",
+            category: normalizePurchaseCategory(purchase.category),
+            subCategory: purchase.subCategory || "",
             notes: purchase.notes || "",
             billable: !!purchase.billable,
             invoiced: !!purchase.invoiced,
@@ -298,6 +331,8 @@ const PurchaseDetailView = () => {
                 invoiceNum: editForm.invoiceNum || "",
                 quantityString: editForm.quantityString || "",
                 description: editForm.description || "",
+                category: normalizePurchaseCategory(editForm.category),
+                subCategory: editForm.subCategory || "",
                 notes: editForm.notes || "",
                 returned: !!editForm.returned,
                 ...(assignedToJob
@@ -815,6 +850,9 @@ const PurchaseDetailView = () => {
         purchase.assignedToJob ||
         purchase.assignmentStatus === "assignedToJob"
     );
+    const editCategoryOptions = purchaseCategoryOptions.includes(editForm.category)
+        ? purchaseCategoryOptions
+        : [editForm.category, ...purchaseCategoryOptions].filter(Boolean);
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -975,6 +1013,32 @@ const PurchaseDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">
+                                            Category
+                                        </p>
+                                        {edit ? (
+                                            <select
+                                                value={editForm.category}
+                                                onChange={(e) =>
+                                                    handleEditFieldChange(
+                                                        "category",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full p-2 border border-gray-300 rounded-lg"
+                                            >
+                                                {editCategoryOptions.map((option) => (
+                                                    <option key={option} value={option}>
+                                                        {option}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        ) : (
+                                            <p>{purchase.category || "Uncategorized"}</p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">
                                             Quantity
                                         </p>
                                         {edit ? (
@@ -992,6 +1056,27 @@ const PurchaseDetailView = () => {
                                             />
                                         ) : (
                                             <p>{purchase.quantityString || "0"}</p>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <p className="text-sm font-semibold text-gray-500 mb-1">
+                                            Subcategory
+                                        </p>
+                                        {edit ? (
+                                            <input
+                                                type="text"
+                                                value={editForm.subCategory}
+                                                onChange={(e) =>
+                                                    handleEditFieldChange(
+                                                        "subCategory",
+                                                        e.target.value
+                                                    )
+                                                }
+                                                className="w-full p-2 border border-gray-300 rounded-lg"
+                                            />
+                                        ) : (
+                                            <p>{purchase.subCategory || "—"}</p>
                                         )}
                                     </div>
 
@@ -1420,6 +1505,10 @@ const PurchaseDetailView = () => {
                                 <div className="flex justify-between border-t pt-3">
                                     <span>Rate:</span>
                                     <span>{purchase.price || formatCurrency(0)}</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Category:</span>
+                                    <span>{purchase.category || "Uncategorized"}</span>
                                 </div>
                                 <div className="flex justify-between font-bold text-lg text-gray-800 border-t pt-3">
                                     <span>Total:</span>

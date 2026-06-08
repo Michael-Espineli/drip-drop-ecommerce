@@ -8,7 +8,14 @@ export const DEFAULT_COMPANY_CATEGORY_ORDER = [
     'Marketing',
     'Users',
     'Auditing',
+    'Migration',
     'Settings',
+];
+
+const DEFAULT_ADMIN_CATEGORY_ORDER = [
+    'NA',
+    'Development',
+    'Management',
 ];
 
 const DEFAULT_CATEGORY_ORDER = [
@@ -50,7 +57,12 @@ export const getNav = (accountType, categoryOrderOverride = null) => {
     // Filter the navigation items that match the user's account type
     const filteredNavs = allNav.filter(nav => nav.role === accountType);
 
-    const fallbackOrder = accountType === 'Company' ? DEFAULT_COMPANY_CATEGORY_ORDER : DEFAULT_CATEGORY_ORDER;
+    const fallbackOrder =
+        accountType === 'Company'
+            ? DEFAULT_COMPANY_CATEGORY_ORDER
+            : accountType === 'Admin'
+                ? DEFAULT_ADMIN_CATEGORY_ORDER
+                : DEFAULT_CATEGORY_ORDER;
     const categoryOrder = normalizeCategoryOrder(categoryOrderOverride, fallbackOrder);
 
     // Group the filtered items by their 'category' property

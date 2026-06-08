@@ -2,16 +2,26 @@
 import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import { ClipboardDocumentIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
 import { format } from 'date-fns';
 
+import { functions } from '../../../utils/config';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { RepairRequest, displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { loadCustomerTimeline } from '../../../utils/customerTimeline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import CustomerTimelineGraph from './CustomerTimelineGraph';
 import { salesCollectionNames } from '../../../utils/models/Sales';
+import {
+    customerMatchesRoleTagAccess,
+    getRoleCustomerTagAccess,
+    normalizeCustomerTag,
+    normalizeCustomerTags,
+} from '../../../utils/customerTags';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing address, notes, and account status' },
@@ -31,11 +41,6 @@ const InfoCard = ({ title, children, actions }) => (
         <div className="space-y-4">{children}</div>
     </div>
 );
-
-const formatCurrency = (value) => {
-    const amount = Number(value);
-    return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "—";
-};
 
 const formatCents = (value) => {
     const amount = Number(value || 0) / 100;
@@ -141,6 +146,30 @@ const timelineTypeStyles = {
         dot: 'bg-violet-500',
         chip: 'bg-violet-50 text-violet-700 border-violet-100',
     },
+    repairRequest: {
+        dot: 'bg-red-500',
+        chip: 'bg-red-50 text-red-700 border-red-100',
+    },
+    purchase: {
+        dot: 'bg-lime-600',
+        chip: 'bg-lime-50 text-lime-700 border-lime-100',
+    },
+    salesAgreement: {
+        dot: 'bg-sky-500',
+        chip: 'bg-sky-50 text-sky-700 border-sky-100',
+    },
+    salesSubscription: {
+        dot: 'bg-teal-500',
+        chip: 'bg-teal-50 text-teal-700 border-teal-100',
+    },
+    salesInvoice: {
+        dot: 'bg-fuchsia-500',
+        chip: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100',
+    },
+    salesPayment: {
+        dot: 'bg-emerald-500',
+        chip: 'bg-emerald-50 text-emerald-700 border-emerald-100',
+    },
     note: {
         dot: 'bg-emerald-500',
         chip: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -154,7 +183,8 @@ const timelineTypeStyles = {
 const timelineFilters = [
     { id: 'all', label: 'All', types: [] },
     { id: 'service', label: 'Service', types: ['serviceStop'] },
-    { id: 'jobs', label: 'Jobs', types: ['workOrder'] },
+    { id: 'jobs', label: 'Jobs', types: ['workOrder', 'repairRequest'] },
+    { id: 'billing', label: 'Billing', types: ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'] },
     { id: 'notes', label: 'Notes', types: ['note', 'toDo'] },
     { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
     { id: 'equipment', label: 'Equipment', types: ['equipmentMaintenance', 'equipmentRepair'] },
@@ -162,25 +192,50 @@ const timelineFilters = [
 ];
 
 // Profile Tab
-const ProfileTab = ({ customer }) => {
+const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer }) => {
     const { recentlySelectedCompany } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
     const [isEditing, setIsEditing] = useState(false);
     const [formData, setFormData] = useState(customer);
+    const [newTag, setNewTag] = useState('');
 
     useEffect(() => setFormData(customer), [customer]);
 
     const handleInputChange = e => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
+    const handleCheckboxChange = e => setFormData(prev => ({ ...prev, [e.target.name]: e.target.checked }));
     const handleBillingAddressChange = e => setFormData(prev => ({ ...prev, billingAddress: { ...prev.billingAddress, [e.target.name]: e.target.value } }));
+
+    const handleAddTag = () => {
+        const tagToAdd = normalizeCustomerTag(newTag);
+        if (!tagToAdd) return;
+
+        setFormData((prev) => ({
+            ...prev,
+            tags: normalizeCustomerTags([...(prev.tags || []), tagToAdd]),
+        }));
+        setNewTag('');
+    };
+
+    const handleRemoveTag = (tagToRemove) => {
+        setFormData((prev) => ({
+            ...prev,
+            tags: normalizeCustomerTags(prev.tags).filter((tag) => tag !== tagToRemove),
+        }));
+    };
 
     const handleSave = async () => {
         if (!requirePermission("14", "update customer details")) return;
 
         const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id);
+        const payload = {
+            ...formData,
+            tags: normalizeCustomerTags(formData.tags),
+        };
         try {
-            await updateDoc(customerRef, formData);
+            await updateDoc(customerRef, payload);
             toast.success('Customer details updated!');
+            onCustomerUpdate?.(payload);
             setIsEditing(false);
         } catch (error) {
             toast.error('Failed to update customer.');
@@ -222,6 +277,59 @@ const ProfileTab = ({ customer }) => {
                 <InfoCard title="Notes">
                     <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
                 </InfoCard>
+                <InfoCard title="Tags">
+                    {isEditing ? (
+                        <div className="space-y-3">
+                            <div className="flex gap-2">
+                                <input
+                                    value={newTag}
+                                    onChange={(event) => setNewTag(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') {
+                                            event.preventDefault();
+                                            handleAddTag();
+                                        }
+                                    }}
+                                    placeholder="Add tag, e.g. R1"
+                                    className="w-full rounded-md border px-3 py-2 text-sm"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={handleAddTag}
+                                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {normalizeCustomerTags(formData.tags).map((tag) => (
+                                    <button
+                                        key={tag}
+                                        type="button"
+                                        onClick={() => handleRemoveTag(tag)}
+                                        className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                                    >
+                                        {tag} x
+                                    </button>
+                                ))}
+                                {normalizeCustomerTags(formData.tags).length === 0 && (
+                                    <span className="text-sm text-slate-500">No tags added.</span>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="flex flex-wrap gap-2">
+                            {normalizeCustomerTags(customer.tags).map((tag) => (
+                                <span key={tag} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                                    {tag}
+                                </span>
+                            ))}
+                            {normalizeCustomerTags(customer.tags).length === 0 && (
+                                <span className="text-sm text-slate-500">No tags added.</span>
+                            )}
+                        </div>
+                    )}
+                </InfoCard>
             </div>
             <div className="space-y-8">
                 <InfoCard title="Billing Address">
@@ -242,16 +350,40 @@ const ProfileTab = ({ customer }) => {
                     )}
                 </InfoCard>
                 <InfoCard title="Status">
-                    <div className="flex items-center">
-                        <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                            {customer.active ? 'Active' : 'Inactive'}
-                        </span>
-                    </div>
+                    {isEditing ? (
+                        <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
+                            <input
+                                type="checkbox"
+                                name="active"
+                                checked={formData.active === true}
+                                onChange={handleCheckboxChange}
+                                className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                            />
+                            Active customer
+                        </label>
+                    ) : (
+                        <div className="flex items-center">
+                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                {customer.active ? 'Active' : 'Inactive'}
+                            </span>
+                        </div>
+                    )}
                 </InfoCard>
                 {isEditing && (
-                    <div className="flex justify-end space-x-4">
-                        <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50" type="button">Cancel</button>
-                        <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700" type="button">Save Changes</button>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        {can("16") ? (
+                            <button
+                                onClick={onDeleteCustomer}
+                                className="px-4 py-2 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-md shadow-sm hover:bg-rose-100"
+                                type="button"
+                            >
+                                Delete Customer
+                            </button>
+                        ) : <span />}
+                        <div className="flex justify-end space-x-4">
+                            <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50" type="button">Cancel</button>
+                            <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700" type="button">Save Changes</button>
+                        </div>
                     </div>
                 )}
             </div>
@@ -264,6 +396,25 @@ const ServiceLocationsTab = ({ customer }) => {
     const [locations, setLocations] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedLocation, setSelectedLocation] = useState(null);
+    const [editingLocation, setEditingLocation] = useState(false);
+    const [savingLocation, setSavingLocation] = useState(false);
+    const [locationForm, setLocationForm] = useState({
+        nickName: '',
+        streetAddress: '',
+        city: '',
+        state: '',
+        zip: '',
+        gateCode: '',
+        estimatedTime: '',
+        notes: '',
+        mainContactName: '',
+        mainContactEmail: '',
+        mainContactPhoneNumber: '',
+        mainContactNotes: '',
+        preText: false,
+        isActive: true,
+    });
+    const [cleanupLinkedRecords, setCleanupLinkedRecords] = useState(false);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
 
@@ -289,6 +440,170 @@ const ServiceLocationsTab = ({ customer }) => {
         }
     }, [customer.id, recentlySelectedCompany, db]);
 
+    const startEditLocation = () => {
+        if (!selectedLocation) return;
+        setLocationForm({
+            nickName: selectedLocation.nickName || '',
+            streetAddress: selectedLocation.address?.streetAddress || '',
+            city: selectedLocation.address?.city || '',
+            state: selectedLocation.address?.state || '',
+            zip: selectedLocation.address?.zip || '',
+            gateCode: selectedLocation.gateCode || '',
+            estimatedTime: selectedLocation.estimatedTime ?? '',
+            notes: selectedLocation.notes || '',
+            mainContactName: selectedLocation.mainContact?.name || '',
+            mainContactEmail: selectedLocation.mainContact?.email || '',
+            mainContactPhoneNumber: selectedLocation.mainContact?.phoneNumber || '',
+            mainContactNotes: selectedLocation.mainContact?.notes || '',
+            preText: Boolean(selectedLocation.preText),
+            isActive: selectedLocation.isActive ?? selectedLocation.active ?? true,
+        });
+        setCleanupLinkedRecords(false);
+        setEditingLocation(true);
+    };
+
+    const updateSelectedLocationState = (updatedLocation) => {
+        setSelectedLocation(updatedLocation);
+        setLocations((current) => current.map((loc) => (
+            loc.id === updatedLocation.id ? updatedLocation : loc
+        )));
+    };
+
+    const handleLocationFormChange = (event) => {
+        const { name, value, type, checked } = event.target;
+        setLocationForm((prev) => ({
+            ...prev,
+            [name]: type === 'checkbox' ? checked : value,
+        }));
+    };
+
+    const locationRelatedCollections = [
+        { collectionName: 'equipment', mode: 'equipment' },
+        { collectionName: 'bodiesOfWater', mode: 'bodyOfWater' },
+        { collectionName: 'recurringServiceStop', mode: 'delete' },
+        { collectionName: 'serviceStops', mode: 'delete' },
+    ];
+
+    const fetchLocationRelatedDocs = async (locationId) => {
+        const snapshots = await Promise.all(
+            locationRelatedCollections.map(({ collectionName }) => (
+                getDocs(query(
+                    collection(db, 'companies', recentlySelectedCompany, collectionName),
+                    where('serviceLocationId', '==', locationId)
+                ))
+            ))
+        );
+
+        return locationRelatedCollections.map((definition, index) => ({
+            ...definition,
+            docs: snapshots[index].docs,
+        }));
+    };
+
+    const deleteLocationRelations = async (locationId) => {
+        const relatedDocs = await fetchLocationRelatedDocs(locationId);
+        await Promise.all(
+            relatedDocs.flatMap(({ docs }) => docs.map((relatedDoc) => deleteDoc(relatedDoc.ref)))
+        );
+    };
+
+    const deactivateLocationRelations = async (locationId) => {
+        const relatedDocs = await fetchLocationRelatedDocs(locationId);
+        await Promise.all(
+            relatedDocs.flatMap(({ mode, docs }) => {
+                if (mode === 'equipment') {
+                    return docs.map((relatedDoc) => updateDoc(relatedDoc.ref, { isActive: false, active: false }));
+                }
+                if (mode === 'bodyOfWater') {
+                    return docs.map((relatedDoc) => updateDoc(relatedDoc.ref, { isActive: false }));
+                }
+                return docs.map((relatedDoc) => deleteDoc(relatedDoc.ref));
+            })
+        );
+    };
+
+    const handleSaveLocation = async (event) => {
+        event.preventDefault();
+        if (!selectedLocation?.id || !recentlySelectedCompany) return;
+
+        setSavingLocation(true);
+        try {
+            const updatedLocation = {
+                ...selectedLocation,
+                nickName: locationForm.nickName,
+                address: {
+                    ...(selectedLocation.address || {}),
+                    streetAddress: locationForm.streetAddress,
+                    city: locationForm.city,
+                    state: locationForm.state,
+                    zip: locationForm.zip,
+                },
+                gateCode: locationForm.gateCode,
+                estimatedTime: locationForm.estimatedTime === '' ? '' : Number(locationForm.estimatedTime),
+                notes: locationForm.notes,
+                preText: locationForm.preText,
+                isActive: locationForm.isActive,
+                mainContact: {
+                    ...(selectedLocation.mainContact || {}),
+                    name: locationForm.mainContactName,
+                    email: locationForm.mainContactEmail,
+                    phoneNumber: locationForm.mainContactPhoneNumber,
+                    notes: locationForm.mainContactNotes,
+                },
+            };
+
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', selectedLocation.id),
+                {
+                    nickName: updatedLocation.nickName,
+                    address: updatedLocation.address,
+                    gateCode: updatedLocation.gateCode,
+                    estimatedTime: updatedLocation.estimatedTime,
+                    notes: updatedLocation.notes,
+                    preText: updatedLocation.preText,
+                    isActive: updatedLocation.isActive,
+                    mainContact: updatedLocation.mainContact,
+                }
+            );
+
+            if (updatedLocation.isActive === false && cleanupLinkedRecords) {
+                await deactivateLocationRelations(selectedLocation.id);
+            }
+
+            updateSelectedLocationState(updatedLocation);
+            setEditingLocation(false);
+            setCleanupLinkedRecords(false);
+            toast.success('Service location updated.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to update service location.');
+        } finally {
+            setSavingLocation(false);
+        }
+    };
+
+    const handleDeleteLocation = async () => {
+        if (!selectedLocation?.id || !recentlySelectedCompany) return;
+        if (!window.confirm('Delete this service location and all linked bodies of water, equipment, recurring service stops, and service stops?')) return;
+
+        setSavingLocation(true);
+        try {
+            await deleteLocationRelations(selectedLocation.id);
+            await deleteDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', selectedLocation.id));
+            const remainingLocations = locations.filter((loc) => loc.id !== selectedLocation.id);
+            setLocations(remainingLocations);
+            setSelectedLocation(remainingLocations[0] || null);
+            setEditingLocation(false);
+            setCleanupLinkedRecords(false);
+            toast.success('Service location deleted.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to delete service location.');
+        } finally {
+            setSavingLocation(false);
+        }
+    };
+
     return (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             <div className="lg:col-span-1">
@@ -313,8 +628,15 @@ const ServiceLocationsTab = ({ customer }) => {
                                         ${selectedLocation?.id === loc.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-slate-50 border-transparent'}
                                     `}
                                 >
-                                    <p className="font-semibold text-gray-800">{loc.nickName}</p>
-                                    <p className="text-sm text-gray-600">{loc.address.streetAddress}, {loc.address.city}</p>
+                                    <div className="flex items-center justify-between gap-3">
+                                        <p className="font-semibold text-gray-800">{loc.nickName}</p>
+                                        {(loc.isActive ?? loc.active ?? true) === false && (
+                                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                                                Inactive
+                                            </span>
+                                        )}
+                                    </div>
+                                    <p className="text-sm text-gray-600">{loc.address?.streetAddress}, {loc.address?.city}</p>
                                 </li>
                             ))}
                             {locations.length === 0 && <p className="text-gray-500">No locations found.</p>}
@@ -325,12 +647,119 @@ const ServiceLocationsTab = ({ customer }) => {
                     <InfoCard
                         title="Service Location"
                         actions={
-                            <button className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition">
-                                Edit
-                            </button>
+                            editingLocation ? (
+                                <button
+                                    onClick={() => {
+                                        setEditingLocation(false);
+                                        setCleanupLinkedRecords(false);
+                                    }}
+                                    className="text-sm font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl hover:bg-slate-200 shadow-sm transition"
+                                    type="button"
+                                >
+                                    Cancel
+                                </button>
+                            ) : (
+                                <button
+                                    onClick={startEditLocation}
+                                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                                    type="button"
+                                >
+                                    Edit
+                                </button>
+                            )
                         }
                     >
+                        {editingLocation ? (
+                            <form onSubmit={handleSaveLocation} className="space-y-4">
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Nickname
+                                        <input name="nickName" value={locationForm.nickName} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Estimated Time
+                                        <input name="estimatedTime" type="number" value={locationForm.estimatedTime} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
+                                        Street Address
+                                        <input name="streetAddress" value={locationForm.streetAddress} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        City
+                                        <input name="city" value={locationForm.city} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        State
+                                        <input name="state" value={locationForm.state} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Zip
+                                        <input name="zip" value={locationForm.zip} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Gate Code
+                                        <input name="gateCode" value={locationForm.gateCode} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                        <input name="preText" type="checkbox" checked={locationForm.preText} onChange={handleLocationFormChange} className="h-4 w-4 rounded border-slate-300" />
+                                        Requires pre-text
+                                    </label>
+                                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                        <input name="isActive" type="checkbox" checked={locationForm.isActive} onChange={handleLocationFormChange} className="h-4 w-4 rounded border-slate-300" />
+                                        Active service location
+                                    </label>
+                                    {!locationForm.isActive && (
+                                        <label className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm font-semibold text-amber-900 sm:col-span-2">
+                                            <input
+                                                type="checkbox"
+                                                checked={cleanupLinkedRecords}
+                                                onChange={(event) => setCleanupLinkedRecords(event.target.checked)}
+                                                className="mt-0.5 h-4 w-4 rounded border-amber-300"
+                                            />
+                                            <span>
+                                                Clean up linked records now
+                                                <span className="block text-xs font-medium text-amber-800">
+                                                    Marks bodies of water and equipment inactive, and deletes recurring service stops and service stops for this location.
+                                                </span>
+                                            </span>
+                                        </label>
+                                    )}
+                                </div>
 
+                                <div className="grid gap-3 sm:grid-cols-2">
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Contact Name
+                                        <input name="mainContactName" value={locationForm.mainContactName} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Contact Email
+                                        <input name="mainContactEmail" value={locationForm.mainContactEmail} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                        Contact Phone
+                                        <input name="mainContactPhoneNumber" value={locationForm.mainContactPhoneNumber} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
+                                        Contact Notes
+                                        <textarea name="mainContactNotes" value={locationForm.mainContactNotes} onChange={handleLocationFormChange} rows="2" className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
+                                        Location Notes
+                                        <textarea name="notes" value={locationForm.notes} onChange={handleLocationFormChange} rows="3" className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
+                                    </label>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <button disabled={savingLocation} className="rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60" type="submit">
+                                        {savingLocation ? 'Saving...' : 'Save'}
+                                    </button>
+                                    <button disabled={savingLocation} onClick={handleDeleteLocation} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-700 disabled:opacity-60" type="button">
+                                        Delete
+                                    </button>
+                                </div>
+                            </form>
+                        ) : (
+                            <>
                         <div className="grid gap-4 sm:grid-cols-2">
                             <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
@@ -358,6 +787,15 @@ const ServiceLocationsTab = ({ customer }) => {
                                     Gate Code
                                 </p>
                                 <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
+                            </div>
+
+                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    Status
+                                </p>
+                                <p className="text-sm text-slate-900">
+                                    {(selectedLocation.isActive ?? selectedLocation.active ?? true) ? 'Active' : 'Inactive'}
+                                </p>
                             </div>
                         </div>
 
@@ -399,6 +837,8 @@ const ServiceLocationsTab = ({ customer }) => {
                                 {selectedLocation.notes || "No location notes added."}
                             </p>
                         </div>
+                            </>
+                        )}
 
                     </InfoCard>
                 }
@@ -438,6 +878,7 @@ const LocationDetails = ({ location, customerId }) => {
                 setServiceHistory(historySnap.docs.map(d => ({ id: d.id, ...d.data() })));
             } catch (err) {
                 toast.error("Failed to load location details.");
+                console.log(err)
             } finally {
                 setLoading(false);
             }
@@ -446,6 +887,10 @@ const LocationDetails = ({ location, customerId }) => {
             fetchDetails();
         }
     }, [location.id, recentlySelectedCompany, db]);
+
+    const bodyOfWaterNameById = new Map(
+        bodiesOfWater.map((bow) => [bow.id, bow.name || "Unnamed Body of Water"])
+    );
 
     return (<div className="space-y-8">
 
@@ -509,10 +954,10 @@ const LocationDetails = ({ location, customerId }) => {
 
                                     <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Service Location
+                                            Water Type
                                         </p>
                                         <p className="mt-1 text-sm text-slate-800">
-                                            {bow.serviceLocationId || "—"}
+                                            {bow.waterType || bow.shape || "Not specified"}
                                         </p>
                                     </div>
                                 </div>
@@ -609,7 +1054,7 @@ const LocationDetails = ({ location, customerId }) => {
                                             Body of Water
                                         </p>
                                         <p className="mt-1 text-sm text-slate-800">
-                                            {eq.bodyOfWaterId || "Unassigned"}
+                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked body of water" : "Unassigned")}
                                         </p>
                                     </div>
 
@@ -718,66 +1163,6 @@ const LocationDetails = ({ location, customerId }) => {
     );
 };
 
-// Contracts Tab
-const ContractsTab = ({ customer }) => {
-    const [contracts, setContracts] = useState([]);
-    const [loading, setLoading] = useState(true);
-    const { recentlySelectedCompany } = useContext(Context);
-    const db = getFirestore();
-
-    useEffect(() => {
-        const fetchContracts = async () => {
-            setLoading(true);
-            try {
-                const q = query(collection(db, 'contracts'), where("receiverId", "==", customer.userId || customer.id));
-                const snapshot = await getDocs(q);
-                setContracts(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-            } catch (error) {
-                toast.error("Failed to fetch contracts.");
-            } finally {
-                setLoading(false);
-            }
-        };
-        if (customer && recentlySelectedCompany) {
-            fetchContracts();
-        }
-    }, [customer, recentlySelectedCompany, db]);
-
-    return (
-        <InfoCard title="Contracts & Estimates" actions={<Link to={`/company/contracts/create-for-customer/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ New Estimate</Link>}>
-            {loading ? <ClipLoader size={30} /> : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left">
-                        <thead>
-                            <tr className="border-b">
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Rate</th>
-                                <th className="py-2 px-4 text-xs font-semibold uppercase tracking-wide text-slate-500">Date Sent</th>
-                                <th className="py-2 px-4"></th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                            {contracts.map(c => (
-                                <tr key={c.id} className="hover:bg-slate-50">
-                                    <td className="py-3 px-4">
-                                        <span className="px-2.5 py-1 text-xs font-semibold rounded-full bg-yellow-100 text-yellow-800">{c.status}</span>
-                                    </td>
-                                    <td className="py-3 px-4">{formatCurrency(c.rate)}</td>
-                                    <td className="py-3 px-4">{c.dateSent ? format(c.dateSent.toDate(), 'PPP') : 'N/A'}</td>
-                                    <td className="py-3 px-4 text-right">
-                                        <Link to={`/company/contract/detail/${c.id}`} className="font-semibold text-blue-600 hover:underline">View</Link>
-                                    </td>
-                                </tr>
-                            ))}
-                            {contracts.length === 0 && <tr><td colSpan="4" className="text-center py-8 text-gray-500">No contracts found.</td></tr>}
-                        </tbody>
-                    </table>
-                </div>
-            )}
-        </InfoCard>
-    );
-};
-
 // Leads Tab
 const LeadsTab = ({ customer }) => {
     const [leads, setLeads] = useState([]);
@@ -825,7 +1210,6 @@ const LeadsTab = ({ customer }) => {
 
 // Recurring Tab
 const RecurringTab = ({ customer }) => {
-    const [recurringContracts, setRecurringContracts] = useState([]);
     const [recurringStops, setRecurringStops] = useState([]);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
@@ -835,10 +1219,6 @@ const RecurringTab = ({ customer }) => {
         const fetchRecurring = async () => {
             setLoading(true);
             try {
-                const contractQ = query(collection(db, 'recurringContracts'), where("customerId", "==", customer.id));
-                const contractSnap = await getDocs(contractQ);
-                setRecurringContracts(contractSnap.docs.map(d => ({ id: d.id, ...d.data() })));
-
                 const stopQ = query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop'), where("customerId", "==", customer.id));
                 const stopSnap = await getDocs(stopQ);
                 setRecurringStops(stopSnap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -854,32 +1234,18 @@ const RecurringTab = ({ customer }) => {
     }, [customer.id, recentlySelectedCompany, db]);
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <InfoCard title="Recurring Contracts" actions={<Link to={`/company/recurring-contracts/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
-                {loading ? <ClipLoader size={20} /> : (
-                    <ul className="divide-y divide-gray-200">
-                        {recurringContracts.map(rc => (
-                            <li key={rc.id} className="py-2 flex justify-between">
-                                <span>{rc.status || '—'}</span> <span>{formatCurrency(rc.rate)}</span>
-                            </li>
-                        ))}
-                        {recurringContracts.length === 0 && <p className="text-gray-500">None found.</p>}
-                    </ul>
-                )}
-            </InfoCard>
-            <InfoCard title="Recurring Service Stops" actions={<Link to={`/company/recurring-service-stops/create/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
-                {loading ? <ClipLoader size={20} /> : (
-                    <ul className="divide-y divide-gray-200">
-                        {recurringStops.map(rs => (
-                            <li key={rs.id} className="py-2 flex justify-between">
-                                <span>{rs.frequency || '—'}</span> <span>{formatRecurringDays(rs)}</span>
-                            </li>
-                        ))}
-                        {recurringStops.length === 0 && <p className="text-gray-500">None found.</p>}
-                    </ul>
-                )}
-            </InfoCard>
-        </div>
+        <InfoCard title="Recurring Service Stops" actions={<Link to={`/company/recurring-service-stops/create/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
+            {loading ? <ClipLoader size={20} /> : (
+                <ul className="divide-y divide-gray-200">
+                    {recurringStops.map(rs => (
+                        <li key={rs.id} className="py-2 flex justify-between">
+                            <span>{rs.frequency || '—'}</span> <span>{formatRecurringDays(rs)}</span>
+                        </li>
+                    ))}
+                    {recurringStops.length === 0 && <p className="text-gray-500">None found.</p>}
+                </ul>
+            )}
+        </InfoCard>
     );
 };
 
@@ -1298,19 +1664,13 @@ const SalesActivitySection = ({ customer }) => {
 const OperationsTab = ({ customer }) => {
     return (
         <div className="space-y-8">
-            <RepairRequestsSection customer={customer} />
-            <SalesActivitySection customer={customer} />
-
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
-                <div className="space-y-8">
-                    <ContractsTab customer={customer} />
-                    <WorkOrdersTab customer={customer} />
-                </div>
-                <div className="space-y-8">
-                    <LeadsTab customer={customer} />
-                    <RecurringTab customer={customer} />
-                </div>
+                <RecurringTab customer={customer} />
+                <WorkOrdersTab customer={customer} />
             </div>
+            <SalesActivitySection customer={customer} />
+            <LeadsTab customer={customer} />
+            <RepairRequestsSection customer={customer} />
         </div>
     );
 };
@@ -1444,7 +1804,7 @@ const HistoryTab = ({ customer }) => {
 export default function CustomerDetails() {
     const { customerId, tab } = useParams();
     const navigate = useNavigate();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, companyRole, companyRoleLoading } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
@@ -1457,28 +1817,41 @@ export default function CustomerDetails() {
     const [activeTab, setActiveTab] = useState(getInitialTab(tab));
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showInactiveModal, setShowInactiveModal] = useState(false);
+    const [accessDenied, setAccessDenied] = useState(false);
+    const [customerInviteLink, setCustomerInviteLink] = useState('');
+    const [creatingInviteLink, setCreatingInviteLink] = useState(false);
 
     useEffect(() => {
         setActiveTab(getInitialTab(tab));
     }, [tab, getInitialTab]);
 
     useEffect(() => {
-        if (!customerId || !recentlySelectedCompany) return;
+        if (!customerId || !recentlySelectedCompany || companyRoleLoading) return;
         const fetchCustomer = async () => {
             setLoading(true);
+            setAccessDenied(false);
             try {
                 const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
                 const docSnap = await getDoc(customerRef);
                 if (docSnap.exists()) {
                     const customerData = docSnap.data();
+                    const nextCustomer = { id: docSnap.id, ...customerData };
+
+                    if (!customerMatchesRoleTagAccess(nextCustomer, companyRole)) {
+                        setCustomer(null);
+                        setAccessDenied(true);
+                        return;
+                    }
+
                     if (customerData.email) {
                         const userQuery = query(collection(db, 'users'), where("email", "==", customerData.email));
                         const userSnapshot = await getDocs(userQuery);
                         if (!userSnapshot.empty) {
-                            customerData.userId = userSnapshot.docs[0].id;
+                            nextCustomer.userId = userSnapshot.docs[0].id;
                         }
                     }
-                    setCustomer({ id: docSnap.id, ...customerData });
+                    setCustomer(nextCustomer);
+                    setCustomerInviteLink(nextCustomer.customerAccountInviteUrl || '');
                 } else {
                     toast.error('Customer not found.');
                 }
@@ -1489,7 +1862,7 @@ export default function CustomerDetails() {
             }
         };
         fetchCustomer();
-    }, [customerId, recentlySelectedCompany, db]);
+    }, [customerId, recentlySelectedCompany, db, companyRole, companyRoleLoading]);
 
     useEffect(() => {
         if (!tab || !validCustomerTabs.includes(tab)) {
@@ -1539,17 +1912,17 @@ export default function CustomerDetails() {
         }
     };
 
-    const handleMakeInactive = async () => {
+    const handleUpdateCustomerStatus = async (nextActive) => {
         if (!requirePermission("14", "update customers")) return;
 
         try {
             const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
-            await updateDoc(customerRef, { active: false });
+            await updateDoc(customerRef, { active: nextActive, isActive: nextActive });
 
             // Optionally, deactivate related items if needed
 
-            toast.success('Customer has been marked as inactive.');
-            setCustomer(prev => ({ ...prev, active: false })); // Update local state
+            toast.success(`Customer has been marked as ${nextActive ? 'active' : 'inactive'}.`);
+            setCustomer(prev => ({ ...prev, active: nextActive, isActive: nextActive })); // Update local state
         } catch (error) {
             toast.error('Failed to update customer status.');
         } finally {
@@ -1557,8 +1930,75 @@ export default function CustomerDetails() {
         }
     };
 
-    if (loading) {
+    const handleCreateCustomerInviteLink = async () => {
+        if (!requirePermission("14", "create customer invite links")) return;
+        if (!recentlySelectedCompany || !customerId) return;
+
+        setCreatingInviteLink(true);
+
+        try {
+            const callable = httpsCallable(functions, 'createCustomerAccountInvite');
+            const authPayload = await getCallableAuthPayload();
+            const result = await callable({
+                ...authPayload,
+                auth: authPayload,
+                companyId: recentlySelectedCompany,
+                customerId,
+                baseUrl: window.location.origin,
+                email: customer.email || '',
+            });
+            const response = result.data || {};
+
+            if (response.status !== 200) {
+                throw new Error(response.error || 'Could not create customer invite link.');
+            }
+
+            const inviteUrl = response.inviteUrl || response.claimAccountUrl || '';
+            setCustomerInviteLink(inviteUrl);
+            setCustomer((prev) => ({
+                ...prev,
+                linkedInviteId: response.inviteId || prev.linkedInviteId || '',
+                customerAccountInviteId: response.inviteId || prev.customerAccountInviteId || '',
+                customerAccountInviteUrl: inviteUrl,
+                customerAccountInviteStatus: 'pending',
+            }));
+
+            if (inviteUrl) {
+                await navigator.clipboard.writeText(inviteUrl);
+                toast.success('Client invite link copied.');
+            } else {
+                toast.success('Client invite link created.');
+            }
+        } catch (error) {
+            console.error('Failed to create customer invite link', error);
+            toast.error(error.message || 'Could not create customer invite link.');
+        } finally {
+            setCreatingInviteLink(false);
+        }
+    };
+
+    if (loading || companyRoleLoading) {
         return <div className="flex justify-center items-center h-screen"><ClipLoader size={50} /></div>;
+    }
+
+    if (accessDenied) {
+        const allowedTags = getRoleCustomerTagAccess(companyRole);
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
+                <div className="max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
+                    <h1 className="text-lg font-bold text-slate-900">Customer access restricted</h1>
+                    <p className="mt-2 text-sm text-slate-600">
+                        Your role can only view customers tagged {allowedTags.join(', ') || 'by your assigned customer tags'}.
+                    </p>
+                    <Link
+                        to="/company/customers"
+                        className="mt-4 inline-flex rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                    >
+                        Back to Customers
+                    </Link>
+                </div>
+            </div>
+        );
     }
 
     if (!customer) {
@@ -1617,6 +2057,9 @@ export default function CustomerDetails() {
                                 ) : (
                                     <StatusBadge>No Homeowner Account</StatusBadge>
                                 )}
+                                {normalizeCustomerTags(customer.tags).map((tag) => (
+                                    <StatusBadge key={tag}>{tag}</StatusBadge>
+                                ))}
                             </div>
                             <h1 className="mt-3 text-3xl font-bold text-slate-950">{customerName}</h1>
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
@@ -1625,29 +2068,34 @@ export default function CustomerDetails() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
+                            {can("14") && !customer.userId && (
+                                <button
+                                    onClick={handleCreateCustomerInviteLink}
+                                    disabled={creatingInviteLink}
+                                    type="button"
+                                    className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    <ClipboardDocumentIcon className="h-4 w-4" />
+                                    {creatingInviteLink
+                                        ? 'Creating...'
+                                        : customerInviteLink
+                                            ? 'Copy Client Invite'
+                                            : 'Create Client Invite'}
+                                </button>
+                            )}
                             {can("14") && (
                                 <button
                                     onClick={() => setShowInactiveModal(true)}
                                     type="button"
-                                    disabled={!customer.active}
                                     className={`rounded-md border px-4 py-2 text-sm font-semibold transition ${customer.active
                                         ? 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                        : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400'
+                                        : 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
                                         }`}
                                 >
-                                    Make Inactive
+                                    {customer.active ? 'Make Inactive' : 'Make Active'}
                                 </button>
                             )}
 
-                            {can("16") && (
-                                <button
-                                    onClick={() => setShowDeleteModal(true)}
-                                    type="button"
-                                    className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
-                                >
-                                    Delete Customer
-                                </button>
-                            )}
                         </div>
                     </div>
                 </section>
@@ -1693,12 +2141,44 @@ export default function CustomerDetails() {
                                     <dd className="mt-1 break-all text-slate-700">{customer.email || "Not set"}</dd>
                                 </div>
                                 <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Client Invite</dt>
+                                    <dd className="mt-1">
+                                        {customerInviteLink ? (
+                                            <a
+                                                href={customerInviteLink}
+                                                className="inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                                                target="_blank"
+                                                rel="noreferrer"
+                                            >
+                                                <EnvelopeIcon className="h-4 w-4 flex-none" />
+                                                <span className="truncate">Open invite landing page</span>
+                                            </a>
+                                        ) : (
+                                            <span className="text-slate-500">Not created</span>
+                                        )}
+                                    </dd>
+                                </div>
+                                <div>
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Phone</dt>
                                     <dd className="mt-1 text-slate-700">{customer.phoneNumber || "Not set"}</dd>
                                 </div>
                                 <div className="border-t border-slate-200 pt-3">
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Address</dt>
                                     <dd className="mt-1 text-slate-700">{billingAddress || "Not set"}</dd>
+                                </div>
+                                <div>
+                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tags</dt>
+                                    <dd className="mt-1 flex flex-wrap gap-1.5">
+                                        {normalizeCustomerTags(customer.tags).length > 0 ? (
+                                            normalizeCustomerTags(customer.tags).map((tag) => (
+                                                <span key={tag} className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                                                    {tag}
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="text-slate-500">No tags</span>
+                                        )}
+                                    </dd>
                                 </div>
                                 <div>
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Current View</dt>
@@ -1709,7 +2189,13 @@ export default function CustomerDetails() {
                     </aside>
 
                     <main className="min-w-0 space-y-6">
-                        {activeTab === 'profile' && <ProfileTab customer={customer} />}
+                        {activeTab === 'profile' && (
+                            <ProfileTab
+                                customer={customer}
+                                onCustomerUpdate={(updates) => setCustomer((prev) => ({ ...prev, ...updates }))}
+                                onDeleteCustomer={() => setShowDeleteModal(true)}
+                            />
+                        )}
                         {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
                         {activeTab === 'operations' && <OperationsTab customer={customer} />}
                         {activeTab === 'history' && <HistoryTab customer={customer} />}
@@ -1738,20 +2224,31 @@ export default function CustomerDetails() {
 
             {showInactiveModal && (
                 <ModalShell
-                    title="Make Customer Inactive"
+                    title={customer.active ? 'Make Customer Inactive' : 'Make Customer Active'}
                     onClose={() => setShowInactiveModal(false)}
                     footer={
                         <div className="flex justify-end gap-3">
                             <button onClick={() => setShowInactiveModal(false)} className="py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition" type="button">
                                 Cancel
                             </button>
-                            <button onClick={handleMakeInactive} className="py-2 px-5 bg-amber-600 text-white font-semibold rounded-lg hover:bg-amber-700 transition" type="button">
+                            <button
+                                onClick={() => handleUpdateCustomerStatus(!customer.active)}
+                                className={`py-2 px-5 text-white font-semibold rounded-lg transition ${
+                                    customer.active
+                                        ? 'bg-amber-600 hover:bg-amber-700'
+                                        : 'bg-emerald-600 hover:bg-emerald-700'
+                                }`}
+                                type="button"
+                            >
                                 Confirm
                             </button>
                         </div>
                     }
                 >
-                    <p>Are you sure you want to mark this customer as inactive? This will not delete their data, but may restrict their access and scheduled services.</p>
+                    <p>
+                        Are you sure you want to mark this customer as {customer.active ? 'inactive' : 'active'}?
+                        {customer.active ? ' This will not delete their data, but may restrict their access and scheduled services.' : ' They will appear in active customer views again.'}
+                    </p>
                 </ModalShell>
             )}
         </div>

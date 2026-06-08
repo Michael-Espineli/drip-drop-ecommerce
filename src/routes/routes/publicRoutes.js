@@ -18,8 +18,10 @@ const PrivacyPolicy = lazy(() => import("../../views/public/PrivacyPolicy"))
 const Terms = lazy(() => import("../../views/public/Terms"))
 const Info = lazy(() => import("../../views/public/Info"))
 const Contact = lazy(() => import("../../views/public/Contact"))
+const Feedback = lazy(() => import("../../views/public/Feedback"))
 const AdminSignIn = lazy(() => import("../../views/auth/AdminSignIn"))
 const SuccessfulSubscription = lazy(() => import("../../views/SuccessfulSubscription"))
+const ClientAccountInviteLanding = lazy(() => import("../../views/client/ClientAccountInviteLanding"))
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
 
@@ -75,6 +77,16 @@ const publicRoutes = [
   }
   ,
   {
+    path: "/client/customer-account-invite/:inviteId",
+    element: <ClientAccountInviteLanding />,
+  }
+  ,
+  {
+    path: "/client/claim-account/:inviteId",
+    element: <ClientAccountInviteLanding />,
+  }
+  ,
+  {
     path: "/adminSignIn",
     element: <AdminSignIn />
   }
@@ -98,6 +110,11 @@ const publicRoutes = [
   {
     path: "/contact",
     element: <Contact />,
+  }
+  ,
+  {
+    path: "/feedback",
+    element: <Feedback />,
   }
   ,
   {

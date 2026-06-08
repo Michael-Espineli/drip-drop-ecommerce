@@ -1,11 +1,16 @@
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, where, orderBy, onSnapshot } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { timeSince } from '../../../utils/timeFormatter';
 import { ChatBubbleLeftRightIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import {
+    getChatDisplayTitle,
+    getChatPreview,
+    isChatUnreadFor,
+    listenVisibleChats,
+} from '../../../utils/chatMessaging';
 
 const Messages = () => {
     const navigate = useNavigate();
@@ -21,25 +26,22 @@ const Messages = () => {
         }
 
         setLoading(true);
-        const chatsRef = collection(db, 'chats');
-        const q = query(
-            chatsRef,
-            where('participantIds', 'array-contains', user.uid),
-            orderBy('mostRecentChat', 'desc')
-        );
-
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            const chatsData = snapshot.docs.map(doc => {
-                const data = doc.data();
-                const isUnread = data.userWhoHaveNotRead?.includes(user.uid);
-                return { ...data, id: doc.id, isUnread };
-            });
-            setChats(chatsData);
-            setLoading(false);
-        }, (err) => {
-            console.error("Error fetching chats: ", err);
-            setError("Failed to load messages.");
-            setLoading(false);
+        const unsubscribe = listenVisibleChats({
+            db,
+            userId: user.uid,
+            onChange: (visibleChats) => {
+                const chatsData = visibleChats.map(chat => ({
+                    ...chat,
+                    isUnread: isChatUnreadFor(chat, user.uid),
+                }));
+                setChats(chatsData);
+                setLoading(false);
+            },
+            onError: (err) => {
+                console.error("Error fetching chats: ", err);
+                setError("Failed to load messages.");
+                setLoading(false);
+            },
         });
 
         return () => unsubscribe();
@@ -68,10 +70,11 @@ const Messages = () => {
                     <div className="bg-white rounded-lg shadow-md mt-8">
                         <ul className="divide-y divide-gray-200">
                             {chats.map(chat => (
-                                <ChatItem 
-                                    key={chat.id} 
-                                    chat={chat} 
-                                    onClick={() => handleChatClick(chat.id)} 
+                                <ChatItem
+                                    key={chat.id}
+                                    chat={chat}
+                                    userId={user.uid}
+                                    onClick={() => handleChatClick(chat.id)}
                                 />
                             ))}
                         </ul>
@@ -99,25 +102,30 @@ const NoChatsView = () => (
     </div>
 );
 
-const ChatItem = ({ chat, onClick }) => (
-    <li onClick={onClick} className="p-4 hover:bg-gray-50 cursor-pointer">
-        <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-                {chat.isUnread && <span className="h-3 w-3 bg-green-500 rounded-full"></span>}
-                <div>
-                    <p className={`font-semibold ${chat.isUnread ? 'text-gray-900' : 'text-gray-700'}`}>
-                        {chat.companyName}
-                    </p>
-                    <p className={`text-sm ${chat.isUnread ? 'text-gray-700' : 'text-gray-500'}`}>
-                        {chat.lastMessage}
-                    </p>
+const ChatItem = ({ chat, userId, onClick }) => {
+    const title = getChatDisplayTitle(chat, userId, { audience: 'client' });
+    const preview = getChatPreview(chat);
+
+    return (
+        <li onClick={onClick} className="p-4 hover:bg-gray-50 cursor-pointer">
+            <div className="flex items-center justify-between gap-4">
+                <div className="flex min-w-0 items-center gap-4">
+                    {chat.isUnread && <span className="h-3 w-3 shrink-0 bg-green-500 rounded-full"></span>}
+                    <div className="min-w-0">
+                        <p className={`truncate font-semibold ${chat.isUnread ? 'text-gray-900' : 'text-gray-700'}`}>
+                            {title}
+                        </p>
+                        <p className={`truncate text-sm ${chat.isUnread ? 'text-gray-700 font-semibold' : 'text-gray-500'}`}>
+                            {preview}
+                        </p>
+                    </div>
                 </div>
+                <p className="shrink-0 text-xs text-gray-400">
+                    {chat.mostRecentChat ? timeSince(chat.mostRecentChat) : ''}
+                </p>
             </div>
-            <p className="text-xs text-gray-400">
-                {chat.mostRecentChat ? timeSince(chat.mostRecentChat) : ''}
-            </p>
-        </div>
-    </li>
-);
+        </li>
+    );
+};
 
 export default Messages;

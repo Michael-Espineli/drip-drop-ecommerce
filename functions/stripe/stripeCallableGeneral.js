@@ -10,22 +10,87 @@ const db = admin.firestore();
 // CORRECTED: Use the Stripe API key from the environment variables loaded in index.js
 const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
+const normalizeStripeCustomerId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id.startsWith('cus_') ? id : '';
+};
+
+const getCompanyStripeCustomerId = (companyData = {}) => (
+    normalizeStripeCustomerId(companyData.stripeCustomerId) ||
+    normalizeStripeCustomerId(companyData.stripeId)
+);
+
+const resolveOrCreateStripeCustomer = async ({ providedCustomerId, companyId, userId, authEmail }) => {
+    const providedStripeCustomerId = normalizeStripeCustomerId(providedCustomerId);
+    if (providedStripeCustomerId) {
+        return providedStripeCustomerId;
+    }
+
+    const companyRef = db.collection('companies').doc(companyId);
+    const userRef = db.collection('users').doc(userId);
+    const [companySnap, userSnap] = await Promise.all([
+        companyRef.get(),
+        userRef.get(),
+    ]);
+
+    if (!companySnap.exists) {
+        throw new HttpsError('not-found', 'Company not found.');
+    }
+
+    const companyData = companySnap.data() || {};
+    const existingStripeCustomerId = getCompanyStripeCustomerId(companyData);
+    if (existingStripeCustomerId) {
+        return existingStripeCustomerId;
+    }
+
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    const firstName = userData.firstName || '';
+    const lastName = userData.lastName || '';
+    const customerName = companyData.ownerName || `${firstName} ${lastName}`.trim() || companyData.name || undefined;
+    const customerEmail = companyData.email || userData.email || authEmail || undefined;
+
+    const customer = await stripe.customers.create({
+        ...(customerEmail && { email: customerEmail }),
+        ...(customerName && { name: customerName }),
+        metadata: {
+            companyId,
+            userId,
+        },
+    });
+
+    await companyRef.set({
+        stripeId: customer.id,
+        stripeCustomerId: customer.id,
+    }, { merge: true });
+
+    return customer.id;
+};
+
 exports.createSubscriptionCheckoutSession = onCall(async (request) => {
     if (!request.auth) {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
     // Destructure all required data, including the new redirect URLs
-    const { stripePriceId, stripeId, userId, companyId, successUrl, cancelUrl } = request.data;
-    if (!stripePriceId || !stripeId || !userId || !companyId || !successUrl || !cancelUrl) {
-        throw new HttpsError('invalid-argument', 'The function must be called with all required arguments: "stripePriceId", "stripeId", "userId", "companyId", "successUrl", and "cancelUrl".');
+    const { stripePriceId, stripeId, stripeCustomerId, userId, companyId, successUrl, cancelUrl } = request.data || {};
+    const billingUserId = userId || request.auth.uid;
+
+    if (!stripePriceId || !billingUserId || !companyId || !successUrl || !cancelUrl) {
+        throw new HttpsError('invalid-argument', 'The function must be called with all required arguments: "stripePriceId", "userId", "companyId", "successUrl", and "cancelUrl".');
     }
 
     try {
+        const resolvedStripeCustomerId = await resolveOrCreateStripeCustomer({
+            providedCustomerId: stripeCustomerId || stripeId,
+            companyId,
+            userId: billingUserId,
+            authEmail: request.auth.token?.email,
+        });
+
         const session = await stripe.checkout.sessions.create({
             payment_method_types: ['card'],
             mode: 'subscription',
-            customer: stripeId,
+            customer: resolvedStripeCustomerId,
             line_items: [
                 {
                     price: stripePriceId,
@@ -33,7 +98,7 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
                 },
             ],
             metadata: {
-                userId: userId,
+                userId: billingUserId,
                 companyId: companyId,
             },
             // Use the URLs passed from the frontend client
@@ -44,6 +109,10 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
         return { url: session.url };
 
     } catch (error) {
+        if (error instanceof HttpsError) {
+            throw error;
+        }
+
         console.error("Stripe Checkout Session Error:", error);
         throw new HttpsError('internal', 'Unable to create Stripe checkout session.', error.message);
     }
@@ -250,18 +319,29 @@ exports.getStripePaymentHistory = onCall(async (request) => {
         throw new HttpsError('unauthenticated', 'The function must be called while authenticated.');
     }
 
-    const { stripeCustomerId } = request.data;
-    if (!stripeCustomerId) {
-        throw new HttpsError('invalid-argument', 'The function must be called with a "stripeCustomerId" argument.');
+    const { stripeCustomerId, companyId } = request.data || {};
+    let resolvedStripeCustomerId = normalizeStripeCustomerId(stripeCustomerId);
+
+    if (!resolvedStripeCustomerId && companyId) {
+        const companySnap = await db.collection('companies').doc(companyId).get();
+        resolvedStripeCustomerId = getCompanyStripeCustomerId(companySnap.data());
+    }
+
+    if (!resolvedStripeCustomerId) {
+        return { status: "success", invoices: [] };
     }
 
     try {
         const invoices = await stripe.invoices.list({
-            customer: stripeCustomerId,
+            customer: resolvedStripeCustomerId,
             limit: 10,
         });
         return { status: "success", invoices: invoices.data };
     } catch (error) {
+        if (error.code === 'resource_missing') {
+            return { status: "success", invoices: [] };
+        }
+
         console.error("Stripe Payment History Error:", error);
         throw new HttpsError('internal', 'Unable to retrieve payment history.', error.message);
     }

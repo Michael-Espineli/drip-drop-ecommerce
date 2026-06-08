@@ -51,6 +51,7 @@ const routePermissionRules = [
   [/^\/company\/recurringlaborcontracts/i, "260"],
 
   [/^\/company\/leads\/new/i, "612"],
+  [/^\/company\/leads\/[^/]+\/edit/i, "614"],
   [/^\/company\/leads/i, "610"],
   [/^\/company\/customers\/create-from-lead/i, "612"],
   [/^\/company\/estimates\/create/i, "622"],
@@ -65,6 +66,8 @@ const routePermissionRules = [
   [/^\/company\/items\/bulk-upload/i, "852"],
   [/^\/company\/items/i, "850"],
   [/^\/company\/reports/i, "870"],
+  [/^\/company\/migration/i, "800"],
+  [/^\/company\/settings\/payroll-setup/i, "400"],
   [/^\/company\/settings\/terms-templates/i, "880"],
   [/^\/company\/settings\/job-templates/i, "820"],
   [/^\/company\/settings\/subscriptions/i, "890"],

@@ -5,6 +5,7 @@ import {
     doc,
     getDoc,
     updateDoc,
+    deleteDoc,
     collection,
     setDoc,
     serverTimestamp,
@@ -28,6 +29,27 @@ const SERVICE_STOP_OPERATION_STATUS = {
     finished: 'Finished',
     notFinished: 'Not Finished',
     skipped: 'Skipped',
+};
+
+const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
+const SERVICE_ESTIMATE_SCHEDULED_STATUS = 'Service Estimate Scheduled';
+
+const isLeadServiceEstimateVisit = (visit = {}) => {
+    const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
+    const typeId = String(visit.typeId || '').trim();
+    const normalizedType = String(visit.type || '').trim().toLowerCase();
+
+    return (
+        useCase === SERVICE_STOP_TYPE_USE_CASES.serviceEstimate ||
+        useCase === SERVICE_STOP_TYPE_USE_CASES.estimate ||
+        typeId === 'initialEstimate' ||
+        typeId === 'system_service_estimate_stop' ||
+        normalizedType.includes('service estimate') ||
+        normalizedType.includes('initial estimate') ||
+        normalizedType.includes('pre estimate') ||
+        normalizedType.includes('pre-estimate') ||
+        normalizedType === 'estimate'
+    );
 };
 
 const EstimateSnapshot = ({ estimate }) => {
@@ -101,6 +123,14 @@ const PreEstimateVisitCard = ({
 
     const defaultPreEstimateTasks = [
         {
+            name: 'Verify service location details',
+            description: 'Confirm address, access instructions, gate code, pets, bodies of water, and any missing property details.',
+            estimatedTime: 15,
+            rate: 0,
+            status: 'Scheduled',
+            priority: 'Normal',
+        },
+        {
             name: 'Get equipment information',
             description: 'Document equipment type, model, condition, and any visible issues.',
             estimatedTime: 15,
@@ -161,7 +191,7 @@ const PreEstimateVisitCard = ({
         }
 
         if (!lead?.customerId) {
-            toast.error('Create a customer before scheduling a pre-estimate visit.');
+            toast.error('Create a customer before scheduling a service estimate.');
             return;
         }
 
@@ -198,8 +228,8 @@ const PreEstimateVisitCard = ({
             );
             const resolvedTypeFields = resolveServiceStopTypeFields({
                 companyServiceStopTypes,
-                fallbackName: 'Initial Estimate Visit',
-                useCase: SERVICE_STOP_TYPE_USE_CASES.estimate,
+                fallbackName: SERVICE_ESTIMATE_VISIT_LABEL,
+                useCase: SERVICE_STOP_TYPE_USE_CASES.serviceEstimate,
                 context: 'LeadDetail.PreEstimateVisitCard.createVisit',
             });
 
@@ -239,7 +269,7 @@ const PreEstimateVisitCard = ({
 
                 recurringServiceStopId: '',
 
-                description: notes || lead.serviceDescription || 'Initial estimate visit',
+                description: notes || lead.serviceDescription || 'Service estimate visit',
 
                 typeId: resolvedTypeFields.typeId,
                 type: resolvedTypeFields.type,
@@ -316,8 +346,8 @@ const PreEstimateVisitCard = ({
                     createdAt: serverTimestamp(),
                     updatedAt: serverTimestamp(),
 
-                    source: 'LeadDetailPreEstimate',
-                    type: 'preEstimateTask',
+                    source: 'LeadDetailServiceEstimate',
+                    type: 'serviceEstimateTask',
                     operationStatus: SERVICE_STOP_OPERATION_STATUS.notFinished,
                     billingStatus: 'Non Billable',
                     isCompleted: false,
@@ -326,15 +356,16 @@ const PreEstimateVisitCard = ({
             }
 
             await updateDoc(doc(db, 'homeownerServiceRequests', lead.id), {
+                serviceEstimateServiceStopId: serviceStopId,
                 initialEstimateServiceStopId: serviceStopId
             });
 
             const leadRef = doc(db, 'homeownerServiceRequests', lead.id);
-            const newStatus = 'Initial Estimate Visit Scheduled';
+            const newStatus = SERVICE_ESTIMATE_SCHEDULED_STATUS;
             await updateDoc(leadRef, { status: newStatus });
             toast.success(`Status updated to ${newStatus}`);
 
-            toast.success('Initial estimate visit created.');
+            toast.success('Service estimate created.');
             onVisitCreated?.({
                 id: serviceStopId,
                 ...stopPayload
@@ -350,7 +381,7 @@ const PreEstimateVisitCard = ({
     return (
         <div className="bg-white p-6 rounded-2xl shadow-lg">
             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-800">Pre-Estimate Visit</h3>
+                <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
                 {badge && (
                     <span className={`px-2 py-1 text-xs font-semibold rounded-full ${badge.className}`}>
                         {badge.label}
@@ -362,7 +393,7 @@ const PreEstimateVisitCard = ({
                 <div className="space-y-3">
                     <div>
                         <p className="text-sm font-medium text-gray-500">Type</p>
-                        <p className="text-gray-900">{existingVisit.type || 'Initial Estimate Visit'}</p>
+                        <p className="text-gray-900">{existingVisit.type || SERVICE_ESTIMATE_VISIT_LABEL}</p>
                     </div>
                     <div>
                         <p className="text-sm font-medium text-gray-500">Scheduled For</p>
@@ -389,13 +420,13 @@ const PreEstimateVisitCard = ({
             ) : (
                 <div className="space-y-4">
                     <p className="text-sm text-gray-600">
-                        Schedule an on-site visit before creating the estimate.
+                        Schedule a fact-finding service estimate before sending pricing.
                     </p>
 
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Visit Type</label>
                         <input
-                            value="Initial Estimate Visit"
+                            value={SERVICE_ESTIMATE_VISIT_LABEL}
                             disabled
                             className="w-full p-2 border rounded-md bg-gray-50 text-gray-700"
                         />
@@ -443,7 +474,7 @@ const PreEstimateVisitCard = ({
                         disabled={saving}
                         className="w-full py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium disabled:opacity-60"
                     >
-                        {saving ? 'Creating Visit...' : 'Create Initial Estimate Visit'}
+                        {saving ? 'Creating Visit...' : 'Create Service Estimate'}
                     </button>
                 </div>
             )}
@@ -455,7 +486,7 @@ const PreEstimateVisitLockedCard = ({ lead }) => {
     return (
         <div className="bg-white p-6 rounded-2xl shadow-lg">
             <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-800">Pre-Estimate Visit</h3>
+                <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
                 <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">
                     Locked
                 </span>
@@ -463,21 +494,14 @@ const PreEstimateVisitLockedCard = ({ lead }) => {
 
             <div className="space-y-4">
                 <p className="text-sm text-gray-600">
-                    Create the customer first before scheduling a pre-estimate visit.
+                    Create the customer first before scheduling a fact-finding service estimate.
                 </p>
 
                 <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
                     <p className="text-sm font-medium text-amber-800">
-                        A customer profile is required before this visit can be created.
+                        A company customer profile is required before this visit can be created. Use the Lead Conversion action on this page to create and link the customer from the homeowner request.
                     </p>
                 </div>
-
-                <Link
-                    to={`/company/customers/create-from-lead/${lead.id}`}
-                    className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
-                >
-                    Create Customer
-                </Link>
             </div>
         </div>
     );
@@ -495,9 +519,15 @@ export default function LeadDetail() {
     const [loading, setLoading] = useState(true);
     const [technicians, setTechnicians] = useState([]);
     const [estimateVisit, setEstimateVisit] = useState(null);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deletingLead, setDeletingLead] = useState(false);
 
     const [savingDescription, setSavingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState('');
+    const [savingPrivateNotes, setSavingPrivateNotes] = useState(false);
+    const [privateNotesDraft, setPrivateNotesDraft] = useState('');
+    const [privateNotesSavedValue, setPrivateNotesSavedValue] = useState('');
+    const [privateNotesDocExists, setPrivateNotesDocExists] = useState(false);
 
     useEffect(() => {
         if (!leadId || !recentlySelectedCompany) {
@@ -524,6 +554,20 @@ export default function LeadDetail() {
                     setLead(enhancedLead);
                     setDescriptionDraft(leadData.serviceDescription || '');
 
+                    const privateNotesSnap = await getDoc(
+                        doc(
+                            db,
+                            'companies',
+                            recentlySelectedCompany,
+                            'leadPrivateNotes',
+                            leadId
+                        )
+                    );
+                    setPrivateNotesDocExists(privateNotesSnap.exists());
+                    const privateNotes = privateNotesSnap.exists() ? privateNotesSnap.data().notes || '' : '';
+                    setPrivateNotesDraft(privateNotes);
+                    setPrivateNotesSavedValue(privateNotes);
+
                     if (leadData.estimateId) {
                         const estimateRef = doc(db, 'contracts', leadData.estimateId);
                         const estimateSnap = await getDoc(estimateRef);
@@ -537,33 +581,43 @@ export default function LeadDetail() {
                     );
                     setTechnicians(techSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-                    if (leadData.initialEstimateServiceStopId) {
+                    const estimateStopId = leadData.serviceEstimateServiceStopId || leadData.initialEstimateServiceStopId || '';
+                    let matchedEstimateVisit = null;
+
+                    if (estimateStopId) {
                         const stopSnap = await getDoc(
                             doc(
                                 db,
                                 'companies',
                                 recentlySelectedCompany,
                                 'serviceStops',
-                                leadData.initialEstimateServiceStopId
+                                estimateStopId
                             )
                         );
 
                         if (stopSnap.exists()) {
-                            setEstimateVisit({ id: stopSnap.id, ...stopSnap.data() });
+                            matchedEstimateVisit = { id: stopSnap.id, ...stopSnap.data() };
                         }
-                    } else {
+                    }
+
+                    if (!matchedEstimateVisit) {
                         const visitQuery = query(
                             collection(db, 'companies', recentlySelectedCompany, 'serviceStops'),
-                            where('leadId', '==', leadId),
-                            where('typeId', '==', 'initialEstimate')
+                            where('leadId', '==', leadId)
                         );
                         const visitSnap = await getDocs(visitQuery);
 
                         if (!visitSnap.empty) {
-                            const firstVisit = visitSnap.docs[0];
-                            setEstimateVisit({ id: firstVisit.id, ...firstVisit.data() });
+                            const visitDocs = visitSnap.docs.map((visitDoc) => ({
+                                id: visitDoc.id,
+                                ...visitDoc.data(),
+                            }));
+                            const firstVisit = visitDocs.find(isLeadServiceEstimateVisit) || visitDocs[0];
+                            matchedEstimateVisit = firstVisit;
                         }
                     }
+
+                    setEstimateVisit(matchedEstimateVisit);
                 } else {
                     toast.error('Lead not found or access denied.');
                     navigate('/company/leads');
@@ -613,6 +667,45 @@ export default function LeadDetail() {
         }
     };
 
+    const savePrivateNotes = async () => {
+        if (!requirePermission("614", "update leads")) return;
+        if (!lead || !recentlySelectedCompany) return;
+        if (privateNotesDraft === privateNotesSavedValue) return;
+
+        setSavingPrivateNotes(true);
+        try {
+            const privateNotesRef = doc(
+                db,
+                'companies',
+                recentlySelectedCompany,
+                'leadPrivateNotes',
+                leadId
+            );
+            const payload = {
+                id: leadId,
+                leadId,
+                companyId: recentlySelectedCompany,
+                notes: privateNotesDraft,
+                visibility: 'companyOnly',
+                updatedAt: serverTimestamp(),
+            };
+
+            if (!privateNotesDocExists) {
+                payload.createdAt = serverTimestamp();
+            }
+
+            await setDoc(privateNotesRef, payload, { merge: true });
+            setPrivateNotesDocExists(true);
+            setPrivateNotesSavedValue(privateNotesDraft);
+            toast.success('Private notes saved.');
+        } catch (error) {
+            console.error('Error updating private lead notes:', error);
+            toast.error('Failed to save private notes.');
+        } finally {
+            setSavingPrivateNotes(false);
+        }
+    };
+
     const saveDescription = async () => {
         if (!requirePermission("614", "update leads")) return;
         if (!lead) return;
@@ -640,6 +733,22 @@ export default function LeadDetail() {
             toast.error('Failed to update description.');
         } finally {
             setSavingDescription(false);
+        }
+    };
+
+    const handleDeleteLead = async () => {
+        if (!requirePermission("616", "delete leads")) return;
+
+        setDeletingLead(true);
+        try {
+            await deleteDoc(doc(db, 'homeownerServiceRequests', leadId));
+            toast.success('Lead deleted.');
+            navigate('/company/leads');
+        } catch (error) {
+            console.error('Error deleting lead:', error);
+            toast.error('Failed to delete lead.');
+            setDeletingLead(false);
+            setShowDeleteModal(false);
         }
     };
 
@@ -672,11 +781,13 @@ export default function LeadDetail() {
         customerId,
         customerName,
         creatorName,
-        homeownerName
+        homeownerName,
+        homeownerEmail,
+        homeownerPhone
     } = lead;
 
     const renderActions = () => {
-        if (source === 'Manual' && !customerId) {
+        if (!customerId) {
             if (!can("612")) return null;
 
             return (
@@ -684,12 +795,12 @@ export default function LeadDetail() {
                     onClick={() => navigate(`/company/customers/create-from-lead/${lead.id}`)}
                     className="w-full py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
                 >
-                    Create Customer
+                    Convert Lead to Customer
                 </button>
             );
         }
 
-        if (customerId || source !== 'Manual') {
+        if (customerId) {
             if (!can("612")) return null;
 
             return (
@@ -708,13 +819,36 @@ export default function LeadDetail() {
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
             <div className="mx-auto">
-                <div className="mb-6">
-                    <Link to="/company/leads" className="text-sm font-medium text-gray-600 hover:text-gray-900">
-                        &larr; Back to Leads
-                    </Link>
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+                    <div>
+                        <Link to="/company/leads" className="text-sm font-medium text-gray-600 hover:text-gray-900">
+                            &larr; Back to Leads
+                        </Link>
 
-                    <h2 className="text-3xl font-bold text-gray-800">Lead Detail</h2>
-                    <p className="text-gray-600 mt-1">View and manage lead details.</p>
+                        <h2 className="text-3xl font-bold text-gray-800">Lead Detail</h2>
+                        <p className="text-gray-600 mt-1">View and manage lead details.</p>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3">
+                        {can("614") && (
+                            <button
+                                type="button"
+                                onClick={() => navigate(`/company/leads/${lead.id}/edit`)}
+                                className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                            >
+                                Edit
+                            </button>
+                        )}
+                        {can("616") && (
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteModal(true)}
+                                className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
+                            >
+                                Delete
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -729,9 +863,19 @@ export default function LeadDetail() {
 
                             <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 mb-6">
                                 <div className="flex items-center justify-between gap-3">
-                                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                        Description
-                                    </p>
+                                    <div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                                Shared Description
+                                            </p>
+                                            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                                                Visible to homeowner
+                                            </span>
+                                        </div>
+                                        <p className="mt-1 text-sm text-gray-600">
+                                            This text is saved on the homeowner service request and can be seen by the homeowner/client account.
+                                        </p>
+                                    </div>
 
                                     {can("614") && (
                                         <button
@@ -756,13 +900,68 @@ export default function LeadDetail() {
 
                                 <textarea
                                     className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
-                                    placeholder="Add lead description..."
+                                    placeholder="Add the shared request description..."
                                     value={descriptionDraft}
                                     onChange={(e) => setDescriptionDraft(e.target.value)}
                                     readOnly={!can("614")}
                                     onBlur={() => {
                                         if (can("614") && descriptionDraft !== (lead.serviceDescription || '')) {
                                             saveDescription();
+                                        }
+                                    }}
+                                />
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 mb-6">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-xs font-semibold text-amber-700 uppercase tracking-wider">
+                                                Company Private Notes
+                                            </p>
+                                            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-700 border border-amber-200">
+                                                Company only
+                                            </span>
+                                        </div>
+                                        <p className="mt-1 text-sm text-amber-800">
+                                            Internal notes for your team. These are stored under the company account, not on the homeowner request.
+                                        </p>
+                                    </div>
+
+                                    {can("614") && (
+                                        <button
+                                            type="button"
+                                            onClick={savePrivateNotes}
+                                            disabled={
+                                                savingPrivateNotes ||
+                                                privateNotesDraft === privateNotesSavedValue
+                                            }
+                                            className={[
+                                                'px-3 py-1 rounded-lg text-sm font-semibold transition border',
+                                                savingPrivateNotes ||
+                                                    privateNotesDraft === privateNotesSavedValue
+                                                    ? 'bg-amber-100 text-amber-400 border-amber-200 cursor-not-allowed'
+                                                    : 'bg-white text-amber-800 border-amber-300 hover:bg-amber-100',
+                                            ].join(' ')}
+                                        >
+                                            {savingPrivateNotes ? 'Saving...' : 'Save'}
+                                        </button>
+                                    )}
+                                </div>
+
+                                <textarea
+                                    className="mt-2 w-full min-h-[120px] p-3 border border-amber-300 rounded-lg focus:ring-amber-500 focus:border-amber-500 bg-white"
+                                    placeholder="Add internal follow-up notes, pricing thoughts, access details, or sales context..."
+                                    value={privateNotesDraft}
+                                    onChange={(e) => setPrivateNotesDraft(e.target.value)}
+                                    readOnly={!can("614")}
+                                    onBlur={() => {
+                                        if (
+                                            can("614") &&
+                                            !savingPrivateNotes &&
+                                            privateNotesDraft !== privateNotesSavedValue
+                                        ) {
+                                            savePrivateNotes();
                                         }
                                     }}
                                 />
@@ -805,17 +1004,15 @@ export default function LeadDetail() {
                                         <div className="mb-4">
                                             <dt className="text-sm font-medium text-gray-500">Email</dt>
                                             <dd className="text-lg text-gray-900 break-words">
-                                                {ownerDetails.email}
+                                                {ownerDetails.email || homeownerEmail || 'N/A'}
                                             </dd>
                                         </div>
-                                        {ownerDetails.phoneNumber && (
-                                            <div>
-                                                <dt className="text-sm font-medium text-gray-500">Phone</dt>
-                                                <dd className="text-lg text-gray-900">
-                                                    {ownerDetails.phoneNumber}
-                                                </dd>
-                                            </div>
-                                        )}
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Phone</dt>
+                                            <dd className="text-lg text-gray-900">
+                                                {ownerDetails.phoneNumber || homeownerPhone || 'N/A'}
+                                            </dd>
+                                        </div>
                                     </dl>
                                 </div>
 
@@ -886,7 +1083,7 @@ export default function LeadDetail() {
 
                                 {can("612") && (
                                     <div className="bg-white p-6 rounded-2xl shadow-lg">
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Actions</h3>
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Lead Conversion</h3>
                                         <div className="space-y-3">{renderActions()}</div>
                                     </div>
                                 )}
@@ -895,6 +1092,35 @@ export default function LeadDetail() {
                     </div>
                 </div>
             </div>
+
+            {showDeleteModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 p-4">
+                    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
+                        <h3 className="text-xl font-bold text-gray-900">Delete Lead</h3>
+                        <p className="mt-3 text-sm text-gray-600">
+                            Delete this lead permanently? Any linked customer, estimate, or scheduled visit will stay in place.
+                        </p>
+                        <div className="mt-6 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteModal(false)}
+                                disabled={deletingLead}
+                                className="rounded-md bg-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 transition hover:bg-gray-300 disabled:opacity-60"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteLead}
+                                disabled={deletingLead}
+                                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-60"
+                            >
+                                {deletingLead ? 'Deleting...' : 'Delete'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

@@ -1,51 +1,46 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { collection, query, where, orderBy, limit, onSnapshot } from 'firebase/firestore';
+import React, { useContext, useEffect, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
-import { Link, useNavigate } from 'react-router-dom';
 import { timeSince } from '../../../utils/timeFormatter';
+import {
+    getChatAvatarText,
+    getChatDisplayTitle,
+    getChatPreview,
+    isChatUnreadFor,
+    listenVisibleChats,
+} from '../../../utils/chatMessaging';
 
 const RecentChatsWidget = () => {
-    const { user } = useContext(Context);
+    const { user, recentlySelectedCompany } = useContext(Context);
     const [recentChats, setRecentChats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [unreadCount, setUnreadCount] = useState(0);
     const navigate = useNavigate();
 
     useEffect(() => {
-        if (!user?.uid) return;
-
-        const chatsRef = collection(db, 'chats');
-        const q = query(
-            chatsRef,
-            where('participantIds', 'array-contains', user.uid),
-            orderBy('mostRecentChat', 'desc')
-        );
-
-        const unsubscribe = onSnapshot(q, (snapshot) => {
-            let unread = 0;
-            const chats = snapshot.docs.map(doc => {
-                const data = doc.data();
-                if (data.userWhoHaveNotRead?.includes(user.uid)) {
-                    unread++;
-                }
-                const otherParticipant = data.participants.find(p => p.userId !== user.uid);
-                return {
-                    id: doc.id,
-                    ...data,
-                    otherParticipant,
-                };
-            });
-            setRecentChats(chats.slice(0, 3));
-            setUnreadCount(unread);
+        if (!user?.uid) {
             setLoading(false);
-        }, (error) => {
-            console.error("Error fetching recent chats: ", error);
-            setLoading(false);
+            return undefined;
+        }
+
+        const unsubscribe = listenVisibleChats({
+            db,
+            userId: user.uid,
+            companyId: recentlySelectedCompany || '',
+            onChange: (visibleChats) => {
+                setRecentChats(visibleChats.slice(0, 3));
+                setUnreadCount(visibleChats.filter((chat) => isChatUnreadFor(chat, user.uid, recentlySelectedCompany)).length);
+                setLoading(false);
+            },
+            onError: (error) => {
+                console.error('Error fetching recent chats:', error);
+                setLoading(false);
+            },
         });
 
         return () => unsubscribe();
-    }, [user]);
+    }, [recentlySelectedCompany, user]);
 
     const handleChatClick = (chatId) => {
         navigate(`/companies-chat/detail/${chatId}`);
@@ -91,42 +86,13 @@ const RecentChatsWidget = () => {
                 {recentChats.length > 0 ? (
                     <div className="space-y-4">
                         {recentChats.map(chat => (
-                            <div
+                            <RecentChatRow
                                 key={chat.id}
-                                className="flex items-start gap-4 cursor-pointer hover:bg-gray-50 p-2 rounded-md transition-colors duration-200"
+                                chat={chat}
+                                userId={user.uid}
+                                companyId={recentlySelectedCompany}
                                 onClick={() => handleChatClick(chat.id)}
-                            >
-                                <div className="shrink-0 relative">
-                                    {chat.otherParticipant?.userImage ? (
-                                        <img src={chat.otherParticipant.userImage} alt={chat.otherParticipant.userName} className="w-10 h-10 rounded-full object-cover" />
-                                    ) : (
-                                        <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center text-white font-semibold">
-                                            {chat.otherParticipant?.userName?.charAt(0).toUpperCase() || 'U'}
-                                        </div>
-                                    )}
-                                    {chat.userWhoHaveNotRead?.includes(user.uid) && (
-                                        <span className="absolute top-0 right-0 block h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white"></span>
-                                    )}
-                                </div>
-                                <div className="flex-1 min-w-0">
-                                    <div className="flex items-center">
-                                        <p className="font-semibold text-gray-900 truncate">{chat.otherParticipant?.userName || 'Unknown User'}</p>
-                                        {chat.otherParticipant?.accountType && (
-                                            <span className={`ml-2 shrink-0 px-2 py-0.5 text-xs font-semibold rounded-full ${
-                                                chat.otherParticipant.accountType === 'Company'
-                                                    ? 'bg-blue-100 text-blue-800'
-                                                    : 'bg-green-100 text-green-800'
-                                            }`}>
-                                                {chat.otherParticipant.accountType}
-                                            </span>
-                                        )}
-                                    </div>
-                                    <p className={`text-sm text-gray-500 truncate ${chat.userWhoHaveNotRead?.includes(user.uid) ? 'font-bold' : ''}`}>
-                                        {chat.lastMessage}
-                                    </p>
-                                </div>
-                                <p className="text-xs text-gray-400 whitespace-nowrap">{timeSince(chat.mostRecentChat)}</p>
-                            </div>
+                            />
                         ))}
                     </div>
                 ) : (
@@ -142,6 +108,35 @@ const RecentChatsWidget = () => {
                     </button>
                 </Link>
             </div>
+        </div>
+    );
+};
+
+const RecentChatRow = ({ chat, userId, companyId, onClick }) => {
+    const unread = isChatUnreadFor(chat, userId, companyId);
+    const title = getChatDisplayTitle(chat, userId, { companyId, audience: 'company' });
+    const avatar = getChatAvatarText(chat, userId, { companyId, audience: 'company' });
+
+    return (
+        <div
+            className="flex items-start gap-4 cursor-pointer hover:bg-gray-50 p-2 rounded-md transition-colors duration-200"
+            onClick={onClick}
+        >
+            <div className="shrink-0 relative">
+                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold">
+                    {avatar}
+                </div>
+                {unread && (
+                    <span className="absolute top-0 right-0 block h-2.5 w-2.5 rounded-full bg-red-500 border-2 border-white"></span>
+                )}
+            </div>
+            <div className="flex-1 min-w-0">
+                <p className="font-semibold text-gray-900 truncate">{title}</p>
+                <p className={`text-sm text-gray-500 truncate ${unread ? 'font-bold' : ''}`}>
+                    {getChatPreview(chat)}
+                </p>
+            </div>
+            <p className="text-xs text-gray-400 whitespace-nowrap">{timeSince(chat.mostRecentChat)}</p>
         </div>
     );
 };

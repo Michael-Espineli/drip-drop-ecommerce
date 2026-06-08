@@ -1,13 +1,14 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate } from 'react-router-dom';
-import { query, collection, getDocs, where, setDoc, doc, updateDoc, arrayUnion } from "firebase/firestore";
+import { query, collection, getDocs, where, setDoc, doc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from 'uuid';
 import Select from 'react-select';
 import toast from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { normalizeEmail } from '../../../utils/email';
 
 const Input = (props) => <input {...props} className={`bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${props.className}`} />;
 const SelectInput = (props) => <Select {...props} styles={{ control: (base) => ({ ...base, background: '#F9FAFB', border: '2px solid #E5E7EB', borderRadius: '0.5rem', padding: '0.25rem' }) }} />;
@@ -31,7 +32,7 @@ const CreateNewCompanyUser = () => {
     const { requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
-    const [activeTab, setActiveTab] = useState('new'); // 'new' or 'existing'
+    const [activeTab, setActiveTab] = useState('new');
 
     // Form state
     const [firstName, setFirstName] = useState('');
@@ -62,6 +63,22 @@ const CreateNewCompanyUser = () => {
         fetchRoles();
     }, [recentlySelectedCompany]);
 
+    const findExistingUserDocByEmail = async (rawEmail) => {
+        const usersRef = collection(db, "users");
+        const trimmedEmail = String(rawEmail || "").trim();
+        const normalizedEmail = normalizeEmail(trimmedEmail);
+
+        const normalizedQuery = query(usersRef, where("email", "==", normalizedEmail));
+        const normalizedSnapshot = await getDocs(normalizedQuery);
+        if (!normalizedSnapshot.empty || trimmedEmail === normalizedEmail) {
+            return normalizedSnapshot.docs[0] || null;
+        }
+
+        const exactQuery = query(usersRef, where("email", "==", trimmedEmail));
+        const exactSnapshot = await getDocs(exactQuery);
+        return exactSnapshot.docs[0] || null;
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!requirePermission("262", "create company users")) return;
@@ -76,7 +93,9 @@ const CreateNewCompanyUser = () => {
     const handleInviteNewUser = async () => {
         if (!requirePermission("262", "create company users")) return;
 
-        if (!firstName || !lastName || !email || !role) {
+        const normalizedInviteEmail = normalizeEmail(email);
+
+        if (!firstName || !lastName || !normalizedInviteEmail || !role) {
             toast.error("Please fill out all fields to invite a new user.");
             return;
         }
@@ -85,19 +104,18 @@ const CreateNewCompanyUser = () => {
         const toastId = toast.loading('Sending invite...');
 
         try {
-            const usersRef = collection(db, "users");
-            const q = query(usersRef, where("email", "==", email));
-            const userQuerySnapshot = await getDocs(q);
+            const existingUserDoc = await findExistingUserDocByEmail(normalizedInviteEmail);
 
-            if (!userQuerySnapshot.empty) {
+            if (existingUserDoc) {
                 toast.error('A user with this email already exists. Please use the "Add Existing User" tab.', { id: toastId });
                 return;
             }
 
             const inviteId = 'invi_' + uuidv4();
+            const roleId = role.id || role.value;
             const inviteData = {
-                id: inviteId, userId: null, firstName, lastName, email, companyName,
-                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label,
+                id: inviteId, userId: null, firstName: firstName.trim(), lastName: lastName.trim(), email: normalizedInviteEmail, companyName,
+                companyId: recentlySelectedCompany, roleId, roleName: role.label,
                 status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
             };
 
@@ -117,7 +135,9 @@ const CreateNewCompanyUser = () => {
     const handleAddExistingUser = async () => {
         if (!requirePermission("262", "create company users")) return;
 
-        if (!email || !role) {
+        const normalizedInviteEmail = normalizeEmail(email);
+
+        if (!normalizedInviteEmail || !role) {
             toast.error("Please provide an email and select a role.");
             return;
         }
@@ -126,50 +146,41 @@ const CreateNewCompanyUser = () => {
         const toastId = toast.loading('Adding user to company...');
 
         try {
-            const usersRef = collection(db, "users");
-            const q = query(usersRef, where("email", "==", email));
-            const userQuerySnapshot = await getDocs(q);
+            const userDoc = await findExistingUserDocByEmail(normalizedInviteEmail);
 
-            if (userQuerySnapshot.empty) {
+            if (!userDoc) {
                 toast.error('No user found with this email. Please invite them as a new user.', { id: toastId });
                 return;
             }
+
+            const userData = userDoc.data();
+            const existingFirstName = String(userData.firstName || "").trim();
+            const existingLastName = String(userData.lastName || "").trim();
+            const fallbackName = String(userData.userName || userData.displayName || userData.name || "").trim();
+            const [fallbackFirstName = "", ...fallbackLastNameParts] = fallbackName.split(/\s+/).filter(Boolean);
+            const roleId = role.id || role.value;
+
             const inviteId = 'invi_' + uuidv4();
             const inviteData = {
-                id: inviteId, userId: null, firstName, lastName, email, companyName,
-                companyId: recentlySelectedCompany, roleId: role.id, roleName: role.label,
-                status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
+                id: inviteId,
+                userId: userDoc.id,
+                firstName: existingFirstName || fallbackFirstName,
+                lastName: existingLastName || fallbackLastNameParts.join(" "),
+                email: normalizeEmail(userData.email || normalizedInviteEmail),
+                companyName,
+                companyId: recentlySelectedCompany,
+                roleId,
+                roleName: role.label,
+                status: 'pending',
+                workerType: 'Employee',
+                currentUser: true,
+                dateCreated: new Date(),
             };
 
             await setDoc(doc(db, "invites", inviteId), inviteData);
 
             toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
             navigate('/company/companyUsers');
-
-            // const userDoc = userQuerySnapshot.docs[0];
-            // const userData = userDoc.data();
-            // const companyUserRef = doc(db, 'companies', recentlySelectedCompany, 'companyUsers', userDoc.id);
-
-            // const userName = (userData.firstName && userData.lastName) 
-            //     ? `${userData.firstName} ${userData.lastName}` 
-            //     : userData.email;
-
-            // await setDoc(companyUserRef, {
-            //     userId: userDoc.id,
-            //     userName: userName,
-            //     email: userData.email,
-            //     roleId: role.id,
-            //     roleName: role.label,
-            //     status: 'Active',
-            //     workerType: 'Employee',
-            // }, { merge: true });
-
-            // await updateDoc(userDoc.ref, {
-            //     companies: arrayUnion(recentlySelectedCompany)
-            // });
-
-            // toast.success('User successfully added to your company!', { id: toastId });
-            // navigate('/company/companyUsers');
 
         } catch (error) {
             console.error("Error adding existing user: ", error);
@@ -190,7 +201,7 @@ const CreateNewCompanyUser = () => {
                 <div className="border-b border-gray-200 mb-6">
                     <div className="flex -mb-px">
                         <TabButton active={activeTab === 'new'} onClick={() => setActiveTab('new')}>Invite New User</TabButton>
-                        <TabButton active={activeTab === 'existing'} onClick={() => setActiveTab('existing')}>Add Existing User</TabButton>
+                        <TabButton active={activeTab === 'existing'} onClick={() => setActiveTab('existing')}>Invite Existing User</TabButton>
                     </div>
                 </div>
 
@@ -213,7 +224,7 @@ const CreateNewCompanyUser = () => {
 
                     {activeTab === 'existing' && (
                         <div className="md:col-span-2">
-                            <p className="text-sm text-gray-600">If the user already has an account, add them directly to your company here.</p>
+                            <p className="text-sm text-gray-600">If the user already has an account, send an invitation to join this company.</p>
                         </div>
                     )}
 
@@ -233,7 +244,7 @@ const CreateNewCompanyUser = () => {
                             Cancel
                         </button>
                         <button type="submit" disabled={isLoading || areRolesLoading} className='py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 disabled:bg-blue-300 transition'>
-                            {isLoading ? 'Processing...' : (activeTab === 'new' ? 'Send Invite' : 'Add User')}
+                            {isLoading ? 'Processing...' : 'Send Invite'}
                         </button>
                     </div>
                 </form>

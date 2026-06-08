@@ -1,9 +1,39 @@
 
 import React, { useState, useEffect, useContext } from 'react';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import CompanySummaryCard, { getCompanySummary } from './CompanySummaryCard';
+
+const dateFromFirestore = (value) => {
+    if (!value) return null;
+    if (typeof value.toDate === 'function') return value.toDate();
+    if (value.seconds) return new Date(value.seconds * 1000);
+    if (value instanceof Date) return value;
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const statusClassFor = (status) => {
+    const normalized = String(status || '').toLowerCase();
+    if (normalized === 'pending') return 'bg-yellow-100 text-yellow-800';
+    if (normalized === 'approved' || normalized === 'completed' || normalized === 'in progress') return 'bg-green-100 text-green-800';
+    if (normalized === 'cancelled' || normalized === 'canceled' || normalized === 'declined' || normalized === 'rejected') return 'bg-red-100 text-red-800';
+    return 'bg-gray-100 text-gray-700';
+};
+
+const formatRequestDate = (request) => {
+    const date = dateFromFirestore(request.createdAt || request.dateCreated);
+    return date ? date.toLocaleDateString() : 'N/A';
+};
+
+const requestCompanyFallback = (request) => getCompanySummary({
+    ...request.companySummary,
+    id: request.companyId,
+    name: request.companyName,
+});
 
 const ServiceRequests = () => {
     const { user } = useContext(Context);
@@ -21,29 +51,56 @@ const ServiceRequests = () => {
         setLoading(true);
         const requestsRef = collection(db, 'homeownerServiceRequests');
         const q = query(requestsRef, where('homeownerId', '==', user.uid));
+        let isActive = true;
 
-        const unsubscribe = onSnapshot(q, (snapshot) => {
+        const unsubscribe = onSnapshot(q, async (snapshot) => {
             if (snapshot.empty) {
-                setRequests([]);
-                setLoading(false);
+                if (isActive) {
+                    setRequests([]);
+                    setLoading(false);
+                }
                 return;
             }
 
-            const requestsData = snapshot.docs.map(doc => ({
-                id: doc.id,
-                ...doc.data(),
-                createdAt: doc.data().createdAt?.toDate().toLocaleDateString()
+            const requestsData = snapshot.docs.map(snapshotDoc => ({
+                id: snapshotDoc.id,
+                ...snapshotDoc.data(),
             }));
 
-            setRequests(requestsData);
-            setLoading(false);
+            const companyIds = [...new Set(requestsData.map(request => request.companyId).filter(Boolean))];
+            const companyEntries = await Promise.all(companyIds.map(async (companyId) => {
+                try {
+                    const companySnap = await getDoc(doc(db, 'companies', companyId));
+                    if (companySnap.exists()) {
+                        return [companyId, { id: companySnap.id, ...companySnap.data() }];
+                    }
+                } catch (companyError) {
+                    console.error("Error fetching company for service request list:", companyError);
+                }
+                return [companyId, null];
+            }));
+            const companiesById = new Map(companyEntries);
+            const requestsWithCompanies = requestsData.map(request => ({
+                ...request,
+                company: companiesById.get(request.companyId) || requestCompanyFallback(request),
+            }));
+
+            if (isActive) {
+                setRequests(requestsWithCompanies);
+                setLoading(false);
+            }
         }, (err) => {
             console.error("Snapshot listener error: ", err);
-            setError('Failed to listen for real-time updates.');
-            setLoading(false);
+            if (isActive) {
+                setError('Failed to listen for real-time updates.');
+                setLoading(false);
+            }
         });
 
-        return () => unsubscribe();
+        return () => {
+            isActive = false;
+            unsubscribe();
+        };
     }, [user]);
 
     const handleRequestClick = (requestId) => {
@@ -78,7 +135,7 @@ const ServiceRequests = () => {
                         </button>
                     </div>
                 ) : (
-                    <div className="bg-white rounded-lg shadow-md overflow-hidden">
+                    <div className="bg-white rounded-lg shadow-md overflow-x-auto">
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
@@ -93,14 +150,17 @@ const ServiceRequests = () => {
                             <tbody className="bg-white divide-y divide-gray-200">
                                 {requests.map(request => (
                                     <tr key={request.id} className="hover:bg-gray-50 transition-colors">
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{request.companyName}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{request.dateCreated}</td>
+                                        <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                                            <CompanySummaryCard
+                                                company={request.company}
+                                                companyId={request.companyId}
+                                                compact
+                                            />
+                                        </td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{formatRequestDate(request)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">
-                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${request.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                                                request.status === 'approved' ? 'bg-green-100 text-green-800' :
-                                                    'bg-red-100 text-red-800'
-                                                }`}>
-                                                {request.status}
+                                            <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${statusClassFor(request.status)}`}>
+                                                {request.status || 'Pending'}
                                             </span>
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">

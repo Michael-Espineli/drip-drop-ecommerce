@@ -3,8 +3,13 @@ import { getAuth, onAuthStateChanged } from "firebase/auth";
 import { db } from "../utils/config";
 import { getDoc, doc, getDocs, where, query, collection, onSnapshot } from "firebase/firestore";
 import { roleHasCompanyPermission } from "../utils/companyPermissionAccess";
+import { normalizeEmail } from "../utils/email";
 
 export const Context = createContext();
+
+const getStripeCustomerId = (companyData = {}) => (
+    companyData.stripeCustomerId || companyData.stripeId || null
+);
 
 export function AuthContext({ children }) {
     // User Information
@@ -46,10 +51,11 @@ export function AuthContext({ children }) {
 
                 // Check for pending invites first
                 try {
+                    const normalizedEmail = normalizeEmail(currentUser.email);
                     const invitesRef = collection(db, "invites");
                     const q = query(
                         invitesRef,
-                        where("email", "==", currentUser.email),
+                        where("email", "==", normalizedEmail),
                         where("status", "in", ["pending", "Pending"])
                     );
                     const inviteSnapshot = await getDocs(q);
@@ -81,9 +87,10 @@ export function AuthContext({ children }) {
                                 const companyDocRef = doc(db, "companies", dbUser.recentlySelectedCompany);
                                 const companyDoc = await getDoc(companyDocRef);
                                 if (companyDoc.exists()) {
-                                    setRecentlySelectedCompanyName(companyDoc.data().name);
-                                    setStripeConnectedAccountId(companyDoc.data().stripeConnectedAccountId);
-                                    setStripeId(companyDoc.data().stripeConnectedAccountId)
+                                    const companyData = companyDoc.data();
+                                    setRecentlySelectedCompanyName(companyData.name);
+                                    setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
+                                    setStripeId(getStripeCustomerId(companyData));
                                 }
                             }
                         } else {
@@ -194,7 +201,7 @@ export function AuthContext({ children }) {
                     const companyData = companyDoc.data();
                     setRecentlySelectedCompanyName(companyData.name || null);
                     setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
-                    setStripeId(companyData.stripeConnectedAccountId || null);
+                    setStripeId(getStripeCustomerId(companyData));
                 } else {
                     setRecentlySelectedCompanyName(null);
                     setStripeConnectedAccountId(null);

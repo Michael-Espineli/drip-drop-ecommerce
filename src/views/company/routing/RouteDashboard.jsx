@@ -358,6 +358,12 @@ const minutesBetween = (start, end) => {
     return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
 };
 
+const numberOrNull = (value) => {
+    if (value === "" || value === null || value === undefined) return null;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
 const timelinePercent = (date, rangeStart, rangeEnd) => {
     if (!date || !rangeStart || !rangeEnd || rangeEnd <= rangeStart) return 0;
 
@@ -1122,6 +1128,70 @@ const RouteDashboard = () => {
         }
     };
 
+    const saveRouteCompletion = async (route, draft) => {
+        if (!recentlySelectedCompany || !route?.id) return;
+
+        const startMileage = numberOrNull(draft.startMileage);
+        const endMileage = numberOrNull(draft.endMileage);
+
+        if (startMileage !== null && endMileage !== null && endMileage < startMileage) {
+            toast.error("End mileage must be greater than or equal to start mileage.");
+            return;
+        }
+
+        const completedAt = new Date();
+        const routeStartTime =
+            getDateValue(route.startTime) ||
+            getDateValue(route.startTimeDate) ||
+            getDateValue(route.date) ||
+            completedAt;
+        const distanceMiles =
+            startMileage !== null && endMileage !== null
+                ? Number((endMileage - startMileage).toFixed(1))
+                : Number(route.distanceMiles || route.distance || 0);
+        const payload = {
+            startMilage: startMileage,
+            startMileage,
+            endMilage: endMileage,
+            endMileage,
+            distanceMiles,
+            distance: distanceMiles,
+            endTime: Timestamp.fromDate(completedAt),
+            completedAt: Timestamp.fromDate(completedAt),
+            completedDate: Timestamp.fromDate(completedAt),
+            durationMin: minutesBetween(routeStartTime, completedAt),
+            status: "Finished",
+            operationStatus: "Finished",
+            mileageStatus: endMileage !== null ? "Complete" : "Needs Mileage",
+            completionNotes: draft.completionNotes || "",
+            finishedStops: route.totalStops || route.finishedStops || 0,
+        };
+
+        try {
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "activeRoutes", route.id), payload);
+
+            if (route.vehicalId && endMileage !== null) {
+                await updateDoc(doc(db, "companies", recentlySelectedCompany, "vehicals", route.vehicalId), {
+                    miles: endMileage,
+                    lastRouteId: route.id,
+                    lastRouteDate: route.date || Timestamp.fromDate(completedAt),
+                    lastRouteMileageUpdatedAt: Timestamp.fromDate(completedAt),
+                });
+            }
+
+            setActiveRoutes((currentRoutes) =>
+                currentRoutes.map((currentRoute) =>
+                    currentRoute.id === route.id ? { ...currentRoute, ...payload } : currentRoute
+                )
+            );
+
+            toast.success("Route completion saved.");
+        } catch (error) {
+            console.error("Error saving route completion:", error);
+            toast.error("Failed to save route completion.");
+        }
+    };
+
     const seedDemoRoute = async () => {
         if (!recentlySelectedCompany || process.env.NODE_ENV === 'production') return;
 
@@ -1331,6 +1401,7 @@ const RouteDashboard = () => {
                                     moveDate={moveDate}
                                     moveTechId={moveTechId}
                                     isMovingStops={isMovingStops}
+                                    onSaveRouteCompletion={saveRouteCompletion}
                                     onToggleStop={toggleSelectedStop}
                                     onMoveDateChange={setMoveDate}
                                     onMoveTechChange={setMoveTechId}
@@ -1473,6 +1544,7 @@ const ActiveRouteDetailPanel = ({
     moveDate,
     moveTechId,
     isMovingStops,
+    onSaveRouteCompletion,
     onToggleStop,
     onMoveDateChange,
     onMoveTechChange,
@@ -1484,6 +1556,26 @@ const ActiveRouteDetailPanel = ({
     const latestLocation = locations[locations.length - 1] || null;
     const selectedCount = selectedStopIds.length;
     const unfinishedStops = stops.filter(stop => !getStopTiming(stop).end);
+    const [completionDraft, setCompletionDraft] = useState({
+        startMileage: "",
+        endMileage: "",
+        completionNotes: "",
+    });
+
+    useEffect(() => {
+        setCompletionDraft({
+            startMileage: route.startMilage ?? route.startMileage ?? "",
+            endMileage: route.endMilage ?? route.endMileage ?? "",
+            completionNotes: route.completionNotes || "",
+        });
+    }, [route.completionNotes, route.endMilage, route.endMileage, route.id, route.startMilage, route.startMileage]);
+
+    const updateCompletionDraft = (field, value) => {
+        setCompletionDraft((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
 
     return (
         <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
@@ -1573,6 +1665,50 @@ const ActiveRouteDetailPanel = ({
                         ) : (
                             <p className="mt-2 text-sm text-gray-500">No GPS breadcrumbs loaded.</p>
                         )}
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 p-4">
+                        <p className="font-semibold text-gray-800">Route Completion</p>
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <label className="space-y-1">
+                                <span className="text-xs font-semibold text-gray-600">Start Mileage</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    value={completionDraft.startMileage}
+                                    onChange={(event) => updateCompletionDraft("startMileage", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                />
+                            </label>
+                            <label className="space-y-1">
+                                <span className="text-xs font-semibold text-gray-600">End Mileage</span>
+                                <input
+                                    type="number"
+                                    min="0"
+                                    step="0.1"
+                                    value={completionDraft.endMileage}
+                                    onChange={(event) => updateCompletionDraft("endMileage", event.target.value)}
+                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                />
+                            </label>
+                        </div>
+                        <label className="mt-3 block space-y-1">
+                            <span className="text-xs font-semibold text-gray-600">Notes</span>
+                            <textarea
+                                value={completionDraft.completionNotes}
+                                onChange={(event) => updateCompletionDraft("completionNotes", event.target.value)}
+                                rows={2}
+                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                            />
+                        </label>
+                        <button
+                            type="button"
+                            onClick={() => onSaveRouteCompletion(route, completionDraft)}
+                            className="mt-3 w-full rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700"
+                        >
+                            Save Route Completion
+                        </button>
                     </div>
 
                     <div className="rounded-lg border border-gray-200 p-4">

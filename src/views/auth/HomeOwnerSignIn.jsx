@@ -13,6 +13,19 @@ export default function HomeOwnerSignIn() {
     const navigate = useNavigate();
     const location = useLocation();
     const { user, accountType } = useContext(Context);
+
+    useEffect(() => {
+        const queryParams = new URLSearchParams(location.search);
+        const inviteEmail = queryParams.get('email') || '';
+        if (inviteEmail) setEmail(inviteEmail);
+    }, [location.search]);
+
+    const queryParams = new URLSearchParams(location.search);
+    const redirectPath = queryParams.get('redirect');
+    const signUpLink = redirectPath
+        ? `/homeownerSignUp?redirect=${encodeURIComponent(redirectPath)}`
+        : '/homeownerSignUp';
+
     useEffect(() => {
         if (!user) return;
         const queryParams = new URLSearchParams(location.search);
@@ -100,9 +113,9 @@ export default function HomeOwnerSignIn() {
                             />
 
                             <div className="text-sm text-right">
-                                <a href="#" className="font-medium text-blue-600 hover:text-blue-500">
+                                <button type="button" className="font-medium text-blue-600 hover:text-blue-500">
                                     Forgot your password?
-                                </a>
+                                </button>
                             </div>
 
                             <button
@@ -115,7 +128,7 @@ export default function HomeOwnerSignIn() {
                         </form>
 
                         <p className="mt-6 text-center text-sm">
-                            Don't have an account? <Link to="/signUp" className="font-medium text-blue-600">Sign up</Link>
+                            Don't have an account? <Link to={signUpLink} className="font-medium text-blue-600">Sign up</Link>
                         </p>
                     </div>
 

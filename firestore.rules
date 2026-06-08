@@ -6,6 +6,11 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isDripDropAdmin() {
+      return signedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountType == "Admin";
+    }
+
     function isSelf(userId) {
       return signedIn() && request.auth.uid == userId;
     }
@@ -58,10 +63,108 @@ service cloud.firestore {
         && hasCompanyAccess(data.companyId);
     }
 
+    function validProductFeedbackCreate(data) {
+      return data.keys().hasOnly([
+          "type",
+          "typeLabel",
+          "audience",
+          "title",
+          "description",
+          "priority",
+          "requesterName",
+          "requesterEmail",
+          "status",
+          "source",
+          "userId",
+          "userEmail",
+          "accountType",
+          "companyId",
+          "companyName",
+          "createdAt",
+          "updatedAt"
+        ])
+        && data.keys().hasAll(["type", "title", "description", "status", "source", "createdAt", "updatedAt"])
+        && data.type in ["bug", "feature"]
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 200
+        && data.description is string
+        && data.description.size() > 0
+        && data.description.size() <= 5000
+        && data.status == "New"
+        && data.source == "footer"
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    function validContactMessageCreate(data) {
+      return data.keys().hasOnly([
+          "name",
+          "email",
+          "companyName",
+          "subject",
+          "message",
+          "audience",
+          "status",
+          "source",
+          "userId",
+          "userEmail",
+          "accountType",
+          "companyId",
+          "createdAt",
+          "updatedAt"
+        ])
+        && data.keys().hasAll(["name", "email", "message", "status", "source", "createdAt", "updatedAt"])
+        && data.name is string
+        && data.name.size() > 0
+        && data.name.size() <= 160
+        && data.email is string
+        && data.email.size() > 0
+        && data.email.size() <= 320
+        && data.message is string
+        && data.message.size() > 0
+        && data.message.size() <= 5000
+        && data.status == "New"
+        && data.source in ["contact-page", "footer"]
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
     function chatParticipant(data) {
       return signedIn()
         && data.participantIds is list
         && request.auth.uid in data.participantIds;
+    }
+
+    function companyChatParticipant(data) {
+      return signedIn()
+        && (
+          (data.companyId is string && hasCompanyAccess(data.companyId))
+          || (data.senderCompanyId is string && hasCompanyAccess(data.senderCompanyId))
+          || (data.receiverCompanyId is string && hasCompanyAccess(data.receiverCompanyId))
+        );
+    }
+
+    function canReadChatData(data) {
+      return chatParticipant(data) || companyChatParticipant(data);
+    }
+
+    function chatPath(chatId) {
+      return /databases/$(database)/documents/chats/$(chatId);
+    }
+
+    function canReadChatById(chatId) {
+      return signedIn()
+        && chatId is string
+        && exists(chatPath(chatId))
+        && canReadChatData(get(chatPath(chatId)).data);
+    }
+
+    function canReadChatByIdAfter(chatId) {
+      return signedIn()
+        && chatId is string
+        && existsAfter(chatPath(chatId))
+        && canReadChatData(getAfter(chatPath(chatId)).data);
     }
 
     match /users/{userId} {
@@ -123,17 +226,24 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow create: if chatParticipant(request.resource.data);
-      allow read, update, delete: if chatParticipant(resource.data);
+      allow create: if canReadChatData(request.resource.data);
+      allow read, update, delete: if canReadChatData(resource.data);
     }
 
     match /messages/{messageId} {
       allow create: if signedIn()
-        && request.resource.data.senderId == request.auth.uid;
+        && request.resource.data.senderId == request.auth.uid
+        && (
+          canReadChatById(request.resource.data.chatId)
+          || canReadChatByIdAfter(request.resource.data.chatId)
+        );
       allow read, update, delete: if signedIn()
         && (
           resource.data.senderId == request.auth.uid
           || resource.data.receiverId == request.auth.uid
+          || (resource.data.senderCompanyId is string && hasCompanyAccess(resource.data.senderCompanyId))
+          || (resource.data.receiverCompanyId is string && hasCompanyAccess(resource.data.receiverCompanyId))
+          || canReadChatById(resource.data.chatId)
         );
     }
 
@@ -215,6 +325,16 @@ service cloud.firestore {
     match /universal/{document=**} {
       allow read: if signedIn();
       allow write: if false;
+    }
+
+    match /productFeedback/{feedbackId} {
+      allow create: if validProductFeedbackCreate(request.resource.data) || isDripDropAdmin();
+      allow read, update, delete: if isDripDropAdmin();
+    }
+
+    match /contactMessages/{messageId} {
+      allow create: if validContactMessageCreate(request.resource.data) || isDripDropAdmin();
+      allow read, update, delete: if isDripDropAdmin();
     }
 
     match /{document=**} {

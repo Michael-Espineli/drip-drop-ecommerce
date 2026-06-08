@@ -32,6 +32,8 @@ export class FeatureFlag {
         4: 'Sales',
         5: 'Turn on real emails',
         6: 'Payroll',
+        8: 'Migration',
+        9: 'Skimmer previous dosages upload',
       }[index] || ''
     );
   }
@@ -45,6 +47,8 @@ export class FeatureFlag {
         4: 'Enables the Sales slice: dashboard, catalog items, service agreements, and sales billing workflows.',
         5: 'When off, service agreement and invoice emails are routed to the internal test inbox instead of homeowners.',
         6: 'Enables Payroll and Payroll Setup under company Finance.',
+        8: 'Enables migration tooling for moving company CRM data into Drip Drop.',
+        9: 'Enables the Skimmer previous dosages Excel upload inside migration tooling.',
       }[index] || ''
     );
   }

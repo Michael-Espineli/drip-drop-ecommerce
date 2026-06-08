@@ -1,4 +1,5 @@
 import { lazy } from "react";
+import { Navigate } from "react-router-dom";
 
 const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
 
@@ -111,6 +112,7 @@ const Vendors = lazy(() => import("../../views/company/venders/Venders"))
 const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
+const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
 
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
@@ -171,6 +173,13 @@ export const sellerRoutes = [
         element: <CompanySettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/settings/payroll-setup',
+        element: <Payroll mode="setup" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '400',
+        featureFlagId: 'feature_flag_006',
     }, {
         path: '/company/setup-guide',
         element: <CompanySetupGuide />,
@@ -860,6 +869,15 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/migration/skimmer-previous-dosages-upload',
+        element: <SkimmerPreviousDosagesUpload />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
+        featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
+    }
+    ,
+    {
         path: '/company/payroll',
         element: <Payroll />,
         ability: ['Admin', 'Seller'],
@@ -869,7 +887,7 @@ export const sellerRoutes = [
     ,
     {
         path: '/company/payroll/setup',
-        element: <Payroll mode="setup" />,
+        element: <Navigate to="/company/settings/payroll-setup" replace />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
         featureFlagId: 'feature_flag_006',
@@ -995,6 +1013,10 @@ export const sellerRoutes = [
     }, {
         path: '/company/leads/:leadId',
         element: <LeadDetail />,
+        role: 'Company',
+    }, {
+        path: '/company/leads/:leadId/edit',
+        element: <AddLead />,
         role: 'Company',
     }, {
         path: '/company/customers/create-from-lead/:leadId',

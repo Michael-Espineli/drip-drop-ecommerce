@@ -18,7 +18,7 @@ const formatCurrency = (amount, currency = 'usd') => {
 };
 
 export default function Subscriptions() {
-    const { recentlySelectedCompany, dataBaseUser, stripeId } = useContext(Context);
+    const { recentlySelectedCompany, stripeId } = useContext(Context);
     const [activeSubscription, setActiveSubscription] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
@@ -69,13 +69,17 @@ export default function Subscriptions() {
         }
     }, [recentlySelectedCompany]);
 
-    const fetchPaymentHistory = useCallback(async () => {
-        if (!stripeId) return;
+    const fetchPaymentHistory = useCallback(async (subscription) => {
+        const stripeCustomerId = subscription?.stripeCustomerId || stripeId;
+        if (!stripeCustomerId || !subscription?.stripeSubscriptionId) return;
 
         setLoadingHistory(true);
         try {
             const getStripePaymentHistory = httpsCallable(functions, 'getStripePaymentHistory');
-            const result = await getStripePaymentHistory({ stripeCustomerId: stripeId });
+            const result = await getStripePaymentHistory({
+                stripeCustomerId,
+                companyId: recentlySelectedCompany,
+            });
             if (result.data.invoices) {
                 setPaymentHistory(result.data.invoices);
             }
@@ -85,7 +89,7 @@ export default function Subscriptions() {
         } finally {
             setLoadingHistory(false);
         }
-    }, [stripeId]);
+    }, [recentlySelectedCompany, stripeId]);
     
     const fetchUpcomingInvoice = useCallback(async (subscriptionId) => {
         if (!subscriptionId) return;
@@ -114,7 +118,7 @@ export default function Subscriptions() {
         
         fetchActiveSubscription().then(subscription => {
             if (subscription) {
-                fetchPaymentHistory();
+                fetchPaymentHistory(subscription);
                 if (subscription.status !== 'pending_cancellation') {
                     fetchUpcomingInvoice(subscription.stripeSubscriptionId);
                 }
@@ -150,7 +154,9 @@ export default function Subscriptions() {
     };
 
     const handleRedirectToPortal = async () => {
-        if (!stripeId) {
+        const stripeCustomerId = activeSubscription?.stripeCustomerId || stripeId;
+
+        if (!stripeCustomerId) {
             toast.error('Stripe customer information not found.');
             return;
         }
@@ -159,7 +165,7 @@ export default function Subscriptions() {
         try {
             const createStripePortalSession = httpsCallable(functions, 'createStripePortalSession');
             const result = await createStripePortalSession({
-                stripeCustomerId: stripeId,
+                stripeCustomerId,
                 returnUrl: window.location.href,
             });
             if (result.data.url) {
@@ -209,19 +215,21 @@ export default function Subscriptions() {
                                         )}
                                     </div>
                                     <div className="md:col-span-2 mt-6 pt-6 border-t border-gray-700 space-y-4">
-                                        <button 
-                                            onClick={handleRedirectToPortal}
-                                            disabled={isPortalLoading}
-                                            className="w-full text-center py-3 px-4 bg-yellow-500 text-black font-bold rounded-lg hover:bg-yellow-600 transition duration-300 disabled:bg-gray-500 disabled:cursor-wait"
-                                        >
-                                            {isPortalLoading ? 'Redirecting...' : 'Manage Billing & Invoices'}
-                                        </button>
-                                         <div className="flex items-center space-x-4">
+                                        {activeSubscription.stripeSubscriptionId && (
+                                            <button
+                                                onClick={handleRedirectToPortal}
+                                                disabled={isPortalLoading}
+                                                className="w-full text-center py-3 px-4 bg-yellow-500 text-black font-bold rounded-lg hover:bg-yellow-600 transition duration-300 disabled:bg-gray-500 disabled:cursor-wait"
+                                            >
+                                                {isPortalLoading ? 'Redirecting...' : 'Manage Billing & Invoices'}
+                                            </button>
+                                        )}
+                                        <div className="flex items-center space-x-4">
                                             <button onClick={() => navigate('/company/settings/subscriptions/picker')} className='w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-5 rounded-lg transition duration-300'>
                                                 Change Plan
                                             </button>
-                                            {activeSubscription.status !== 'pending_cancellation' && (
-                                                 <button onClick={handleCancelSubscription} className='w-full bg-gray-600 hover:bg-red-700 text-white font-bold py-2 px-5 rounded-lg transition duration-300'>
+                                            {activeSubscription.stripeSubscriptionId && activeSubscription.status !== 'pending_cancellation' && (
+                                                <button onClick={handleCancelSubscription} className='w-full bg-gray-600 hover:bg-red-700 text-white font-bold py-2 px-5 rounded-lg transition duration-300'>
                                                     Cancel
                                                 </button>
                                             )}
@@ -239,7 +247,7 @@ export default function Subscriptions() {
                             )}
                         </div>
 
-                        {activeSubscription && (
+                        {activeSubscription?.stripeSubscriptionId && (
                             <div>
                                 <h3 className="text-3xl font-bold mb-6 text-center">Recent Payments</h3>
                                 {loadingHistory ? (

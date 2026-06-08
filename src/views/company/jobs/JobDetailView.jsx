@@ -198,6 +198,12 @@ const JobDetailView = () => {
   const [taskDescription, setTaskDescription] = useState("");
   const [taskLaborCost, setTaskLaborCost] = useState("");
   const [estimatedTime, setEstimatedTime] = useState("");
+  const [taskBodyOfWaterList, setTaskBodyOfWaterList] = useState([]);
+  const [taskEquipmentList, setTaskEquipmentList] = useState([]);
+  const [selectedTaskBodyOfWater, setSelectedTaskBodyOfWater] = useState(null);
+  const [selectedTaskEquipment, setSelectedTaskEquipment] = useState(null);
+  const [selectedTaskDbItem, setSelectedTaskDbItem] = useState(null);
+  const [taskQuantity, setTaskQuantity] = useState("1");
 
   // Shopping list
   const [shoppingList, setShoppingList] = useState([]);
@@ -934,6 +940,52 @@ const JobDetailView = () => {
     }),
     menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
   };
+
+  const bodyOfWaterTaskTypes = new Set(["Empty Water", "Fill Water", "Install", "Replace"]);
+  const equipmentTaskTypes = new Set(["Clean Filter", "Maintenance", "Repair", "Remove", "Replace"]);
+  const installItemTaskTypes = new Set(["Install", "Replace"]);
+
+  const selectedTaskTypeValue = selectedTaskType?.value || "";
+  const taskNeedsBodyOfWater = bodyOfWaterTaskTypes.has(selectedTaskTypeValue);
+  const taskNeedsEquipment = equipmentTaskTypes.has(selectedTaskTypeValue);
+  const taskNeedsInstallItem = installItemTaskTypes.has(selectedTaskTypeValue);
+
+  const taskEquipmentOptions = useMemo(() => {
+    if (selectedTaskTypeValue !== "Clean Filter") return taskEquipmentList;
+
+    return (taskEquipmentList || []).filter((item) =>
+      String(item.type || item.category || "").toLowerCase().includes("filter")
+    );
+  }, [selectedTaskTypeValue, taskEquipmentList]);
+
+  const equipmentById = useMemo(
+    () => new Map((taskEquipmentList || []).map((item) => [item.id, item])),
+    [taskEquipmentList]
+  );
+
+  const bodyOfWaterById = useMemo(
+    () => new Map((taskBodyOfWaterList || []).map((item) => [item.id, item])),
+    [taskBodyOfWaterList]
+  );
+
+  const taskContextLabel = (task) => {
+    const parts = [];
+
+    if (task.bodyOfWaterId) {
+      parts.push(bodyOfWaterById.get(task.bodyOfWaterId)?.name || "Linked body of water");
+    }
+
+    if (task.equipmentId) {
+      parts.push(equipmentById.get(task.equipmentId)?.name || "Linked equipment");
+    }
+
+    if (task.dataBaseItemId) {
+      const item = (shoppingDbItemList || []).find((dbItem) => dbItem.id === task.dataBaseItemId);
+      parts.push(item?.name || "Linked item");
+    }
+
+    return parts.join(" • ");
+  };
   // Contract create confirmation modal
   const [showCreateContractModal, setShowCreateContractModal] = useState(false);
   const [showCreateWorkOfferModal, setShowCreateWorkOfferModal] = useState(false);
@@ -1270,6 +1322,50 @@ const JobDetailView = () => {
     const stateUpdates = purchasedItemInvoiceState({ invoiceId, invoiceType });
     setPurchasedItems((prev) =>
       (prev || []).map((item) => (itemsById.has(item.id) ? { ...item, ...stateUpdates } : item))
+    );
+
+    return items.length;
+  };
+
+  const markShoppingItemsReadyForAcceptedEstimate = async () => {
+    if (!recentlySelectedCompany || !jobId) return 0;
+
+    const shoppingSnap = await getDocs(
+      query(
+        collection(db, "companies", recentlySelectedCompany, "shoppingList"),
+        where("jobId", "==", jobId)
+      )
+    );
+    const terminalStatuses = new Set(["purchased", "installed", "cancelled", "canceled"]);
+    const items = shoppingSnap.docs
+      .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+      .filter((item) => !terminalStatuses.has(String(item.status || "").toLowerCase()));
+
+    if (!items.length) return 0;
+
+    await Promise.all(
+      items.map((item) =>
+        updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), {
+          status: "Ready to Purchase",
+          estimateAccepted: true,
+          estimateAcceptedAt: serverTimestamp(),
+          jobBillingStatus: "accepted",
+        })
+      )
+    );
+
+    setShoppingList((current) =>
+      (current || []).map((item) =>
+        items.some((readyItem) => readyItem.id === item.id)
+          ? {
+              ...item,
+              status: "Ready to Purchase",
+              estimateAccepted: true,
+              estimateAcceptedAt: new Date(),
+              jobBillingStatus: "accepted",
+            }
+          : item
+      )
     );
 
     return items.length;
@@ -2422,6 +2518,57 @@ const JobDetailView = () => {
           }));
         }
 
+        if (j.serviceLocationId) {
+          const [bodySnap, equipmentSnap] = await Promise.all([
+            getDocs(
+              query(
+                collection(db, "companies", recentlySelectedCompany, "bodiesOfWater"),
+                where("serviceLocationId", "==", j.serviceLocationId)
+              )
+            ),
+            getDocs(
+              query(
+                collection(db, "companies", recentlySelectedCompany, "equipment"),
+                where("serviceLocationId", "==", j.serviceLocationId)
+              )
+            ),
+          ]);
+
+          setTaskBodyOfWaterList(
+            bodySnap.docs.map((docSnap) => {
+              const data = docSnap.data();
+              const id = data.id || docSnap.id;
+
+              return {
+                ...data,
+                id,
+                value: id,
+                label: data.name || "Body Of Water",
+              };
+            })
+          );
+
+          setTaskEquipmentList(
+            equipmentSnap.docs.map((docSnap) => {
+              const data = docSnap.data();
+              const id = data.id || docSnap.id;
+              const label = data.name
+                ? `${data.name}${data.type ? ` — ${data.type}` : ""}`
+                : data.model || "Equipment";
+
+              return {
+                ...data,
+                id,
+                value: id,
+                label,
+              };
+            })
+          );
+        } else {
+          setTaskBodyOfWaterList([]);
+          setTaskEquipmentList([]);
+        }
+
         const taskTypeQuery = query(collection(db, "universal", "settings", "taskTypes"));
         const taskTypeSnap = await getDocs(taskTypeQuery);
         const types = taskTypeSnap.docs.map((d) => {
@@ -2515,6 +2662,8 @@ const JobDetailView = () => {
             rate: Number(data.rate || 0),
             sellPrice: Number(data.sellPrice || 0),
             cost: Number(data.cost || data.rate || 0),
+            category: data.category || "",
+            subCategory: data.subCategory || "",
             label: name,
             value: data.id || docSnap.id,
           };
@@ -3103,8 +3252,21 @@ const JobDetailView = () => {
     setTaskDescription("");
     setTaskLaborCost("");
     setEstimatedTime("");
+    setSelectedTaskBodyOfWater(null);
+    setSelectedTaskEquipment(null);
+    setSelectedTaskDbItem(null);
+    setTaskQuantity("1");
     setNewTask(false);
   };
+
+  useEffect(() => {
+    if (!taskNeedsBodyOfWater) setSelectedTaskBodyOfWater(null);
+    if (!taskNeedsEquipment) setSelectedTaskEquipment(null);
+    if (!taskNeedsInstallItem) {
+      setSelectedTaskDbItem(null);
+      setTaskQuantity("1");
+    }
+  }, [taskNeedsBodyOfWater, taskNeedsEquipment, taskNeedsInstallItem]);
 
   const handleAddTask = async (e) => {
     e.preventDefault();
@@ -3113,10 +3275,25 @@ const JobDetailView = () => {
       if (!taskDescription) return toast.error("Add a description");
       if (!taskLaborCost) return toast.error("Add labor cost");
       if (!estimatedTime) return toast.error("Add estimated time (minutes)");
+      if (taskNeedsBodyOfWater && !selectedTaskBodyOfWater?.id) {
+        return toast.error("Select a body of water");
+      }
+      if (taskNeedsEquipment && !selectedTaskEquipment?.id) {
+        return toast.error("Select equipment");
+      }
+      if (taskNeedsInstallItem && !selectedTaskDbItem?.id) {
+        return toast.error("Select an item");
+      }
+      if (taskNeedsInstallItem) {
+        const qty = parseFloat(taskQuantity);
+        if (!qty || qty <= 0) return toast.error("Quantity must be greater than 0");
+      }
 
       const id = "comp_wo_tas_" + uuidv4();
       const costCents = Math.round(parseFloat(taskLaborCost) * 100);
       const estMin = parseFloat(estimatedTime);
+      const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
+      const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), {
         id,
@@ -3141,13 +3318,78 @@ const JobDetailView = () => {
           internalId: "",
         },
 
-        equipmentId: job.equipmentId || "",
+        equipmentId: taskNeedsEquipment ? selectedTaskEquipment?.id || "" : "",
         serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
-        bodyOfWaterId: job.bodyOfWaterId || "",
-        dataBaseItemId: "",
-        shoppingListItemId: "",
-        shoppingListItemIds: [],
+        bodyOfWaterId: taskNeedsBodyOfWater ? selectedTaskBodyOfWater?.id || "" : "",
+        dataBaseItemId: taskNeedsInstallItem ? selectedTaskDbItem?.id || "" : "",
+        shoppingListItemId: linkedShoppingListItemId,
+        shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
       });
+
+      if (taskNeedsInstallItem) {
+        const plannedUnitCostCents = Number(selectedTaskDbItem?.rate || selectedTaskDbItem?.cost || 0);
+        const plannedUnitPriceCents = Number(
+          selectedTaskDbItem?.sellPrice ||
+          selectedTaskDbItem?.rate ||
+          selectedTaskDbItem?.cost ||
+          0
+        );
+        const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
+        const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
+
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
+          id: linkedShoppingListItemId,
+          category: "Job",
+          subCategory: "Data Base",
+          status: "Need to Purchase",
+          purchaserId: "",
+          purchaserName: "",
+          genericItemId: selectedTaskDbItem?.genericItemId || "",
+          name: selectedTaskDbItem?.name || "",
+          description: selectedTaskDbItem?.description || "",
+          datePurchased: null,
+          quantity: String(quantity),
+          jobId: jobId || "",
+          jobName: job.internalId || "Job",
+          linkedTaskId: id,
+          linkedTaskName: taskDescription,
+          linkedTaskType: selectedTaskType.value,
+          customerId: job.customerId || "",
+          customerName:
+            job.customerName ||
+            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+            "",
+          userId: "",
+          userName: "",
+          serviceStopId: "",
+          serviceStopInternalId: "",
+          serviceLocationId: job.serviceLocationId || "",
+          serviceLocationName: serviceLocation.nickName || "",
+          scheduledDate: null,
+          prepKeys: [
+            jobId ? `job:${jobId}` : "",
+            job.customerId ? `customer:${job.customerId}` : "",
+            job.serviceLocationId ? `serviceLocation:${job.serviceLocationId}` : "",
+            `jobTask:${id}`,
+          ].filter(Boolean),
+          needsAction: true,
+          actionDate: Timestamp.fromDate(new Date()),
+          assignedTechIds: [],
+          dbItemId: selectedTaskDbItem?.id || "",
+          dbItemName: selectedTaskDbItem?.name || "",
+          purchasedItem: "",
+          invoiced: true,
+          itemId: selectedTaskDbItem?.id || "",
+          itemType: "Data Base",
+          cost: plannedUnitCostCents,
+          price: plannedUnitPriceCents,
+          plannedUnitCostCents,
+          plannedUnitPriceCents,
+          plannedTotalCostCents,
+          plannedTotalPriceCents,
+        });
+      }
+
       await recordJobHistory({
         eventType: "Task",
         title: `Task added: ${taskDescription}`,
@@ -3155,6 +3397,15 @@ const JobDetailView = () => {
           buildHistoryChange("type", "Task Type", "—", selectedTaskType.value),
           buildHistoryChange("contractedRate", "Labor Cost", "—", moneyFromCents(costCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estMin} minutes`),
+          ...(taskNeedsBodyOfWater
+            ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", selectedTaskBodyOfWater?.label || selectedTaskBodyOfWater?.name || "—")]
+            : []),
+          ...(taskNeedsEquipment
+            ? [buildHistoryChange("equipmentId", "Equipment", "—", selectedTaskEquipment?.label || selectedTaskEquipment?.name || "—")]
+            : []),
+          ...(taskNeedsInstallItem
+            ? [buildHistoryChange("dataBaseItemId", "Item", "—", selectedTaskDbItem?.label || selectedTaskDbItem?.name || "—")]
+            : []),
         ],
         metadata: { taskId: id },
       });
@@ -3162,13 +3413,21 @@ const JobDetailView = () => {
       const tasksRef = collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks");
       const tasksSnap = await getDocs(tasksRef);
       const tasks = tasksSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const shoppingSnap = await getDocs(
+        query(
+          collection(db, "companies", recentlySelectedCompany, "shoppingList"),
+          where("jobId", "==", jobId)
+        )
+      );
+      const updatedShoppingList = shoppingSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
       setTaskList(tasks);
+      setShoppingList(updatedShoppingList);
 
       await loadJobWorkflowData({
         companyId: recentlySelectedCompany,
         currentJobId: jobId,
         currentTaskList: tasks,
-        currentShoppingList: shoppingList,
+        currentShoppingList: updatedShoppingList,
       });
 
       toast.success("Added task");
@@ -4369,6 +4628,7 @@ const JobDetailView = () => {
           billingStatus: "Accepted",
           operationStatus: job.operationStatus === "Estimate Pending" ? "Unscheduled" : job.operationStatus,
         });
+        const readyShoppingItemCount = await markShoppingItemsReadyForAcceptedEstimate();
 
         setJob((prev) => ({
           ...prev,
@@ -4392,7 +4652,7 @@ const JobDetailView = () => {
               job.operationStatus === "Estimate Pending" ? "Unscheduled" : job.operationStatus
             ),
           ],
-          metadata: { contractId: selectedContract.id },
+          metadata: { contractId: selectedContract.id, readyShoppingItemCount },
         });
 
         toast.success("Estimate marked as accepted");
@@ -4400,6 +4660,7 @@ const JobDetailView = () => {
 
         const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
         await updateDoc(jobRef, { billingStatus: "Accepted", operationStatus: "Unscheduled" });
+        const readyShoppingItemCount = await markShoppingItemsReadyForAcceptedEstimate();
         setJob((prev) => ({ ...prev, billingStatus: "Accepted", operationStatus: "Unscheduled" }));
         setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
         setSelectedOperationStatus({ value: "Unscheduled", label: "Unscheduled" });
@@ -4410,6 +4671,7 @@ const JobDetailView = () => {
             buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Accepted"),
             buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", "Unscheduled"),
           ],
+          metadata: { readyShoppingItemCount },
         });
       }
     } catch (err) {
@@ -5863,7 +6125,14 @@ const JobDetailView = () => {
                 <tbody className="divide-y divide-gray-200">
                   {taskList?.map((task) => (
                     <tr key={task.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">{task.name}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
+                        <div>{task.name}</div>
+                        {taskContextLabel(task) && (
+                          <div className="mt-1 max-w-xs truncate text-xs font-normal text-gray-500">
+                            {taskContextLabel(task)}
+                          </div>
+                        )}
+                      </td>
                       <td className="p-4 whitespace-nowrap text-gray-700">{task.type}</td>
                       <td className="p-4 whitespace-nowrap">
                         <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-800">
@@ -5952,6 +6221,58 @@ const JobDetailView = () => {
                       styles={selectStyles}
                     />
                   </div>
+
+                  {taskNeedsBodyOfWater && (
+                    <div className="w-full">
+                      <Select
+                        value={selectedTaskBodyOfWater}
+                        options={taskBodyOfWaterList}
+                        onChange={setSelectedTaskBodyOfWater}
+                        isSearchable
+                        placeholder="Select Body of Water"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    </div>
+                  )}
+
+                  {taskNeedsEquipment && (
+                    <div className="w-full">
+                      <Select
+                        value={selectedTaskEquipment}
+                        options={taskEquipmentOptions}
+                        onChange={setSelectedTaskEquipment}
+                        isSearchable
+                        placeholder="Select Equipment"
+                        theme={selectTheme}
+                        styles={selectStyles}
+                      />
+                    </div>
+                  )}
+
+                  {taskNeedsInstallItem && (
+                    <>
+                      <div className="w-full">
+                        <Select
+                          value={selectedTaskDbItem}
+                          options={shoppingDbItemList}
+                          onChange={setSelectedTaskDbItem}
+                          isSearchable
+                          placeholder="Select Item"
+                          theme={selectTheme}
+                          styles={selectStyles}
+                        />
+                      </div>
+
+                      <input
+                        className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                        type="text"
+                        placeholder="Quantity"
+                        value={taskQuantity}
+                        onChange={(e) => setTaskQuantity(e.target.value)}
+                      />
+                    </>
+                  )}
 
                   <input
                     className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"

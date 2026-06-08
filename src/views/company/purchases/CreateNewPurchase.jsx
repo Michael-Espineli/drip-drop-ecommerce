@@ -51,7 +51,7 @@ const CreateNewPurchase = () => {
     const [itemName, setItemName] = useState('');
     const [size, setSize] = useState('');
     const [vender, setVender] = useState(null);
-    const [venderName, setVenderName] = useState('');
+    const [, setVenderName] = useState('');
     const [venderId, setVenderId] = useState('');
 
     const [uomList] = useState([
@@ -128,6 +128,8 @@ const CreateNewPurchase = () => {
         const number = parseFloat(value);
         return Number.isFinite(number) ? number : 0;
     };
+
+    const normalizePurchaseCategory = (value) => String(value || '').trim() || 'Uncategorized';
 
     const getLineItemTotal = (item) => {
         const unitPrice = numberFromInput(item.rate);
@@ -289,13 +291,16 @@ const CreateNewPurchase = () => {
                 quantityString: quantity,
                 description: selectedGenericItem.description,
                 totalCost: totalCost.toFixed(2),
-                category: selectedGenericItem.category,
+                category: normalizePurchaseCategory(selectedGenericItem.category),
+                subCategory: selectedGenericItem.subCategory || '',
                 billingRate: selectedGenericItem.billingRate || 0,
             };
 
             setPurchaseItemList(prev => [...prev, newItem]);
             setQuantity('');
             setSelectedGenericItem(null);
+        } else {
+            toast.error("Select an item and quantity before adding a line item.");
         }
     }
 
@@ -343,6 +348,8 @@ const CreateNewPurchase = () => {
                     techName: selectedUser?.userName || '',
                     itemId: item.itemId,
                     name: item.name,
+                    category: normalizePurchaseCategory(item.category),
+                    subCategory: item.subCategory || "",
                     price: price,
                     quantityString: item.quantityString,
                     date: purchaseDate,
@@ -420,6 +427,8 @@ const CreateNewPurchase = () => {
                     techName: selectedUser?.userName || '',
                     itemId: item.itemId,
                     name: item.name,
+                    category: normalizePurchaseCategory(item.category),
+                    subCategory: item.subCategory || "",
                     price: price,
                     quantityString: item.quantityString,
                     date: purchaseDate,
@@ -743,6 +752,7 @@ const CreateNewPurchase = () => {
                                             <tr>
                                                 <th className="py-3 px-4">SKU</th>
                                                 <th className="py-3 px-4">Name</th>
+                                                <th className="py-3 px-4">Category</th>
                                                 <th className="py-3 px-4">Description</th>
                                                 <th className="py-3 px-4">Cost</th>
                                                 <th className="py-3 px-4">Quantity</th>
@@ -755,6 +765,7 @@ const CreateNewPurchase = () => {
                                                 <tr key={item.id} className="border-b border-gray-100">
                                                     <td className="py-3 px-4">{item.sku}</td>
                                                     <td className="py-3 px-4 font-medium">{item.name}</td>
+                                                    <td className="py-3 px-4">{item.category || "Uncategorized"}</td>
                                                     <td className="py-3 px-4">{item.description}</td>
                                                     <td className="py-3 px-4">
                                                         <div className="flex items-center min-w-28 border border-gray-300 rounded-lg px-2 bg-white focus-within:ring-2 focus-within:ring-blue-100 focus-within:border-blue-500">

@@ -8,6 +8,19 @@ import { ArrowLeftIcon, TrashIcon, WrenchScrewdriverIcon, ChevronRightIcon } fro
 import { format } from 'date-fns';
 import { displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
 
+const formatEquipmentDate = (value) => {
+    if (!value) return 'N/A';
+    if (typeof value?.toDate === 'function') return format(value.toDate(), 'MMM d, yyyy');
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? 'N/A' : format(parsed, 'MMM d, yyyy');
+};
+
+const getServiceCadence = (equipment) => {
+    if (!equipment?.needsService) return 'No regular service set';
+    const cadence = [equipment.serviceFrequency, equipment.serviceFrequencyEvery].filter(Boolean).join(' ');
+    return cadence || 'Regular service';
+};
+
 const EquipmentDetailView = () => {
     const { equipmentId } = useParams();
     const { user } = useContext(Context);
@@ -86,7 +99,7 @@ const EquipmentDetailView = () => {
         setError(null);
         try {
             await deleteDoc(doc(db, 'homeownerEquipment', equipmentId));
-            navigate('/equipment'); // Redirect to the list view after deletion
+            navigate('/client/equipment');
         } catch (err) {
             console.error("Error deleting equipment: ", err);
             setError("Failed to delete equipment. Please try again.");
@@ -120,7 +133,7 @@ const EquipmentDetailView = () => {
                                 <WrenchScrewdriverIcon className='w-7 h-7 text-gray-600' />
                                 {equipment.name}
                             </h2>
-                            <p className="text-gray-600">{equipment.make} {equipment.model}</p>
+                            <p className="text-gray-600">{[equipment.make, equipment.model].filter(Boolean).join(' ') || 'Make and model not set'}</p>
                         </div>
                         <button
                             onClick={handleDelete}
@@ -132,12 +145,18 @@ const EquipmentDetailView = () => {
                         </button>
                     </div>
                     <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-                        <DetailItem label="Type/Category" value={equipment.type} />
+                        <DetailItem label="Type/Category" value={equipment.category || equipment.type} />
+                        <DetailItem label="Status" value={equipment.status} />
+                        <DetailItem label="Active" value={equipment.isActive === false ? 'No' : 'Yes'} />
                         <DetailItem label="Make" value={equipment.make} />
                         <DetailItem label="Model" value={equipment.model} />
-                        <DetailItem label="Serial Number" value={equipment.serialNumber} />
-                        <DetailItem label="Installed On" value={equipment.installDate ? new Date(equipment.installDate).toLocaleDateString() : 'N/A'} />
-                        <DetailItem label="Warranty" value={equipment.warrantyInfo || 'N/A'} />
+                        <DetailItem label="Installed On" value={formatEquipmentDate(equipment.dateInstalled)} />
+                        <DetailItem label="Needs Regular Service" value={equipment.needsService ? 'Yes' : 'No'} />
+                        <DetailItem label="Service Frequency" value={getServiceCadence(equipment)} />
+                        <DetailItem label="Last Service" value={formatEquipmentDate(equipment.lastServiceDate)} />
+                        <DetailItem label="Next Service" value={formatEquipmentDate(equipment.nextServiceDate)} />
+                        <DetailItem label="Clean Filter Pressure" value={equipment.cleanFilterPressure} />
+                        <DetailItem label="Current Pressure" value={equipment.currentPressure} />
                         <DetailItem label="Linked To" value={bodyOfWaterName || 'Unassigned'} />
                     </div>
                     {equipment.notes && (
@@ -167,7 +186,7 @@ const Header = ({ name, onBack }) => (
 const DetailItem = ({ label, value }) => (
     <div>
         <p className="font-semibold text-gray-800">{label}</p>
-        <p className="text-gray-600">{value || 'N/A'}</p>
+        <p className="text-gray-600">{value === 0 ? 0 : value || 'N/A'}</p>
     </div>
 );
 

@@ -239,6 +239,12 @@ const CompanySettings = () => {
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Terms Templates',
                 description: 'Create and manage templates for your terms and conditions.'
+            },
+            {
+                to: '/company/settings/payroll-setup',
+                icon: <CurrencyDollarIcon className="w-6 h-6" />,
+                title: 'Payroll Setup',
+                description: 'Configure stop pay, technician rates, and pay rules.'
             }
         ],
         stripe: [
@@ -277,19 +283,17 @@ const CompanySettings = () => {
     }
 
     return (
-        <div className='px-4 md:px-8 py-6 bg-gray-50 min-h-screen'>
-            <div className="max-w-7xl mx-auto">
+        <div className='px-0 py-6 bg-gray-50 min-h-screen'>
+            <div className="w-full">
                 <div>
                     <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
                     <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
                 </div>
 
-                <NavigationOrderSettings />
-
                 {/* General Settings */}
                 <div className="mb-10">
                     <h2 className="text-xl font-semibold text-gray-800 mb-4">General</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
                         {settings.general.map(item => <SettingsLink key={item.to} {...item} />)}
                     </div>
                 </div>
@@ -297,15 +301,15 @@ const CompanySettings = () => {
                 {/* Company Settings */}
                 <div className="mb-10">
                     <h2 className="text-xl font-semibold text-gray-800 mb-4">Company</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
                         {settings.company.map(item => <SettingsLink key={item.to} {...item} />)}
                     </div>
                 </div>
 
                 {/* Billing Settings */}
                 <div className="mb-10">
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Billing</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Billing & Payroll</h2>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
                         {settings.billing.map(item => <SettingsLink key={item.to} {...item} />)}
                     </div>
                 </div>
@@ -317,19 +321,21 @@ const CompanySettings = () => {
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {settings.stripe.map(item => <SettingsLink key={item.to} {...item} />)}
                     </div>
-                </div> */}
+	                </div> */}
+
+                <NavigationOrderSettings />
 
 
-                {/* {process.env.NODE_ENV === 'development' && ( */}
-                <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
-                    <h3 className="text-xl font-bold text-yellow-400">🚧 Development Only:Upload For Developers To Call Different Cloud Functions 🚧</h3>
-                    <p className="text-yellow-300">This feature is for testing and will not be in the final product.</p>
-                    {/* You can put any component or button here. For example: */}
-                    <button
-                        onClick={(e) => runFunction(e)}
-                        className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#9C0D38] cursor-pointer rounded mt-3'>Run updateCompanyReadingsSettings</button>
-                </div>
-                {/* )} */}
+                {process.env.NODE_ENV === 'development' && (
+                    <div className="p-4 my-4 bg-yellow-900 border-2 border-yellow-500 rounded-lg">
+                        <h3 className="text-xl font-bold text-yellow-400">🚧 Development Only:Upload For Developers To Call Different Cloud Functions 🚧</h3>
+                        <p className="text-yellow-300">This feature is for testing and will not be in the final product.</p>
+                        {/* You can put any component or button here. For example: */}
+                        <button
+                            onClick={(e) => runFunction(e)}
+                            className='font-bold text-[#ffffff] px-4 py-1 text-base py-1 px-2 bg-[#9C0D38] cursor-pointer rounded mt-3'>Run updateCompanyReadingsSettings</button>
+                    </div>
+                )}
             </div>
         </div>
     );

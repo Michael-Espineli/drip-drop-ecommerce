@@ -111,8 +111,8 @@ export default function ScheduleEstimate() {
         try {
             const resolvedTypeFields = resolveServiceStopTypeFields({
                 companyServiceStopTypes,
-                fallbackName: 'Estimate',
-                useCase: SERVICE_STOP_TYPE_USE_CASES.estimate,
+                fallbackName: 'Service Estimate',
+                useCase: SERVICE_STOP_TYPE_USE_CASES.serviceEstimate,
                 context: 'ScheduleEstimate.handleSubmit',
             });
             const serviceStopPayload = {

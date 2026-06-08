@@ -958,6 +958,8 @@ const AlphaWaterReceiptImport = () => {
           techName: getCompanyUserDisplayName(selectedTech),
           itemId,
           name: databaseItem?.name || line.name || line.sku || "Purchased Item",
+          category: databaseItem?.category || line.category || inferCategory(`${line.sku} ${line.name}`),
+          subCategory: databaseItem?.subCategory || "Misc",
           price: centsFromDollars(line.unitPrice),
           quantityString: String(line.quantity || "1"),
           date: receiptDate,

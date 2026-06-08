@@ -1,0 +1,211 @@
+<!--
+SendGrid Dynamic Template: Sales Invoice
+
+Subject line:
+{{subject}}
+
+Expected dynamic data:
+{
+  "subject": "Murdock Pool Service Invoice INV-10024",
+  "preHeader": "Your pool service invoice is ready to review.",
+  "customer": "Jane Homeowner",
+  "companyName": "Murdock Pool Service",
+  "invoiceTitle": "Invoice",
+  "invoiceNumber": "INV-10024",
+  "invoiceStatus": "Open",
+  "invoiceUrl": "https://app.dripdrop-poolapp.com/client/billing/invoices/...",
+  "sentDate": "June 5, 2026",
+  "dueDate": "June 20, 2026",
+  "address01": "123 Main St",
+  "address02": "",
+  "city": "Fresno",
+  "state": "CA",
+  "zip": "93720",
+  "subtotalAmount": "$175.00",
+  "discountAmount": "$0.00",
+  "taxAmount": "$0.00",
+  "totalAmount": "$175.00",
+  "amountPaid": "$0.00",
+  "amountDue": "$175.00",
+  "memo": "Thank you for your business.",
+  "lineItems": [
+    {
+      "name": "Weekly pool service",
+      "description": "Routine cleaning, water testing, and chemical balancing.",
+      "quantity": "1",
+      "unitAmount": "$175.00",
+      "totalAmount": "$175.00"
+    }
+  ],
+  "companyPhone": "(555) 555-5555",
+  "companyEmail": "office@example.com",
+  "shouldShowClaimAccountLink": true,
+  "claimAccountUrl": "https://app.dripdrop-poolapp.com/client/connect-to-company?..."
+}
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="X-UA-Compatible" content="IE=edge">
+  <title>Sales Invoice</title>
+</head>
+<body style="margin:0; padding:0; background-color:#F5F7FB; font-family:Arial, sans-serif; color:#172033;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    {{preHeader}}
+  </div>
+
+  <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F5F7FB; margin:0; padding:24px 0;">
+    <tr>
+      <td align="center" style="padding:0 12px;">
+        <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:680px; background-color:#FFFFFF; border-radius:12px; overflow:hidden;">
+          <tr>
+            <td style="background-color:#1D2E76; padding:32px 36px;">
+              <p style="margin:0 0 8px; color:#E0AE36; font-size:13px; line-height:18px; font-weight:700; text-transform:uppercase;">Invoice</p>
+              <h1 style="margin:0; color:#FFFFFF; font-size:28px; line-height:36px; font-weight:700;">
+                {{companyName}} sent you an invoice
+              </h1>
+              <p style="margin:12px 0 0; color:#DCE4F6; font-size:15px; line-height:23px;">
+                Hi {{customer}}, invoice {{invoiceNumber}} is ready to review.
+              </p>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:30px 36px 8px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px;">
+                <tr>
+                  <td style="padding:20px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr>
+                        <td style="padding:0 0 14px;">
+                          <div style="color:#64748B; font-size:13px; line-height:18px; font-weight:700; text-transform:uppercase;">Amount Due</div>
+                          <div style="color:#111827; font-size:34px; line-height:42px; font-weight:700; margin-top:4px;">{{amountDue}}</div>
+                          {{#if dueDate}}
+                          <div style="color:#64748B; font-size:14px; line-height:20px; margin-top:4px;">Due {{dueDate}}</div>
+                          {{/if}}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td style="border-top:1px solid #E5E7EB; padding-top:14px;">
+                          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                            <tr>
+                              <td width="50%" style="padding:6px 8px 6px 0;">
+                                <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Invoice</div>
+                                <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{invoiceNumber}}</div>
+                              </td>
+                              <td width="50%" style="padding:6px 0 6px 8px;">
+                                <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Status</div>
+                                <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{invoiceStatus}}</div>
+                              </td>
+                            </tr>
+                            <tr>
+                              <td width="50%" style="padding:6px 8px 6px 0;">
+                                <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Total</div>
+                                <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{totalAmount}}</div>
+                              </td>
+                              <td width="50%" style="padding:6px 0 6px 8px;">
+                                <div style="color:#64748B; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase;">Paid</div>
+                                <div style="color:#111827; font-size:15px; line-height:22px; font-weight:700;">{{amountPaid}}</div>
+                              </td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:18px 36px 10px;">
+              <table cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="background-color:#E0AE36; border-radius:8px;">
+                    <a href="{{invoiceUrl}}" target="_blank" style="display:inline-block; padding:14px 24px; color:#111827; font-size:15px; line-height:20px; font-weight:700; text-decoration:none;">
+                      Review Invoice
+                    </a>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          {{#if shouldShowClaimAccountLink}}
+          <tr>
+            <td style="padding:4px 36px 20px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#EEF6FF; border:1px solid #BFDBFE; border-radius:10px;">
+                <tr>
+                  <td style="padding:14px 16px; color:#1E3A8A; font-size:14px; line-height:21px;">
+                    Want this connected to your homeowner account?
+                    <a href="{{claimAccountUrl}}" target="_blank" style="color:#1D4ED8; font-weight:700; text-decoration:none;">Connect your account</a>.
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          {{/if}}
+
+          <tr>
+            <td style="padding:10px 36px 22px;">
+              <h2 style="margin:0 0 12px; color:#1D2E76; font-size:20px; line-height:26px;">Invoice Items</h2>
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="border:1px solid #E5E7EB; border-radius:10px; overflow:hidden;">
+                <tr>
+                  <th align="left" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Item</th>
+                  <th align="center" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Qty</th>
+                  <th align="right" style="background-color:#F8FAFC; color:#475569; font-size:12px; line-height:16px; font-weight:700; text-transform:uppercase; padding:12px;">Total</th>
+                </tr>
+                {{#each lineItems}}
+                <tr>
+                  <td style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#1F2937; font-size:14px; line-height:20px;">
+                    <strong>{{this.name}}</strong>
+                    {{#if this.description}}<div style="color:#64748B; font-size:13px; line-height:19px; margin-top:3px;">{{this.description}}</div>{{/if}}
+                    <div style="color:#64748B; font-size:13px; line-height:19px; margin-top:3px;">{{this.unitAmount}} each</div>
+                  </td>
+                  <td align="center" style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#1F2937; font-size:14px; line-height:20px;">{{this.quantity}}</td>
+                  <td align="right" style="padding:14px 12px; border-top:1px solid #E5E7EB; color:#111827; font-size:14px; line-height:20px; font-weight:700;">{{this.totalAmount}}</td>
+                </tr>
+                {{/each}}
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="padding:0 36px 26px;">
+              <table width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#F8FAFC; border:1px solid #E5E7EB; border-radius:10px;">
+                <tr>
+                  <td style="padding:16px 18px; color:#374151; font-size:14px; line-height:22px;">
+                    <table width="100%" cellpadding="0" cellspacing="0" border="0">
+                      <tr><td style="padding:5px 0; color:#64748B;">Subtotal</td><td align="right" style="padding:5px 0; font-weight:700;">{{subtotalAmount}}</td></tr>
+                      <tr><td style="padding:5px 0; color:#64748B;">Discount</td><td align="right" style="padding:5px 0; font-weight:700;">{{discountAmount}}</td></tr>
+                      <tr><td style="padding:5px 0; color:#64748B;">Tax</td><td align="right" style="padding:5px 0; font-weight:700;">{{taxAmount}}</td></tr>
+                      <tr><td style="padding:10px 0 5px; color:#111827; border-top:1px solid #E5E7EB; font-weight:700;">Amount Due</td><td align="right" style="padding:10px 0 5px; color:#111827; border-top:1px solid #E5E7EB; font-weight:700;">{{amountDue}}</td></tr>
+                    </table>
+                    {{#if memo}}<p style="margin:14px 0 0; color:#64748B;">{{memo}}</p>{{/if}}
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <tr>
+            <td style="background-color:#172033; padding:24px 36px; color:#D8DEE9; font-size:13px; line-height:20px;">
+              <strong style="color:#FFFFFF;">{{companyName}}</strong><br>
+              {{#if companyPhone}}{{companyPhone}}<br>{{/if}}
+              {{#if companyEmail}}<a href="mailto:{{companyEmail}}" style="color:#E0AE36; text-decoration:none;">{{companyEmail}}</a><br>{{/if}}
+              <br>
+              <a href="<%asm_group_unsubscribe_raw_url%>" style="color:#E0AE36; text-decoration:none;">Unsubscribe</a>
+              &nbsp;|&nbsp;
+              <a href="<%asm_preferences_raw_url%>" style="color:#E0AE36; text-decoration:none;">Preferences</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+

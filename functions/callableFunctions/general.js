@@ -10,6 +10,10 @@ const admin = require("firebase-admin");
 const { title } = require("process");
 
 const sgMail = require("@sendgrid/mail");
+const {
+  ensureCustomerAccountInvite,
+  getCustomerAccountInvitePreview,
+} = require("../customerAccountInvites");
 
 const db = admin.firestore();
 
@@ -74,6 +78,43 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
 const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const getVerifiedCallableAuth = async (payload = {}, context = {}) => {
+  if (context.auth?.uid) {
+    return {
+      uid: context.auth.uid,
+      token: context.auth.token || {},
+    };
+  }
+
+  const authorizationHeader =
+    context.rawRequest?.headers?.authorization ||
+    context.rawRequest?.headers?.Authorization ||
+    "";
+  const bearerToken = String(authorizationHeader).startsWith("Bearer ")
+    ? String(authorizationHeader).slice("Bearer ".length).trim()
+    : "";
+  const idToken = [
+    payload.idToken,
+    payload.auth?.idToken,
+    payload.data?.idToken,
+    bearerToken,
+  ].find((candidate) => String(candidate || "").trim());
+
+  if (!idToken) return null;
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    return {
+      uid: decodedToken.uid,
+      token: decodedToken,
+    };
+  } catch (error) {
+    console.error("Unable to verify callable auth token", error);
+    return null;
+  }
+};
 
 const safeDocIdPart = (value) => String(value || "")
   .trim()
@@ -140,6 +181,218 @@ const getHomeownerRelationshipId = (companyId, customerId, homeownerId) => (
   `ccr_${safeDocIdPart(companyId)}_${safeDocIdPart(customerId)}_${safeDocIdPart(homeownerId)}`
 );
 
+const createCompanyScopedId = (prefix) => `${prefix}_${uuidv4()}`;
+
+const normalizeLeadConversionAddress = (address = {}) => removeUndefinedDeep({
+  streetAddress: address.streetAddress || address.address || "",
+  city: address.city || "",
+  state: address.state || "",
+  zip: address.zip || address.zipCode || "",
+  zipCode: address.zipCode || address.zip || "",
+  latitude: address.latitude ?? null,
+  longitude: address.longitude ?? null,
+});
+
+const hasLeadConversionAddress = (address = {}) => Boolean(
+  address &&
+  (
+    address.streetAddress ||
+    address.address ||
+    address.city ||
+    address.state ||
+    address.zip ||
+    address.zipCode
+  )
+);
+
+const firstNonEmptyString = (...values) => {
+  for (const value of values) {
+    const text = String(value || "").trim();
+    if (text) return text;
+  }
+
+  return "";
+};
+
+const splitLeadConversionName = (name = "") => {
+  const parts = String(name || "").trim().split(/\s+/).filter(Boolean);
+
+  return {
+    firstName: parts[0] || "",
+    lastName: parts.slice(1).join(" "),
+  };
+};
+
+const toArrayOfStrings = (value) => {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  const text = String(value || "").trim();
+  return text ? [text] : [];
+};
+
+const homeownerRecordBelongsToUser = (record = {}, homeownerId = "") => {
+  if (!homeownerId) return true;
+
+  return [
+    record.userId,
+    record.homeownerId,
+    record.customerId,
+    record.customerUserId,
+  ].filter(Boolean).includes(homeownerId);
+};
+
+const readHomeownerOwnedRecord = async (firestore, collectionName, recordId, homeownerId) => {
+  if (!recordId) return null;
+
+  const recordSnap = await firestore.collection(collectionName).doc(recordId).get();
+  if (!recordSnap.exists) return null;
+
+  const record = { id: recordSnap.id, ...recordSnap.data() };
+  if (!homeownerRecordBelongsToUser(record, homeownerId)) {
+    console.warn("[leadConversion] Ignoring homeowner record with mismatched owner", {
+      collectionName,
+      recordId,
+      homeownerId,
+      recordUserId: record.userId || "",
+      recordHomeownerId: record.homeownerId || "",
+      recordCustomerId: record.customerId || "",
+      recordCustomerUserId: record.customerUserId || "",
+    });
+    return null;
+  }
+
+  return record;
+};
+
+const queryHomeownerEquipmentForBody = async (firestore, bodyOfWaterId, homeownerId) => {
+  if (!bodyOfWaterId) return [];
+
+  const equipmentSnap = await firestore
+    .collection("homeownerEquipment")
+    .where("bodyOfWaterId", "==", bodyOfWaterId)
+    .get();
+
+  return equipmentSnap.docs
+    .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
+    .filter((equipment) => homeownerRecordBelongsToUser(equipment, homeownerId));
+};
+
+const mapHomeownerEquipmentToCompanyDraft = (equipment = {}) => ({
+  id: equipment.id || "",
+  name: equipment.name || equipment.category || equipment.type || "Equipment",
+  type: equipment.type || equipment.category || "",
+  typeId: equipment.typeId || "",
+  make: equipment.make || "",
+  makeId: equipment.makeId || "",
+  model: equipment.model || "",
+  modelId: equipment.modelId || equipment.universalEquipmentId || "",
+  universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || "",
+  manualPdfLink: equipment.manualPdfLink || "",
+  cleanFilterPressure: equipment.cleanFilterPressure ?? null,
+  currentPressure: equipment.currentPressure ?? null,
+  serviceFrequency: equipment.serviceFrequency ?? null,
+  serviceFrequencyEvery: equipment.serviceFrequencyEvery || "",
+  dateInstalled: equipment.dateInstalled || null,
+  lastServiceDate: equipment.lastServiceDate || null,
+  nextServiceDate: equipment.nextServiceDate || null,
+  notes: equipment.notes || "",
+  needsService: Boolean(equipment.needsService),
+  status: equipment.status || "Operational",
+  verified: Boolean(equipment.verified),
+  photoUrls: Array.isArray(equipment.photoUrls) ? equipment.photoUrls : [],
+  linkedHomeownerEquipmentId: equipment.id || "",
+});
+
+const isDefaultLeadConversionEquipment = (equipmentList = []) => {
+  if (!equipmentList.length) return true;
+
+  return equipmentList.every((equipment = {}) => {
+    const name = String(equipment.name || "").trim().toLowerCase();
+    const type = String(equipment.type || equipment.category || "").trim().toLowerCase();
+    const isDefaultName = ["pump", "filter", "pump 1", "filter 1"].includes(name);
+    const isDefaultType = ["pump", "filter"].includes(type) || !type;
+    const hasSpecificInfo = Boolean(
+      equipment.make ||
+      equipment.makeId ||
+      equipment.model ||
+      equipment.modelId ||
+      equipment.universalEquipmentId ||
+      equipment.manualPdfLink ||
+      equipment.notes
+    );
+
+    return isDefaultName && isDefaultType && !hasSpecificInfo;
+  });
+};
+
+const userCanAccessCompany = async (firestore, userId, companyId) => {
+  if (!userId || !companyId) return false;
+
+  const [userSnap, accessSnap] = await Promise.all([
+    firestore.collection("users").doc(userId).get(),
+    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
+  ]);
+
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+  return userData.accountType === "Admin" || accessSnap.exists;
+};
+
+const MAX_LINKED_SERVICE_HISTORY_RECORDS = 104;
+const SERVICE_HISTORY_LOOKBACK_MS = 1000 * 60 * 60 * 24 * 365 * 2;
+
+const timestampMillis = (value) => {
+  if (!value) return 0;
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number") return value;
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const firstTimestampMillis = (source = {}, fields = []) => {
+  for (const field of fields) {
+    const millis = timestampMillis(source[field]);
+    if (millis) return millis;
+  }
+
+  return 0;
+};
+
+const recentHistoryEntries = (documents = [], dateFields = []) => {
+  const nowMs = Date.now();
+  const cutoffMs = nowMs - SERVICE_HISTORY_LOOKBACK_MS;
+
+  return documents
+    .map((document) => {
+      const data = document.data() || {};
+      const millis = firstTimestampMillis(data, dateFields);
+
+      return { document, data, millis };
+    })
+    .filter((entry) => entry.millis && entry.millis >= cutoffMs && entry.millis <= nowMs)
+    .sort((left, right) => right.millis - left.millis);
+};
+
+const isFinishedServiceStopForHomeownerHistory = (serviceStop = {}, hasStopData = false) => {
+  if (hasStopData) return true;
+
+  const statusText = [
+    serviceStop.operationStatus,
+    serviceStop.status,
+    serviceStop.serviceStatus,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return (
+    statusText.includes("finished") ||
+    statusText.includes("complete") ||
+    Boolean(serviceStop.finishedAt || serviceStop.completedAt || serviceStop.endTime)
+  );
+};
+
 async function linkHomeownerToCompanyCustomer({
   companyId,
   customerId,
@@ -202,14 +455,15 @@ async function linkHomeownerToCompanyCustomer({
   }
 
   const expectedEmail = normalizeEmail(invite?.email || invite?.customerEmail || customer.email);
-  if (!expectedEmail) {
+  const tokenOnlyInviteClaimAllowed = Boolean(inviteId && invite?.allowTokenClaim === true && !expectedEmail);
+  if (!expectedEmail && !tokenOnlyInviteClaimAllowed) {
     return {
       status: 400,
       error: "The company customer needs an email before it can be linked"
     };
   }
 
-  if (expectedEmail !== normalizedAuthEmail) {
+  if (expectedEmail && expectedEmail !== normalizedAuthEmail) {
     return {
       status: 403,
       error: "Authenticated email does not match the customer invite email"
@@ -231,14 +485,17 @@ async function linkHomeownerToCompanyCustomer({
   const companyName = company.name || company.companyName || "";
   const now = admin.firestore.FieldValue.serverTimestamp();
 
-  const [serviceLocationsSnap, bodiesOfWaterSnap, equipmentSnap] = await Promise.all([
+  const [serviceLocationsSnap, bodiesOfWaterSnap, equipmentSnap, serviceStopsSnap, stopDataSnap] = await Promise.all([
     companyRef.collection("serviceLocations").where("customerId", "==", customerId).get(),
     companyRef.collection("bodiesOfWater").where("customerId", "==", customerId).get(),
     companyRef.collection("equipment").where("customerId", "==", customerId).get(),
+    companyRef.collection("serviceStops").where("customerId", "==", customerId).get(),
+    companyRef.collection("stopData").where("customerId", "==", customerId).get(),
   ]);
 
   const serviceLocationIdMap = new Map();
   const bodyOfWaterIdMap = new Map();
+  const serviceStopIdMap = new Map();
   const bodyIdsByLocationId = new Map();
 
   serviceLocationsSnap.docs.forEach((locationDoc) => {
@@ -266,6 +523,40 @@ async function linkHomeownerToCompanyCustomer({
     }
   });
 
+  serviceStopsSnap.docs.forEach((serviceStopDoc) => {
+    const serviceStop = serviceStopDoc.data() || {};
+    const sourceServiceStopId = serviceStop.id || serviceStopDoc.id;
+    const homeownerServiceStopId = linkedHomeownerDocId("hoss", companyId, sourceServiceStopId);
+    serviceStopIdMap.set(sourceServiceStopId, homeownerServiceStopId);
+    serviceStopIdMap.set(serviceStopDoc.id, homeownerServiceStopId);
+  });
+
+  const recentStopDataEntries = recentHistoryEntries(
+    stopDataSnap.docs,
+    ["date", "serviceDate", "createdAt"]
+  ).slice(0, MAX_LINKED_SERVICE_HISTORY_RECORDS);
+  const stopDataByServiceStopId = new Map();
+
+  recentStopDataEntries.forEach(({ data }) => {
+    const sourceServiceStopId = data.serviceStopId || "";
+    if (sourceServiceStopId && !stopDataByServiceStopId.has(sourceServiceStopId)) {
+      stopDataByServiceStopId.set(sourceServiceStopId, data);
+    }
+  });
+
+  const recentServiceStopEntries = recentHistoryEntries(
+    serviceStopsSnap.docs,
+    ["serviceDate", "date", "finishedAt", "completedAt", "createdAt"]
+  )
+    .filter(({ data, document }) => {
+      const sourceServiceStopId = data.id || document.id;
+      return isFinishedServiceStopForHomeownerHistory(
+        data,
+        stopDataByServiceStopId.has(sourceServiceStopId)
+      );
+    })
+    .slice(0, MAX_LINKED_SERVICE_HISTORY_RECORDS);
+
   const writes = [
     {
       ref: relationshipRef,
@@ -280,7 +571,8 @@ async function linkHomeownerToCompanyCustomer({
         status: "active",
         source,
         inviteId: inviteId || customer.linkedInviteId || "",
-        inviteEmail: expectedEmail,
+        inviteEmail: expectedEmail || normalizedAuthEmail,
+        tokenOnlyInviteClaim: tokenOnlyInviteClaimAllowed,
         emailVerifiedAt: now,
         linkedAt: now,
         updatedAt: now,
@@ -303,6 +595,7 @@ async function linkHomeownerToCompanyCustomer({
         customerCompanyRelationshipId: relationshipId,
         linkedStatus: "active",
         linkedEmail: normalizedAuthEmail,
+        customerAccountInviteStatus: "accepted",
         linkedAt: now,
         linkedInviteId: inviteId || customer.linkedInviteId || relationshipId,
       }),
@@ -405,6 +698,84 @@ async function linkHomeownerToCompanyCustomer({
     });
   });
 
+  recentServiceStopEntries.forEach(({ document, data: serviceStop }) => {
+    const sourceServiceStopId = serviceStop.id || document.id;
+    const homeownerServiceStopId = serviceStopIdMap.get(sourceServiceStopId);
+    const stopDataForStop = stopDataByServiceStopId.get(sourceServiceStopId) || {};
+    const sourceServiceLocationId = serviceStop.serviceLocationId || stopDataForStop.serviceLocationId || "";
+    const sourceBodyOfWaterId = serviceStop.bodyOfWaterId || stopDataForStop.bodyOfWaterId || "";
+
+    writes.push({
+      ref: firestore.collection("homeownerServiceStops").doc(homeownerServiceStopId),
+      data: removeUndefinedDeep({
+        ...serviceStop,
+        id: homeownerServiceStopId,
+        userId: homeownerId,
+        homeownerId,
+        customerId: homeownerId,
+        companyCustomerId: customerId,
+        customerName,
+        companyId,
+        companyName,
+        serviceLocationId: serviceLocationIdMap.get(sourceServiceLocationId) || "",
+        bodyOfWaterId: bodyOfWaterIdMap.get(sourceBodyOfWaterId) || "",
+        techName: serviceStop.techName || serviceStop.tech || "",
+        notes: serviceStop.notes || serviceStop.serviceNotes || serviceStop.description || "",
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        source: "company",
+        linkedCompanyId: companyId,
+        linkedCompanyName: companyName,
+        linkedCompanyCustomerId: customerId,
+        linkedCompanyServiceStopId: sourceServiceStopId,
+        sourceCompanyServiceStopId: sourceServiceStopId,
+        sourceCompanyServiceLocationId: sourceServiceLocationId,
+        sourceCompanyBodyOfWaterId: sourceBodyOfWaterId,
+        updatedAt: now,
+        linkedAt: now,
+      }),
+    });
+  });
+
+  recentStopDataEntries.forEach(({ document, data: stopData }) => {
+    const sourceStopDataId = stopData.id || document.id;
+    const sourceServiceStopId = stopData.serviceStopId || "";
+    const sourceServiceLocationId = stopData.serviceLocationId || "";
+    const sourceBodyOfWaterId = stopData.bodyOfWaterId || "";
+    const homeownerStopDataId = linkedHomeownerDocId("hostop", companyId, sourceStopDataId);
+
+    writes.push({
+      ref: firestore.collection("stopData").doc(homeownerStopDataId),
+      data: removeUndefinedDeep({
+        ...stopData,
+        id: homeownerStopDataId,
+        userId: homeownerId,
+        homeownerId,
+        customerId: homeownerId,
+        companyCustomerId: customerId,
+        companyId,
+        companyName,
+        serviceStopId: serviceStopIdMap.get(sourceServiceStopId) || "",
+        serviceLocationId: serviceLocationIdMap.get(sourceServiceLocationId) || "",
+        bodyOfWaterId: bodyOfWaterIdMap.get(sourceBodyOfWaterId) || "",
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        source: "company",
+        linkedCompanyId: companyId,
+        linkedCompanyName: companyName,
+        linkedCompanyCustomerId: customerId,
+        linkedCompanyStopDataId: sourceStopDataId,
+        linkedCompanyServiceStopId: sourceServiceStopId,
+        sourceCompanyStopDataId: sourceStopDataId,
+        sourceCompanyServiceStopId: sourceServiceStopId,
+        sourceCompanyServiceLocationId: sourceServiceLocationId,
+        sourceCompanyBodyOfWaterId: sourceBodyOfWaterId,
+        updatedAt: now,
+        linkedAt: now,
+      }),
+    });
+  });
+
   if (inviteId) {
     writes.push({
       ref: firestore.collection("linkedInvite").doc(inviteId),
@@ -480,6 +851,8 @@ async function linkHomeownerToCompanyCustomer({
       serviceLocations: serviceLocationsSnap.size,
       bodiesOfWater: bodiesOfWaterSnap.size,
       equipment: equipmentSnap.size,
+      serviceStops: recentServiceStopEntries.length,
+      stopData: recentStopDataEntries.length,
     },
     account: "Successfully linked homeowner account"
   };
@@ -558,6 +931,11 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       // Milliseconds
       if (typeof value === "number") {
         return new Date(value);
+      }
+
+      if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        const [year, month, day] = value.split("-").map(Number);
+        return new Date(year, month - 1, day, 12, 0, 0, 0);
       }
 
       // ISO string or Date-compatible string
@@ -769,6 +1147,19 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       });
     };
 
+    const alignDateToDayOnOrAfter = (date, dayName) => {
+      const targetDow = dayNameToIndex(dayName);
+
+      if (targetDow < 0) {
+        throw new Error(`Invalid rssData.day: ${dayName}`);
+      }
+
+      const aligned = normalizeToNoon(date);
+      const diff = (targetDow - aligned.getDay() + 7) % 7;
+      aligned.setDate(aligned.getDate() + diff);
+      return aligned;
+    };
+
     const buildServiceStop = (serviceDate) => {
       const idss = "com_ss_" + uuidv4();
       const internalId = "S" + String(counterPush + 1);
@@ -928,25 +1319,16 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       return lastCreated;
     };
 
-    // Weekly rule:
-    // startDate is the first actual service day.
-    // If startDate is today, it seeds today.
-    // rssData.day is still validated/logged, but it does not push the first stop forward.
     const seedWeekly = async () => {
+      const firstServiceDate = alignDateToDayOnOrAfter(functionalStartDate, rssData.day);
       const targetDow = dayNameToIndex(rssData.day);
-
-      if (targetDow < 0) {
-        throw new Error(`Invalid rssData.day: ${rssData.day}`);
-      }
-
-      const firstServiceDate = normalizeToNoon(functionalStartDate);
       const firstServiceDateDow = firstServiceDate.getDay();
 
-      if (targetDow !== firstServiceDateDow) {
+      if (firstServiceDate.getTime() !== normalizeToNoon(functionalStartDate).getTime()) {
         console.warn("Weekly RSS startDate day does not match selected day", {
           rssDay: rssData.day,
           targetDow,
-          firstServiceDateDow,
+          startDateDow: normalizeToNoon(functionalStartDate).getDay(),
           firstServiceDate: firstServiceDate.toISOString(),
         });
       }
@@ -975,9 +1357,10 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
 
     const seedBiWeekly = async () => {
       let lastCreated = null;
+      const firstServiceDate = alignDateToDayOnOrAfter(functionalStartDate, rssData.day);
 
       for (
-        let d = new Date(functionalStartDate);
+        let d = new Date(firstServiceDate);
         d.getTime() <= functionalEndDate.getTime();
         d.setDate(d.getDate() + 14)
       ) {
@@ -1066,7 +1449,7 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
 
     // MARK: - Update Recurring Route
 
-    await updateRecurringRoute(db, companyId, rssData);
+    await updateRecurringRoute({ db, companyId, rss: rssData });
 
     return {
       status: 200,
@@ -1439,16 +1822,41 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
 //   }
 // });
 
-async function updateRecurringRoute({ db, companyId, rss }) {
+async function updateRecurringRoute({ db, companyId, rss } = {}) {
   try {
+    if (!db || typeof db.collection !== "function") {
+      throw new Error("updateRecurringRoute requires a valid Firestore instance.");
+    }
+
+    if (!companyId || !rss?.id) {
+      console.log("[updateRecurringRoute] Missing companyId or recurring service stop id. Skipping route update.", {
+        companyId,
+        recurringServiceStopId: rss?.id || "",
+      });
+      return [];
+    }
+
+    if (!rss.day || !rss.techId) {
+      console.log("[updateRecurringRoute] Missing day or techId. Skipping route update.", {
+        recurringServiceStopId: rss.id,
+        day: rss.day || "",
+        techId: rss.techId || "",
+      });
+      return [];
+    }
+
     // Match the same collection/fields used by handleSaveTemplate
-    const querySnapshot = await db
+    const recurringRoutesRef = db
       .collection("companies")
       .doc(companyId)
-      .collection("recurringRoutes")
+      .collection("recurringRoutes");
+
+    const querySnapshot = await recurringRoutesRef
       .where("day", "==", rss.day)
       .where("techId", "==", rss.techId)
       .get();
+
+    const updatedRouteIds = [];
 
     for (const routeDoc of querySnapshot.docs) {
       const documentData = routeDoc.data();
@@ -1474,24 +1882,18 @@ async function updateRecurringRoute({ db, companyId, rss }) {
 
       const updatedOrder = [...currentOrder, addedOrder];
 
-      const routeRef = db
-        .collection("companies")
-        .doc(companyId)
-        .collection("recurringRoutes")
-        .doc(routeDoc.id);
+      const routeRef = recurringRoutesRef.doc(routeDoc.id);
 
       await routeRef.update({
         order: updatedOrder,
+        rssIds: admin.firestore.FieldValue.arrayUnion(rss.id),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       });
+
+      updatedRouteIds.push(routeDoc.id);
     }
 
-    // Preserve your existing return behavior
-    const routesSnap = await db
-      .collection(ROUTES_COL(companyId))
-      .where("rssIds", "array-contains", rss.id)
-      .get();
-
-    return routesSnap.docs;
+    return updatedRouteIds;
   } catch (error) {
     console.log("Error updating recurring route:", error);
     throw error;
@@ -2126,6 +2528,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       email: email,
       phoneNumber: phoneNumber,
       verified: false,
+      hideFromBrowse: false,
       serviceZipCodes: zipCodes,
       services: services,
       accountType: "Free",
@@ -2708,11 +3111,189 @@ exports.createCompanyAdminNotes = functions.https.onCall(async (data, context) =
   }
 });
 
+exports.updateCompanyAdminFlags = functions.https.onCall(async (data, context) => {
+  const payload = data?.data ?? data ?? {};
+  const verifiedAuth = await getVerifiedCallableAuth(payload, context);
+  const authUserId = verifiedAuth?.uid;
+  const companyId = String(payload.companyId || "").trim();
+
+  if (!authUserId) {
+    throw new functions.https.HttpsError("unauthenticated", "You must be signed in.");
+  }
+
+  if (!companyId) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
+  }
+
+  const firestore = getFirestore();
+  const userSnap = await firestore.collection("users").doc(authUserId).get();
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+
+  if (userData.accountType !== "Admin") {
+    throw new functions.https.HttpsError("permission-denied", "Only platform admins can update company admin flags.");
+  }
+
+  const companyRef = firestore.collection("companies").doc(companyId);
+  const companySnap = await companyRef.get();
+
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Company not found.");
+  }
+
+  const updates = {
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    adminFlagsUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    adminFlagsUpdatedBy: authUserId,
+    adminFlagsUpdatedByName: userData.name || userData.displayName || "",
+  };
+
+  const responseCompany = {};
+
+  if (Object.prototype.hasOwnProperty.call(payload, "hideFromBrowse")) {
+    const hideFromBrowse = payload.hideFromBrowse === true;
+    updates.hideFromBrowse = hideFromBrowse;
+    responseCompany.hideFromBrowse = hideFromBrowse;
+  }
+
+  if (payload.verified === true) {
+    updates.verified = true;
+    updates.needToVerify = false;
+    updates.lastVerified = admin.firestore.FieldValue.serverTimestamp();
+    updates.verifiedByAdminId = authUserId;
+    updates.verifiedByAdminName = userData.name || userData.displayName || "";
+    responseCompany.verified = true;
+    responseCompany.needToVerify = false;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(updates, "hideFromBrowse") && updates.verified !== true) {
+    throw new functions.https.HttpsError("invalid-argument", "No supported company flag was provided.");
+  }
+
+  await companyRef.update(updates);
+
+  return {
+    status: 200,
+    companyId,
+    company: responseCompany,
+  };
+});
+
+const getAdminUserData = async (firestore, authUserId) => {
+  if (!authUserId) return null;
+
+  const userSnap = await firestore.collection("users").doc(authUserId).get();
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+
+  return userData.accountType === "Admin" ? userData : null;
+};
+
+const getQueryCount = async (queryRef) => {
+  const snap = await queryRef.get();
+  return snap.size;
+};
+
+const serializeCallableDate = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === "function") return value.toDate().toISOString();
+  if (value instanceof Date) return value.toISOString();
+  return value;
+};
+
+const ADMIN_CALLABLE_CORS_ORIGINS = [
+  "https://dripdrop-poolapp.com",
+  "https://www.dripdrop-poolapp.com",
+  "https://the-pool-app-3e652.web.app",
+  "https://the-pool-app-3e652.firebaseapp.com",
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+];
+
+exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
+  const payload = request.data ?? {};
+  const verifiedAuth = await getVerifiedCallableAuth(payload, { auth: request.auth });
+  const authUserId = verifiedAuth?.uid;
+
+  if (!authUserId) {
+    throw new HttpsError("unauthenticated", "You must be signed in.");
+  }
+
+  const firestore = getFirestore();
+  const adminUserData = await getAdminUserData(firestore, authUserId);
+
+  if (!adminUserData) {
+    throw new HttpsError("permission-denied", "Only platform admins can view company stats.");
+  }
+
+  const companiesSnap = await firestore.collection("companies").get();
+
+  const companies = await Promise.all(companiesSnap.docs.map(async (companyDoc) => {
+    const company = companyDoc.data() || {};
+    const companyRef = companyDoc.ref;
+    const [companyUserCount, activeCustomerCount, totalCustomerCount] = await Promise.all([
+      getQueryCount(companyRef.collection("companyUsers")),
+      getQueryCount(companyRef.collection("customers").where("active", "==", true)),
+      getQueryCount(companyRef.collection("customers")),
+    ]);
+
+    return {
+      id: companyDoc.id,
+      ownerId: company.ownerId || "",
+      ownerName: company.ownerName || "",
+      name: company.name || "",
+      email: company.email || "",
+      phoneNumber: company.phoneNumber || "",
+      verified: company.verified === true,
+      needToVerify: company.needToVerify === true,
+      hideFromBrowse: company.hideFromBrowse === true,
+      status: company.status || "",
+      paidUntil: serializeCallableDate(company.paidUntil),
+      dateCreated: serializeCallableDate(company.dateCreated),
+      companyUserCount,
+      activeCustomerCount,
+      totalCustomerCount,
+    };
+  }));
+
+  const summary = companies.reduce((acc, company) => {
+    acc.totalCompanies += 1;
+    acc.hiddenCompanies += company.hideFromBrowse ? 1 : 0;
+    acc.visibleCompanies += company.hideFromBrowse ? 0 : 1;
+    acc.verifiedCompanies += company.verified ? 1 : 0;
+    acc.unverifiedCompanies += company.verified ? 0 : 1;
+    acc.needsVerification += company.needToVerify ? 1 : 0;
+    acc.totalCompanyUsers += company.companyUserCount || 0;
+    acc.totalActiveCustomers += company.activeCustomerCount || 0;
+    acc.totalCustomers += company.totalCustomerCount || 0;
+    return acc;
+  }, {
+    totalCompanies: 0,
+    hiddenCompanies: 0,
+    visibleCompanies: 0,
+    verifiedCompanies: 0,
+    unverifiedCompanies: 0,
+    needsVerification: 0,
+    totalCompanyUsers: 0,
+    totalActiveCustomers: 0,
+    totalCustomers: 0,
+  });
+
+  companies.sort((a, b) => a.name.localeCompare(b.name));
+
+  return {
+    status: 200,
+    companies,
+    summary,
+  };
+});
+
 exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
 
   try {
     const payload = data?.data ?? data ?? {};
-    const authUserId = context.auth?.uid;
+    const authContext = await getVerifiedCallableAuth(payload, context);
+    const authUserId = authContext?.uid;
 
     if (!authUserId) {
       return {
@@ -2751,7 +3332,7 @@ exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
       companyId,
       customerId,
       homeownerId,
-      authEmail: context.auth?.token?.email || payload.email || "",
+      authEmail: authContext?.token?.email || payload.email || "",
       inviteId,
       source: "companyInvite",
       requestedByUserId: authUserId,
@@ -2768,12 +3349,597 @@ exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
   }
 });
 
+exports.createCustomerAccountInvite = functions.https.onCall(async (data, context) => {
+  try {
+    const payload = data?.data ?? data ?? {};
+    const authContext = await getVerifiedCallableAuth(payload, context);
+    const authUserId = authContext?.uid;
+
+    if (!authUserId) {
+      return {
+        status: 401,
+        error: "You must be signed in to create a customer account invite"
+      };
+    }
+
+    const companyId = payload.companyId || "";
+    const customerId = payload.customerId || "";
+
+    if (!companyId || !customerId) {
+      return {
+        status: 400,
+        error: "Missing companyId or customerId"
+      };
+    }
+
+    const canAccessCompany = await userCanAccessCompany(getFirestore(), authUserId, companyId);
+    if (!canAccessCompany) {
+      return {
+        status: 403,
+        error: "You do not have access to this company"
+      };
+    }
+
+    return await ensureCustomerAccountInvite({
+      companyId,
+      customerId,
+      createdByUserId: authUserId,
+      source: payload.source || "companyCustomerInvite",
+      baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+      email: payload.email || "",
+      forceNew: payload.forceNew === true,
+    });
+  } catch (error) {
+    console.error("Error creating customer account invite", error);
+    return {
+      status: 500,
+      error: error.message || "Could not create customer account invite"
+    };
+  }
+});
+
+exports.getCustomerAccountInvitePreview = functions.https.onCall(async (data) => {
+  try {
+    const payload = data?.data ?? data ?? {};
+    const inviteId = payload.inviteId || payload.linkedInviteId || payload.id || "";
+
+    if (!inviteId) {
+      return {
+        status: 400,
+        error: "Missing customer account invite id"
+      };
+    }
+
+    return await getCustomerAccountInvitePreview({
+      inviteId,
+      baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+    });
+  } catch (error) {
+    console.error("Error loading customer account invite preview", error);
+    return {
+      status: 500,
+      error: error.message || "Could not load customer account invite"
+    };
+  }
+});
+
+exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall(async (data, context) => {
+  try {
+    const payload = data?.data ?? data ?? {};
+    const authContext = await getVerifiedCallableAuth(payload, context);
+    const authUserId = authContext?.uid;
+    const companyId = payload.companyId || "";
+    const leadId = payload.leadId || payload.requestId || "";
+
+    if (!authUserId) {
+      console.warn("[leadConversion][unauthenticated]", {
+        companyId,
+        leadId,
+        hasContextAuth: Boolean(context.auth?.uid),
+        hasPayloadToken: Boolean(payload.idToken || payload.auth?.idToken || payload.data?.idToken),
+        hasAuthorizationHeader: Boolean(context.rawRequest?.headers?.authorization),
+      });
+      return {
+        status: 401,
+        error: "You must be signed in to convert a service request. Auth token did not reach the deployed function."
+      };
+    }
+
+    if (!companyId || !leadId) {
+      return {
+        status: 400,
+        error: "Missing companyId or leadId"
+      };
+    }
+
+    const firestore = getFirestore();
+    const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
+    if (!hasAccess) {
+      return {
+        status: 403,
+        error: "You do not have access to this company"
+      };
+    }
+
+    const companyRef = firestore.collection("companies").doc(companyId);
+    const leadRef = firestore.collection("homeownerServiceRequests").doc(leadId);
+    const [companySnap, leadSnap] = await Promise.all([
+      companyRef.get(),
+      leadRef.get(),
+    ]);
+
+    if (!companySnap.exists) {
+      return {
+        status: 404,
+        error: "Company not found"
+      };
+    }
+
+    if (!leadSnap.exists) {
+      return {
+        status: 404,
+        error: "Service request not found"
+      };
+    }
+
+    const company = companySnap.data() || {};
+    const lead = leadSnap.data() || {};
+
+    if (lead.companyId && lead.companyId !== companyId) {
+      return {
+        status: 403,
+        error: "This service request belongs to a different company"
+      };
+    }
+
+    const formData = payload.formData || payload.customer || {};
+    const serviceLocationData = payload.serviceLocationData || {};
+    const bodyOfWaterData = payload.bodyOfWaterData || {};
+    const payloadEquipmentData = Array.isArray(payload.equipmentData) ? payload.equipmentData : [];
+    const displayAsCompany = Boolean(payload.displayAsCompany ?? formData.displayAsCompany);
+    const submittedHomeownerName = firstNonEmptyString(
+      lead.homeownerName,
+      lead.creatorName,
+      lead.customerName,
+      lead.name
+    );
+    const submittedNameParts = splitLeadConversionName(submittedHomeownerName);
+    const firstName = String(formData.firstName || lead.firstName || submittedNameParts.firstName || "").trim();
+    const lastName = String(formData.lastName || lead.lastName || submittedNameParts.lastName || "").trim();
+    const companyCustomerName = String(formData.companyName || formData.company || "").trim();
+    const email = normalizeEmail(
+      formData.email ||
+      lead.homeownerEmail ||
+      lead.creatorEmail ||
+      lead.customerEmail ||
+      lead.email ||
+      ""
+    );
+    const phoneNumber = String(
+      formData.phone ||
+      formData.phoneNumber ||
+      lead.homeownerPhone ||
+      lead.creatorPhone ||
+      lead.customerPhone ||
+      lead.phoneNumber ||
+      lead.phone ||
+      ""
+    ).trim();
+    const customerName = (
+      displayAsCompany
+        ? companyCustomerName
+        : `${firstName} ${lastName}`.trim()
+    ) || submittedHomeownerName || email || "New Customer";
+    const homeownerId = (
+      lead.homeownerId ||
+      lead.customerUserId ||
+      lead.homeownerUserId ||
+      lead.userId ||
+      payload.homeownerId ||
+      ""
+    );
+    const homeownerServiceLocationId = (
+      lead.homeownerServiceLocationId ||
+      lead.homeownerserviceLocationId ||
+      payload.homeownerServiceLocationId ||
+      ""
+    );
+    const homeownerBodyOfWaterId = lead.homeownerBodyOfWaterId || payload.homeownerBodyOfWaterId || "";
+    const homeownerEquipmentIds = [
+      lead.homeownerEquipmentId,
+      payload.homeownerEquipmentId,
+      ...(Array.isArray(lead.homeownerEquipmentIds) ? lead.homeownerEquipmentIds : []),
+      ...(Array.isArray(payload.homeownerEquipmentIds) ? payload.homeownerEquipmentIds : []),
+    ].filter(Boolean);
+    const homeownerEquipmentId = homeownerEquipmentIds[0] || "";
+
+    const [
+      homeownerServiceLocation,
+      homeownerBodyOfWater,
+      ...homeownerEquipmentRecordsFromIds
+    ] = await Promise.all([
+      readHomeownerOwnedRecord(firestore, "homeownerServiceLocations", homeownerServiceLocationId, homeownerId),
+      readHomeownerOwnedRecord(firestore, "homeownerBodiesOfWater", homeownerBodyOfWaterId, homeownerId),
+      ...[...new Set(homeownerEquipmentIds)].map((equipmentId) => (
+        readHomeownerOwnedRecord(firestore, "homeownerEquipment", equipmentId, homeownerId)
+      )),
+    ]);
+
+    const homeownerEquipmentRecords = homeownerEquipmentRecordsFromIds.filter(Boolean);
+    const homeownerEquipmentForBody = homeownerEquipmentRecords.length
+      ? []
+      : await queryHomeownerEquipmentForBody(firestore, homeownerBodyOfWaterId, homeownerId);
+    const sourceHomeownerEquipment = homeownerEquipmentRecords.length
+      ? homeownerEquipmentRecords
+      : homeownerEquipmentForBody;
+    const equipmentData = (
+      sourceHomeownerEquipment.length && isDefaultLeadConversionEquipment(payloadEquipmentData)
+        ? sourceHomeownerEquipment.map(mapHomeownerEquipmentToCompanyDraft)
+        : payloadEquipmentData
+    );
+    const payloadBodyOfWaterEntries = Array.isArray(payload.bodyOfWaterEntries)
+      ? payload.bodyOfWaterEntries
+      : [];
+    const normalizedBodyOfWaterEntries = payloadBodyOfWaterEntries.length
+      ? payloadBodyOfWaterEntries.map((entry = {}) => {
+        const entryData = entry.bodyOfWaterData || entry.data || entry;
+        return {
+          bodyOfWaterData: entryData,
+          equipmentData: Array.isArray(entry.equipmentData) ? entry.equipmentData : [],
+          sourceHomeownerBodyOfWaterId:
+            entry.sourceHomeownerBodyOfWaterId ||
+            entry.linkedHomeownerBodyOfWaterId ||
+            entry.homeownerBodyOfWaterId ||
+            entryData.sourceHomeownerBodyOfWaterId ||
+            entryData.linkedHomeownerBodyOfWaterId ||
+            entryData.homeownerBodyOfWaterId ||
+            "",
+          companyBodyOfWaterId: entry.companyBodyOfWaterId || entry.bodyOfWaterId || "",
+        };
+      })
+      : [{
+        bodyOfWaterData,
+        equipmentData,
+        sourceHomeownerBodyOfWaterId: homeownerBodyOfWaterId,
+        companyBodyOfWaterId: payload.bodyOfWaterId || "",
+      }];
+    const customerId = payload.customerId || createCompanyScopedId("com_cus");
+    const existingRelationshipId = (
+      payload.relationshipId ||
+      payload.customerCompanyRelationshipId ||
+      lead.relationshipId ||
+      lead.customerCompanyRelationshipId ||
+      ""
+    );
+    const relationshipId = (
+      existingRelationshipId ||
+      (homeownerId ? getHomeownerRelationshipId(companyId, customerId, homeownerId) : "")
+    );
+    const serviceAddressSource = [
+      payload.serviceLocationAddress,
+      lead.serviceLocationAddress,
+      homeownerServiceLocation?.address,
+    ].find(hasLeadConversionAddress) || {};
+    const serviceAddress = normalizeLeadConversionAddress(serviceAddressSource);
+    const billingAddress = payload.useDifferentBillingAddress
+      ? normalizeLeadConversionAddress(payload.billingAddress || {})
+      : serviceAddress;
+    const addServiceLocation = payload.addServiceLocation !== false;
+    const addBodyOfWater = addServiceLocation && Boolean(payload.addBodyOfWater);
+    const addEquipment = addBodyOfWater && Boolean(payload.addEquipment);
+    const serviceLocationId = addServiceLocation
+      ? (payload.serviceLocationId || createCompanyScopedId("com_sl"))
+      : "";
+    const bodyOfWaterEntries = addBodyOfWater ? normalizedBodyOfWaterEntries : [];
+    const bodyOfWaterIds = bodyOfWaterEntries.map((entry, index) => (
+      entry.companyBodyOfWaterId || (index === 0 && payload.bodyOfWaterId) || createCompanyScopedId("com_bow")
+    ));
+    const bodyOfWaterId = bodyOfWaterIds[0] || "";
+    const companyName = company.name || company.companyName || payload.companyName || "";
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const writes = [];
+    const equipmentIds = [];
+
+    writes.push({
+      ref: companyRef.collection("customers").doc(customerId),
+      data: removeUndefinedDeep({
+        id: customerId,
+        createdAt: now,
+        updatedAt: now,
+        firstName,
+        lastName,
+        company: displayAsCompany ? companyCustomerName : "",
+        companyName: displayAsCompany ? companyCustomerName : "",
+        displayAsCompany,
+        active: true,
+        email,
+        phoneNumber,
+        phoneLabel: "",
+        billingAddress,
+        billingNotes: formData.billingNotes || "",
+        hireDate: now,
+        linkedCustomerIds: homeownerId ? [homeownerId] : [],
+        linkedCustomerUserId: homeownerId || "",
+        linkedHomeownerUserId: homeownerId || "",
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        linkedStatus: homeownerId ? "active" : "",
+        linkedEmail: email,
+        linkedAt: homeownerId ? now : null,
+        linkedInviteId: relationshipId || "",
+        source: "homeownerServiceRequest",
+        sourceHomeownerServiceRequestId: leadId,
+      }),
+    });
+
+    if (relationshipId && homeownerId) {
+      writes.push({
+        ref: firestore.collection("customerCompanyRelationships").doc(relationshipId),
+        data: removeUndefinedDeep({
+          id: relationshipId,
+          companyId,
+          companyName,
+          companyCustomerId: customerId,
+          companyCustomerName: customerName,
+          homeownerUserId: homeownerId,
+          homeownerEmail: email || lead.homeownerEmail || "",
+          status: "active",
+          source: "homeownerServiceRequest",
+          serviceRequestId: leadId,
+          linkedAt: now,
+          updatedAt: now,
+          createdAt: now,
+          createdByUserId: authUserId,
+          permissions: {
+            companyCanUpdateSharedFields: true,
+            companyCanDeleteHomeownerOwnedRecords: false,
+            homeownerCanEditPortalRecords: true,
+          },
+        }),
+      });
+    }
+
+    if (addServiceLocation) {
+      writes.push({
+        ref: companyRef.collection("serviceLocations").doc(serviceLocationId),
+        data: removeUndefinedDeep({
+          id: serviceLocationId,
+          nickName: serviceLocationData.nickName || homeownerServiceLocation?.nickName || homeownerServiceLocation?.name || "Main",
+          address: serviceAddress,
+          gateCode: serviceLocationData.gateCode || homeownerServiceLocation?.gateCode || "",
+          dogName: toArrayOfStrings(serviceLocationData.dogName).length
+            ? toArrayOfStrings(serviceLocationData.dogName)
+            : toArrayOfStrings(homeownerServiceLocation?.dogName),
+          estimatedTime: serviceLocationData.estimatedTime || homeownerServiceLocation?.estimatedTime || 15,
+          mainContact: {
+            id: createCompanyScopedId("com_cus_con"),
+            name: customerName,
+            email,
+            phoneNumber,
+            notes: "",
+          },
+          notes: serviceLocationData.notes || homeownerServiceLocation?.notes || "",
+          bodiesOfWaterId: addBodyOfWater ? bodyOfWaterIds : [],
+          rateType: "",
+          laborType: "",
+          chemicalCost: "",
+          laborCost: "",
+          rate: "",
+          customerId,
+          customerName,
+          relationshipId,
+          customerCompanyRelationshipId: relationshipId,
+          linkedHomeownerUserId: homeownerId || "",
+          linkedHomeownerServiceLocationId: homeownerServiceLocationId,
+          sourceHomeownerServiceLocationId: homeownerServiceLocation?.id || homeownerServiceLocationId,
+          source: "homeownerServiceRequest",
+          sourceHomeownerServiceRequestId: leadId,
+          backYardTree: homeownerServiceLocation?.backYardTree || [],
+          backYardBushes: homeownerServiceLocation?.backYardBushes || [],
+          backYardOther: homeownerServiceLocation?.backYardOther || [],
+          preText: Boolean(serviceLocationData.preText ?? homeownerServiceLocation?.preText),
+          verified: Boolean(homeownerServiceLocation?.verified),
+          photoUrls: Array.isArray(homeownerServiceLocation?.photoUrls) ? homeownerServiceLocation.photoUrls : [],
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      });
+    }
+
+    if (addBodyOfWater) {
+      for (const [bodyIndex, entry] of bodyOfWaterEntries.entries()) {
+        const entryBodyOfWaterId = bodyOfWaterIds[bodyIndex];
+        const entryBodyOfWaterData = entry.bodyOfWaterData || {};
+        const sourceHomeownerBodyOfWaterId = entry.sourceHomeownerBodyOfWaterId || "";
+        const sourceHomeownerBodyOfWater = (
+          sourceHomeownerBodyOfWaterId &&
+          sourceHomeownerBodyOfWaterId === (homeownerBodyOfWater?.id || homeownerBodyOfWaterId)
+        )
+          ? homeownerBodyOfWater
+          : null;
+
+        writes.push({
+          ref: companyRef.collection("bodiesOfWater").doc(entryBodyOfWaterId),
+          data: removeUndefinedDeep({
+            id: entryBodyOfWaterId,
+            name: entryBodyOfWaterData.name || sourceHomeownerBodyOfWater?.name || "Main Pool",
+            gallons: entryBodyOfWaterData.gallons || sourceHomeownerBodyOfWater?.gallons || "",
+            waterType: entryBodyOfWaterData.waterType || sourceHomeownerBodyOfWater?.waterType || "Chlorine",
+            material: entryBodyOfWaterData.material || sourceHomeownerBodyOfWater?.material || "",
+            customerId,
+            customerName,
+            serviceLocationId,
+            relationshipId,
+            customerCompanyRelationshipId: relationshipId,
+            linkedHomeownerUserId: homeownerId || "",
+            linkedHomeownerBodyOfWaterId: sourceHomeownerBodyOfWaterId,
+            sourceHomeownerBodyOfWaterId: sourceHomeownerBodyOfWater?.id || sourceHomeownerBodyOfWaterId,
+            source: "homeownerServiceRequest",
+            sourceHomeownerServiceRequestId: leadId,
+            notes: entryBodyOfWaterData.notes || sourceHomeownerBodyOfWater?.notes || "",
+            shape: entryBodyOfWaterData.shape || sourceHomeownerBodyOfWater?.shape || "",
+            length: entryBodyOfWaterData.length ?? sourceHomeownerBodyOfWater?.length ?? null,
+            depth: entryBodyOfWaterData.depth ?? sourceHomeownerBodyOfWater?.depth ?? null,
+            width: entryBodyOfWaterData.width ?? sourceHomeownerBodyOfWater?.width ?? null,
+            photoUrls: Array.isArray(sourceHomeownerBodyOfWater?.photoUrls) ? sourceHomeownerBodyOfWater.photoUrls : [],
+            lastFilled: sourceHomeownerBodyOfWater?.lastFilled || now,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+          }),
+        });
+
+        if (addEquipment) {
+          const entryEquipmentData = Array.isArray(entry.equipmentData) ? entry.equipmentData : [];
+
+          for (const equipment of entryEquipmentData) {
+            if (!equipment?.name) continue;
+
+            const equipmentId = createCompanyScopedId("com_equ");
+            const catalogEquipmentId = equipment.modelId || equipment.universalEquipmentId || "";
+            const sourceHomeownerEquipmentId =
+              equipment.linkedHomeownerEquipmentId ||
+              equipment.homeownerEquipmentId ||
+              equipment.sourceHomeownerEquipmentId ||
+              equipment.id ||
+              (bodyIndex === 0 ? homeownerEquipmentId : "");
+            equipmentIds.push(equipmentId);
+
+            const equipmentRecord = removeUndefinedDeep({
+              id: equipmentId,
+              name: equipment.name,
+              type: equipment.type || equipment.category || "",
+              typeId: equipment.typeId || "",
+              make: equipment.make || "",
+              makeId: equipment.makeId || "",
+              model: equipment.model || "",
+              modelId: catalogEquipmentId,
+              universalEquipmentId: catalogEquipmentId,
+              manualPdfLink: equipment.manualPdfLink || "",
+              dateInstalled: equipment.dateInstalled || now,
+              cleanFilterPressure: equipment.cleanFilterPressure ?? null,
+              currentPressure: equipment.currentPressure ?? null,
+              serviceFrequency: equipment.serviceFrequency ?? null,
+              serviceFrequencyEvery: equipment.serviceFrequencyEvery || "",
+              notes: equipment.notes || "",
+              customerId,
+              customerName,
+              serviceLocationId,
+              bodyOfWaterId: entryBodyOfWaterId,
+              relationshipId,
+              customerCompanyRelationshipId: relationshipId,
+              linkedHomeownerUserId: homeownerId || "",
+              linkedHomeownerEquipmentId: sourceHomeownerEquipmentId,
+              sourceHomeownerEquipmentId,
+              source: "homeownerServiceRequest",
+              sourceHomeownerServiceRequestId: leadId,
+              lastServiceDate: equipment.lastServiceDate || null,
+              nextServiceDate: equipment.nextServiceDate || null,
+              isActive: true,
+              needsService: Boolean(equipment.needsService),
+              status: equipment.status || "Operational",
+              verified: Boolean(equipment.verified),
+              photoUrls: Array.isArray(equipment.photoUrls) ? equipment.photoUrls : [],
+              createdAt: now,
+              updatedAt: now,
+            });
+
+            const equipmentRef = companyRef.collection("equipment").doc(equipmentId);
+            writes.push({
+              ref: equipmentRef,
+              data: equipmentRecord,
+            });
+
+            if (catalogEquipmentId) {
+              const partsSnapshot = await firestore
+                .collection("universal")
+                .doc("equipment")
+                .collection("equipment")
+                .doc(catalogEquipmentId)
+                .collection("parts")
+                .get();
+
+              partsSnapshot.docs.forEach((partDoc) => {
+                const part = partDoc.data() || {};
+                const partId = createCompanyScopedId("com_equ_par");
+                writes.push({
+                  ref: equipmentRef.collection("parts").doc(partId),
+                  data: removeUndefinedDeep({
+                    id: partId,
+                    name: part.name || "",
+                    sku: part.sku || "",
+                    make: part.make || equipmentRecord.make || "",
+                    model: part.model || equipmentRecord.model || "",
+                    manualPdfLink: part.manualPdfLink || "",
+                    universalPartId: part.id || partDoc.id,
+                    universalEquipmentId: catalogEquipmentId,
+                    createdAt: now,
+                  }),
+                });
+              });
+            }
+          }
+        }
+      }
+    }
+
+    writes.push({
+      ref: leadRef,
+      data: removeUndefinedDeep({
+        customerId,
+        companyCustomerId: customerId,
+        customerName,
+        customerUserId: homeownerId || lead.customerUserId || "",
+        homeownerUserId: homeownerId || "",
+        homeownerId: homeownerId || lead.homeownerId || "",
+        serviceLocationId,
+        companyServiceLocationId: serviceLocationId,
+        bodyOfWaterId,
+        companyBodyOfWaterId: bodyOfWaterId,
+        bodyOfWaterIds,
+        companyBodyOfWaterIds: bodyOfWaterIds,
+        equipmentIds,
+        companyEquipmentIds: equipmentIds,
+        relationshipId,
+        customerCompanyRelationshipId: relationshipId,
+        convertedAt: now,
+        convertedByUserId: authUserId,
+        conversionSource: "companyLeadConversion",
+        updatedAt: now,
+      }),
+    });
+
+    await commitFirestoreWrites(firestore, writes);
+
+    return {
+      status: 200,
+      leadId,
+      companyId,
+      customerId,
+      customerName,
+      serviceLocationId,
+      bodyOfWaterId,
+      bodyOfWaterIds,
+      equipmentIds,
+      relationshipId,
+    };
+  } catch (error) {
+    console.error("Error converting homeowner service request to company customer", error);
+    return {
+      status: 500,
+      error: error.message || "Could not convert service request"
+    };
+  }
+});
+
 exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
   try {
     const payload = data?.data ?? data ?? {};
     const inviteId = payload.inviteId;
     const requestedUserId = payload.userId;
-    const authUserId = context.auth?.uid;
+    const authContext = await getVerifiedCallableAuth(payload, context);
+    const authUserId = authContext?.uid;
     const userId = requestedUserId || authUserId;
     const profile = payload.profile || {};
 
@@ -2826,7 +3992,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       };
     }
 
-    const authEmail = context.auth?.token?.email?.toLowerCase();
+    const authEmail = authContext?.token?.email?.toLowerCase();
     const inviteEmail = invite.email?.toLowerCase();
 
     if (authEmail && inviteEmail && authEmail !== inviteEmail) {
@@ -2836,7 +4002,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       };
     }
 
-    const acceptedStatus = invite.status === "Pending" ? "Accepted" : "accepted";
+    const acceptedStatus = "accepted";
     const now = admin.firestore.FieldValue.serverTimestamp();
     const fullName = `${profile.firstName || invite.firstName || ""} ${profile.lastName || invite.lastName || ""}`.trim();
     const workerType = invite.workerType || "Employee";
@@ -3034,84 +4200,243 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
   const db = getFirestore();
 
   try {
-    console.log('Creating All functions for company')
-    let receivedData = data.data
-    console.log("Received Data")
-    console.log(receivedData)
-    let companyId = receivedData.companyId
-    let serviceStopList = receivedData.serviceStopList
-    let newTech = receivedData.newTech
-    let newDay = receivedData.newDay
-    let currentDayOfWeek = new Date().getDay()
-    let newDayOfWeek = 0
-    switch (newDay) {
-      case "Sunday":
-        newDayOfWeek = 0
-        break;
-      case "Monday":
-        newDayOfWeek = 1
-        break;
-      case "Tuesday":
-        newDayOfWeek = 2
-        break;
-      case "Wednesday":
-        newDayOfWeek = 3
-        break;
-      case "Thursday":
-        newDayOfWeek = 4
-        break;
-      case "Friday":
-        newDayOfWeek = 5
-        break;
-      case "Saturday":
-        newDayOfWeek = 6
-        break;
+    console.log("[updateServiceStopDayPermanently] Received request");
+
+    const receivedData = data?.data ?? data ?? {};
+    const companyId = receivedData.companyId;
+    const serviceStopList = Array.isArray(receivedData.serviceStopList)
+      ? receivedData.serviceStopList
+      : [];
+    const newTech = receivedData.newTech || {};
+    const newDay = receivedData.newDay;
+
+    const dayIndexes = {
+      Sunday: 0,
+      Monday: 1,
+      Tuesday: 2,
+      Wednesday: 3,
+      Thursday: 4,
+      Friday: 5,
+      Saturday: 6
+    };
+
+    const newDayOfWeek = dayIndexes[newDay];
+
+    if (!companyId) {
+      throw new functions.https.HttpsError("invalid-argument", "companyId is required.");
     }
-    let difference = newDayOfWeek - currentDayOfWeek
-    let newServiceDate = new Date()
-    newServiceDate.setDate(newServiceDate.getDate() + difference);
 
-    if (newDayOfWeek >= currentDayOfWeek) {
-      for (let i = 0; i < serviceStopList.length; i++) {
-        let stop = serviceStopList[i]
-        //Check Status
-        if (stop.operationStatus == "Not Finished") {
-          const ssRef = db
-            .collection(`companies/${companyId}/serviceStops`)
-            .doc(stop.id);
+    if (!newTech.userId || !newTech.userName) {
+      throw new functions.https.HttpsError("invalid-argument", "newTech.userId and newTech.userName are required.");
+    }
 
-          //Update ss Data
-          //Update techId
-          //Update Tech
-          //Update serviceDate
-          await ssRef.update({
-            serviceDate: newServiceDate,
-            techId: newTech.userId,
-            tech: newTech.userName
-          });
+    if (newDayOfWeek === undefined) {
+      throw new functions.https.HttpsError("invalid-argument", "newDay must be a valid day of week.");
+    }
 
-          //Update Recurring Routes?
+    const selectedStopIds = [
+      ...new Set(
+        serviceStopList
+          .map((stop) => stop?.id)
+          .filter((id) => typeof id === "string" && id.trim().length > 0)
+      )
+    ];
 
-        } else {
-          // if status is anything but "Not Finished" do not move stops
-        }
+    if (!selectedStopIds.length) {
+      throw new functions.https.HttpsError("invalid-argument", "At least one service stop id is required.");
+    }
+
+    const companyRef = db.collection("companies").doc(companyId);
+    const serviceStopsRef = companyRef.collection("serviceStops");
+    const recurringStopsRef = companyRef.collection("recurringServiceStop");
+    const serverTimestamp = admin.firestore.FieldValue.serverTimestamp();
+
+    const parseDate = (value) => {
+      if (!value) return null;
+      if (typeof value.toDate === "function") return value.toDate();
+      if (value instanceof Date) return value;
+      if (typeof value === "number") return new Date(value);
+
+      if (typeof value._seconds === "number") {
+        return new Date(value._seconds * 1000);
       }
-    } else {
-      //Only Change Future Stops and RSS
-      //Skip ServiceStops list, just change future and rss
+
+      if (typeof value.seconds === "number") {
+        return new Date(value.seconds * 1000);
+      }
+
+      const parsed = new Date(value);
+      return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const startOfDay = (date) => {
+      const workingDate = new Date(date);
+      workingDate.setHours(0, 0, 0, 0);
+      return workingDate;
+    };
+
+    const nextSunday = () => {
+      const today = startOfDay(new Date());
+      const daysUntilNextSunday = today.getDay() === 0 ? 7 : 7 - today.getDay();
+      today.setDate(today.getDate() + daysUntilNextSunday);
+      return today;
+    };
+
+    const dateForDayOnOrAfter = (date, targetDayIndex) => {
+      const workingDate = startOfDay(date || new Date());
+      const daysUntilTarget = (targetDayIndex - workingDate.getDay() + 7) % 7;
+      workingDate.setDate(workingDate.getDate() + daysUntilTarget);
+      return workingDate;
+    };
+
+    const serviceStopUpdates = new Map();
+    const queueServiceStopUpdate = (docRef, patch) => {
+      const existing = serviceStopUpdates.get(docRef.path) || { ref: docRef, data: {} };
+      serviceStopUpdates.set(docRef.path, {
+        ref: docRef,
+        data: {
+          ...existing.data,
+          ...patch
+        }
+      });
+    };
+
+    const selectedSnapshots = await Promise.all(
+      selectedStopIds.map((stopId) => serviceStopsRef.doc(stopId).get())
+    );
+
+    const selectedStops = selectedSnapshots
+      .filter((snapshot) => snapshot.exists)
+      .map((snapshot) => ({
+        ref: snapshot.ref,
+        id: snapshot.id,
+        ...snapshot.data()
+      }));
+
+    const movableSelectedStops = selectedStops.filter((stop) => {
+      return stop.operationStatus === "Not Finished";
+    });
+
+    const recurringIds = [
+      ...new Set(
+        movableSelectedStops
+          .map((stop) => stop.recurringServiceStopId)
+          .filter((id) => typeof id === "string" && id.trim().length > 0)
+      )
+    ];
+
+    if (!movableSelectedStops.length || !recurringIds.length) {
+      return {
+        status: 200,
+        companyId,
+        selectedServiceStopCount: 0,
+        futureServiceStopCount: 0,
+        recurringServiceStopCount: 0,
+        recurringRouteResults: [],
+        message: "No unfinished recurring service stops were selected."
+      };
     }
-    for (let i = 0; i < serviceStopList.length; i++) {
-      updateRSSAndNextWeek(companyId, serviceStopList[i], newDay, newDayOfWeek, newTech)
+
+    movableSelectedStops.forEach((stop) => {
+      const currentServiceDate = parseDate(stop.serviceDate) || new Date();
+      queueServiceStopUpdate(stop.ref, {
+        serviceDate: Timestamp.fromDate(dateForDayOnOrAfter(currentServiceDate, newDayOfWeek)),
+        techId: newTech.userId,
+        tech: newTech.userName,
+        updatedAt: serverTimestamp
+      });
+    });
+
+    const routeUpdateInputs = [];
+    let futureServiceStopCount = 0;
+
+    for (const recurringServiceStopId of recurringIds) {
+      const recurringRef = recurringStopsRef.doc(recurringServiceStopId);
+      const recurringSnap = await recurringRef.get();
+
+      if (!recurringSnap.exists) {
+        console.warn("[updateServiceStopDayPermanently] Recurring service stop not found.", {
+          companyId,
+          recurringServiceStopId
+        });
+        continue;
+      }
+
+      const previousRSS = {
+        id: recurringSnap.id,
+        ...recurringSnap.data()
+      };
+
+      const updatedRSS = {
+        ...previousRSS,
+        day: newDay,
+        techId: newTech.userId,
+        tech: newTech.userName
+      };
+
+      routeUpdateInputs.push({ previousRSS, updatedRSS });
+
+      await recurringRef.update({
+        day: newDay,
+        techId: newTech.userId,
+        tech: newTech.userName,
+        updatedAt: serverTimestamp
+      });
+
+      const futureStopsSnapshot = await serviceStopsRef
+        .where("recurringServiceStopId", "==", recurringServiceStopId)
+        .where("serviceDate", ">=", Timestamp.fromDate(nextSunday()))
+        .get();
+
+      futureStopsSnapshot.docs.forEach((doc) => {
+        const stop = doc.data() || {};
+
+        if (stop.operationStatus === "Finished") {
+          return;
+        }
+
+        const currentServiceDate = parseDate(stop.serviceDate) || new Date();
+
+        queueServiceStopUpdate(doc.ref, {
+          serviceDate: Timestamp.fromDate(dateForDayOnOrAfter(currentServiceDate, newDayOfWeek)),
+          techId: newTech.userId,
+          tech: newTech.userName,
+          updatedAt: serverTimestamp
+        });
+
+        futureServiceStopCount += 1;
+      });
     }
-    //
-    // check if service day has past. Can not move
-    // if new day is earlier(less than) in week then do not move stops selected, but all future stops and update rss
-    //if new day is today or later in the week move stop, rss and future stops. 
-    //
+
+    const serviceStopUpdateList = Array.from(serviceStopUpdates.values());
+    for (let i = 0; i < serviceStopUpdateList.length; i += 450) {
+      const batch = db.batch();
+      const chunk = serviceStopUpdateList.slice(i, i + 450);
+
+      chunk.forEach((update) => {
+        batch.update(update.ref, update.data);
+      });
+
+      await batch.commit();
+    }
+
+    const recurringRouteResults = [];
+    for (const routeUpdateInput of routeUpdateInputs) {
+      recurringRouteResults.push(await updateRecurringRouteOrderForRSS({
+        db,
+        companyId,
+        previousRSS: routeUpdateInput.previousRSS,
+        updatedRSS: routeUpdateInput.updatedRSS
+      }));
+    }
 
     return {
       status: 200,
-      companyId: companyId
+      companyId,
+      selectedServiceStopCount: movableSelectedStops.length,
+      futureServiceStopCount,
+      recurringServiceStopCount: routeUpdateInputs.length,
+      recurringRouteResults
     };
   } catch (error) {
     console.error(
@@ -3124,73 +4449,6 @@ exports.updateServiceStopDayPermanently = functions.https.onCall(async (data, co
     };
   }
 });
-
-
-async function updateRSSAndNextWeek(
-  companyId,
-  ssData,
-  newDay,
-  newDayOfWeek,
-  newUserData
-) {
-  const db = getFirestore();
-  const serviceStopsCol = `companies/${companyId}/serviceStops`;
-
-
-
-
-  let currentDayOfWeek = new Date().getDay()
-  let differenceInDays = newDayOfWeek - currentDayOfWeek
-  let nextSunday = new Date()
-
-  nextSunday.setDate(nextSunday.getDate() + 7 - currentDayOfWeek);
-
-  const rssRef = db
-    .collection(`companies/${companyId}/recurringServiceStop`)
-    .doc(stop.recurringServiceStopId);
-
-  //Get all future SS Data to update of service stops that share the same RSS ID. 
-  serviceStopsCol
-    .where("recurringServiceStopId", "==", stop.recurringServiceStopId)
-    .where("serviceDate", ">=", nextSunday)
-    .get().then((querySnapshot) => {
-      querySnapshot.forEach(async (doc) => {
-        // Update ss Data
-        // Update techId
-        // Update Tech
-        // Update serviceDate
-        console.log("ServiceStop:", doc.id, " => ", doc.data());
-        let documentData = doc.data()
-        //Add Difference in days to service stop
-        let newServiceDate = new Date()
-        newServiceDate.setDate(newServiceDate.getDate() + differenceInDays);
-
-        const ssRef = db
-          .collection(`companies/${companyId}/serviceStops`)
-          .doc(documentData.id);
-        await ssRef.update({
-          serviceDate: newServiceDate,
-          techId: newUserData.userId,
-          tech: newUserData.userName
-        });
-      });
-    })
-    .catch((error) => {
-      console.log("Error getting Service Stop Documents: ", error);
-    });
-
-  // Update RSS doc
-  // Update techId
-  // Update Tech
-  // Update day
-
-  await rssRef.update({
-    day: newDay,
-    techId: newUserData.userId,
-    tech: newUserData.userName
-  });
-  //Update Recurring Routes?
-}
 
 //a Test Function
 exports.updateCompanyReadingsSettings = functions.https.onCall(async (data, context) => {
@@ -3353,7 +4611,8 @@ exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (dat
 exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (data, context) => {
   try {
     const payload = data?.data ?? data ?? {};
-    const authUserId = context.auth?.uid;
+    const authContext = await getVerifiedCallableAuth(payload, context);
+    const authUserId = authContext?.uid;
 
     if (!authUserId) {
       return {
@@ -3374,7 +4633,7 @@ exports.createHomeOwnerCustomerBasedOnCompany = functions.https.onCall(async (da
       companyId: payload.companyId,
       customerId: payload.customerId,
       homeownerId,
-      authEmail: context.auth?.token?.email || payload.email || "",
+      authEmail: authContext?.token?.email || payload.email || "",
       inviteId: payload.inviteId || payload.linkedInviteId || "",
       source: payload.source || "companyDirectLink",
       requestedByUserId: authUserId,
@@ -3508,16 +4767,20 @@ exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context
 
 async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
   try {
-    // Match the same collection/fields used by handleSaveTemplate
     const ROUTES_COL = `companies/${companyId}/recurringRoutes`;
+    const routeSnapshots = await Promise.all([
+      db.collection(ROUTES_COL).get(),
+      db.collection(ROUTES_COL).where("rssIds", "array-contains", rss.id).get(),
+    ]);
+    const routesById = new Map();
 
-    const querySnapshot = await db
-      .collection(ROUTES_COL)
-      .where("day", "==", rss.day)
-      .where("techId", "==", rss.techId)
-      .get();
+    routeSnapshots.forEach((querySnapshot) => {
+      querySnapshot.docs.forEach((routeDoc) => {
+        routesById.set(routeDoc.id, routeDoc);
+      });
+    });
 
-    for (const routeDoc of querySnapshot.docs) {
+    for (const routeDoc of routesById.values()) {
       const documentData = routeDoc.data();
       const currentOrder = Array.isArray(documentData.order) ? documentData.order : [];
 
@@ -3525,11 +4788,26 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
         (item) => item.recurringServiceStopId !== rss.id
       );
 
+      const hadOrderMatch = filteredOrder.length !== currentOrder.length;
+      const hadRssIdMatch = Array.isArray(documentData.rssIds) && documentData.rssIds.includes(rss.id);
+
+      if (!hadOrderMatch && !hadRssIdMatch) {
+        continue;
+      }
+
       // Re-index order to keep it aligned with handleSaveTemplate
       const updatedOrder = filteredOrder.map((item, index) => ({
         ...item,
         order: index + 1,
       }));
+      const updates = {
+        order: updatedOrder,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+
+      if (Array.isArray(documentData.rssIds)) {
+        updates.rssIds = documentData.rssIds.filter((rssId) => rssId !== rss.id);
+      }
 
       const routeRef = db
         .collection("companies")
@@ -3537,18 +4815,10 @@ async function removeRSSFromRecurringRoute({ db, companyId, rss }) {
         .collection("recurringRoutes")
         .doc(routeDoc.id);
 
-      await routeRef.update({
-        order: updatedOrder,
-      });
+      await routeRef.set(updates, { merge: true });
     }
 
-    // Preserve your existing return behavior
-    const routesSnap = await db
-      .collection(ROUTES_COL)
-      .where("rssIds", "array-contains", rss.id)
-      .get();
-
-    return routesSnap.docs;
+    return [...routesById.values()];
   } catch (error) {
     console.log("Error removing RSS from recurring route:", error);
     throw error;
@@ -3915,6 +5185,7 @@ async function updateRecurringRouteOrderForRSS({
 
       await routeDoc.ref.update({
         order: reIndexedOrder,
+        rssIds: admin.firestore.FieldValue.arrayRemove(rssId),
         updatedAt: admin.firestore.FieldValue.serverTimestamp()
       });
 
@@ -3954,6 +5225,7 @@ async function updateRecurringRouteOrderForRSS({
       techId: updatedTechId,
       day: updatedDay,
       order: nextOrder,
+      rssIds: admin.firestore.FieldValue.arrayUnion(rssId),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
 
@@ -3976,6 +5248,7 @@ async function updateRecurringRouteOrderForRSS({
           order: 1
         }
       ],
+      rssIds: [rssId],
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });

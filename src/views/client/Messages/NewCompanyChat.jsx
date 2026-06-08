@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useContext } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, getDoc, collection, addDoc, serverTimestamp, setDoc } from "firebase/firestore";
+import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { ArrowLeftIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
-import { v4 as uuidv4 } from 'uuid';
+import { createClientCompanyChat } from '../../../utils/chatMessaging';
 
 const NewCompanyChat = () => {
     const { companyId } = useParams();
@@ -47,41 +47,16 @@ const NewCompanyChat = () => {
         setError(null);
 
         try {
-            // Step 1: Create the chat document first
-
-            const chatId = 'cha_' + uuidv4();
-            const newChatRef = doc(db, 'chats', chatId);
-            let fullName = dataBaseUser.firstName + " " + dataBaseUser.lastName
-            const newChatData = {
-                id: chatId,
-                participantIds: [user.uid, company.id],
-                participants: [
-                    { userName: fullName, id: uuidv4(), userId: user.uid, userImage: dataBaseUser.photoUrl },
-                    { userName: company.ownerName, id: uuidv4(), userId: company.ownerId, userImage: "" }
-                ],
-                userWhoHaveNotRead: [company.id],
-                companyName: company.name,
-                lastMessage: message.trim(),
-                mostRecentChat: serverTimestamp(),
-            };
-
-            await setDoc(newChatRef, newChatData);
-
-            // Step 2: Add the first message to the new chat
-            const messageId = 'msg_' + uuidv4();
-
-            const messagesColRef = doc(db, 'messages', messageId);
-            await setDoc(messagesColRef, {
-                id: messageId,
-                message: message.trim(),
-                chatId: newChatRef.id,
-                senderId: user.uid,
-                receiverId: company.id,
-                dateSent: serverTimestamp(),
+            const chatId = await createClientCompanyChat({
+                db,
+                user,
+                dataBaseUser,
+                company,
+                message,
             });
+            if (!chatId) throw new Error("Unable to create chat.");
 
-            // Step 3: Navigate to the newly created chat
-            navigate(`/client/chat/details/${newChatRef.id}`);
+            navigate(`/client/chat/details/${chatId}`);
 
         } catch (err) {
             console.error("Error sending message: ", err);

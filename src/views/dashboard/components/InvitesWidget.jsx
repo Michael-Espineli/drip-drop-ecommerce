@@ -4,6 +4,7 @@ import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Link } from 'react-router-dom';
 import { InboxIcon, CheckCircleIcon, XCircleIcon, ArrowRightIcon } from '@heroicons/react/24/outline';
+import { normalizeEmail } from '../../../utils/email';
 
 const InvitesWidget = () => {
     const { user } = useContext(Context);
@@ -11,16 +12,25 @@ const InvitesWidget = () => {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!user?.email) return;
+        const normalizedUserEmail = normalizeEmail(user?.email);
+        if (!normalizedUserEmail) {
+            setInviteCounts({ pending: 0, accepted: 0, rejected: 0 });
+            setLoading(false);
+            return undefined;
+        }
 
         const invitesRef = collection(db, 'invites');
-        const q = query(invitesRef, where('email', '==', user.email));
+        const q = query(invitesRef, where('email', '==', normalizedUserEmail));
 
         const unsubscribe = onSnapshot(q, (snapshot) => {
             const counts = { pending: 0, accepted: 0, rejected: 0 };
             snapshot.forEach(doc => {
                 const data = doc.data();
                 const normalizedStatus = String(data.status || '').toLowerCase();
+                if (normalizedStatus === 'declined') {
+                    counts.rejected++;
+                    return;
+                }
                 if (normalizedStatus in counts) {
                     counts[normalizedStatus]++;
                 }

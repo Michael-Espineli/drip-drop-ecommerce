@@ -19,7 +19,9 @@ const BrowseCompanies = () => {
         const fetchCompanies = async () => {
             try {
                 const querySnapshot = await getDocs(collection(db, 'companies'));
-                const companiesList = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const companiesList = querySnapshot.docs
+                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                    .filter(company => company.hideFromBrowse !== true);
                 setCompanies(companiesList);
             } catch (error) {
                 console.error("Error fetching companies: ", error);
@@ -66,7 +68,7 @@ const BrowseCompanies = () => {
     };
 
     const filteredCompanies = companies.filter(company =>
-        company.name.toLowerCase().includes(searchTerm.toLowerCase())
+        (company.name || '').toLowerCase().includes(searchTerm.toLowerCase())
     );
 
     const handleCompanyClick = (companyId) => {

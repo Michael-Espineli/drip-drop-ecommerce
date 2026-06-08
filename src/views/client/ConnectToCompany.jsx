@@ -1,12 +1,11 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc, getDocs, collection, query, where } from 'firebase/firestore';
-import { db } from '../../utils/config';
+import { db, functions } from '../../utils/config';
 import { Context } from '../../context/AuthContext';
 import toast from 'react-hot-toast';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-
-const functions = getFunctions();
+import { httpsCallable } from 'firebase/functions';
+import { getCallableAuthPayload } from '../../utils/callableAuth';
 
 // how to receive /client/connect-to-company?companyId=YOUR_COMPANY_ID&customerId=YOUR_CUSTOMER_ID
 // how to receive /client/connect-to-company?companyId=com_7d90268d-b1bd-4cba-9b18-39edceeec046&customerId=com_cus_2f36a059-09f1-471b-a1ed-0d97c1ab18e8
@@ -150,7 +149,10 @@ const ConnectToCompany = () => {
     e.preventDefault()
     try {
       const functionName = httpsCallable(functions, 'createHomeOwnerCustomerBasedOnCompany');
+      const authPayload = await getCallableAuthPayload();
       const result = await functionName({
+        ...authPayload,
+        auth: authPayload,
         companyId: companyId,
         companyName: company.name,
         customerId: customerId,

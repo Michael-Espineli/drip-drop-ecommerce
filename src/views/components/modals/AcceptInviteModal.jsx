@@ -9,8 +9,7 @@ const AcceptInviteModal = ({ invite, user, onClose, onAcceptSuccess }) => {
         setLoading(true);
         setError('');
         try {
-            const userName = user.displayName || `${invite.firstName} ${invite.lastName}`;
-            await acceptInvite(invite, user.uid, userName);
+            await acceptInvite(invite, user.uid, invite.firstName, invite.lastName, invite.email);
             // Notify parent on success instead of navigating directly
             if (onAcceptSuccess) {
                 onAcceptSuccess();

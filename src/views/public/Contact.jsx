@@ -1,9 +1,57 @@
-import React from 'react';
+import React, { useContext, useState } from 'react';
+import toast from 'react-hot-toast';
 import PublicHeader from '../../layout/PublicHeader';
 import Footer from '../../layout/Footer';
 import { EnvelopeIcon, ChatBubbleLeftRightIcon, SparklesIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { Context } from '../../context/AuthContext';
+import { createContactMessage, FEEDBACK_AUDIENCES } from '../../utils/adminInbox';
 
 export default function Contact() {
+    const context = useContext(Context);
+    const [isSubmitting, setIsSubmitting] = useState(false);
+    const [formData, setFormData] = useState({
+        name: '',
+        email: context.user?.email || '',
+        companyName: context.recentlySelectedCompanyName || '',
+        audience: context.accountType || FEEDBACK_AUDIENCES.prospect,
+        subject: '',
+        message: '',
+    });
+
+    const handleChange = (event) => {
+        const { name, value } = event.target;
+        setFormData((current) => ({ ...current, [name]: value }));
+    };
+
+    const handleSubmit = async (event) => {
+        event.preventDefault();
+
+        if (!formData.name.trim() || !formData.email.trim() || !formData.message.trim()) {
+            toast.error('Please add your name, email, and message.');
+            return;
+        }
+
+        setIsSubmitting(true);
+        const toastId = toast.loading('Sending message...');
+
+        try {
+            await createContactMessage(formData, context);
+            setFormData((current) => ({
+                name: '',
+                email: current.email,
+                companyName: current.companyName,
+                audience: current.audience,
+                subject: '',
+                message: '',
+            }));
+            toast.success('Message sent. We will reach out soon.', { id: toastId });
+        } catch (error) {
+            console.error('Error sending contact message:', error);
+            toast.error('Could not send your message. Please try again.', { id: toastId });
+        } finally {
+            setIsSubmitting(false);
+        }
+    };
 
     return (
         <div className="bg-gray-50 text-gray-800">
@@ -27,26 +75,76 @@ export default function Contact() {
                     <div className="container mx-auto px-4">
                         <div className="grid md:grid-cols-2 gap-16">
                             {/* Contact Form */}
-                            {/* <div className="bg-white p-8 rounded-lg shadow-md">
+                            <div className="bg-white p-8 rounded-lg shadow-md">
                                 <h2 className="text-2xl font-bold mb-6">Send Us a Message</h2>
-                                <form >
+                                <form onSubmit={handleSubmit}>
                                     <div className="mb-4">
                                         <label htmlFor="name" className="block text-gray-700 font-semibold mb-2">Your Name</label>
-                                        <input type="text" id="name" name="name" className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                        <input
+                                            type="text"
+                                            id="name"
+                                            name="name"
+                                            required
+                                            value={formData.name}
+                                            onChange={handleChange}
+                                            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
                                     </div>
                                     <div className="mb-4">
                                         <label htmlFor="email" className="block text-gray-700 font-semibold mb-2">Your Email</label>
-                                        <input type="email" id="email" name="email" className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                                        <input
+                                            type="email"
+                                            id="email"
+                                            name="email"
+                                            required
+                                            value={formData.email}
+                                            onChange={handleChange}
+                                            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                    <div className="mb-4">
+                                        <label htmlFor="companyName" className="block text-gray-700 font-semibold mb-2">Company</label>
+                                        <input
+                                            type="text"
+                                            id="companyName"
+                                            name="companyName"
+                                            value={formData.companyName}
+                                            onChange={handleChange}
+                                            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
+                                    </div>
+                                    <div className="mb-4">
+                                        <label htmlFor="subject" className="block text-gray-700 font-semibold mb-2">Subject</label>
+                                        <input
+                                            type="text"
+                                            id="subject"
+                                            name="subject"
+                                            value={formData.subject}
+                                            onChange={handleChange}
+                                            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        />
                                     </div>
                                     <div className="mb-4">
                                         <label htmlFor="message" className="block text-gray-700 font-semibold mb-2">Message</label>
-                                        <textarea id="message" name="message" rows="5" className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+                                        <textarea
+                                            id="message"
+                                            name="message"
+                                            rows="5"
+                                            required
+                                            value={formData.message}
+                                            onChange={handleChange}
+                                            className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                        ></textarea>
                                     </div>
-                                    <button type="submit" className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition">
-                                        Submit
+                                    <button
+                                        type="submit"
+                                        disabled={isSubmitting}
+                                        className="w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:bg-blue-300"
+                                    >
+                                        {isSubmitting ? 'Submitting...' : 'Submit'}
                                     </button>
                                 </form>
-                            </div> */}
+                            </div>
 
                             {/* Contact Info */}
                             <div className="space-y-8">

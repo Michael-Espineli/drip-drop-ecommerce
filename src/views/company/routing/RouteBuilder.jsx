@@ -7,8 +7,6 @@ import { getFunctions, httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
 import { MultiLocationMap } from '../../components/MultiLocationMap';
-import DatePicker from "react-datepicker";
-import "react-datepicker/dist/react-datepicker.css";
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import {
@@ -20,16 +18,16 @@ import {
 
 const functions = getFunctions();
 // Reusable form components
-const Input = (props) => (
+const Input = ({ className = "", ...props }) => (
   <input
     {...props}
-    className={`bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${props.className}`}
+    className={`bg-white border border-gray-300 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${className}`}
   />
 );
-const Button = ({ children, ...props }) => (
+const Button = ({ children, className = "", ...props }) => (
   <button
     {...props}
-    className={`py-2 px-4 rounded-lg font-semibold shadow-md transition-all ${props.className}`}
+    className={`py-2 px-4 rounded-lg font-semibold shadow-md transition-all ${className}`}
   >
     {children}
   </button>
@@ -39,6 +37,12 @@ const SelectInput = (props) => (
     {...props}
     styles={{ control: (base) => ({ ...base, borderColor: '#D1D5DB', borderRadius: '0.5rem' }) }}
   />
+);
+const Field = ({ label, children, className = "" }) => (
+  <div className={`block ${className}`}>
+    <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+    {children}
+  </div>
 );
 
 const RouteBuilder = () => {
@@ -59,6 +63,7 @@ const RouteBuilder = () => {
   const [selectedTechnician, setSelectedTechnician] = useState(null);
   const [routeStops, setRouteStops] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [routeSaveProgress, setRouteSaveProgress] = useState(null);
 
   // Data state
   const [technicians, setTechnicians] = useState([]);
@@ -72,6 +77,20 @@ const RouteBuilder = () => {
     value: day,
     label: day
   }));
+
+  const dayNameToIndex = (dayName) => daysOfWeek.findIndex((day) => day.value === dayName);
+
+  const nextDateForDay = (dayName, fromDate = new Date()) => {
+    const targetDow = dayNameToIndex(dayName);
+    const start = new Date(fromDate);
+    start.setHours(12, 0, 0, 0);
+
+    if (targetDow < 0) return start;
+
+    const diff = (targetDow - start.getDay() + 7) % 7;
+    start.setDate(start.getDate() + diff);
+    return start;
+  };
 
   const serviceStopTypeOptions = useMemo(
     () =>
@@ -259,6 +278,7 @@ const RouteBuilder = () => {
 
   const createRecurringServiceStopForRouteStop = async (stop) => {
     const resolvedTypeFields = resolveStopTypeFields(stop, serviceStopTypeForStop(stop));
+    const firstServiceDate = nextDateForDay(selectedDay.value);
     const recurringServiceStop = {
       id: `comp_rss_${uuidv4()}`,
       internalId: await getNextRecurringServiceStopInternalId(),
@@ -272,13 +292,13 @@ const RouteBuilder = () => {
       tech: selectedTechnician.label,
       techId: selectedTechnician.value,
       dateCreated: new Date(),
-      startDate: new Date(),
+      startDate: firstServiceDate,
       endDate: null,
       noEndDate: true,
       frequency: stop.frequency ?? "Weekly",
       day: selectedDay.value,
       description,
-      lastCreated: new Date(),
+      lastCreated: firstServiceDate,
       serviceLocationId: stop.serviceLocationId || stop.id,
       estimatedTime: stop.estimatedTime ?? null,
       otherCompany: stop.otherCompany ?? null,
@@ -307,6 +327,9 @@ const RouteBuilder = () => {
             typeId: resolvedTypeFields.typeId,
             typeImage: resolvedTypeFields.typeImage,
             serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+            day: selectedDay.value,
+            tech: selectedTechnician.label,
+            techId: selectedTechnician.value,
           }
         );
       } catch (error) {
@@ -422,12 +445,20 @@ const RouteBuilder = () => {
   // =============================
 
   const handleSaveTemplate = async () => {
-    if (!description || !selectedTechnician || !selectedDay || routeStops.length === 0) {
-      toast.error("Please provide a description, select a day and technician, and add at least one stop.");
+    if (!selectedTechnician || !selectedDay || routeStops.length === 0) {
+      toast.error("Select a day and technician, then add at least one stop.");
       return;
     }
 
+    const totalRouteStops = routeStops.length;
+    const saveAction = editingTemplate ? "Updating" : "Creating";
     setIsLoading(true);
+    setRouteSaveProgress({
+      action: saveAction,
+      current: 0,
+      total: totalRouteStops,
+      detail: "Preparing route...",
+    });
 
     try {
       // -------------------------
@@ -455,6 +486,10 @@ const RouteBuilder = () => {
 
         // Delete removed recurring service stops
         for (const rssId of removedRssIds) {
+          setRouteSaveProgress((progress) => ({
+            ...progress,
+            detail: "Removing deleted route stops...",
+          }));
           const callable = httpsCallable(functions, "deleteRecurringServiceStop");
           await callable({
             stopId: rssId,
@@ -464,6 +499,12 @@ const RouteBuilder = () => {
 
         const newRouteOrder = [];
         for (let i = 0; i < routeStops.length; i++) {
+          setRouteSaveProgress({
+            action: saveAction,
+            current: i + 1,
+            total: totalRouteStops,
+            detail: `${i + 1}/${totalRouteStops} route stops being updated`,
+          });
           newRouteOrder.push(await buildRouteOrderItem(routeStops[i], i));
         }
 
@@ -478,6 +519,12 @@ const RouteBuilder = () => {
         };
 
         batch.set(routeRef, templateData, { merge: true });
+        setRouteSaveProgress({
+          action: saveAction,
+          current: totalRouteStops,
+          total: totalRouteStops,
+          detail: "Saving route...",
+        });
         await batch.commit();
 
         toast.success("Route successfully updated!");
@@ -500,6 +547,12 @@ const RouteBuilder = () => {
 
       for (let i = 0; i < routeStops.length; i++) {
         const stop = routeStops[i];
+        setRouteSaveProgress({
+          action: saveAction,
+          current: i + 1,
+          total: totalRouteStops,
+          detail: `${i + 1}/${totalRouteStops} route stops being created`,
+        });
         binder.push(await buildRouteOrderItem(stop, i));
       }
 
@@ -514,6 +567,12 @@ const RouteBuilder = () => {
       };
 
       batch.set(routeRef, templateData, { merge: true });
+      setRouteSaveProgress({
+        action: saveAction,
+        current: totalRouteStops,
+        total: totalRouteStops,
+        detail: "Saving route...",
+      });
       await batch.commit();
 
       toast.success("Route successfully created!");
@@ -524,6 +583,7 @@ const RouteBuilder = () => {
       toast.error(`Failed to save template: ${error?.message || String(error)}`);
     } finally {
       setIsLoading(false);
+      setRouteSaveProgress(null);
     }
   };
 
@@ -595,137 +655,151 @@ const RouteBuilder = () => {
   };
 
   return (
-    <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-      <div className="max-w-7xl mx-auto">
-        <header className="mb-8">
+    <div className='min-h-screen bg-gray-50 px-3 py-4 sm:px-5 lg:px-6'>
+      <div className="mx-auto w-full max-w-[1800px]">
+        <header className="mb-6">
           <h1 className='text-3xl font-bold text-gray-800'>
             {editingTemplate ? 'Edit Route' : 'New Route'}
           </h1>
           <p className='text-gray-600 mt-1'>Build the planned route, assign each stop type, and arrange the stop order.</p>
         </header>
 
-        <div className="bg-white p-6 rounded-2xl shadow-lg mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <Input
-              placeholder="Template Description (e.g., 'Monday Pool Route')"
-              value={description}
-              onChange={e => setDescription(e.target.value)}
-              className="md:col-span-3"
-            />
-            <SelectInput
-              options={daysOfWeek}
-              value={selectedDay}
-              onChange={setSelectedDay}
-              placeholder="Select Day"
-              isDisabled={!!editingTemplate}
-            />
-            <SelectInput
-              options={technicians}
-              value={selectedTechnician}
-              onChange={setSelectedTechnician}
-              placeholder="Select Technician"
-              isDisabled={!!editingTemplate}
-              isLoading={isLoading}
-            />
-            <SelectInput
-              options={serviceStopTypeOptions}
-              value={selectedServiceStopType}
-              onChange={setSelectedServiceStopType}
-              placeholder="Default Service Stop Type"
-              isLoading={isLoading}
-            />
-          </div>
-        </div>
-
-        <div className="w-full h-96 md:h-[400px] rounded-2xl overflow-hidden shadow-lg mb-8 border border-gray-200">
-          <MultiLocationMap locations={mapLocations} />
-        </div>
-
         <DragDropContext onDragEnd={handleOnDragEnd}>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-            <div className="bg-white p-6 rounded-2xl shadow-lg">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">Available Stops</h3>
-              <Input
-                placeholder="Search by customer or address..."
-                value={searchTerm}
-                onChange={e => setSearchTerm(e.target.value)}
-                className="mb-4"
-              />
-              <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                {availableStops.map(stop => (
-                  <div key={stop.id} className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                    <div className="mb-3">
-                      <p className="font-semibold text-gray-800">{stop.customerName}</p>
-                      <p className="text-sm text-gray-500">{stop.address?.streetAddress}</p>
+          <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,1fr)_420px] 2xl:grid-cols-[minmax(0,1fr)_480px]">
+            <div className="min-w-0 space-y-6">
+              <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <Field label="Route Description (Optional)" className="md:col-span-2">
+                    <Input
+                      placeholder="Optional notes for this route"
+                      value={description}
+                      onChange={e => setDescription(e.target.value)}
+                    />
+                  </Field>
+                  <Field label="Day of Week">
+                    <SelectInput
+                      options={daysOfWeek}
+                      value={selectedDay}
+                      onChange={setSelectedDay}
+                      placeholder="Select day of week"
+                      isDisabled={!!editingTemplate}
+                    />
+                  </Field>
+                  <Field label="Technician">
+                    <SelectInput
+                      options={technicians}
+                      value={selectedTechnician}
+                      onChange={setSelectedTechnician}
+                      placeholder="Select technician"
+                      isDisabled={!!editingTemplate}
+                      isLoading={isLoading}
+                    />
+                  </Field>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm sm:p-6">
+                <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                  <h3 className="text-xl font-bold text-gray-800">Available Stops</h3>
+                  <Input
+                    placeholder="Search by customer or address..."
+                    value={searchTerm}
+                    onChange={e => setSearchTerm(e.target.value)}
+                    className="md:max-w-md"
+                  />
+                </div>
+                <div className="grid max-h-[34rem] gap-3 overflow-y-auto pr-2 xl:grid-cols-2 2xl:grid-cols-3">
+                  {availableStops.map(stop => (
+                    <div key={stop.id} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="mb-3">
+                        <p className="font-semibold text-gray-800">{stop.customerName}</p>
+                        <p className="text-sm text-gray-500">{stop.address?.streetAddress}</p>
+                      </div>
+                      <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center xl:grid-cols-1 2xl:grid-cols-[1fr_auto]">
+                        <SelectInput
+                          options={serviceStopTypeOptions}
+                          value={availableStopTypeSelections[stop.id] || selectedServiceStopType}
+                          onChange={(selectedType) => handleAvailableStopTypeChange(stop.id, selectedType)}
+                          placeholder="Service Stop Type"
+                          isLoading={isLoading}
+                        />
+                        <Button
+                          onClick={() => handleAddStop(stop)}
+                          className="bg-blue-600 text-white hover:bg-blue-700"
+                        >
+                          Add
+                        </Button>
+                      </div>
                     </div>
-                    <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
-                      <SelectInput
-                        options={serviceStopTypeOptions}
-                        value={availableStopTypeSelections[stop.id] || selectedServiceStopType}
-                        onChange={(selectedType) => handleAvailableStopTypeChange(stop.id, selectedType)}
-                        placeholder="Service Stop Type"
-                        isLoading={isLoading}
-                      />
-                      <Button
-                        onClick={() => handleAddStop(stop)}
-                        className="bg-blue-600 text-white hover:bg-blue-700"
-                      >
-                        Add
-                      </Button>
-                    </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </div>
+
+              <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                <div className="border-b border-gray-200 px-5 py-4 sm:px-6">
+                  <h3 className="text-xl font-bold text-gray-800">Route Map</h3>
+                </div>
+                <div className="h-96 w-full md:h-[420px]">
+                  <MultiLocationMap locations={mapLocations} />
+                </div>
               </div>
             </div>
 
-            <div className="bg-white p-6 rounded-2xl shadow-lg">
-              <h3 className="text-xl font-bold text-gray-800 mb-4">Route Stops ({routeStops.length})</h3>
-              <Droppable droppableId="routeStops">
-                {(provided) => (
-                  <div
-                    {...provided.droppableProps}
-                    ref={provided.innerRef}
-                    className="bg-gray-50 p-4 rounded-lg space-y-3 min-h-[200px] border border-gray-200"
-                  >
-                    {routeStops.map((stop, index) => (
-                      <Draggable key={stop.id} draggableId={stop.id} index={index}>
-                        {(provided) => (
-                          <div
-                            ref={provided.innerRef}
-                            {...provided.draggableProps}
-                            {...provided.dragHandleProps}
-                            className="bg-white p-4 rounded-lg shadow border border-gray-200"
-                          >
-                            <div className="grid gap-3 md:grid-cols-[1fr_220px_auto] md:items-center">
-                              <div className='flex items-center'>
-                                <span className='text-lg font-bold text-gray-400 mr-4'>{index + 1}</span>
-                                <div>
-                                  <p className="font-semibold text-gray-900">{stop.customerName}</p>
-                                  <p className="text-sm text-gray-600">{stop.address?.streetAddress}</p>
+            <div className="min-w-0 xl:sticky xl:top-6">
+              <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm sm:p-6 xl:flex xl:max-h-[calc(100vh-3rem)] xl:flex-col">
+                <div className="mb-4 flex items-center justify-between gap-4">
+                  <h3 className="text-xl font-bold text-gray-800">Route Stops</h3>
+                  <span className="rounded-full bg-blue-50 px-3 py-1 text-sm font-semibold text-blue-700">{routeStops.length}</span>
+                </div>
+                <Droppable droppableId="routeStops">
+                  {(provided) => (
+                    <div
+                      {...provided.droppableProps}
+                      ref={provided.innerRef}
+                      className="min-h-[280px] space-y-3 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 sm:p-4 xl:flex-1"
+                    >
+                      {routeStops.map((stop, index) => (
+                        <Draggable key={stop.id} draggableId={stop.id} index={index}>
+                          {(provided) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.draggableProps}
+                              {...provided.dragHandleProps}
+                              className="rounded-lg border border-gray-200 bg-white p-4 shadow"
+                            >
+                              <div className="space-y-3">
+                                <div className='flex items-start gap-3'>
+                                  <span className='flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gray-100 text-sm font-bold text-gray-500'>{index + 1}</span>
+                                  <div>
+                                    <p className="font-semibold text-gray-900">{stop.customerName}</p>
+                                    <p className="text-sm text-gray-600">{stop.address?.streetAddress}</p>
+                                  </div>
+                                </div>
+                                <div className="grid gap-2 sm:grid-cols-[1fr_auto] xl:grid-cols-1 2xl:grid-cols-[1fr_auto]">
+                                  <SelectInput
+                                    options={serviceStopTypeOptions}
+                                    value={serviceStopTypeForStop(stop)}
+                                    onChange={(selectedType) => handleRouteStopTypeChange(stop.id, selectedType)}
+                                    placeholder="Service Stop Type"
+                                    isLoading={isLoading}
+                                  />
+                                  <Button
+                                    onClick={() => setRouteStops(routeStops.filter(s => s.id !== stop.id))}
+                                    className="bg-red-500 text-white hover:bg-red-600"
+                                  >
+                                    Remove
+                                  </Button>
                                 </div>
                               </div>
-                              <SelectInput
-                                options={serviceStopTypeOptions}
-                                value={serviceStopTypeForStop(stop)}
-                                onChange={(selectedType) => handleRouteStopTypeChange(stop.id, selectedType)}
-                                placeholder="Service Stop Type"
-                                isLoading={isLoading}
-                              />
-                              <Button
-                                onClick={() => setRouteStops(routeStops.filter(s => s.id !== stop.id))}
-                                className="bg-red-500 text-white hover:bg-red-600"
-                              >
-                                Remove
-                              </Button>
                             </div>
-                          </div>
-                        )}
-                      </Draggable>
-                    ))}
-                    {provided.placeholder}
-                  </div>
-                )}
-              </Droppable>
+                          )}
+                        </Draggable>
+                      ))}
+                      {provided.placeholder}
+                    </div>
+                  )}
+                </Droppable>
+              </div>
             </div>
           </div>
         </DragDropContext>
@@ -739,6 +813,23 @@ const RouteBuilder = () => {
           </Button>
         </div>
       </div>
+      {routeSaveProgress && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 px-4">
+          <div className="w-full max-w-md rounded-lg border border-gray-200 bg-white p-6 text-center shadow-2xl">
+            <p className="text-sm font-semibold uppercase tracking-wide text-blue-600">{routeSaveProgress.action} Route</p>
+            <p className="mt-2 text-2xl font-bold text-gray-900">
+              {routeSaveProgress.current}/{routeSaveProgress.total}
+            </p>
+            <p className="mt-1 text-sm text-gray-600">{routeSaveProgress.detail}</p>
+            <div className="mt-5 h-3 overflow-hidden rounded-full bg-gray-100">
+              <div
+                className="h-full rounded-full bg-blue-600 transition-all duration-300"
+                style={{ width: `${Math.max(5, Math.round((routeSaveProgress.current / routeSaveProgress.total) * 100))}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

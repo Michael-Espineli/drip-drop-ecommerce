@@ -107,7 +107,10 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
           {/* Navigation */}
           <nav className="px-2 pt-5 text-slate-200 flex-grow overflow-y-auto">
             {Object.keys(navItemsByCategory).map((category) => (
-              <div key={category} className="mb-3">
+              <div
+                key={category}
+                className={`mb-4 ${category !== 'NA' ? 'border-t border-slate-800/60 pt-3' : ''}`}
+              >
                 {category !== 'NA' && (
                   <h3 className="px-3 py-2 text-xs font-bold uppercase tracking-wider text-slate-400">
                     {category}

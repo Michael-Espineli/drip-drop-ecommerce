@@ -27,18 +27,24 @@ const EditServiceRequest = () => {
         const fetchRequestAndLocations = async () => {
             setLoading(true);
             try {
-                const requestRef = doc(db, 'serviceRequests', requestId);
+                const requestRef = doc(db, 'homeownerServiceRequests', requestId);
                 const requestSnap = await getDoc(requestRef);
 
-                if (!requestSnap.exists() || requestSnap.data().userId !== user.uid) {
+                const requestOwnerId =
+                    requestSnap.data()?.homeownerId ||
+                    requestSnap.data()?.userId ||
+                    requestSnap.data()?.customerUserId ||
+                    "";
+
+                if (!requestSnap.exists() || requestOwnerId !== user.uid) {
                     setError('Service request not found or you do not have permission to edit it.');
                     setLoading(false);
                     return;
                 }
 
                 const requestData = requestSnap.data();
-                setDescription(requestData.description);
-                setServiceLocation(requestData.serviceLocationId);
+                setDescription(requestData.serviceDescription || requestData.description || '');
+                setServiceLocation(requestData.homeownerServiceLocationId || requestData.serviceLocationId || '');
 
                 // Fetch company details
                 const companyRef = doc(db, 'companies', requestData.companyId);
@@ -76,10 +82,13 @@ const EditServiceRequest = () => {
         setError(null);
 
         try {
-            const requestRef = doc(db, 'serviceRequests', requestId);
+            const requestRef = doc(db, 'homeownerServiceRequests', requestId);
+            const selectedLocation = userLocations.find((location) => location.id === serviceLocation);
             await updateDoc(requestRef, {
+                homeownerServiceLocationId: serviceLocation,
                 serviceLocationId: serviceLocation,
-                description,
+                serviceLocationAddress: selectedLocation?.address || {},
+                serviceDescription: description,
             });
             navigate(`/client/service-requests/${requestId}`);
         } catch (err) {
