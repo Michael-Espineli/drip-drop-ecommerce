@@ -15,6 +15,7 @@ import { MdEmail, MdOutlineLocalOffer } from "react-icons/md";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { salesCollectionNames } from "../../../utils/models/Sales";
+import BillingReadinessCard from "../sales/components/BillingReadinessCard";
 
 const emptyCounts = {
   companyUsers: 0,
@@ -31,7 +32,9 @@ const emptyCounts = {
   termsTemplates: 0,
   catalogItems: 0,
   agreements: 0,
+  billingProfiles: 0,
   billingSubscriptions: 0,
+  activeBillingSubscriptions: 0,
   invoices: 0,
   payments: 0,
 };
@@ -39,6 +42,21 @@ const emptyCounts = {
 const countSnapshot = async (ref) => {
   const snapshot = await getDocs(ref);
   return snapshot.size;
+};
+
+const normalizeStatus = (value) => String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+
+const getBillingSubscriptionCounts = async (companyId) => {
+  const snapshot = await getDocs(query(collection(db, salesCollectionNames.billingSubscriptions), where("companyId", "==", companyId)));
+  const activeBillingSubscriptions = snapshot.docs.filter((subscriptionDoc) => {
+    const data = subscriptionDoc.data() || {};
+    return ["active", "trialing"].includes(normalizeStatus(data.stripeStatus || data.status));
+  }).length;
+
+  return {
+    activeBillingSubscriptions,
+    billingSubscriptions: snapshot.size,
+  };
 };
 
 const getString = (...values) => values.find((value) => typeof value === "string" && value.trim()) || "";
@@ -53,38 +71,40 @@ const SetupItem = ({ item }) => {
   const complete = !!item.completed;
 
   return (
-    <div className="flex min-h-[116px] flex-col justify-between rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex items-start gap-3">
-        <span className={complete ? "mt-0.5 text-emerald-600" : "mt-0.5 text-slate-300"}>
-          {complete ? <FaCheckCircle className="h-5 w-5" /> : <FaRegCircle className="h-5 w-5" />}
-        </span>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="text-sm font-semibold text-slate-950">{item.title}</h3>
-            <span className={complete ? "rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700" : "rounded bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"}>
-              {complete ? "Done" : "Needs setup"}
-            </span>
+    <div className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 flex-1 items-start gap-3">
+          <span className={complete ? "mt-0.5 text-emerald-600" : "mt-0.5 text-slate-300"}>
+            {complete ? <FaCheckCircle className="h-5 w-5" /> : <FaRegCircle className="h-5 w-5" />}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="text-sm font-semibold text-slate-950">{item.title}</h3>
+              <span className={complete ? "rounded bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700" : "rounded bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700"}>
+                {complete ? "Done" : "Needs setup"}
+              </span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
           </div>
-          <p className="mt-1 text-xs leading-5 text-slate-500">{item.description}</p>
         </div>
-      </div>
 
-      <div className="mt-4 flex items-center justify-between gap-3">
-        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">{item.metric}</span>
-        <Link
-          to={item.to}
-          className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-        >
-          {item.actionLabel}
-          <FaArrowRight className="h-3 w-3" />
-        </Link>
+        <div className="flex shrink-0 items-center justify-between gap-3 sm:justify-end">
+          <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">{item.metric}</span>
+          <Link
+            to={item.to}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            {item.actionLabel}
+            <FaArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
       </div>
     </div>
   );
 };
 
 const CompanySetupGuide = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId } = useContext(Context);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [company, setCompany] = useState(null);
@@ -123,7 +143,8 @@ const CompanySetupGuide = () => {
           termsTemplates,
           catalogItems,
           agreements,
-          billingSubscriptions,
+          billingProfiles,
+          billingSubscriptionCounts,
           invoices,
           payments,
         ] = await Promise.all([
@@ -143,7 +164,8 @@ const CompanySetupGuide = () => {
           countSnapshot(collection(db, "companies", companyId, "termsTemplates")),
           countSnapshot(query(collection(db, salesCollectionNames.catalogItems), where("companyId", "==", companyId))),
           countSnapshot(query(collection(db, salesCollectionNames.agreements), where("companyId", "==", companyId))),
-          countSnapshot(query(collection(db, salesCollectionNames.billingSubscriptions), where("companyId", "==", companyId))),
+          countSnapshot(query(collection(db, salesCollectionNames.billingProfiles), where("companyId", "==", companyId))),
+          getBillingSubscriptionCounts(companyId),
           countSnapshot(query(collection(db, salesCollectionNames.invoices), where("companyId", "==", companyId))),
           countSnapshot(query(collection(db, salesCollectionNames.payments), where("companyId", "==", companyId))),
         ]);
@@ -165,7 +187,9 @@ const CompanySetupGuide = () => {
           termsTemplates,
           catalogItems,
           agreements,
-          billingSubscriptions,
+          billingProfiles,
+          billingSubscriptions: billingSubscriptionCounts.billingSubscriptions,
+          activeBillingSubscriptions: billingSubscriptionCounts.activeBillingSubscriptions,
           invoices,
           payments,
         });
@@ -183,7 +207,8 @@ const CompanySetupGuide = () => {
   const setupSections = useMemo(() => {
     const companyName = getString(company?.companyName, company?.name, recentlySelectedCompanyName);
     const companyContact = getString(company?.email, company?.phoneNumber, company?.phone, company?.streetAddress, company?.address?.streetAddress);
-    const hasStripeAccount = !!getString(company?.stripeConnectedAccountId, company?.stripeAccountId, company?.stripeConnectedAccount?.id);
+    const connectedAccountId = getString(stripeConnectedAccountId, company?.stripeConnectedAccountId, company?.stripeAccountId, company?.stripeConnectedAccount?.id);
+    const hasStripeAccount = !!connectedAccountId;
     const emailReady = !!emailConfig && emailConfig.emailIsOn !== false;
 
     return [
@@ -258,7 +283,7 @@ const CompanySetupGuide = () => {
         ],
       },
       {
-        title: "Service And Routing",
+        title: "Service and Routing",
         helper: "Turn customer records into repeatable work and daily routes.",
         icon: FaRoute,
         items: [
@@ -297,7 +322,7 @@ const CompanySetupGuide = () => {
         ],
       },
       {
-        title: "Sales And Billing",
+        title: "Sales and Billing",
         helper: "Connect terms, catalog items, service agreements, subscriptions, invoices, and payments.",
         icon: FaFileInvoiceDollar,
         items: [
@@ -344,12 +369,18 @@ const CompanySetupGuide = () => {
         ],
       },
     ];
-  }, [company, counts, emailConfig, recentlySelectedCompanyName]);
+  }, [company, counts, emailConfig, recentlySelectedCompanyName, stripeConnectedAccountId]);
 
   const allItems = setupSections.flatMap((section) => section.items);
   const completedCount = allItems.filter((item) => item.completed).length;
   const progress = allItems.length ? Math.round((completedCount / allItems.length) * 100) : 0;
   const nextItem = allItems.find((item) => !item.completed);
+  const setupStripeConnectedAccountId = getString(
+    stripeConnectedAccountId,
+    company?.stripeConnectedAccountId,
+    company?.stripeAccountId,
+    company?.stripeConnectedAccount?.id
+  );
 
   if (!recentlySelectedCompany) {
     return (
@@ -410,12 +441,14 @@ const CompanySetupGuide = () => {
       {loading ? (
         <div className="rounded-md border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">Loading setup guide...</div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
+        <div className="space-y-5">
           {setupSections.map((section) => {
             const sectionComplete = section.items.filter((item) => item.completed).length;
+            const showBillingReadiness = section.title === "Sales and Billing";
+
             return (
-              <section key={section.title} className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="mb-4 flex items-start justify-between gap-3">
+              <section key={section.title} className="space-y-3">
+                <div className="flex items-start justify-between gap-3 rounded-md border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex items-start gap-3">
                     <SectionIcon icon={section.icon} />
                     <div>
@@ -427,7 +460,17 @@ const CompanySetupGuide = () => {
                     {sectionComplete}/{section.items.length}
                   </span>
                 </div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+
+                {showBillingReadiness ? (
+                  <BillingReadinessCard
+                    activeSubscriptionCount={counts.activeBillingSubscriptions}
+                    billingProfileCount={counts.billingProfiles}
+                    companyId={recentlySelectedCompany}
+                    connectedAccountId={setupStripeConnectedAccountId}
+                  />
+                ) : null}
+
+                <div className="space-y-3">
                   {section.items.map((item) => (
                     <SetupItem key={`${section.title}-${item.title}`} item={item} />
                   ))}

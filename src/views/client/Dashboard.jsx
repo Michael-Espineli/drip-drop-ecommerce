@@ -283,7 +283,6 @@ const BillingWidget = () => {
         }
 
         const invoiceMap = new Map();
-        let firstSnapshotsRemaining = user.email ? 2 : 1;
 
         const publish = (snapshot) => {
             snapshot.docs.forEach(doc => {
@@ -297,30 +296,15 @@ const BillingWidget = () => {
             });
 
             setInvoices(fetchedInvoices.slice(0, 3));
-            firstSnapshotsRemaining -= 1;
-            if (firstSnapshotsRemaining <= 0) setLoading(false);
+            setLoading(false);
         };
 
         const invoicesRef = collection(db, salesCollectionNames.invoices);
-        const unsubscribes = [
-            onSnapshot(
-                query(invoicesRef, where('customerUserId', '==', user.uid)),
-                publish,
-                () => setLoading(false)
-            ),
-        ];
-
-        if (user.email) {
-            unsubscribes.push(
-                onSnapshot(
-                    query(invoicesRef, where('email', '==', user.email)),
-                    publish,
-                    () => setLoading(false)
-                )
-            );
-        }
-
-        return () => unsubscribes.forEach(unsubscribe => unsubscribe());
+        return onSnapshot(
+            query(invoicesRef, where('customerUserId', '==', user.uid)),
+            publish,
+            () => setLoading(false)
+        );
     }, [user]);
 
     const openInvoices = invoices.filter(invoice => (

@@ -5,7 +5,7 @@ import Footer from '../../layout/Footer';
 export default function TermsOfService() {
     return (
         <div className="bg-gray-50 text-gray-800">
-            <header className="fixed top-0 left-0 right-0 z-50 bg-blue-600 shadow-md">
+            <header className="fixed top-0 left-0 right-0 z-50 bg-cyan-600 shadow-md">
                 <div className="container mx-auto px-4">
                     <PublicHeader />
                 </div>

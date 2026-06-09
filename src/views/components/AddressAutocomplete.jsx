@@ -1,11 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { MapPinIcon } from '@heroicons/react/24/outline';
 
-const AddressAutocomplete = ({ onAddressSelect, placeholder, initialValue, customClasses }) => {
+const AddressAutocomplete = ({
+  onAddressSelect,
+  onInputChange,
+  placeholder,
+  initialValue,
+  customClasses,
+  iconClasses,
+}) => {
   const autocompleteRef = useRef(null);
   const [inputValue, setInputValue] = useState(initialValue || '');
+  const [placesReady, setPlacesReady] = useState(Boolean(window.google?.maps?.places));
 
   useEffect(() => {
+    setInputValue(initialValue || '');
+  }, [initialValue]);
+
+  useEffect(() => {
+    if (placesReady) return undefined;
+
+    const timer = window.setInterval(() => {
+      if (window.google?.maps?.places) {
+        setPlacesReady(true);
+        window.clearInterval(timer);
+      }
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [placesReady]);
+
+  useEffect(() => {
+    if (!placesReady || !autocompleteRef.current || !window.google?.maps?.places) return undefined;
+
     const autocomplete = new window.google.maps.places.Autocomplete(
       autocompleteRef.current,
       {
@@ -50,7 +77,8 @@ const AddressAutocomplete = ({ onAddressSelect, placeholder, initialValue, custo
           }
         }
 
-        onAddressSelect(address);
+        onAddressSelect?.(address);
+        onInputChange?.(address.streetAddress || place.formatted_address || '');
         setInputValue(place.formatted_address);
       }
     });
@@ -58,17 +86,20 @@ const AddressAutocomplete = ({ onAddressSelect, placeholder, initialValue, custo
     return () => {
       window.google.maps.event.clearInstanceListeners(autocomplete);
     };
-  }, [onAddressSelect]);
+  }, [onAddressSelect, onInputChange, placesReady]);
 
   return (
     <div className="relative">
-        <MapPinIcon className='absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-900' />
+        <MapPinIcon className={iconClasses || 'pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-gray-900'} />
         <input
           ref={autocompleteRef}
           type="text"
           placeholder={placeholder || "Enter Address"}
           value={inputValue}
-          onChange={(e) => setInputValue(e.target.value)}
+          onChange={(e) => {
+            setInputValue(e.target.value);
+            onInputChange?.(e.target.value);
+          }}
           className={customClasses || "w-full p-1 bg-gray-700 rounded-md"}
         />
     </div>

@@ -6,7 +6,7 @@ import { InformationCircleIcon, StarIcon } from '@heroicons/react/24/outline';
 export default function Info() {
     return (
         <div className="bg-gray-50 text-gray-800">
-            <header className="fixed top-0 left-0 right-0 z-50 bg-blue-600 shadow-md">
+            <header className="fixed top-0 left-0 right-0 z-50 bg-cyan-600 shadow-md">
                 <div className="container mx-auto px-4">
                     <PublicHeader />
                 </div>
@@ -16,7 +16,7 @@ export default function Info() {
                 {/* Page Header */}
                 <header className="bg-white py-16">
                     <div className="container mx-auto px-4 text-center">
-                        <InformationCircleIcon className="h-16 w-16 text-blue-500 mx-auto mb-4" />
+                        <InformationCircleIcon className="h-16 w-16 text-cyan-500 mx-auto mb-4" />
                         <h1 className="text-4xl md:text-5xl font-bold">General Information</h1>
                         <p className="mt-4 text-lg text-gray-600">A flexible page for your content.</p>
                     </div>

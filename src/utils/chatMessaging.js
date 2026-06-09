@@ -503,7 +503,6 @@ const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) 
   if (!db || !user?.uid) return [];
 
   const uid = user.uid;
-  const email = user.email || '';
   const chatCompanyId = chat.companyId || chat.receiverCompanyId || '';
 
   if (type === CONVERSATION_LINK_TYPES.equipment) {
@@ -553,11 +552,8 @@ const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) 
   }
 
   if (type === CONVERSATION_LINK_TYPES.serviceAgreement) {
-    const snapshots = await Promise.all([
-      safeGetDocs(query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', uid))),
-      email ? safeGetDocs(query(collection(db, salesCollectionNames.agreements), where('email', '==', email))) : Promise.resolve([]),
-    ]);
-    return dedupeRecords(snapshots.flat())
+    const records = await safeGetDocs(query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', uid)));
+    return records
       .map((record) => buildPickerItem({
         type,
         record,
@@ -568,11 +564,8 @@ const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) 
   }
 
   if (type === CONVERSATION_LINK_TYPES.invoice) {
-    const snapshots = await Promise.all([
-      safeGetDocs(query(collection(db, salesCollectionNames.invoices), where('customerUserId', '==', uid))),
-      email ? safeGetDocs(query(collection(db, salesCollectionNames.invoices), where('email', '==', email))) : Promise.resolve([]),
-    ]);
-    return dedupeRecords(snapshots.flat())
+    const records = await safeGetDocs(query(collection(db, salesCollectionNames.invoices), where('customerUserId', '==', uid)));
+    return records
       .map((record) => buildPickerItem({
         type,
         record,

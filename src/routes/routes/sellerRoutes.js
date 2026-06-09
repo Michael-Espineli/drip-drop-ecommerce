@@ -69,6 +69,7 @@ const AlphaWaterReceiptImport = lazy(() => import("../../views/company/purchases
 const ShoppingListView = lazy(() => import("../../views/company/shoppingList/ShoppingListListView"))
 const CreateNewShoppingList = lazy(() => import("../../views/company/shoppingList/ShoppingListCreateView"))
 const ShoppingListDetailView = lazy(() => import("../../views/company/shoppingList/ShoppingListDetailView"))
+const PartApprovals = lazy(() => import("../../views/company/partApprovals/PartApprovals"))
 
 const DataBaseItemDetailView = lazy(() => import("../../views/company/databaseItems/DataBaseItemDetailView"))
 const CreateNewDataBaseItem = lazy(() => import("../../views/company/databaseItems/CreateNewDataBaseItem"))
@@ -112,6 +113,8 @@ const Vendors = lazy(() => import("../../views/company/venders/Venders"))
 const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
+const MigrationDashboard = lazy(() => import("../../views/company/migration/MigrationDashboard"))
+const CustomerExportImport = lazy(() => import("../../views/company/migration/CustomerExportImport"))
 const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
 
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
@@ -516,6 +519,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/part-approvals',
+        element: <PartApprovals />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/vendors',
         element: <Vendors />,
         ability: ['Admin', 'Seller'],
@@ -869,6 +879,24 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/migration',
+        element: <MigrationDashboard />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/customer-export-import',
+        element: <CustomerExportImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
         path: '/company/migration/skimmer-previous-dosages-upload',
         element: <SkimmerPreviousDosagesUpload />,
         ability: ['Admin', 'Seller'],
@@ -1077,6 +1105,11 @@ export const sellerRoutes = [
     }, {
         path: '/company/sales/agreements',
         element: <SalesAgreements />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/agreements/needs-routing',
+        element: <SalesAgreements routingQueueOnly />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',
     }, {

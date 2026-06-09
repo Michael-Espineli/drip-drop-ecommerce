@@ -12,6 +12,7 @@ const CompanyList = lazy(() => import("../../views/admin/company/CompanyList"))
 const CompanyDetailView = lazy(() => import("../../views/admin/company/CompanyDetailView"))
 
 const UniversalEquipment = lazy(() => import("../../views/admin/universalEquipment/UniversalEquipment"))
+const UniversalReadingsDosages = lazy(() => import("../../views/admin/universalTemplates/UniversalReadingsDosages"))
 const DripDropWorkflowArchitectureDocsPage = lazy(() => import("../../views/admin/documentation/DripDropWorkflowArchitectureDocsPage"))
 const FeatureFlags = lazy(() => import("../../views/admin/featureFlags/FeatureFlags"))
 const Complaints = lazy(() => import("../../views/admin/complaints/Complaints"))
@@ -102,6 +103,12 @@ export const adminRoutes = [
     {
         path: '/admin/universal-equipment',
         element: <UniversalEquipment />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/universal-readings-dosages',
+        element: <UniversalReadingsDosages />,
         role: 'Admin'
     }
     ,

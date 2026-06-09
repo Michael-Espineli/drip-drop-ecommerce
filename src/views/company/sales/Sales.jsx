@@ -1,7 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { httpsCallable } from 'firebase/functions';
 import { format } from 'date-fns';
 import {
   FaCalendarAlt,
@@ -19,7 +18,7 @@ import {
   FaUsers,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
-import { db, functions } from '../../../utils/config';
+import { db } from '../../../utils/config';
 import {
   SalesAgreementStatus,
   SalesBillingSubscriptionStatus,
@@ -30,6 +29,7 @@ import {
 import { buildTermsContent, getTermDescription } from '../../../utils/models/TermsTemplate';
 import { getTerms, listenTermsTemplates } from '../../../utils/terms/termsTemplateFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import BillingReadinessCard from './components/BillingReadinessCard';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -159,9 +159,6 @@ const Sales = () => {
   const [selectedTermsTemplateId, setSelectedTermsTemplateId] = useState('');
   const [selectedTerms, setSelectedTerms] = useState([]);
   const [termsLoading, setTermsLoading] = useState(false);
-  const [stripeReadiness, setStripeReadiness] = useState(null);
-  const [stripeReadinessLoading, setStripeReadinessLoading] = useState(false);
-  const [stripeReadinessError, setStripeReadinessError] = useState('');
 
   useEffect(() => {
     setErrors([]);
@@ -366,32 +363,6 @@ const Sales = () => {
   };
 
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
-  const hasConnectedAccount = Boolean(stripeConnectedAccountId);
-  const hasBlockingStripeRequirements = Boolean(
-    stripeReadiness?.currentlyDue?.length || stripeReadiness?.pastDue?.length || stripeReadiness?.errors?.length
-  );
-
-  const verifyStripeReadiness = async () => {
-    if (!stripeConnectedAccountId || stripeReadinessLoading) return;
-
-    setStripeReadinessLoading(true);
-    setStripeReadinessError('');
-
-    try {
-      const verifyCallable = httpsCallable(functions, 'verifyConnectedAccountBillingReadiness');
-      const result = await verifyCallable({
-        connectedAccount: stripeConnectedAccountId,
-        companyId: recentlySelectedCompany,
-      });
-
-      setStripeReadiness(result.data);
-    } catch (error) {
-      console.error('Unable to verify Stripe billing readiness', error);
-      setStripeReadinessError(error.message || 'Unable to verify Stripe billing readiness.');
-    } finally {
-      setStripeReadinessLoading(false);
-    }
-  };
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
@@ -798,93 +769,12 @@ const Sales = () => {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-bold text-slate-950">Billing Readiness</h2>
-              <div className="mt-4 space-y-3">
-                <div className="flex items-start gap-3">
-                  <FaCheckCircle className={hasConnectedAccount ? 'mt-1 text-emerald-600' : 'mt-1 text-slate-300'} />
-                  <div>
-                    <p className="font-semibold text-slate-900">Connected Stripe account</p>
-                    <p className="mt-1 break-all text-sm text-slate-500">
-                      {hasConnectedAccount ? stripeConnectedAccountId : 'Needs setup before customer billing'}
-                    </p>
-                  </div>
-                </div>
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-semibold text-slate-900">Stripe billing verification</p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        {stripeReadiness?.canBillCustomers
-                          ? 'Ready for card billing'
-                          : stripeReadiness
-                            ? 'Stripe needs attention'
-                            : 'Not checked yet'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={verifyStripeReadiness}
-                      disabled={!hasConnectedAccount || stripeReadinessLoading}
-                      className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {stripeReadinessLoading ? 'Checking...' : 'Check'}
-                    </button>
-                  </div>
-
-                  {stripeReadinessError && (
-                    <p className="mt-2 text-sm font-medium text-rose-600">{stripeReadinessError}</p>
-                  )}
-
-                  {stripeReadiness && (
-                    <div className="mt-3 grid gap-2 text-sm">
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Charges</span>
-                        <span className={stripeReadiness.chargesEnabled ? 'font-semibold text-emerald-700' : 'font-semibold text-rose-700'}>
-                          {stripeReadiness.chargesEnabled ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Payouts</span>
-                        <span className={stripeReadiness.payoutsEnabled ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
-                          {stripeReadiness.payoutsEnabled ? 'Enabled' : 'Pending'}
-                        </span>
-                      </div>
-                      <div className="flex items-center justify-between">
-                        <span className="text-slate-500">Card payments</span>
-                        <span className={stripeReadiness.cardPaymentsEnabled ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
-                          {stripeReadiness.cardPaymentsEnabled ? 'Enabled' : labelize(stripeReadiness.capabilities?.cardPayments)}
-                        </span>
-                      </div>
-                      {hasBlockingStripeRequirements && (
-                        <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-amber-800">
-                          <p className="font-semibold">Requirements need attention</p>
-                          <p className="mt-1 break-words text-xs">
-                            {[...(stripeReadiness.currentlyDue || []), ...(stripeReadiness.pastDue || [])]
-                              .slice(0, 4)
-                              .join(', ')}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <div className="flex items-start gap-3">
-                  <FaCheckCircle className={billingProfiles.length > 0 ? 'mt-1 text-emerald-600' : 'mt-1 text-slate-300'} />
-                  <div>
-                    <p className="font-semibold text-slate-900">Customer billing profiles</p>
-                    <p className="mt-1 text-sm text-slate-500">{billingProfiles.length} profile{billingProfiles.length === 1 ? '' : 's'} found.</p>
-                  </div>
-                </div>
-                <div className="flex items-start gap-3">
-                  <FaCheckCircle className={activeSubscriptions.length > 0 ? 'mt-1 text-emerald-600' : 'mt-1 text-slate-300'} />
-                  <div>
-                    <p className="font-semibold text-slate-900">Active homeowner billing</p>
-                    <p className="mt-1 text-sm text-slate-500">{activeSubscriptions.length} active subscription{activeSubscriptions.length === 1 ? '' : 's'}.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
+            <BillingReadinessCard
+              activeSubscriptionCount={activeSubscriptions.length}
+              billingProfileCount={billingProfiles.length}
+              companyId={recentlySelectedCompany}
+              connectedAccountId={stripeConnectedAccountId}
+            />
 
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Operational Sources</h2>

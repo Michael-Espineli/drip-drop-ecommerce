@@ -30,6 +30,7 @@ const clientNavItems = {
     ],
     'Agreements': [
         { title: 'Service Agreements', icon: <DocumentTextIcon />, path: '/client/service-agreements' },
+        { title: 'Part Approvals', icon: <WrenchScrewdriverIcon />, path: '/client/part-approvals' },
         { title: 'Billing', icon: <CreditCardIcon />, path: '/client/billing' },
     ],
     'NA': [

@@ -168,20 +168,6 @@ const ClientInvoiceDetail = () => {
       ),
     ];
 
-    if (user.email) {
-      unsubscribes.push(
-        onSnapshot(
-          query(
-            collection(db, salesCollectionNames.payments),
-            where('invoiceId', '==', invoiceId),
-            where('email', '==', user.email)
-          ),
-          publish,
-          onError
-        )
-      );
-    }
-
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [invoiceId, user]);
 

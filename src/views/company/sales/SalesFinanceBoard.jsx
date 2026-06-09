@@ -23,6 +23,7 @@ import {
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -478,7 +479,9 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
 
     try {
       const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
       const result = await startCheckoutCallable({
+        ...authPayload,
         billingSubscriptionId: subscription.id,
         agreementId: subscription.agreementId || '',
         companyId: subscription.companyId || recentlySelectedCompany,

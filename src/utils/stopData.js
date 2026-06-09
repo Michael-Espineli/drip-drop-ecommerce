@@ -51,7 +51,7 @@ export const normalizeDosageForStopData = (template = {}, amount = "", bodyOfWat
   amount: amount === null || amount === undefined ? "" : String(amount),
   UOM: template.UOM || template.uom || "",
   rate: template.rate || "",
-  linkedItem: template.linkedItem || template.linkedDosage || template.itemId || "",
+  linkedItem: template.linkedItem || template.linkedItemId || template.linkedDosage || template.itemId || "",
   bodyOfWaterId,
 });
 

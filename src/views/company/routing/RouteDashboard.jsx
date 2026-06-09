@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
 import { query, collection, getDocs, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
 import { db } from "../../../utils/config";
@@ -1229,12 +1229,18 @@ const RouteDashboard = () => {
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className=" mx-auto">
-                <header className="flex justify-between items-center mb-6">
+                <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <h1 className="text-3xl font-bold text-gray-800">Daily Route Board</h1>
                         <p className="text-gray-500">Manage today's routes, stops, technician locations, and route activity.</p>
                     </div>
                     <div className="flex flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+                        <Link
+                            to="/company/serviceStops"
+                            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-center text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+                        >
+                            Service Stops
+                        </Link>
                         {process.env.NODE_ENV !== 'production' && (
                             <button
                                 type="button"

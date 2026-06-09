@@ -136,6 +136,48 @@ const getOrCreateConnectedStripeCustomer = async ({ subscription, connectedAccou
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
 
+const getCallableData = (data) => data?.data || data || {};
+
+const getCallableAuth = async (data, context, message) => {
+  if (context.auth?.uid) {
+    return {
+      uid: context.auth.uid,
+      token: context.auth.token || {},
+    };
+  }
+
+  const payload = getCallableData(data);
+  const authorizationHeader =
+    context.rawRequest?.headers?.authorization ||
+    context.rawRequest?.headers?.Authorization ||
+    '';
+  const bearerToken = String(authorizationHeader).startsWith('Bearer ')
+    ? String(authorizationHeader).slice('Bearer '.length).trim()
+    : '';
+  const idToken = [
+    payload.idToken,
+    payload.auth?.idToken,
+    payload.data?.idToken,
+    bearerToken,
+  ].find((candidate) => String(candidate || '').trim());
+
+  if (!idToken) {
+    throw new functions.https.HttpsError('unauthenticated', message);
+  }
+
+  try {
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+
+    return {
+      uid: decodedToken.uid,
+      token: decodedToken,
+    };
+  } catch (error) {
+    console.error('Unable to verify callable id token', error);
+    throw new functions.https.HttpsError('unauthenticated', message);
+  }
+};
+
 const userHasCompanyAccess = async (uid, companyId) => {
   if (!uid || !companyId) return false;
 
@@ -152,16 +194,73 @@ const userHasCompanyAccess = async (uid, companyId) => {
 const userCanAccessSalesRecord = async ({ auth, record }) => {
   if (!auth || !record) return false;
 
-  if (record.customerUserId && record.customerUserId === auth.uid) return true;
+  const recordCustomerUserId = String(record.customerUserId || '').trim();
+  if (recordCustomerUserId && recordCustomerUserId === auth.uid) return true;
+
+  if (await userHasCompanyAccess(auth.uid, record.companyId)) return true;
+
+  if (recordCustomerUserId) return false;
 
   const authEmail = normalizeEmail(auth.token?.email);
   const recordEmail = normalizeEmail(record.email || record.customerEmail || record.billingEmail);
   if (authEmail && recordEmail && authEmail === recordEmail) return true;
 
-  return userHasCompanyAccess(auth.uid, record.companyId);
+  return false;
 };
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const linkedJobIdForAgreement = (agreement = {}) => {
+  if (agreement.jobId) return agreement.jobId;
+  if (agreement.workOrderId) return agreement.workOrderId;
+  if (normalizeStatus(agreement.sourceType) === 'oneoffjob' && agreement.sourceId) return agreement.sourceId;
+  return '';
+};
+
+const syncLinkedJobForAgreementStatus = async ({
+  agreement,
+  status,
+  actorUserId = '',
+  actorUserName = '',
+  timestamp = admin.firestore.FieldValue.serverTimestamp(),
+}) => {
+  const companyId = agreement.companyId || '';
+  const jobId = linkedJobIdForAgreement(agreement);
+  if (!companyId || !jobId) return;
+
+  const jobRef = db.collection('companies').doc(companyId).collection('workOrders').doc(jobId);
+  const jobDoc = await jobRef.get();
+  if (!jobDoc.exists) return;
+
+  const job = jobDoc.data() || {};
+  const statusKey = normalizeStatus(status);
+  const update = {
+    salesAgreementId: agreement.id || agreement.agreementId || '',
+    salesAgreementStatus: status,
+    salesAgreementStatusUpdatedAt: timestamp,
+    salesAgreementStatusUpdatedByUserId: actorUserId,
+    salesAgreementStatusUpdatedByUserName: actorUserName,
+    updatedAt: timestamp,
+  };
+
+  if (statusKey === 'accepted') {
+    update.billingStatus = 'Accepted';
+    update.salesAgreementAcceptedAt = timestamp;
+    if (!job.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(job.operationStatus)) {
+      update.operationStatus = 'Unscheduled';
+    }
+  }
+
+  if (statusKey === 'sent') {
+    update.billingStatus = 'Estimate';
+    update.salesAgreementSentAt = timestamp;
+    if (!job.operationStatus || job.operationStatus === 'Estimate Pending') {
+      update.operationStatus = 'Unscheduled';
+    }
+  }
+
+  await jobRef.set(update, { merge: true });
+};
 
 const mapStripeSubscriptionStatus = (status) => {
   if (status === 'active' || status === 'trialing') return 'active';
@@ -461,11 +560,8 @@ const createConnectedAccountPriceForSalesLineItem = async ({ connectedAccount, s
 };
 
 exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in to accept a service agreement.');
-  }
-
-  const receivedData = data.data || data;
+  const callableAuth = await getCallableAuth(data, context, 'You must be signed in to accept a service agreement.');
+  const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
 
@@ -481,7 +577,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   }
 
   const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
-  const canAccess = await userCanAccessSalesRecord({ auth: context.auth, record: agreement });
+  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: agreement });
 
   if (!canAccess) {
     throw new functions.https.HttpsError('permission-denied', 'This service agreement does not belong to your account.');
@@ -498,8 +594,8 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement, stripeConnectedAccountId });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
-  const acceptedByEmail = context.auth.token?.email || agreement.email || '';
-  const acceptedByName = context.auth.token?.name || agreement.customerName || acceptedByEmail || 'Customer';
+  const acceptedByEmail = callableAuth.token?.email || agreement.email || '';
+  const acceptedByName = callableAuth.token?.name || agreement.customerName || acceptedByEmail || 'Customer';
 
   await db.runTransaction(async (transaction) => {
     const [freshAgreementSnap, subscriptionSnap] = await Promise.all([
@@ -521,7 +617,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       ...existingSubscription,
       companyId: subscriptionDraft.companyId,
       customerId: subscriptionDraft.customerId,
-      customerUserId: subscriptionDraft.customerUserId || context.auth.uid,
+      customerUserId: subscriptionDraft.customerUserId || callableAuth.uid,
       relationshipId: subscriptionDraft.relationshipId,
       customerCompanyRelationshipId: subscriptionDraft.customerCompanyRelationshipId,
       customerName: subscriptionDraft.customerName,
@@ -557,7 +653,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     transaction.set(agreementRef, {
       status: 'accepted',
       acceptedAt,
-      acceptedByUserId: context.auth.uid,
+      acceptedByUserId: callableAuth.uid,
       acceptedByUserName: acceptedByName,
       acceptedByEmail,
       acceptedSource: 'customerPortal',
@@ -570,7 +666,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         terms: freshAgreement.terms || '',
         termsList: Array.isArray(freshAgreement.termsList) ? freshAgreement.termsList : [],
         acceptedAt,
-        acceptedByUserId: context.auth.uid,
+        acceptedByUserId: callableAuth.uid,
         acceptedByUserName: acceptedByName,
         acceptedByEmail,
         billingSubscriptionId: subscriptionDraft.id,
@@ -581,12 +677,21 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
+      customerUserId: freshAgreement.customerUserId || callableAuth.uid,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       operationsSetupStatus: freshAgreement.operationsSetupStatus || 'needsRecurringServiceStop',
       operationsSetupReason: freshAgreement.operationsSetupReason || 'acceptedServiceAgreement',
       operationsSetupUpdatedAt: acceptedAt,
       updatedAt: acceptedAt,
     }, { merge: true });
+  });
+
+  await syncLinkedJobForAgreementStatus({
+    agreement,
+    status: 'accepted',
+    actorUserId: callableAuth.uid,
+    actorUserName: acceptedByName,
+    timestamp: acceptedAt,
   });
 
   return {
@@ -599,11 +704,8 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
 });
 
 exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'You must be signed in to start Stripe Checkout.');
-  }
-
-  const receivedData = data.data || data;
+  const callableAuth = await getCallableAuth(data, context, 'You must be signed in to start Stripe Checkout.');
+  const receivedData = getCallableData(data);
   const {
     billingSubscriptionId,
     agreementId,
@@ -632,7 +734,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
     throw new functions.https.HttpsError('permission-denied', 'This billing subscription belongs to another company.');
   }
 
-  const canAccess = await userCanAccessSalesRecord({ auth: context.auth, record: subscription });
+  const canAccess = await userCanAccessSalesRecord({ auth: callableAuth, record: subscription });
   if (!canAccess) {
     throw new functions.https.HttpsError('permission-denied', 'You do not have access to this billing subscription.');
   }
@@ -672,7 +774,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       salesBillingSubscriptionId: billingSubscriptionId,
       salesAgreementId: subscription.agreementId || agreementId || '',
       salesCustomerId: subscription.customerId || '',
-      createdByUserId: context.auth.uid,
+      createdByUserId: callableAuth.uid,
       stripeConnectedAccountId: connectedAccount,
     };
 
@@ -702,7 +804,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       customerCanPayImmediately: true,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       stripeCheckoutCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      stripeCheckoutCreatedByUserId: context.auth.uid,
+      stripeCheckoutCreatedByUserId: callableAuth.uid,
     };
 
     const batch = db.batch();

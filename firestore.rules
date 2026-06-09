@@ -53,8 +53,17 @@ service cloud.firestore {
         );
     }
 
+    function hasLinkedSalesCustomerUser(data) {
+      return data.customerUserId is string && data.customerUserId.size() > 0;
+    }
+
     function canReadSalesRecord(data) {
-      return isPersonalOrCompanyData(data) || emailMatchesSignedInUser(data);
+      return signedIn()
+        && (
+          (data.companyId is string && hasCompanyAccess(data.companyId))
+          || (data.customerUserId is string && data.customerUserId == request.auth.uid)
+          || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+        );
     }
 
     function canCompanyWriteSalesRecord(data) {
@@ -315,6 +324,12 @@ service cloud.firestore {
     match /salesPaymentEvents/{paymentEventId} {
       allow read: if canReadSalesRecord(resource.data);
       allow create, update, delete: if false;
+    }
+
+    match /customerPartApprovals/{approvalId} {
+      allow read: if canReadSalesRecord(resource.data);
+      allow create: if canCompanyWriteSalesRecord(request.resource.data);
+      allow update, delete: if canCompanyWriteSalesRecord(resource.data);
     }
 
     match /subscriptions/{subscriptionId} {

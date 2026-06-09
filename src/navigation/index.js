@@ -7,7 +7,6 @@ export const DEFAULT_COMPANY_CATEGORY_ORDER = [
     'Finance',
     'Marketing',
     'Users',
-    'Auditing',
     'Migration',
     'Settings',
 ];

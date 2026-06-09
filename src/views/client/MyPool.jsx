@@ -57,30 +57,16 @@ const MyPool = () => {
                 const equipQuery = query(collection(db, 'homeownerEquipment'), where('userId', '==', user.uid));
                 const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('userId', '==', user.uid), orderBy('createdAt', 'desc'));
                 const serviceQuery = query(collection(db, 'homeownerServiceStops'), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'));
-                const agreementQueries = [
-                    query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
-                ];
+                const agreementQuery = query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid));
 
-                if (user.email) {
-                    agreementQueries.push(
-                        query(collection(db, salesCollectionNames.agreements), where('email', '==', user.email))
-                    );
-                }
-
-                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap] = await Promise.all([
+                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, agreementSnap] = await Promise.all([
                     getDocs(locationQuery),
                     getDocs(bowQuery),
                     getDocs(equipQuery),
                     getDocs(repairQuery),
-                    getDocs(serviceQuery)
+                    getDocs(serviceQuery),
+                    getDocs(agreementQuery)
                 ]);
-                const agreementSnaps = await Promise.all(agreementQueries.map(getDocs));
-                const agreementMap = new Map();
-                agreementSnaps.forEach((snap) => {
-                    snap.docs.forEach((agreementDoc) => {
-                        agreementMap.set(agreementDoc.id, { id: agreementDoc.id, ...agreementDoc.data() });
-                    });
-                });
 
                 setServiceLocations(locSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setAllData({
@@ -88,7 +74,7 @@ const MyPool = () => {
                     equipment: equipSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     repairRequests: repairSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     serviceStops: serviceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    serviceAgreements: Array.from(agreementMap.values())
+                    serviceAgreements: agreementSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
                 });
 
             } catch (error) {

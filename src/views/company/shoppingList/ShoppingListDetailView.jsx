@@ -8,7 +8,7 @@ import { linkedReferenceText } from "../../../utils/displayReferences";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
-const statusOptions = ["Need to Purchase", "Purchased", "Installed"];
+const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Installed"];
 const shoppingListCollectionNames = ["shoppingList", "shoppingListItems"];
 
 const ShoppingListDetailView = () => {
@@ -49,6 +49,9 @@ const ShoppingListDetailView = () => {
         plannedUnitPriceCents: null,
         plannedTotalCostCents: null,
         plannedTotalPriceCents: null,
+        customerApprovalRequired: false,
+        customerApprovalStatus: "",
+        partApprovalRequestId: "",
     });
 
     const [editForm, setEditForm] = useState({
@@ -78,6 +81,9 @@ const ShoppingListDetailView = () => {
         plannedUnitPriceCents: null,
         plannedTotalCostCents: null,
         plannedTotalPriceCents: null,
+        customerApprovalRequired: false,
+        customerApprovalStatus: "",
+        partApprovalRequestId: "",
     });
 
     useEffect(() => {
@@ -143,6 +149,9 @@ const ShoppingListDetailView = () => {
                     plannedUnitPriceCents: data.plannedUnitPriceCents ?? data.price ?? null,
                     plannedTotalCostCents: data.plannedTotalCostCents ?? null,
                     plannedTotalPriceCents: data.plannedTotalPriceCents ?? null,
+                    customerApprovalRequired: !!data.customerApprovalRequired,
+                    customerApprovalStatus: data.customerApprovalStatus || "",
+                    partApprovalRequestId: data.partApprovalRequestId || data.approvalRequestId || "",
                 };
 
                 setItem(loadedItem);
@@ -217,6 +226,9 @@ const ShoppingListDetailView = () => {
                 plannedUnitPriceCents: editForm.plannedUnitPriceCents ?? null,
                 plannedTotalCostCents: editForm.plannedTotalCostCents ?? null,
                 plannedTotalPriceCents: editForm.plannedTotalPriceCents ?? null,
+                customerApprovalRequired: !!editForm.customerApprovalRequired,
+                customerApprovalStatus: editForm.customerApprovalStatus || "",
+                partApprovalRequestId: editForm.partApprovalRequestId || "",
             };
 
             await updateDoc(docRef, payload);
@@ -406,6 +418,40 @@ const ShoppingListDetailView = () => {
                                         </select>
                                     ) : (
                                         <p>{item.status || "—"}</p>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Customer Approval</p>
+                                    {edit ? (
+                                        <label className="flex items-center gap-2 text-gray-700 mt-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={!!editForm.customerApprovalRequired}
+                                                onChange={(e) => handleEditFieldChange("customerApprovalRequired", e.target.checked)}
+                                            />
+                                            <span>Required</span>
+                                        </label>
+                                    ) : (
+                                        <p>{item.customerApprovalRequired ? item.customerApprovalStatus || "pending" : "Not required"}</p>
+                                    )}
+                                </div>
+
+                                <div>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Approval Request</p>
+                                    {edit ? (
+                                        <input
+                                            type="text"
+                                            value={editForm.partApprovalRequestId}
+                                            onChange={(e) => handleEditFieldChange("partApprovalRequestId", e.target.value)}
+                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                        />
+                                    ) : item.partApprovalRequestId ? (
+                                        <Link to="/company/part-approvals" className="font-semibold text-blue-600 hover:underline">
+                                            {item.partApprovalRequestId}
+                                        </Link>
+                                    ) : (
+                                        <p>—</p>
                                     )}
                                 </div>
 

@@ -71,6 +71,255 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
   },
 });
 
+const REQUIRED_UNIVERSAL_READING_TEMPLATES = [
+  {
+    id: "univ_rt_total_alkalinity",
+    name: "Total Alkalinity",
+    amount: [],
+    UOM: "ppm",
+    chemType: "Alkalinity",
+    linkedDosage: "",
+    editable: true,
+    order: 40,
+    highWarning: 120,
+    lowWarning: 80,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_rt_bromine",
+    name: "Bromine",
+    amount: [],
+    UOM: "ppm",
+    chemType: "Sanitizer",
+    linkedDosage: "",
+    editable: true,
+    order: 70,
+    highWarning: 6,
+    lowWarning: 2,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_rt_total_hardness",
+    name: "Total Hardness",
+    amount: [],
+    UOM: "ppm",
+    chemType: "Hardness",
+    linkedDosage: "",
+    editable: true,
+    order: 80,
+    highWarning: 400,
+    lowWarning: 200,
+    defaultForNewCompanies: true,
+  },
+];
+
+const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
+  {
+    id: "univ_dt_alkalinity_up",
+    name: "Alkalinity Up",
+    amount: [],
+    UOM: "lbs",
+    rate: "",
+    linkedItemId: "",
+    strength: 0,
+    editable: true,
+    chemType: "Alkalinity",
+    order: 40,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_dt_alkalinity_down",
+    name: "Alkalinity Down",
+    amount: [],
+    UOM: "lbs",
+    rate: "",
+    linkedItemId: "",
+    strength: 0,
+    editable: true,
+    chemType: "Alkalinity",
+    order: 41,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_dt_non_chlor_shock",
+    name: "Non-Chlor Shock",
+    amount: [],
+    UOM: "oz",
+    rate: "",
+    linkedItemId: "",
+    strength: 0,
+    editable: true,
+    chemType: "Shock",
+    order: 70,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_dt_dichloric",
+    name: "Dichloric",
+    amount: [],
+    UOM: "scoop",
+    rate: "",
+    linkedItemId: "",
+    strength: 0,
+    editable: true,
+    chemType: "Sanitizer",
+    order: 80,
+    defaultForNewCompanies: true,
+  },
+  {
+    id: "univ_dt_phosphates_down",
+    name: "Phosphates Down",
+    amount: [],
+    UOM: "oz",
+    rate: "",
+    linkedItemId: "",
+    strength: 0,
+    editable: true,
+    chemType: "Phosphates",
+    order: 90,
+    defaultForNewCompanies: true,
+  },
+];
+
+const normalizeUniversalTemplateName = (value = "") =>
+  String(value).trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+
+const setRequiredUniversalTemplates = async ({ collectionName, templates }) => {
+  const collectionRef = getFirestore()
+    .collection("universal")
+    .doc("settings")
+    .collection(collectionName);
+  const snapshot = await collectionRef.get();
+  const existingByName = new Map();
+  const existingById = new Map();
+
+  snapshot.docs.forEach((templateDoc) => {
+    const templateData = templateDoc.data() || {};
+    existingById.set(templateDoc.id, templateDoc.ref);
+    const nameKey = normalizeUniversalTemplateName(templateData.name);
+    if (nameKey) existingByName.set(nameKey, templateDoc.ref);
+  });
+
+  const batch = getFirestore().batch();
+
+  templates.forEach((template) => {
+    const nameKey = normalizeUniversalTemplateName(template.name);
+    const existingRef = existingByName.get(nameKey) || existingById.get(template.id);
+
+    if (existingRef) {
+      batch.set(existingRef, { id: existingRef.id }, { merge: true });
+      return;
+    }
+
+    batch.set(collectionRef.doc(template.id), template, { merge: true });
+  });
+
+  await batch.commit();
+};
+
+const ensureUniversalReadingAndDosageDefaults = async () => {
+  await Promise.all([
+    setRequiredUniversalTemplates({
+      collectionName: "readingTemplates",
+      templates: REQUIRED_UNIVERSAL_READING_TEMPLATES,
+    }),
+    setRequiredUniversalTemplates({
+      collectionName: "dosageTemplates",
+      templates: REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES,
+    }),
+  ]);
+};
+
+const copyUniversalReadingTemplatesToCompany = async (companyId) => {
+  const querySnapshot = await getFirestore()
+    .collection("universal")
+    .doc("settings")
+    .collection("readingTemplates")
+    .get();
+
+  await Promise.all(
+    querySnapshot.docs
+      .filter((readingDoc) => {
+        const documentData = readingDoc.data() || {};
+        return documentData.defaultForNewCompanies !== false;
+      })
+      .map((readingDoc) => {
+        const documentData = readingDoc.data() || {};
+        const readingsTemplate = {
+          id: 'com_set_rt_' + uuidv4(),
+          readingsTemplateId: documentData.id || readingDoc.id,
+          name: documentData.name || "",
+          amount: documentData.amount || [],
+          UOM: documentData.UOM || "",
+          chemType: documentData.chemType || "",
+          linkedDosage: documentData.linkedDosage || "",
+          editable: documentData.editable !== false,
+          order: documentData.order || 0,
+          highWarning: documentData.highWarning ?? 0,
+          lowWarning: documentData.lowWarning ?? 0,
+        };
+
+        return getFirestore()
+          .collection("companies")
+          .doc(companyId)
+          .collection("settings")
+          .doc("readings")
+          .collection("readings")
+          .doc(readingsTemplate.id)
+          .set(readingsTemplate);
+      })
+  );
+};
+
+const copyUniversalDosageTemplatesToCompany = async (companyId) => {
+  const querySnapshot = await getFirestore()
+    .collection("universal")
+    .doc("settings")
+    .collection("dosageTemplates")
+    .get();
+
+  await Promise.all(
+    querySnapshot.docs
+      .filter((dosageDoc) => {
+        const documentData = dosageDoc.data() || {};
+        return documentData.defaultForNewCompanies !== false;
+      })
+      .map((dosageDoc) => {
+        const documentData = dosageDoc.data() || {};
+        const dosageTemplate = {
+          id: 'com_set_dt_' + uuidv4(),
+          dosageTemplateId: documentData.id || dosageDoc.id,
+          name: documentData.name || "",
+          amount: documentData.amount || [],
+          UOM: documentData.UOM || "",
+          rate: documentData.rate || "",
+          linkedItemId: "",
+          strength: documentData.strength || 0,
+          editable: documentData.editable !== false,
+          chemType: documentData.chemType || "",
+          order: documentData.order || 0,
+        };
+
+        return getFirestore()
+          .collection("companies")
+          .doc(companyId)
+          .collection("settings")
+          .doc("dosages")
+          .collection("dosages")
+          .doc(dosageTemplate.id)
+          .set(dosageTemplate);
+      })
+  );
+};
+
+const copyUniversalReadingAndDosageTemplatesToCompany = async (companyId) => {
+  await ensureUniversalReadingAndDosageDefaults();
+  await Promise.all([
+    copyUniversalReadingTemplatesToCompany(companyId),
+    copyUniversalDosageTemplatesToCompany(companyId),
+  ]);
+};
+
 //Live
 // const publishableStripeKey = defineSecret('pk_live_51SR0FQAarMCMczenzad9KHz2dWM4tcMlSN1aquZVdN83md983TatYFy02H3usQAWeWldDMmlnPbVw5PvmhdjsXbn00sJx5TPCF');
 //Test
@@ -78,6 +327,13 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
 const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
+
+const getCallablePayload = (data) => data?.data ?? data ?? {};
+
+const getV2CallableContext = (request = {}) => ({
+  auth: request.auth,
+  rawRequest: request.rawRequest,
+});
 
 const getVerifiedCallableAuth = async (payload = {}, context = {}) => {
   if (context.auth?.uid) {
@@ -2619,76 +2875,8 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     //Initial Service Stops 
     // "companies/\(companyId)/settings/serviceStops/serviceStops"
 
-    //Inital Readings
-    console.log("Initial Reading Template Created")
-
-    //Get Universal Readings Templates "universal/settings/readingTemplates
-    await getFirestore()
-      .collection("universal")
-      .doc("settings")
-      .collection("readingTemplates")
-      .get().then((querySnapshot) => {
-        querySnapshot.forEach(async (doc) => {
-          console.log("Reading Template:", doc.id, " => ", doc.data());
-
-          let documentData = doc.data()
-          //Then Make local reaings
-          let readingsTemplate = {
-            id: 'com_set_rt_' + uuidv4(),
-            readingsTemplateId: documentData.id,
-            name: documentData.name,
-            amount: documentData.amount,
-            UOM: documentData.UOM,
-            chemType: documentData.chemType,
-            linkedDosage: documentData.linkedDosage,
-            editable: documentData.editable,
-            order: documentData.order,
-            highWarning: documentData.highWarning,
-            lowWarning: documentData.lowWarning,
-          }
-          //companies/\(companyId)/settings/readings/readings
-          await getFirestore().collection("companies").doc(companyId).collection("settings").doc("readings").collection("readings").doc(readingsTemplate.id).set(readingsTemplate);
-
-        });
-      })
-      .catch((error) => {
-        console.log("Error getting Universal Readings documents: ", error);
-      });
-    console.log("Initial Dosage Template Created")
-
-    //Inital Dosages
-    //Get Universal Dosages Templates "universal/settings/dosageTemplates
-    await getFirestore()
-      .collection("universal")
-      .doc("settings")
-      .collection("dosageTemplates")
-      .get().then((querySnapshot) => {
-        querySnapshot.forEach(async (doc) => {
-          console.log("Dosage Template:", doc.id, " => ", doc.data());
-
-          let documentData = doc.data()
-
-          let dosageTemplate = {
-            id: 'com_set_dt_' + uuidv4(),
-            dosageTemplateId: documentData.id,
-            name: documentData.name,
-            amount: documentData.amount,
-            UOM: documentData.UOM,
-            rate: documentData.rate,
-            linkedItemId: "",
-            strength: documentData.strength,
-            editable: documentData.editable,
-            chemType: documentData.chemType,
-            order: documentData.order,
-          }
-          //"companies/\(companyId)/settings/dosages/dosages
-          await getFirestore().collection("companies").doc(companyId).collection("settings").doc("dosages").collection("dosages").doc(dosageTemplate.id).set(dosageTemplate);
-
-        });
-      })
-      .catch((error) => {
-        console.log("Error getting Universal Dosages documents: ", error);
-      });
+    await copyUniversalReadingAndDosageTemplatesToCompany(companyId);
+    console.log("Initial reading and dosage templates created")
 
     //Create Generic Billing Templates
     //Create Generic Training Templates
@@ -3210,6 +3398,235 @@ const ADMIN_CALLABLE_CORS_ORIGINS = [
   "http://127.0.0.1:3001",
 ];
 
+const CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS = {
+  cors: [
+    ...ADMIN_CALLABLE_CORS_ORIGINS,
+    "http://localhost:3020",
+    "http://127.0.0.1:3020",
+  ],
+};
+
+const customerCanRespondToPartApproval = (auth, approval = {}) => {
+  if (!auth?.uid) return false;
+  if (approval.customerUserId && approval.customerUserId === auth.uid) return true;
+
+  const authEmail = normalizeEmail(auth.token?.email);
+  const approvalEmail = normalizeEmail(approval.customerEmail || approval.email || approval.billingEmail);
+  return Boolean(authEmail && approvalEmail && authEmail === approvalEmail && !approval.customerUserId);
+};
+
+exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
+  const payload = request.data ?? {};
+  const verifiedAuth = await getVerifiedCallableAuth(payload, {
+    auth: request.auth,
+    rawRequest: request.rawRequest,
+  });
+
+  if (!verifiedAuth?.uid) {
+    throw new HttpsError("unauthenticated", "You must be signed in to respond to a part approval.");
+  }
+
+  const approvalId = String(payload.approvalId || "").trim();
+  const action = String(payload.action || "").trim().toLowerCase();
+  const responseNote = String(payload.responseNote || "").trim().slice(0, 2000);
+
+  if (!approvalId) {
+    throw new HttpsError("invalid-argument", "approvalId is required.");
+  }
+
+  if (!["approved", "rejected"].includes(action)) {
+    throw new HttpsError("invalid-argument", "action must be approved or rejected.");
+  }
+
+  const firestore = getFirestore();
+  const approvalRef = firestore.collection("customerPartApprovals").doc(approvalId);
+  const approvalSnap = await approvalRef.get();
+
+  if (!approvalSnap.exists) {
+    throw new HttpsError("not-found", "Part approval request was not found.");
+  }
+
+  const approval = { id: approvalSnap.id, ...(approvalSnap.data() || {}) };
+  if (!customerCanRespondToPartApproval(verifiedAuth, approval)) {
+    throw new HttpsError("permission-denied", "This part approval does not belong to your account.");
+  }
+
+  const companyId = approval.companyId || "";
+  const existingShoppingListItemId = approval.shoppingListItemId || approval.shoppingItemId || "";
+  const generatedShoppingListItemId =
+    action === "approved" && companyId && !existingShoppingListItemId
+      ? `comp_shop_${uuidv4()}`
+      : "";
+  const shoppingListItemId = existingShoppingListItemId || generatedShoppingListItemId;
+  const jobId = approval.jobId || "";
+  const linkedTaskId = approval.linkedTaskId || "";
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const customerName = verifiedAuth.token?.name || approval.customerName || verifiedAuth.token?.email || "Customer";
+  const nextShoppingStatus = action === "approved" ? "Ready to Purchase" : "Customer Rejected";
+  const nextApprovalStatus = action;
+
+  const batch = firestore.batch();
+
+  batch.set(approvalRef, {
+    status: nextApprovalStatus,
+    approvalStatus: nextApprovalStatus,
+    response: action,
+    responseNote,
+    respondedAt: now,
+    respondedByUserId: verifiedAuth.uid,
+    respondedByUserName: customerName,
+    respondedByEmail: verifiedAuth.token?.email || approval.customerEmail || "",
+    shoppingListItemId,
+    shoppingListPath: shoppingListItemId && companyId ? `companies/${companyId}/shoppingList/${shoppingListItemId}` : "",
+    shoppingListGeneratedAt: generatedShoppingListItemId ? now : approval.shoppingListGeneratedAt || null,
+    updatedAt: now,
+  }, { merge: true });
+
+  if (companyId && shoppingListItemId) {
+    const shoppingRef = firestore
+      .collection("companies")
+      .doc(companyId)
+      .collection("shoppingList")
+      .doc(shoppingListItemId);
+
+    const quantity = String(approval.quantity || "1");
+    const numericQuantity = Number.parseFloat(quantity) || 1;
+    const plannedUnitCostCents = Number(approval.plannedUnitCostCents || approval.unitCostCents || 0);
+    const plannedUnitPriceCents = Number(approval.plannedUnitPriceCents || approval.unitPriceCents || 0);
+    const plannedTotalCostCents = Number(approval.plannedTotalCostCents || 0) || Math.round(plannedUnitCostCents * numericQuantity);
+    const plannedTotalPriceCents = Number(approval.plannedTotalPriceCents || approval.totalPriceCents || 0) || Math.round(plannedUnitPriceCents * numericQuantity);
+    const shoppingPayload = {
+      id: shoppingListItemId,
+      category: jobId ? "Job" : "Customer",
+      subCategory: approval.subCategory || (approval.dbItemId ? "Data Base" : "Part"),
+      status: nextShoppingStatus,
+      purchaserId: approval.purchaserId || "",
+      purchaserName: approval.purchaserName || "",
+      genericItemId: approval.genericItemId || "",
+      name: approval.itemName || approval.name || approval.dbItemName || "Pool Part",
+      description: approval.description || "",
+      quantity,
+      jobId,
+      jobName: approval.jobName || approval.jobInternalId || "",
+      linkedTaskId,
+      linkedTaskName: approval.linkedTaskName || "",
+      linkedTaskType: approval.linkedTaskType || "",
+      customerId: approval.customerId || "",
+      customerName: approval.customerName || "",
+      customerUserId: approval.customerUserId || verifiedAuth.uid || "",
+      userId: "",
+      userName: "",
+      serviceStopId: "",
+      serviceStopInternalId: "",
+      serviceLocationId: approval.serviceLocationId || "",
+      serviceLocationName: approval.serviceLocationName || "",
+      scheduledDate: null,
+      prepKeys: Array.from(new Set([
+        jobId ? `job:${jobId}` : "",
+        approval.customerId ? `customer:${approval.customerId}` : "",
+        approval.serviceLocationId ? `serviceLocation:${approval.serviceLocationId}` : "",
+        linkedTaskId ? `jobTask:${linkedTaskId}` : "",
+      ].filter(Boolean))),
+      needsAction: action === "approved",
+      actionDate: now,
+      assignedTechIds: [],
+      dbItemId: approval.dbItemId || "",
+      dbItemName: approval.dbItemName || approval.itemName || approval.name || "",
+      itemId: approval.dbItemId || "",
+      itemType: approval.subCategory || (approval.dbItemId ? "Data Base" : "Part"),
+      purchasedItem: "",
+      invoiced: false,
+      cost: plannedUnitCostCents,
+      price: plannedUnitPriceCents,
+      plannedUnitCostCents,
+      plannedUnitPriceCents,
+      plannedTotalCostCents,
+      plannedTotalPriceCents,
+      customerApprovalRequired: true,
+      customerApprovalStatus: nextApprovalStatus,
+      customerApprovalResponse: action,
+      customerApprovalResponseNote: responseNote,
+      customerApprovalRespondedAt: now,
+      customerApprovalRespondedByUserId: verifiedAuth.uid,
+      customerApprovalRespondedByUserName: customerName,
+      customerApprovalRespondedByEmail: verifiedAuth.token?.email || approval.customerEmail || "",
+      approvalRequestId: approvalId,
+      partApprovalRequestId: approvalId,
+      sourceType: approval.sourceType || "partApprovalRequest",
+      updatedAt: now,
+    };
+
+    if (generatedShoppingListItemId) {
+      shoppingPayload.datePurchased = null;
+      shoppingPayload.createdAt = now;
+    }
+
+    batch.set(shoppingRef, shoppingPayload, { merge: true });
+  }
+
+  if (companyId && jobId && linkedTaskId) {
+    const taskRef = firestore
+      .collection("companies")
+      .doc(companyId)
+      .collection("workOrders")
+      .doc(jobId)
+      .collection("tasks")
+      .doc(linkedTaskId);
+
+    batch.set(taskRef, {
+      customerApproval: action === "approved",
+      customerApprovalStatus: nextApprovalStatus,
+      customerApprovalRespondedAt: now,
+      customerApprovalRequestId: approvalId,
+      ...(shoppingListItemId ? {
+        shoppingListItemId,
+        shoppingListItemIds: admin.firestore.FieldValue.arrayUnion(shoppingListItemId),
+      } : {}),
+      updatedAt: now,
+    }, { merge: true });
+  }
+
+  if (companyId && jobId) {
+    const historyId = `comp_job_hist_${uuidv4()}`;
+    const historyRef = firestore
+      .collection("companies")
+      .doc(companyId)
+      .collection("workOrders")
+      .doc(jobId)
+      .collection("history")
+      .doc(historyId);
+
+    batch.set(historyRef, {
+      id: historyId,
+      companyId,
+      jobId,
+      eventType: "Part Approval",
+      title: `Part ${action}: ${approval.itemName || approval.name || "Material"}`,
+      description: responseNote || "",
+      severity: action === "approved" ? "success" : "warning",
+      metadata: {
+        approvalId,
+        shoppingListItemId,
+        linkedTaskId,
+        action,
+      },
+      actorUserId: verifiedAuth.uid,
+      actorUserName: customerName,
+      createdAt: now,
+      createdAtMillis: Date.now(),
+    });
+  }
+
+  await batch.commit();
+
+  return {
+    status: "success",
+    approvalId,
+    action,
+    shoppingListItemId,
+  };
+});
+
 exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS }, async (request) => {
   const payload = request.data ?? {};
   const verifiedAuth = await getVerifiedCallableAuth(payload, { auth: request.auth });
@@ -3288,11 +3705,11 @@ exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS },
   };
 });
 
-exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
+exports.acceptLinkedInvite = onCall(CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS, async (request) => {
 
   try {
-    const payload = data?.data ?? data ?? {};
-    const authContext = await getVerifiedCallableAuth(payload, context);
+    const payload = getCallablePayload(request.data);
+    const authContext = await getVerifiedCallableAuth(payload, getV2CallableContext(request));
     const authUserId = authContext?.uid;
 
     if (!authUserId) {
@@ -3349,10 +3766,10 @@ exports.acceptLinkedInvite = functions.https.onCall(async (data, context) => {
   }
 });
 
-exports.createCustomerAccountInvite = functions.https.onCall(async (data, context) => {
+exports.createCustomerAccountInvite = onCall(CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS, async (request) => {
   try {
-    const payload = data?.data ?? data ?? {};
-    const authContext = await getVerifiedCallableAuth(payload, context);
+    const payload = getCallablePayload(request.data);
+    const authContext = await getVerifiedCallableAuth(payload, getV2CallableContext(request));
     const authUserId = authContext?.uid;
 
     if (!authUserId) {
@@ -3398,9 +3815,9 @@ exports.createCustomerAccountInvite = functions.https.onCall(async (data, contex
   }
 });
 
-exports.getCustomerAccountInvitePreview = functions.https.onCall(async (data) => {
+exports.getCustomerAccountInvitePreview = onCall(CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS, async (request) => {
   try {
-    const payload = data?.data ?? data ?? {};
+    const payload = getCallablePayload(request.data);
     const inviteId = payload.inviteId || payload.linkedInviteId || payload.id || "";
 
     if (!inviteId) {
@@ -4463,68 +4880,7 @@ exports.updateCompanyReadingsSettings = functions.https.onCall(async (data, cont
     console.log(receivedData)
     let companyId = receivedData.companyId
 
-    //Create Company Settings
-    //Inital Readings
-    //Get Universal Readings Templates "universal/settings/readingTemplates
-    await getFirestore()
-      .collection("universal")
-      .doc("settings")
-      .collection("readingTemplates")
-      .get().then((querySnapshot) => {
-        querySnapshot.forEach(async (doc) => {
-          console.log("Reading Template:", doc.id, " => ", doc.data());
-
-          let documentData = doc.data()
-          //Then Make local reaings
-          let readingsTemplate = {
-            id: 'com_set_rt_' + uuidv4(),
-            readingsTemplateId: documentData.id,
-            name: documentData.name,
-            amount: documentData.amount,
-            UOM: documentData.UOM,
-            chemType: documentData.chemType,
-            linkedDosage: documentData.linkedDosage,
-            editable: documentData.editable,
-            order: documentData.order,
-            highWarning: documentData.highWarning,
-            lowWarning: documentData.lowWarning,
-          }
-          //companies/\(companyId)/settings/readings/readings
-          await getFirestore().collection("companies").doc(companyId).collection("settings").doc("readings").collection("readings").doc(readingsTemplate.id).set(readingsTemplate);
-        });
-      })
-      .catch((error) => {
-        console.log("Error getting Universal Readings documents: ", error);
-      });
-    //Inital Dosages
-    //Get Universal Dosages Templates "universal/settings/dosageTemplates
-    await getFirestore()
-      .collection("universal")
-      .doc("settings")
-      .collection("dosageTemplates")
-      .get().then((querySnapshot) => {
-        querySnapshot.forEach(async (doc) => {
-          console.log("Dosage Template:", doc.id, " => ", doc.data());
-          let documentData = doc.data()
-          let dosageTemplate = {
-            id: 'com_set_dt_' + uuidv4(),
-            dosageTemplateId: documentData.id,
-            name: documentData.name,
-            amount: documentData.amount,
-            UOM: documentData.UOM,
-            rate: documentData.rate,
-            linkedItemId: "",
-            strength: documentData.strength,
-            editable: documentData.editable,
-            chemType: documentData.chemType,
-            order: documentData.order,
-          }
-          await getFirestore().collection("companies").doc(companyId).collection("settings").doc("dosages").collection("dosages").doc(dosageTemplate.id).set(dosageTemplate);
-        });
-      })
-      .catch((error) => {
-        console.log("Error getting Universal Dosagesdocuments: ", error);
-      });
+    await copyUniversalReadingAndDosageTemplatesToCompany(companyId);
 
     return {
       status: 200,

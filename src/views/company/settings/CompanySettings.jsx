@@ -202,7 +202,7 @@ const CompanySettings = () => {
                 description: 'Configure your company\'s email settings.'
             },
             {
-                to: '/Company/ReadingsAndDosages',
+                to: '/company/readingsAndDosages',
                 icon: <BeakerIcon className="w-6 h-6" />,
                 title: 'Reading and Dosages',
                 description: 'Set up measurement units and chemical dosages.'
@@ -283,7 +283,7 @@ const CompanySettings = () => {
     }
 
     return (
-        <div className='px-0 py-6 bg-gray-50 min-h-screen'>
+        <div className='p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen'>
             <div className="w-full">
                 <div>
                     <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>

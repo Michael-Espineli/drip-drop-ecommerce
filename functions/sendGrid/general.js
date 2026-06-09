@@ -1,6 +1,7 @@
 
-const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onCall } = require("firebase-functions/v2/https");
 const functions = require("firebase-functions");
+const HttpsError = functions.https.HttpsError;
 const functions1 = require('firebase-functions/v1');
 const { getFirestore } = require("firebase-admin/firestore");
 const { v4: uuidv4 } = require('uuid');
@@ -151,7 +152,19 @@ const getCallableAuth = async (data, context, message) => {
     }
 
     const payload = getCallableData(data);
-    const idToken = payload.idToken;
+    const authorizationHeader =
+        context.rawRequest?.headers?.authorization ||
+        context.rawRequest?.headers?.Authorization ||
+        "";
+    const bearerToken = String(authorizationHeader).startsWith("Bearer ")
+        ? String(authorizationHeader).slice("Bearer ".length).trim()
+        : "";
+    const idToken = [
+        payload.idToken,
+        payload.auth?.idToken,
+        payload.data?.idToken,
+        bearerToken,
+    ].find((candidate) => String(candidate || "").trim());
 
     if (!idToken) {
         throw new HttpsError("unauthenticated", message);
@@ -450,6 +463,60 @@ const labelize = (value) => {
         .replace(/\b\w/g, (char) => char.toUpperCase());
 };
 
+const normalizeStatusKey = (value) => String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+
+const linkedJobIdForAgreement = (agreement = {}) => {
+    if (agreement.jobId) return agreement.jobId;
+    if (agreement.workOrderId) return agreement.workOrderId;
+    if (normalizeStatusKey(agreement.sourceType) === "oneoffjob" && agreement.sourceId) return agreement.sourceId;
+    return "";
+};
+
+const syncLinkedJobForAgreementStatus = async ({
+    agreement,
+    status,
+    actorUserId = "",
+    actorUserName = "",
+    timestamp = admin.firestore.FieldValue.serverTimestamp(),
+}) => {
+    const jobId = linkedJobIdForAgreement(agreement);
+    const companyId = agreement.companyId || "";
+    if (!companyId || !jobId) return;
+
+    const jobRef = db.collection("companies").doc(companyId).collection("workOrders").doc(jobId);
+    const jobDoc = await jobRef.get();
+    if (!jobDoc.exists) return;
+
+    const job = jobDoc.data() || {};
+    const statusKey = normalizeStatusKey(status);
+    const update = {
+        salesAgreementId: agreement.id || agreement.agreementId || "",
+        salesAgreementStatus: status,
+        salesAgreementStatusUpdatedAt: timestamp,
+        salesAgreementStatusUpdatedByUserId: actorUserId,
+        salesAgreementStatusUpdatedByUserName: actorUserName,
+        updatedAt: timestamp,
+    };
+
+    if (statusKey === "sent") {
+        update.billingStatus = "Estimate";
+        update.salesAgreementSentAt = timestamp;
+        if (!job.operationStatus || job.operationStatus === "Estimate Pending") {
+            update.operationStatus = "Unscheduled";
+        }
+    }
+
+    if (statusKey === "accepted") {
+        update.billingStatus = "Accepted";
+        update.salesAgreementAcceptedAt = timestamp;
+        if (!job.operationStatus || ["Estimate Pending", "Unscheduled"].includes(job.operationStatus)) {
+            update.operationStatus = "Unscheduled";
+        }
+    }
+
+    await jobRef.set(update, { merge: true });
+};
+
 const escapeHtml = (value) => String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -469,10 +536,20 @@ const buildAgreementTerms = (agreement) => {
     if (Array.isArray(agreement.termsList) && agreement.termsList.length > 0) {
         return agreement.termsList
             .filter(Boolean)
-            .map((description, index) => ({
-                title: `Term ${index + 1}`,
-                description: String(description)
-            }));
+            .map((term, index) => {
+                if (typeof term === "string") {
+                    return {
+                        title: `Term ${index + 1}`,
+                        description: term
+                    };
+                }
+
+                return {
+                    title: term?.title || term?.label || `Term ${index + 1}`,
+                    description: String(term?.description || term?.value || term?.text || "")
+                };
+            })
+            .filter((term) => term.description);
     }
 
     if (agreement.terms) {
@@ -648,17 +725,36 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         dynamicTemplateData: addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery)
     };
 
-    const sendResult = await sgMail.send(msg);
+    let sendResult;
+    try {
+        sendResult = await sgMail.send(msg);
+    } catch (error) {
+        const providerErrors = error.response?.body?.errors || [];
+        const providerMessage = providerErrors.length
+            ? providerErrors.map((item) => item.message).filter(Boolean).join("; ")
+            : error.message || "SendGrid rejected the request.";
+
+        console.error("Unable to send service agreement email through SendGrid", {
+            message: error.message,
+            code: error.code,
+            responseBody: error.response?.body,
+        });
+
+        throw new HttpsError("internal", `Unable to send service agreement email: ${providerMessage}`);
+    }
+
     const messageId = sendResult?.[0]?.headers?.["x-message-id"] || "";
+
+    const sentAt = admin.firestore.FieldValue.serverTimestamp();
 
     await agreementRef.set({
         status: "sent",
         customerUserId: agreement.customerUserId || customerAccess.customerUserId || null,
         relationshipId: agreement.relationshipId || customerAccess.relationshipId || "",
         customerCompanyRelationshipId: agreement.customerCompanyRelationshipId || customerAccess.customerCompanyRelationshipId || "",
-        sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        sentAt,
         sentByUserId: callableAuth.uid,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: sentAt,
         emailDelivery: {
             provider: "sendGrid",
             templateId,
@@ -675,9 +771,20 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
             testMode: emailDelivery.testMode,
             realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
             realEmailsEnabled: emailDelivery.realEmailsEnabled,
-            lastSentAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastSentAt: sentAt,
         }
     }, { merge: true });
+
+    await syncLinkedJobForAgreementStatus({
+        agreement: {
+            ...agreement,
+            customerUserId: agreement.customerUserId || customerAccess.customerUserId || null,
+        },
+        status: "sent",
+        actorUserId: callableAuth.uid,
+        actorUserName: callableAuth.token?.name || callableAuth.token?.email || "Company user",
+        timestamp: sentAt,
+    });
 
     return {
         status: 200,

@@ -32,6 +32,8 @@ const ServiceRequestDetail = lazy(() => import("../../views/client/serviceReques
 const EditServiceRequest = lazy(() => import("../../views/client/serviceRequests/EditServiceRequest"));
 const ServiceAgreements = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreements"));
 const ServiceAgreementDetail = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreementDetail"));
+const PartApprovals = lazy(() => import("../../views/client/partApprovals/PartApprovals"));
+const PartApprovalDetail = lazy(() => import("../../views/client/partApprovals/PartApprovalDetail"));
 const ClientBilling = lazy(() => import("../../views/client/billing/ClientBilling"));
 const ClientInvoiceDetail = lazy(() => import("../../views/client/billing/ClientInvoiceDetail"));
 
@@ -222,6 +224,24 @@ export const clientRoutes = [
     {
         path: '/client/service-agreements/:agreementId',
         element: <ServiceAgreementDetail />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/part-approvals',
+        element: <PartApprovals />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/client/part-approvals/:approvalId',
+        element: <PartApprovalDetail />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
+        path: '/customer/part-approvals/:approvalId',
+        element: <PartApprovalDetail />,
         ability: ['Admin', 'Client'],
         role: 'Client'
     },

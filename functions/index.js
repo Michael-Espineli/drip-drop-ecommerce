@@ -101,12 +101,20 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = callableGeneral.conver
 exports.updateCompanyReadingsSettings = callableGeneral.updateCompanyReadingsSettings;
 exports.updateServiceStopDayPermanently = callableGeneral.updateServiceStopDayPermanently;
 exports.updateRecurringRouteOrderPermanently = callableGeneral.updateRecurringRouteOrderPermanently;
+exports.respondToCustomerPartApproval = callableGeneral.respondToCustomerPartApproval;
 exports.createHomeOwnerCustomerBasedOnCompany = callableGeneral.createHomeOwnerCustomerBasedOnCompany;
 exports.makeUpdatesToRecurringRoutes = callableGeneral.makeUpdatesToRecurringRoutes;
 
 exports.deleteRecurringServiceStop = callableGeneral.deleteRecurringServiceStop;
 exports.endRecurringServiceStop = callableGeneral.endRecurringServiceStop;
 exports.updateRecurringServiceStop = callableGeneral.updateRecurringServiceStop;
+
+const publicLeadIntake = require('./publicLeadIntake');
+exports.getPublicLeadIntakeCompany = publicLeadIntake.getPublicLeadIntakeCompany;
+exports.listPublicCompanies = publicLeadIntake.listPublicCompanies;
+exports.submitPublicServiceRequestLead = publicLeadIntake.submitPublicServiceRequestLead;
+exports.getPublicLeadVerificationPreview = publicLeadIntake.getPublicLeadVerificationPreview;
+exports.claimPublicServiceRequestLead = publicLeadIntake.claimPublicServiceRequestLead;
 
 
 //-----------------Stripe Functions----------------------------

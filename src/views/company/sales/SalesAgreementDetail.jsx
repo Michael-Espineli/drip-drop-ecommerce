@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { deleteDoc, doc, increment, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { deleteDoc, doc, getDoc, increment, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -363,6 +363,46 @@ const SalesAgreementDetail = () => {
     stripeConnectedAccountId
   );
 
+  const linkedJobIdForAgreement = (targetAgreement = agreement) => {
+    if (!targetAgreement) return '';
+    if (targetAgreement.jobId) return targetAgreement.jobId;
+    if (targetAgreement.workOrderId) return targetAgreement.workOrderId;
+    if (normalizeStatus(targetAgreement.sourceType) === 'oneoffjob' && targetAgreement.sourceId) {
+      return targetAgreement.sourceId;
+    }
+    return '';
+  };
+
+  const syncLinkedJobForAcceptedAgreement = async () => {
+    const linkedJobId = linkedJobIdForAgreement();
+    const companyId = agreement?.companyId || recentlySelectedCompany;
+    if (!companyId || !linkedJobId) return;
+
+    try {
+      const jobRef = doc(db, 'companies', companyId, 'workOrders', linkedJobId);
+      const jobSnap = await getDoc(jobRef);
+      const jobData = jobSnap.exists() ? jobSnap.data() : {};
+      const updatePayload = {
+        billingStatus: 'Accepted',
+        salesAgreementId: agreement.id,
+        salesAgreementStatus: SalesAgreementStatus.accepted,
+        salesAgreementAcceptedAt: serverTimestamp(),
+        salesAgreementStatusUpdatedAt: serverTimestamp(),
+        salesAgreementStatusUpdatedByUserId: user?.uid || '',
+        salesAgreementStatusUpdatedByUserName: actorName,
+        updatedAt: serverTimestamp(),
+      };
+
+      if (!jobData.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(jobData.operationStatus)) {
+        updatePayload.operationStatus = 'Unscheduled';
+      }
+
+      await updateDoc(jobRef, updatePayload);
+    } catch (syncError) {
+      console.warn('Unable to sync linked job after agreement acceptance', syncError);
+    }
+  };
+
   const sendAgreementEmail = async () => {
     if (!canSend) return;
 
@@ -570,6 +610,8 @@ const SalesAgreementDetail = () => {
         },
       });
 
+      await syncLinkedJobForAcceptedAgreement();
+
       toast.success(billingSubscriptionDraft.customerCanPayImmediately
         ? 'Agreement accepted and billing subscription is ready for payment setup.'
         : 'Agreement accepted and billing subscription was created.');
@@ -619,7 +661,9 @@ const SalesAgreementDetail = () => {
       if (!billingSubscriptionId) throw new Error('Create the billing subscription before starting Stripe Checkout.');
 
       const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
       const result = await startCheckoutCallable({
+        ...authPayload,
         billingSubscriptionId,
         agreementId: agreement.id,
         companyId: agreement.companyId || recentlySelectedCompany,

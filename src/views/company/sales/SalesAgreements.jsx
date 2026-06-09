@@ -12,6 +12,12 @@ import {
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
 import { SalesAgreementStatus, salesCollectionNames } from '../../../utils/models/Sales';
+import {
+  AgreementBillingType,
+  agreementNeedsRecurringRouting,
+  buildRecurringRoutingIndex,
+  getAgreementBillingType,
+} from '../../../utils/sales/agreementRouting';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -74,6 +80,22 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const billingTypeTone = {
+  recurring: 'bg-indigo-50 text-indigo-700 border-indigo-200',
+  oneTime: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+};
+
+const BillingTypeBadge = ({ agreement }) => {
+  const billingType = getAgreementBillingType(agreement);
+  const tone = billingTypeTone[billingType] || billingTypeTone.oneTime;
+
+  return (
+    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
+      {billingType === AgreementBillingType.recurring ? 'Recurring' : 'One Time'}
+    </span>
+  );
+};
+
 const StatTile = ({ icon: Icon, label, value, helper }) => (
   <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
@@ -89,12 +111,16 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
   </div>
 );
 
-const SalesAgreements = () => {
+const SalesAgreements = ({ routingQueueOnly = false }) => {
   const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
   const [agreements, setAgreements] = useState([]);
+  const [recurringStops, setRecurringStops] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [billingTypeFilter, setBillingTypeFilter] = useState(
+    routingQueueOnly ? AgreementBillingType.recurring : AgreementBillingType.all
+  );
   const [error, setError] = useState('');
 
   const navigate = useNavigate();
@@ -108,7 +134,7 @@ const SalesAgreements = () => {
     setLoading(true);
     setError('');
 
-    return onSnapshot(
+    const unsubscribeAgreements = onSnapshot(
       query(
         collection(db, salesCollectionNames.agreements),
         where('companyId', '==', recentlySelectedCompany)
@@ -127,14 +153,49 @@ const SalesAgreements = () => {
         setLoading(false);
       }
     );
-  }, [recentlySelectedCompany]);
+
+    let unsubscribeRecurringStops = () => {};
+    if (routingQueueOnly) {
+      unsubscribeRecurringStops = onSnapshot(
+        collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop'),
+        (snapshot) => {
+          setRecurringStops(snapshot.docs.map((stopDoc) => ({ id: stopDoc.id, ...stopDoc.data() })));
+        },
+        (snapshotError) => {
+          console.error('Unable to load recurring service stops', snapshotError);
+        }
+      );
+    }
+
+    return () => {
+      unsubscribeAgreements();
+      unsubscribeRecurringStops();
+    };
+  }, [recentlySelectedCompany, routingQueueOnly]);
+
+  useEffect(() => {
+    if (!routingQueueOnly) return;
+    setStatusFilter(SalesAgreementStatus.accepted);
+    setBillingTypeFilter(AgreementBillingType.recurring);
+  }, [routingQueueOnly]);
+
+  const recurringRoutingIndex = useMemo(
+    () => buildRecurringRoutingIndex(recurringStops),
+    [recurringStops]
+  );
 
   const filteredAgreements = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
     return agreements.filter((agreement) => {
+      if (routingQueueOnly && !agreementNeedsRecurringRouting(agreement, recurringRoutingIndex)) return false;
+
       const matchesStatus = statusFilter === 'all' || normalizeStatus(agreement.status) === normalizeStatus(statusFilter);
       if (!matchesStatus) return false;
+
+      const billingType = getAgreementBillingType(agreement);
+      const matchesBillingType = billingTypeFilter === AgreementBillingType.all || billingType === billingTypeFilter;
+      if (!matchesBillingType) return false;
 
       if (!normalizedSearch) return true;
 
@@ -143,17 +204,20 @@ const SalesAgreements = () => {
         agreement.customerName,
         agreement.email,
         agreement.status,
+        billingType,
+        billingType === AgreementBillingType.recurring ? 'recurring' : 'one time',
         agreement.termsTemplateName,
         agreement.id,
       ]
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedSearch));
     });
-  }, [agreements, searchTerm, statusFilter]);
+  }, [agreements, billingTypeFilter, recurringRoutingIndex, routingQueueOnly, searchTerm, statusFilter]);
 
   const summary = useMemo(() => {
     const sentCount = agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent).length;
     const acceptedCount = agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted).length;
+    const needsRoutingCount = agreements.filter((agreement) => agreementNeedsRecurringRouting(agreement, recurringRoutingIndex)).length;
     const totalAmountCents = agreements.reduce(
       (total, agreement) => total + (Number(agreement.totalAmountCents || agreement.rateAmountCents) || 0),
       0
@@ -162,12 +226,14 @@ const SalesAgreements = () => {
     return {
       sentCount,
       acceptedCount,
+      needsRoutingCount,
       totalAmountCents,
     };
-  }, [agreements]);
+  }, [agreements, recurringRoutingIndex]);
 
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
   const statusOptions = ['all', ...Object.values(SalesAgreementStatus)];
+  const billingTypeOptions = [AgreementBillingType.all, AgreementBillingType.recurring, AgreementBillingType.oneTime];
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -184,7 +250,9 @@ const SalesAgreements = () => {
                 </span>
               </div>
               <div className="mt-3 flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-950">Service Agreements</h1>
+                <h1 className="text-3xl font-bold text-slate-950">
+                  {routingQueueOnly ? 'Agreements Needing Routing' : 'Service Agreements'}
+                </h1>
                 <FeatureInfoButton title="How Service Agreements Work" align="left">
                   <p>
                     Service agreements are customer-facing billing snapshots built from company catalog items,
@@ -197,7 +265,9 @@ const SalesAgreements = () => {
                 </FeatureInfoButton>
               </div>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Search, review, and send customer service agreement snapshots.
+                {routingQueueOnly
+                  ? 'Accepted recurring service agreements that still need a routed recurring stop.'
+                  : 'Search, review, and send customer service agreement snapshots.'}
               </p>
             </div>
 
@@ -209,6 +279,21 @@ const SalesAgreements = () => {
                 <FaArrowLeft className="text-xs" />
                 Sales
               </Link>
+              {routingQueueOnly ? (
+                <Link
+                  to="/company/sales/agreements"
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  All Agreements
+                </Link>
+              ) : (
+                <Link
+                  to="/company/sales/agreements/needs-routing"
+                  className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100"
+                >
+                  Needs Routing
+                </Link>
+              )}
               <Link
                 to="/company/sales/agreements/new"
                 className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
@@ -227,14 +312,24 @@ const SalesAgreements = () => {
         )}
 
         <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          <StatTile icon={FaFileSignature} label="Agreements" value={agreements.length} helper="All statuses" />
+          <StatTile
+            icon={FaFileSignature}
+            label={routingQueueOnly ? 'Need Routing' : 'Agreements'}
+            value={routingQueueOnly ? filteredAgreements.length : agreements.length}
+            helper={routingQueueOnly ? 'Accepted recurring agreements' : 'All statuses'}
+          />
           <StatTile icon={FaEnvelope} label="Sent" value={summary.sentCount} helper="Waiting on customer" />
           <StatTile icon={FaCheckCircle} label="Accepted" value={summary.acceptedCount} helper="Ready for billing" />
-          <StatTile icon={FaFileSignature} label="Quoted Value" value={formatCurrency(summary.totalAmountCents)} helper="Draft and active total" />
+          <StatTile
+            icon={FaFileSignature}
+            label={routingQueueOnly ? 'Queue Total' : 'Quoted Value'}
+            value={routingQueueOnly ? summary.needsRoutingCount : formatCurrency(summary.totalAmountCents)}
+            helper={routingQueueOnly ? 'Need recurring route setup' : 'Draft and active total'}
+          />
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_220px]">
+          <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_190px_190px]">
             <div className="relative">
               <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -248,10 +343,23 @@ const SalesAgreements = () => {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
+              disabled={routingQueueOnly}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               {statusOptions.map((status) => (
                 <option key={status} value={status}>{status === 'all' ? 'All Statuses' : labelize(status)}</option>
+              ))}
+            </select>
+            <select
+              value={billingTypeFilter}
+              onChange={(event) => setBillingTypeFilter(event.target.value)}
+              disabled={routingQueueOnly}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            >
+              {billingTypeOptions.map((billingType) => (
+                <option key={billingType} value={billingType}>
+                  {billingType === AgreementBillingType.all ? 'All Types' : billingType === AgreementBillingType.recurring ? 'Recurring' : 'One Time'}
+                </option>
               ))}
             </select>
           </div>
@@ -261,9 +369,11 @@ const SalesAgreements = () => {
               <div className="p-5 text-sm text-slate-500">Loading service agreements...</div>
             ) : filteredAgreements.length === 0 ? (
               <div className="p-8 text-center">
-                <p className="font-semibold text-slate-800">No service agreements found</p>
+                <p className="font-semibold text-slate-800">
+                  {routingQueueOnly ? 'No recurring agreements need routing' : 'No service agreements found'}
+                </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Create a new agreement or adjust your search filters.
+                  {routingQueueOnly ? 'Accepted recurring agreements will appear here until a recurring stop is routed.' : 'Create a new agreement or adjust your search filters.'}
                 </p>
               </div>
             ) : (
@@ -273,6 +383,7 @@ const SalesAgreements = () => {
                     <th className="px-5 py-3">Agreement</th>
                     <th className="px-5 py-3">Customer</th>
                     <th className="px-5 py-3">Amount</th>
+                    <th className="px-5 py-3">Type</th>
                     <th className="px-5 py-3">Status</th>
                     <th className="px-5 py-3">Sent</th>
                     <th className="px-5 py-3">Updated</th>
@@ -292,6 +403,9 @@ const SalesAgreements = () => {
                       </td>
                       <td className="px-5 py-4 font-semibold text-slate-900">
                         {formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)}
+                      </td>
+                      <td className="px-5 py-4">
+                        <BillingTypeBadge agreement={agreement} />
                       </td>
                       <td className="px-5 py-4">
                         <StatusBadge status={agreement.status} />

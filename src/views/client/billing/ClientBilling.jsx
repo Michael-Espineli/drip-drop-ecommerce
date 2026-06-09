@@ -13,6 +13,7 @@ import {
   MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
 import {
   SalesInvoiceStatus,
@@ -156,7 +157,7 @@ const ClientBilling = () => {
       payments: new Map(),
       subscriptions: new Map(),
     };
-    let firstSnapshotsRemaining = user.email ? 6 : 3;
+    let firstSnapshotsRemaining = 3;
 
     const publish = (key) => (snapshot) => {
       snapshot.docs.forEach((recordDoc) => {
@@ -193,26 +194,6 @@ const ClientBilling = () => {
         onError
       ),
     ];
-
-    if (user.email) {
-      unsubscribes.push(
-        onSnapshot(
-          query(collection(db, salesCollectionNames.invoices), where('email', '==', user.email)),
-          publish('invoices'),
-          onError
-        ),
-        onSnapshot(
-          query(collection(db, salesCollectionNames.payments), where('email', '==', user.email)),
-          publish('payments'),
-          onError
-        ),
-        onSnapshot(
-          query(collection(db, salesCollectionNames.billingSubscriptions), where('email', '==', user.email)),
-          publish('subscriptions'),
-          onError
-        )
-      );
-    }
 
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [user]);
@@ -256,7 +237,9 @@ const ClientBilling = () => {
 
     try {
       const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
       const result = await startCheckoutCallable({
+        ...authPayload,
         billingSubscriptionId: subscription.id,
         agreementId: subscription.agreementId || '',
         companyId: subscription.companyId,

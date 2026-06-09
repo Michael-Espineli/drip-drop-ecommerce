@@ -104,56 +104,27 @@ const ServiceAgreements = () => {
     setLoading(true);
     setError('');
 
-    const agreementMap = new Map();
-    let firstSnapshotsRemaining = user.email ? 2 : 1;
-
-    const publish = () => {
-      const nextAgreements = Array.from(agreementMap.values()).sort((left, right) => {
-        const rightMillis = toMillis(right.updatedAt || right.sentAt || right.createdAt);
-        const leftMillis = toMillis(left.updatedAt || left.sentAt || left.createdAt);
-        return rightMillis - leftMillis;
-      });
-
-      setAgreements(nextAgreements);
-      firstSnapshotsRemaining -= 1;
-      if (firstSnapshotsRemaining <= 0) setLoading(false);
-    };
-
-    const onError = (snapshotError) => {
-      console.error('Unable to load service agreements', snapshotError);
-      setError(snapshotError.message || 'Unable to load service agreements.');
-      setLoading(false);
-    };
-
-    const unsubscribes = [
-      onSnapshot(
-        query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
-        (snapshot) => {
-          snapshot.docs.forEach((agreementDoc) => {
-            agreementMap.set(agreementDoc.id, { id: agreementDoc.id, ...agreementDoc.data() });
+    return onSnapshot(
+      query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid)),
+      (snapshot) => {
+        const nextAgreements = snapshot.docs
+          .map((agreementDoc) => ({ id: agreementDoc.id, ...agreementDoc.data() }))
+          .filter((agreement) => agreement.customerUserId === user.uid)
+          .sort((left, right) => {
+            const rightMillis = toMillis(right.updatedAt || right.sentAt || right.createdAt);
+            const leftMillis = toMillis(left.updatedAt || left.sentAt || left.createdAt);
+            return rightMillis - leftMillis;
           });
-          publish();
-        },
-        onError
-      ),
-    ];
 
-    if (user.email) {
-      unsubscribes.push(
-        onSnapshot(
-          query(collection(db, salesCollectionNames.agreements), where('email', '==', user.email)),
-          (snapshot) => {
-            snapshot.docs.forEach((agreementDoc) => {
-              agreementMap.set(agreementDoc.id, { id: agreementDoc.id, ...agreementDoc.data() });
-            });
-            publish();
-          },
-          onError
-        )
-      );
-    }
-
-    return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+        setAgreements(nextAgreements);
+        setLoading(false);
+      },
+      (snapshotError) => {
+        console.error('Unable to load service agreements', snapshotError);
+        setError(snapshotError.message || 'Unable to load service agreements.');
+        setLoading(false);
+      }
+    );
   }, [user]);
 
   const summary = useMemo(() => {

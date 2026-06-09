@@ -3,7 +3,7 @@ import React, { useState, useEffect, useContext, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ClipboardDocumentIcon, EnvelopeIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, EnvelopeIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -16,6 +16,7 @@ import { loadCustomerTimeline } from '../../../utils/customerTimeline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import CustomerTimelineGraph from './CustomerTimelineGraph';
 import { salesCollectionNames } from '../../../utils/models/Sales';
+import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
 import {
     customerMatchesRoleTagAccess,
     getRoleCustomerTagAccess,
@@ -1661,9 +1662,42 @@ const SalesActivitySection = ({ customer }) => {
 };
 
 // Operations Tab
-const OperationsTab = ({ customer }) => {
+const OperationsTab = ({ customer, onNewPartApproval }) => {
     return (
         <div className="space-y-8">
+            <InfoCard
+                title="Part Approvals"
+                actions={
+                    <button
+                        type="button"
+                        onClick={onNewPartApproval}
+                        className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                    >
+                        <PlusIcon className="h-4 w-4" />
+                        New Part Approval
+                    </button>
+                }
+            >
+                <div className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-start gap-3">
+                        <span className="rounded-md bg-white p-2 text-slate-600 shadow-sm">
+                            <WrenchScrewdriverIcon className="h-5 w-5" />
+                        </span>
+                        <div>
+                            <p className="font-semibold text-slate-950">Customer part requests</p>
+                            <p className="mt-1 text-sm text-slate-600">
+                                Approved parts move into the shopping list, then can be installed and invoiced from the part approvals queue.
+                            </p>
+                        </div>
+                    </div>
+                    <Link
+                        to="/company/part-approvals"
+                        className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                    >
+                        Open Queue
+                    </Link>
+                </div>
+            </InfoCard>
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
                 <RecurringTab customer={customer} />
                 <WorkOrdersTab customer={customer} />
@@ -1817,6 +1851,7 @@ export default function CustomerDetails() {
     const [activeTab, setActiveTab] = useState(getInitialTab(tab));
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [showInactiveModal, setShowInactiveModal] = useState(false);
+    const [showPartApprovalModal, setShowPartApprovalModal] = useState(false);
     const [accessDenied, setAccessDenied] = useState(false);
     const [customerInviteLink, setCustomerInviteLink] = useState('');
     const [creatingInviteLink, setCreatingInviteLink] = useState(false);
@@ -2197,11 +2232,22 @@ export default function CustomerDetails() {
                             />
                         )}
                         {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
-                        {activeTab === 'operations' && <OperationsTab customer={customer} />}
+                        {activeTab === 'operations' && (
+                            <OperationsTab
+                                customer={customer}
+                                onNewPartApproval={() => setShowPartApprovalModal(true)}
+                            />
+                        )}
                         {activeTab === 'history' && <HistoryTab customer={customer} />}
                     </main>
                 </section>
             </div>
+
+            <PartApprovalCreateModal
+                open={showPartApprovalModal}
+                onClose={() => setShowPartApprovalModal(false)}
+                fixedCustomer={customer}
+            />
 
             {showDeleteModal && (
                 <ModalShell

@@ -21,7 +21,7 @@ export default function Company() {
 
     return (
         <div className="bg-gray-50 text-gray-800">
-            <header className="fixed top-0 left-0 right-0 z-50 bg-blue-600 shadow-md">
+            <header className="fixed top-0 left-0 right-0 z-50 bg-cyan-600 shadow-md">
                 <div className="container mx-auto px-4">
                     <PublicHeader />
                 </div>
@@ -41,7 +41,7 @@ export default function Company() {
                                 <p className="text-gray-600 mb-6">Sign in to manage your team, routes, and customers.</p>
                                 <Link
                                     to="/signIn"
-                                    className="flex items-center justify-between bg-blue-600 text-white px-6 py-3 rounded-full font-semibold hover:bg-blue-700 transition"
+                                    className="flex items-center justify-between bg-cyan-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-cyan-700 transition"
                                 >
                                     <span>Sign In</span>
                                     <ArrowRightIcon className="h-5 w-5" />

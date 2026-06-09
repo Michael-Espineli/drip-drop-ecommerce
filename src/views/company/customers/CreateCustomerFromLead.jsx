@@ -126,6 +126,38 @@ const blankEquipmentData = {
     needsService: false,
 };
 
+const mapPublicEquipmentToForm = (equipment = {}) => ({
+    ...blankEquipmentData,
+    name: equipment.name || equipment.type || '',
+    type: equipment.type || equipment.category || '',
+    make: equipment.make || '',
+    model: equipment.model || '',
+    notes: equipment.notes || equipment.description || '',
+    needsService: Boolean(equipment.needsService),
+});
+
+const mapPublicBodyOfWaterToForm = (bodyOfWater = {}, index = 0) => {
+    const sizeNotes = [
+        bodyOfWater.type ? `Type: ${bodyOfWater.type}` : '',
+        bodyOfWater.sizeCategory ? `Size: ${bodyOfWater.sizeCategory}` : '',
+        bodyOfWater.condition ? `Condition: ${bodyOfWater.condition}` : '',
+    ].filter(Boolean);
+    const submittedNotes = bodyOfWater.notes || bodyOfWater.description || '';
+
+    return {
+        ...defaultBodyOfWaterData,
+        name: bodyOfWater.name || bodyOfWater.type || `Pool / Spa ${index + 1}`,
+        gallons: bodyOfWater.gallons || bodyOfWater.volume || '',
+        waterType: bodyOfWater.waterType || defaultBodyOfWaterData.waterType,
+        material: bodyOfWater.material || bodyOfWater.surface || '',
+        notes: [...sizeNotes, submittedNotes].filter(Boolean).join('\n'),
+        shape: bodyOfWater.shape || '',
+        length: bodyOfWater.length ?? '',
+        depth: bodyOfWater.depth ?? '',
+        width: bodyOfWater.width ?? '',
+    };
+};
+
 const mapHomeownerBodyOfWaterToForm = (bodyOfWater = {}) => ({
     id: bodyOfWater.id || '',
     homeownerBodyOfWaterId: bodyOfWater.id || '',
@@ -297,6 +329,14 @@ const CreateCustomerFromLead = () => {
                             ));
                         }
 
+                        const publicIntake = leadData.publicLeadIntake || leadData.leadIntake || {};
+                        const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater)
+                            ? publicIntake.bodiesOfWater
+                            : [];
+                        const publicEquipment = Array.isArray(publicIntake.equipment)
+                            ? publicIntake.equipment
+                            : [];
+
                         if (assets.bodiesOfWater.length) {
                             setAddEquipment(assets.equipment.length > 0);
                             setAddBodyOfWater(true);
@@ -315,8 +355,30 @@ const CreateCustomerFromLead = () => {
                                     });
                                 })
                             );
+                        } else if (publicBodiesOfWater.length) {
+                            const entries = publicBodiesOfWater.map((bodyOfWater, bodyIndex) => {
+                                const bodyEquipment = Array.isArray(bodyOfWater.equipment)
+                                    ? bodyOfWater.equipment.map(mapPublicEquipmentToForm)
+                                    : [];
+
+                                return createBodyOfWaterEntry({
+                                    data: mapPublicBodyOfWaterToForm(bodyOfWater, bodyIndex),
+                                    equipmentData: bodyEquipment,
+                                });
+                            });
+                            const hasPublicEquipment = entries.some((entry) => entry.equipmentData.length > 0);
+                            setAddBodyOfWater(true);
+                            setAddEquipment(hasPublicEquipment);
+                            setBodyOfWaterEntries(entries);
                         } else if (assets.equipment.length) {
                             const importedEquipment = assets.equipment.map(mapHomeownerEquipmentToForm);
+                            setAddEquipment(true);
+                            setBodyOfWaterEntries([
+                                createBodyOfWaterEntry({ equipmentData: importedEquipment })
+                            ]);
+                        } else if (publicEquipment.length) {
+                            const importedEquipment = publicEquipment.map(mapPublicEquipmentToForm);
+                            setAddBodyOfWater(true);
                             setAddEquipment(true);
                             setBodyOfWaterEntries([
                                 createBodyOfWaterEntry({ equipmentData: importedEquipment })
@@ -652,23 +714,32 @@ const CreateCustomerFromLead = () => {
     const requesterPhone = getRequesterPhone(lead, requesterProfile);
     const sourceAddress = homeownerAssets.serviceLocation?.address || lead?.serviceLocationAddress || {};
     const sourceAddressText = formatAddress(sourceAddress);
+    const publicIntake = lead?.publicLeadIntake || lead?.leadIntake || {};
+    const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater) ? publicIntake.bodiesOfWater : [];
+    const publicEquipment = Array.isArray(publicIntake.equipment) ? publicIntake.equipment : [];
     const sourceBodiesOfWater = homeownerAssets.bodiesOfWater?.length
         ? homeownerAssets.bodiesOfWater
         : homeownerAssets.bodyOfWater
             ? [homeownerAssets.bodyOfWater]
-            : [];
-    const sourceEquipment = homeownerAssets.equipment || [];
+            : publicBodiesOfWater;
+    const sourceEquipment = homeownerAssets.equipment?.length
+        ? homeownerAssets.equipment
+        : publicEquipment.length
+            ? publicEquipment
+            : publicBodiesOfWater.flatMap((body) => Array.isArray(body.equipment) ? body.equipment : []);
     const hasHomeownerServiceLocation = Boolean(homeownerAssets.serviceLocation);
     const hasHomeownerBodyOfWater = sourceBodiesOfWater.length > 0;
     const hasHomeownerEquipment = sourceEquipment.length > 0;
+    const hasLinkedHomeownerBodyOfWater = homeownerAssets.bodiesOfWater?.length > 0 || Boolean(homeownerAssets.bodyOfWater);
+    const hasLinkedHomeownerEquipment = homeownerAssets.equipment?.length > 0;
     const serviceLocationCopyLabel = hasHomeownerServiceLocation
         ? 'Copy homeowner service location into company account'
         : 'Create company service location from lead address';
     const bodyOfWaterCopyLabel = hasHomeownerBodyOfWater
-        ? `Copy ${sourceBodiesOfWater.length} homeowner body of water record${sourceBodiesOfWater.length === 1 ? '' : 's'} into company account`
+        ? `${hasLinkedHomeownerBodyOfWater ? 'Copy' : 'Use'} ${sourceBodiesOfWater.length} ${hasLinkedHomeownerBodyOfWater ? 'homeowner' : 'submitted'} body of water record${sourceBodiesOfWater.length === 1 ? '' : 's'} in the company account`
         : 'Add company body of water manually';
     const equipmentCopyLabel = hasHomeownerEquipment
-        ? `Copy ${sourceEquipment.length} homeowner equipment record${sourceEquipment.length === 1 ? '' : 's'} into company account`
+        ? `${hasLinkedHomeownerEquipment ? 'Copy' : 'Use'} ${sourceEquipment.length} ${hasLinkedHomeownerEquipment ? 'homeowner' : 'submitted'} equipment record${sourceEquipment.length === 1 ? '' : 's'} in the company account`
         : 'Add company equipment manually';
 
     return (
@@ -701,6 +772,11 @@ const CreateCustomerFromLead = () => {
                         <div className="rounded-lg bg-white p-4">
                             <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Property</p>
                             <p className="mt-2 text-sm text-gray-900">{sourceAddressText || 'No service address submitted'}</p>
+                            {(publicIntake.treeTypes || publicIntake.treeDebrisLevel || publicIntake.overhangingTrees) && (
+                                <p className="mt-1 text-sm text-gray-700">
+                                    Trees: {[publicIntake.treeTypes, publicIntake.treeDebrisLevel ? `${publicIntake.treeDebrisLevel} debris` : '', publicIntake.overhangingTrees].filter(Boolean).join(' / ')}
+                                </p>
+                            )}
                             {sourceBodiesOfWater.length > 0 && (
                                 <p className="mt-1 text-sm text-gray-700">
                                     Bodies of water: {sourceBodiesOfWater.map(body => body.name || 'Pool / Spa').join(', ')}
@@ -785,8 +861,10 @@ const CreateCustomerFromLead = () => {
                                     <div className="pl-6 mt-2 space-y-4 p-4 border-l-2">
                                         <p className="rounded-lg bg-gray-50 p-3 text-sm text-gray-700">
                                             {hasHomeownerBodyOfWater
-                                                ? 'Body of water fields are pre-filled from the homeowner account and will be saved as company-side copies linked back to homeowner records when available.'
-                                                : 'This body of water is being added as a new company-side record because no homeowner body of water was attached to the lead.'}
+                                                ? hasLinkedHomeownerBodyOfWater
+                                                    ? 'Body of water fields are pre-filled from the homeowner account and will be saved as company-side copies linked back to homeowner records when available.'
+                                                    : 'Body of water fields are pre-filled from the public request form and will be saved as company-side records.'
+                                                : 'This body of water is being added as a new company-side record because no pool or spa was attached to the lead.'}
                                         </p>
                                         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                             <label className="flex items-center font-semibold"><input type="checkbox" checked={addEquipment} onChange={e => handleAddEquipmentToggle(e.target.checked)} className="mr-2 h-5 w-5" />{equipmentCopyLabel}</label>
@@ -799,7 +877,7 @@ const CreateCustomerFromLead = () => {
                                                         <h4 className="font-semibold text-gray-900">Body of Water #{bodyIndex + 1}</h4>
                                                         <p className="text-sm text-gray-600">
                                                             {sourceBodiesOfWater[bodyIndex]
-                                                                ? `Copied from homeowner record: ${sourceBodiesOfWater[bodyIndex].name || 'Pool / Spa'}`
+                                                                ? `${hasLinkedHomeownerBodyOfWater ? 'Copied from homeowner record' : 'Submitted on public form'}: ${sourceBodiesOfWater[bodyIndex].name || 'Pool / Spa'}`
                                                                 : 'New company-side body of water.'}
                                                         </p>
                                                     </div>

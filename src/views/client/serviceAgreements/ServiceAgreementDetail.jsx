@@ -11,6 +11,7 @@ import {
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
 import {
   SalesAgreementStatus,
@@ -55,6 +56,16 @@ const formatDate = (value) => {
 };
 
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
+const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const customerCanViewAgreement = (agreement = {}, user = {}) => {
+  const customerUserId = String(agreement.customerUserId || '').trim();
+  if (customerUserId) return customerUserId === user?.uid;
+
+  const authEmail = normalizeEmail(user?.email);
+  const agreementEmail = normalizeEmail(agreement.email || agreement.customerEmail || agreement.billingEmail);
+  return Boolean(authEmail && agreementEmail && authEmail === agreementEmail);
+};
 
 const statusTone = {
   accepted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
@@ -88,6 +99,8 @@ const ServiceAgreementDetail = () => {
   const { agreementId } = useParams();
   const location = useLocation();
   const { user } = useContext(Context);
+  const userId = user?.uid;
+  const userEmail = user?.email;
   const [agreement, setAgreement] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -117,7 +130,15 @@ const ServiceAgreementDetail = () => {
           return;
         }
 
-        setAgreement({ id: snapshot.id, ...snapshot.data() });
+        const nextAgreement = { id: snapshot.id, ...snapshot.data() };
+        if (userId && !customerCanViewAgreement(nextAgreement, { uid: userId, email: userEmail })) {
+          setAgreement(null);
+          setError('This service agreement does not belong to your account.');
+          setLoading(false);
+          return;
+        }
+
+        setAgreement(nextAgreement);
         setLoading(false);
       },
       (snapshotError) => {
@@ -126,7 +147,7 @@ const ServiceAgreementDetail = () => {
         setLoading(false);
       }
     );
-  }, [agreementId]);
+  }, [agreementId, userEmail, userId]);
 
   useEffect(() => {
     const subscriptionId = agreement?.billingSubscriptionId;
@@ -166,11 +187,16 @@ const ServiceAgreementDetail = () => {
   const statusKey = normalizeStatus(agreement?.status);
   const isAccepted = statusKey === normalizeStatus(SalesAgreementStatus.accepted);
   const isClosed = ['canceled', 'rejected', 'expired'].includes(statusKey);
-  const canAccept = Boolean(agreement && !isAccepted && !isClosed && !accepting);
+  const isSignedIn = Boolean(userId);
+  const redirectParam = encodeURIComponent(`/client/service-agreements/${agreementId}`);
+  const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
+  const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${agreement?.email ? `&email=${encodeURIComponent(agreement.email)}` : ''}`;
+  const canAccept = Boolean(isSignedIn && agreement && !isAccepted && !isClosed && !accepting);
   const effectiveSubscriptionId = billingSubscription?.id || agreement?.billingSubscriptionId;
   const subscriptionStatusKey = normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status);
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(subscriptionStatusKey);
   const canStartCheckout = Boolean(
+    isSignedIn &&
     agreement &&
     effectiveSubscriptionId &&
     !hasActiveStripeSubscription &&
@@ -180,6 +206,11 @@ const ServiceAgreementDetail = () => {
   );
 
   const acceptAgreement = async () => {
+    if (!isSignedIn) {
+      toast.error('Sign in with the customer email on this agreement before accepting.');
+      return;
+    }
+
     if (!canAccept) return;
 
     if (!acceptedTerms) {
@@ -191,7 +222,9 @@ const ServiceAgreementDetail = () => {
 
     try {
       const acceptCallable = httpsCallable(functions, 'acceptSalesServiceAgreement');
+      const authPayload = await getCallableAuthPayload();
       const result = await acceptCallable({
+        ...authPayload,
         agreementId: agreement.id,
         acceptanceNote,
       });
@@ -220,7 +253,9 @@ const ServiceAgreementDetail = () => {
 
     try {
       const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
       const result = await startCheckoutCallable({
+        ...authPayload,
         billingSubscriptionId: effectiveSubscriptionId,
         agreementId: agreement.id,
         companyId: agreement.companyId,
@@ -371,12 +406,21 @@ const ServiceAgreementDetail = () => {
             <div className="space-y-4 p-5">
               {termsList.length > 0 && (
                 <div className="space-y-3">
-                  {termsList.map((term, index) => (
-                    <div key={term.id || index} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <p className="font-semibold text-slate-950">{term.title || term.label || `Term ${index + 1}`}</p>
-                      <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{term.description || term.value || term.text || ''}</p>
-                    </div>
-                  ))}
+                  {termsList.map((term, index) => {
+                    const title = typeof term === 'string'
+                      ? `Term ${index + 1}`
+                      : term.title || term.label || `Term ${index + 1}`;
+                    const description = typeof term === 'string'
+                      ? term
+                      : term.description || term.value || term.text || '';
+
+                    return (
+                      <div key={term.id || index} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <p className="font-semibold text-slate-950">{title}</p>
+                        <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{description}</p>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
@@ -405,6 +449,27 @@ const ServiceAgreementDetail = () => {
 
             {!isAccepted && !isClosed && (
               <div className="mt-5 space-y-4">
+                {!isSignedIn && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                    <p className="font-semibold">Sign in required</p>
+                    <p className="mt-1">Use the customer account or create one with the email on this agreement before accepting.</p>
+                    <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                      <Link
+                        to={signInPath}
+                        className="inline-flex justify-center rounded-md bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700"
+                      >
+                        Sign In
+                      </Link>
+                      <Link
+                        to={signUpPath}
+                        className="inline-flex justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100"
+                      >
+                        Create Account
+                      </Link>
+                    </div>
+                  </div>
+                )}
+
                 <label className="block text-sm font-semibold text-slate-700" htmlFor="acceptanceNote">
                   Note
                   <textarea

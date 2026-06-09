@@ -30,6 +30,19 @@ const StatusBadge = ({ status }) => {
     return <span className={`${baseClasses} ${specificClasses}`}>{status}</span>;
 };
 
+const currencyFormatter = new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+});
+
+const cents = (value) => {
+    const amount = Number(value || 0);
+    return Number.isFinite(amount) ? amount : 0;
+};
+
+const dollarsFromCents = (value) => ((cents(value) / 100) || 0).toFixed(2);
+const formatCurrencyFromCents = (value) => currencyFormatter.format(cents(value) / 100);
+
 const ContractDetailView = () => {
     const { contractId } = useParams();
     const navigate = useNavigate();
@@ -74,7 +87,7 @@ const ContractDetailView = () => {
                     setContract(contractData);
 
                     setDetailsForm({
-                        rate: contractData.rate ?? '',
+                        rate: dollarsFromCents(contractData.rate),
                         lastDateToAccept: contractData.lastDateToAccept
                             ? format(contractData.lastDateToAccept.toDate(), 'yyyy-MM-dd')
                             : '',
@@ -128,10 +141,11 @@ const ContractDetailView = () => {
         const contractRef = doc(db, 'contracts', contractId);
 
         try {
+            const parsedAmount = Number(detailsForm.rate || 0);
             const parsedRate =
-                detailsForm.rate === '' || detailsForm.rate === null
+                detailsForm.rate === '' || detailsForm.rate === null || !Number.isFinite(parsedAmount)
                     ? null
-                    : Number(detailsForm.rate);
+                    : Math.round(parsedAmount * 100);
 
             const parsedTerms = detailsForm.termsText
                 .split('\n')
@@ -192,6 +206,16 @@ const ContractDetailView = () => {
         }
     };
 
+    const getContractCustomerEmail = () => (
+        contract.receiverEmail ||
+        contract.customerEmail ||
+        contract.email ||
+        contract.billingEmail ||
+        contract.mainContact?.email ||
+        contract.contact?.email ||
+        ''
+    );
+
     const handleSendToCustomer = () => {
         const subject = encodeURIComponent(`Contract for ${contract.receiverName || 'Customer'}`);
         const body = encodeURIComponent(
@@ -202,9 +226,10 @@ ${window.location.href}
 
 Thank you.`
         );
+        const customerEmail = getContractCustomerEmail();
 
-        if (contract.receiverEmail) {
-            window.location.href = `mailto:${contract.receiverEmail}?subject=${subject}&body=${body}`;
+        if (customerEmail) {
+            window.location.href = `mailto:${customerEmail}?subject=${subject}&body=${body}`;
         } else {
             toast.error('No customer email found on this contract.');
         }
@@ -300,7 +325,7 @@ Thank you.`
                                             onClick={() => {
                                                 setIsEditingDetails(false);
                                                 setDetailsForm({
-                                                    rate: contract.rate ?? '',
+                                                    rate: dollarsFromCents(contract.rate),
                                                     lastDateToAccept: contract.lastDateToAccept
                                                         ? format(contract.lastDateToAccept.toDate(), 'yyyy-MM-dd')
                                                         : '',
@@ -341,7 +366,7 @@ Thank you.`
                                 <div>
                                     <dt className="text-sm font-medium text-gray-500">Amount</dt>
                                     <dd className="mt-1 text-lg font-semibold text-gray-900">
-                                        ${contract.rate?.toLocaleString() || '0.00'}
+                                        {formatCurrencyFromCents(contract.rate)}
                                     </dd>
                                 </div>
                                 <div>
@@ -378,6 +403,8 @@ Thank you.`
                                 </label>
                                 <input
                                     type="number"
+                                    min="0"
+                                    step="0.01"
                                     value={detailsForm.rate}
                                     onChange={(e) =>
                                         setDetailsForm((prev) => ({

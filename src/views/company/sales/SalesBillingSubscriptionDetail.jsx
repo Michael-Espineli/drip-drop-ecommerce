@@ -18,6 +18,7 @@ import {
   FaUpload,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
 import {
   SalesBillingSubscriptionStatus,
@@ -356,7 +357,9 @@ const SalesBillingSubscriptionDetail = () => {
 
     try {
       const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
       const result = await startCheckoutCallable({
+        ...authPayload,
         billingSubscriptionId: subscription.id,
         agreementId: subscription.agreementId || '',
         companyId: subscription.companyId || recentlySelectedCompany,

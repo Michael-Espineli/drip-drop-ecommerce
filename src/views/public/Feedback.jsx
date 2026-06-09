@@ -82,19 +82,19 @@ export default function Feedback() {
 
   return (
     <div className="bg-gray-50 text-gray-800 min-h-screen">
-      <header className="fixed top-0 left-0 right-0 z-50 bg-blue-600 shadow-md">
+      <header className="fixed top-0 left-0 right-0 z-50 bg-cyan-600 shadow-md">
         <div className="container mx-auto px-4">
           <PublicHeader />
         </div>
       </header>
 
       <main className="pt-24">
-        <section className="bg-blue-600 text-white py-16">
+        <section className="bg-cyan-600 text-white py-16">
           <div className="container mx-auto px-4">
             <div className="max-w-3xl">
-              <SelectedIcon className="h-12 w-12 text-blue-100" />
+              <SelectedIcon className="h-12 w-12 text-cyan-50" />
               <h1 className="mt-4 text-4xl md:text-5xl font-bold">Bug Reports & Feature Requests</h1>
-              <p className="mt-4 text-lg text-blue-100">
+              <p className="mt-4 text-lg text-cyan-50">
                 Send app issues and product ideas directly to the Drip Drop admin team.
               </p>
             </div>
@@ -114,7 +114,7 @@ export default function Feedback() {
                     name="type"
                     value={formData.type}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     <option value="feature">Feature Request</option>
                     <option value="bug">Bug Report</option>
@@ -130,7 +130,7 @@ export default function Feedback() {
                     name="audience"
                     value={formData.audience}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     {Object.values(FEEDBACK_AUDIENCES).map((audience) => (
                       <option key={audience} value={audience}>{audience}</option>
@@ -148,7 +148,7 @@ export default function Feedback() {
                     type="text"
                     value={formData.requesterName}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
 
@@ -162,7 +162,7 @@ export default function Feedback() {
                     type="email"
                     value={formData.requesterEmail}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
 
@@ -177,7 +177,7 @@ export default function Feedback() {
                     required
                     value={formData.title}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
 
@@ -190,7 +190,7 @@ export default function Feedback() {
                     name="priority"
                     value={formData.priority}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   >
                     <option value="Low">Low</option>
                     <option value="Medium">Medium</option>
@@ -210,7 +210,7 @@ export default function Feedback() {
                     rows="6"
                     value={formData.description}
                     onChange={handleChange}
-                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500"
                   />
                 </div>
               </div>
@@ -218,7 +218,7 @@ export default function Feedback() {
               <button
                 type="submit"
                 disabled={isSubmitting}
-                className="mt-6 w-full bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:bg-blue-300"
+                className="mt-6 w-full bg-cyan-600 text-white py-3 rounded-lg font-semibold hover:bg-cyan-700 transition disabled:cursor-not-allowed disabled:bg-cyan-300"
               >
                 {isSubmitting ? 'Submitting...' : 'Submit'}
               </button>

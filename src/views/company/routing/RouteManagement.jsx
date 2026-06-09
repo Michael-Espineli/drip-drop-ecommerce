@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query } from "firebase/firestore";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import Select from "react-select";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
@@ -196,13 +196,21 @@ const RouteManagement = () => {
             <h1 className="text-3xl font-bold text-slate-900">Planned Routes</h1>
             <p className="mt-1 text-slate-600">Recurring routes organized by day and technician.</p>
           </div>
-          <button
-            type="button"
-            onClick={() => handleCreate(null)}
-            className="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
-          >
-            New Route
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/company/recurringServiceStop"
+              className="rounded-md border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+            >
+              Recurring Service Stops
+            </Link>
+            <button
+              type="button"
+              onClick={() => handleCreate(null)}
+              className="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+            >
+              New Route
+            </button>
+          </div>
         </header>
 
         <div className="mb-6 grid gap-4 md:grid-cols-3">

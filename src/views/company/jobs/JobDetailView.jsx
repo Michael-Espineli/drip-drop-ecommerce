@@ -36,12 +36,14 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 import {
   salesCollectionNames,
+  SalesAgreementSourceType,
+  SalesAgreementStatus,
   SalesCatalogBillingBehavior,
   SalesCatalogItemType,
   SalesCatalogSourceType,
 } from "../../../utils/models/Sales";
 
-/** 
+/**
  * JobDetailView
  * - Added Billing tab for estimate / invoice lifecycle
  * - Billing tab includes:
@@ -236,6 +238,7 @@ const JobDetailView = () => {
     jobName: "",
     dbItemId: "",
     linkedTaskId: "",
+    customerApprovalRequired: true,
   });
 
   useEffect(() => {
@@ -293,6 +296,9 @@ const JobDetailView = () => {
   const [contracts, setContracts] = useState([]);
   const [contractsLoading, setContractsLoading] = useState(true);
   const [selectedContractId, setSelectedContractId] = useState("");
+  const [jobSalesAgreements, setJobSalesAgreements] = useState([]);
+  const [salesAgreementsLoading, setSalesAgreementsLoading] = useState(false);
+  const [selectedSalesAgreementId, setSelectedSalesAgreementId] = useState("");
   const [sendingEstimateEmail, setSendingEstimateEmail] = useState(false);
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
@@ -346,6 +352,17 @@ const JobDetailView = () => {
     () => contracts.find((c) => c.id === selectedContractId) || contracts[0] || null,
     [contracts, selectedContractId]
   );
+
+  const selectedSalesAgreement = useMemo(
+    () =>
+      jobSalesAgreements.find((agreement) => agreement.id === selectedSalesAgreementId) ||
+      (linkedSalesAgreement?.id ? linkedSalesAgreement : null) ||
+      jobSalesAgreements[0] ||
+      null,
+    [jobSalesAgreements, linkedSalesAgreement, selectedSalesAgreementId]
+  );
+
+  const selectedBillingRecord = selectedSalesAgreement || selectedContract;
 
   const contractStatusOptions = useMemo(
     () => ["Draft", "Sent", "Viewed", "Accepted", "Rejected", "Expired", "Invoiced", "Paid"],
@@ -468,6 +485,8 @@ const JobDetailView = () => {
     const n = Number(value || 0);
     return Number.isFinite(n) ? n : 0;
   };
+
+  const dollarsFromCents = (value) => ((cents(value) / 100) || 0).toFixed(2);
 
   const idValue = (value) => {
     if (!value) return "";
@@ -856,8 +875,26 @@ const JobDetailView = () => {
   const formatCurrency = (number, locale = "en-US", currency = "USD") =>
     new Intl.NumberFormat(locale, { style: "currency", currency }).format(Number(number || 0));
 
+  const formatStatusLabel = (status) => {
+    const raw = String(status || "").trim();
+    if (!raw) return "";
+
+    const normalized = raw.toLowerCase();
+    const labels = {
+      [SalesAgreementStatus.draft]: "Draft",
+      [SalesAgreementStatus.sent]: "Sent",
+      [SalesAgreementStatus.revised]: "Revised",
+      [SalesAgreementStatus.accepted]: "Accepted",
+      [SalesAgreementStatus.rejected]: "Rejected",
+      [SalesAgreementStatus.expired]: "Expired",
+      [SalesAgreementStatus.canceled]: "Canceled",
+    };
+
+    return labels[normalized] || raw;
+  };
+
   const getStatusClass = (status) => {
-    switch (status) {
+    switch (formatStatusLabel(status)) {
       case "Draft":
       case "Estimate Pending":
       case "Unscheduled":
@@ -876,6 +913,7 @@ const JobDetailView = () => {
         return "bg-green-100 text-green-800";
       case "Invoiced":
         return "bg-blue-100 text-blue-800";
+      case "Canceled":
       case "Rejected":
         return "bg-gray-200 text-gray-800";
       default:
@@ -884,7 +922,7 @@ const JobDetailView = () => {
   };
 
   const statusTone = (status) => {
-    switch (status) {
+    switch (formatStatusLabel(status)) {
       case "Draft":
       case "Estimate Pending":
       case "Unscheduled":
@@ -903,6 +941,7 @@ const JobDetailView = () => {
         return "border-emerald-200 bg-emerald-50 text-emerald-700";
       case "Invoiced":
         return "border-blue-200 bg-blue-50 text-blue-700";
+      case "Canceled":
       case "Rejected":
         return "border-rose-200 bg-rose-50 text-rose-700";
       default:
@@ -912,7 +951,7 @@ const JobDetailView = () => {
 
   const StatusBadge = ({ status }) => (
     <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${statusTone(status)}`}>
-      {status || "Not set"}
+      {formatStatusLabel(status) || "Not set"}
     </span>
   );
 
@@ -1195,6 +1234,22 @@ const JobDetailView = () => {
     technicianRates,
   ]);
 
+  const billingSnapshotItems = useMemo(() => {
+    if (selectedSalesAgreement?.lineItems?.length) {
+      return selectedSalesAgreement.lineItems.map((item, index) => ({
+        id: item?.id || `agreement_line_${index}`,
+        type: item?.type || item?.salesItemType || "Item",
+        name: item?.name || item?.title || `Line ${index + 1}`,
+        description: item?.description || "",
+        quantity: Number(item?.quantity || 1),
+        amount: Number(item?.totalAmountCents || item?.amount || item?.price || 0),
+        displayAmount: formatCurrency((Number(item?.totalAmountCents || item?.amount || item?.price || 0) / 100) || 0),
+      }));
+    }
+
+    return contractSnapshotItems;
+  }, [contractSnapshotItems, selectedSalesAgreement]);
+
   const plannedStopLaborCents = useMemo(() => {
     return (plannedServiceStops || []).reduce(
       (total, stop) => total + getPlannedStopCostCents(stop),
@@ -1339,7 +1394,11 @@ const JobDetailView = () => {
     const terminalStatuses = new Set(["purchased", "installed", "cancelled", "canceled"]);
     const items = shoppingSnap.docs
       .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
-      .filter((item) => !terminalStatuses.has(String(item.status || "").toLowerCase()));
+      .filter((item) => {
+        if (terminalStatuses.has(String(item.status || "").toLowerCase())) return false;
+        if (item.customerApprovalRequired && item.customerApprovalStatus !== "approved") return false;
+        return true;
+      });
 
     if (!items.length) return 0;
 
@@ -1417,28 +1476,60 @@ const JobDetailView = () => {
   }, [job.rate, actualLaborTotalCents, actualPurchasedMaterialCostCents]);
 
   const contractTotalCents = useMemo(() => {
+    if (selectedSalesAgreement) {
+      return Number(
+        selectedSalesAgreement.totalAmountCents ??
+        selectedSalesAgreement.rateAmountCents ??
+        selectedSalesAgreement.subtotalAmountCents ??
+        0
+      );
+    }
+
     if (selectedContract?.rate !== undefined && selectedContract?.rate !== null) {
       return Number(selectedContract.rate || 0);
     }
     return Number(job.rate || 0);
-  }, [selectedContract, job.rate]);
+  }, [job.rate, selectedContract, selectedSalesAgreement]);
 
   const getCustomerEmail = () => (
     customer.email ||
+    customer.customerEmail ||
     customer.billingEmail ||
     customer.mainContact?.email ||
     customer.contact?.email ||
+    job.customerEmail ||
+    job.email ||
+    job.billingEmail ||
+    selectedSalesAgreement?.email ||
+    selectedSalesAgreement?.customerEmail ||
+    selectedSalesAgreement?.billingEmail ||
     selectedContract?.receiverEmail ||
+    selectedContract?.customerEmail ||
+    selectedContract?.email ||
+    selectedContract?.billingEmail ||
     ""
   );
 
   const getCustomerDisplayName = () => (
     job.customerName ||
+    customer.displayName ||
     customer.customerName ||
     customer.name ||
     [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+    selectedSalesAgreement?.customerName ||
     selectedContract?.receiverName ||
     "Customer"
+  );
+
+  const getCustomerUserId = (source = customer) => (
+    source?.customerUserId ||
+    source?.userId ||
+    source?.linkedCustomerUserId ||
+    source?.linkedHomeownerUserId ||
+    source?.homeownerUserId ||
+    source?.homeownerId ||
+    (Array.isArray(source?.linkedCustomerIds) ? source.linkedCustomerIds[0] : null) ||
+    null
   );
 
   const getServiceLocationSnapshot = () => ({
@@ -1451,10 +1542,78 @@ const JobDetailView = () => {
     zip: serviceLocation.zip || "",
   });
 
-  const getSalesLineItemsFromSnapshot = () => {
-    const snapshotItems = contractSnapshotItems?.length
-      ? contractSnapshotItems
-      : buildSuggestedContractSnapshot();
+  const createCustomerPartApprovalRequest = async ({
+    approvalRequestId,
+    shoppingListItemId = "",
+    linkedTask = null,
+    itemName = "",
+    itemDescription = "",
+    quantity = "",
+    dbItemId = "",
+    dbItemName = "",
+    plannedUnitCostCents = 0,
+    plannedUnitPriceCents = 0,
+    plannedTotalCostCents = 0,
+    plannedTotalPriceCents = 0,
+  }) => {
+    if (!approvalRequestId) return null;
+
+    const customerUserId = getCustomerUserId();
+    const customerEmail = getCustomerEmail();
+    const serviceLocationSnapshot = getServiceLocationSnapshot();
+    const payload = {
+      id: approvalRequestId,
+      companyId: recentlySelectedCompany,
+      companyName: authCtx?.recentlySelectedCompanyName || "",
+      customerId: job.customerId || customer.id || "",
+      customerUserId: customerUserId || null,
+      customerName: getCustomerDisplayName(),
+      customerEmail,
+      email: customerEmail,
+      jobId: jobId || "",
+      jobInternalId: job.internalId || "",
+      jobName: job.internalId || job.description || "Job",
+      serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+      serviceLocationName: serviceLocation.nickName || serviceLocationSnapshot.streetAddress || "",
+      serviceLocationSnapshot,
+      shoppingListItemId,
+      shoppingListPath: shoppingListItemId ? `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}` : "",
+      linkedTaskId: linkedTask?.id || "",
+      linkedTaskName: linkedTask?.name || "",
+      linkedTaskType: linkedTask?.type || "",
+      itemName,
+      name: itemName,
+      description: itemDescription,
+      quantity: String(quantity || ""),
+      dbItemId,
+      dbItemName,
+      plannedUnitCostCents,
+      plannedUnitPriceCents,
+      plannedTotalCostCents,
+      plannedTotalPriceCents,
+      status: "pending",
+      approvalStatus: "pending",
+      sourceType: "shoppingListItem",
+      requestedAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      requestedByUserId: getUserId() || "",
+      requestedByUserName: getAuditUserName(),
+    };
+
+    await setDoc(doc(db, "customerPartApprovals", approvalRequestId), payload);
+    return payload;
+  };
+
+  const getSalesLineItemsFromSnapshot = (sourceItems = null) => {
+    const snapshotItems =
+      Array.isArray(sourceItems) && sourceItems.length
+        ? sourceItems
+        : selectedSalesAgreement?.lineItems?.length
+          ? selectedSalesAgreement.lineItems
+          : contractSnapshotItems?.length
+            ? contractSnapshotItems
+            : buildSuggestedContractSnapshot();
     const mappedItems = snapshotItems
       .map((item, index) => {
         const quantity = Math.max(Number(item.quantity || 1), 1);
@@ -1520,6 +1679,29 @@ const JobDetailView = () => {
       : [];
   };
 
+  const isServiceAgreementRecord = (record) =>
+    Boolean(record?.id && String(record.id).startsWith("sa_")) ||
+    record?.sourceType === SalesAgreementSourceType.oneOffJob ||
+    record?.sourceType === SalesAgreementSourceType.recurringService ||
+    record?.sourceType === SalesAgreementSourceType.manual;
+
+  const normalizeSalesAgreementStatus = (status) => {
+    const key = String(status || SalesAgreementStatus.draft).trim().toLowerCase();
+    return Object.values(SalesAgreementStatus).includes(key)
+      ? key
+      : SalesAgreementStatus.draft;
+  };
+
+  const normalizeAgreementDeadline = (value) => {
+    if (!value) return null;
+    if (value?.toDate || value instanceof Date) return value;
+    if (typeof value === "string") {
+      const date = new Date(value.includes("T") ? value : `${value}T12:00:00`);
+      return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+    }
+    return value;
+  };
+
   const findLinkedSalesAgreement = async () => {
     if (!recentlySelectedCompany || !jobId) return null;
 
@@ -1554,49 +1736,97 @@ const JobDetailView = () => {
       : { id: agreementsSnap.docs[0].id, ...agreementsSnap.docs[0].data() };
   };
 
-  const ensureJobSalesAgreement = async () => {
+  const ensureJobSalesAgreement = async ({
+    sourceRecord = null,
+    forceNew = false,
+    status = "",
+  } = {}) => {
     const email = getCustomerEmail();
     if (!email) throw new Error("Customer email is required before sending an estimate.");
 
-    const lineItems = getSalesLineItemsFromSnapshot();
+    const source = sourceRecord || selectedSalesAgreement || selectedContract || {};
+    const sourceIsAgreement = isServiceAgreementRecord(source);
+    const existingAgreement = forceNew
+      ? null
+      : sourceIsAgreement && source?.id
+        ? source
+        : await findLinkedSalesAgreement();
+    const lineItems = getSalesLineItemsFromSnapshot(
+      source?.lineItems?.length ? source.lineItems : existingAgreement?.lineItems
+    );
     if (!lineItems.length) throw new Error("Add at least one line item or job price before sending.");
 
-    const existingAgreement = await findLinkedSalesAgreement();
-    const id = existingAgreement?.id || `sa_${uuidv4()}`;
+    const id = existingAgreement?.id || (sourceIsAgreement && source?.id ? source.id : `sa_${uuidv4()}`);
     const subtotalAmountCents = lineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0);
-    const totalAmountCents = cents(selectedContract?.rate || 0) || subtotalAmountCents || cents(job.rate);
-    const selectedTerms = normalizeTerms(selectedContract?.terms || []);
-    const termsList = selectedTerms
-      .map((term) => term.description || term.title)
-      .filter(Boolean);
+    const sourceRate =
+      source?.rateAmountCents ??
+      source?.totalAmountCents ??
+      source?.rate ??
+      existingAgreement?.totalAmountCents ??
+      existingAgreement?.rateAmountCents ??
+      0;
+    const totalAmountCents = cents(sourceRate) || subtotalAmountCents || cents(job.rate);
+    const sourceTerms = source?.termsList?.length ? source.termsList : source?.terms;
+    const selectedTerms = normalizeTerms(sourceTerms || []);
     const fallbackTerms =
-      selectedContract?.notes ||
-      selectedContract?.termsText ||
+      source?.termsSummary ||
+      source?.termsText ||
+      source?.notes ||
+      source?.description ||
+      existingAgreement?.termsSummary ||
+      existingAgreement?.terms ||
       job.description ||
       "Customer approval is required before work begins.";
+    const termsList = selectedTerms
+      .map((term, index) => ({
+        id: term.id || `term_${index}`,
+        title: term.title || term.name || term.label || `Term ${index + 1}`,
+        description: term.description || term.value || term.title || "",
+        value: term.value || "",
+      }))
+      .filter((term) => term.description || term.title);
+    const fallbackTermsList = [{
+      id: "fallback_terms",
+      title: "Agreement Terms",
+      description: fallbackTerms,
+      value: "",
+    }];
+    const termsText = termsList
+      .map((term) => term.description || term.title)
+      .filter(Boolean);
+    const termsSummary = (termsText.length ? termsText : [fallbackTerms]).join("\n");
+    const legacyContractId = !sourceIsAgreement
+      ? source?.id || existingAgreement?.contractId || ""
+      : existingAgreement?.contractId || "";
 
     const payload = {
       ...(existingAgreement || {}),
       id,
       companyId: recentlySelectedCompany,
-      companyName: authCtx?.recentlySelectedCompanyName || selectedContract?.senderName || "",
+      companyName: authCtx?.recentlySelectedCompanyName || source?.senderName || "",
       customerId: job.customerId || customer.id || "",
-      customerUserId: customer.customerUserId || customer.userId || null,
+      customerUserId: getCustomerUserId(),
       customerName: getCustomerDisplayName(),
+      customerEmail: email,
+      billingEmail: customer.billingEmail || email,
+      customerPhoneNumber: customer.phoneNumber || customer.phone || "",
+      relationshipId: customer.relationshipId || customer.customerCompanyRelationshipId || "",
+      customerCompanyRelationshipId: customer.customerCompanyRelationshipId || customer.relationshipId || "",
       email,
       serviceLocationIds: [job.serviceLocationId || serviceLocation.id || ""].filter(Boolean),
       serviceLocationSnapshots: [getServiceLocationSnapshot()].filter((location) => location.id || location.streetAddress),
-      sourceType: "oneOffJob",
+      sourceType: SalesAgreementSourceType.oneOffJob,
       sourceId: jobId,
-      title: selectedContract?.title || `${job.internalId || "Job"} Estimate`,
-      description: selectedContract?.notes || job.description || "",
+      title: source?.title || `${job.internalId || "Job"} Estimate`,
+      description: source?.description || source?.notes || job.description || "",
       terms: selectedTerms.length ? "" : fallbackTerms,
-      termsTemplateId: selectedContract?.termsTemplateId || "",
-      termsTemplateName: selectedContract?.termsTemplateName || "Job Estimate Terms",
-      termsTemplateDescription: selectedContract?.termsTemplateDescription || "",
-      termsList: termsList.length ? termsList : [fallbackTerms],
+      termsTemplateId: source?.termsTemplateId || "",
+      termsTemplateName: source?.termsTemplateName || "Job Estimate Terms",
+      termsTemplateDescription: source?.termsTemplateDescription || "",
+      termsList: termsList.length ? termsList : fallbackTermsList,
+      termsSummary,
       lineItems,
-      status: existingAgreement?.status || "draft",
+      status: normalizeSalesAgreementStatus(status || existingAgreement?.status || source?.status),
       billingProfileId: existingAgreement?.billingProfileId || "",
       billingSubscriptionId: existingAgreement?.billingSubscriptionId || "",
       rateAmountCents: totalAmountCents,
@@ -1612,14 +1842,14 @@ const JobDetailView = () => {
       excludedServices: [],
       startDate: existingAgreement?.startDate || null,
       endDate: existingAgreement?.endDate || null,
-      expiresAt: selectedContract?.lastDateToAccept || existingAgreement?.expiresAt || null,
+      expiresAt: normalizeAgreementDeadline(source?.expiresAt || source?.lastDateToAccept || existingAgreement?.expiresAt),
       atWill: false,
       createdByUserId: existingAgreement?.createdByUserId || getUserId() || dataBaseUser?.id || "",
       emailDelivery: existingAgreement?.emailDelivery || {},
       updatedAt: serverTimestamp(),
       createdAt: existingAgreement?.createdAt || serverTimestamp(),
       jobId,
-      contractId: selectedContract?.id || "",
+      contractId: legacyContractId,
     };
 
     await setDoc(doc(db, salesCollectionNames.agreements, id), payload, { merge: true });
@@ -1628,14 +1858,29 @@ const JobDetailView = () => {
       salesEstimateAgreementId: id,
     });
 
-    if (selectedContract?.id) {
-      await updateDoc(doc(db, "contracts", selectedContract.id), {
+    if (legacyContractId) {
+      await updateDoc(doc(db, "contracts", legacyContractId), {
         salesAgreementId: id,
+        receiverName: source.receiverName || getCustomerDisplayName(),
+        receiverEmail: source.receiverEmail || email,
+        customerId: source.customerId || job.customerId || customer.id || "",
+        customerName: source.customerName || getCustomerDisplayName(),
+        customerEmail: source.customerEmail || email,
+        email: source.email || email,
+        billingEmail: source.billingEmail || customer.billingEmail || email,
+        customerUserId: getCustomerUserId(source) || getCustomerUserId(),
+        relationshipId: source.relationshipId || customer.relationshipId || customer.customerCompanyRelationshipId || "",
+        customerCompanyRelationshipId:
+          source.customerCompanyRelationshipId ||
+          customer.customerCompanyRelationshipId ||
+          customer.relationshipId ||
+          "",
         updatedAt: serverTimestamp(),
       });
     }
 
     setLinkedSalesAgreement(payload);
+    setSelectedSalesAgreementId(id);
     return payload;
   };
 
@@ -1681,7 +1926,12 @@ const JobDetailView = () => {
     const existingInvoice = await findLinkedSalesInvoice();
     const id = existingInvoice?.id || `si_${uuidv4()}`;
     const subtotalAmountCents = lineItems.reduce((total, item) => total + cents(item.totalAmountCents), 0);
-    const totalAmountCents = cents(selectedContract?.rate || 0) || subtotalAmountCents || cents(job.rate);
+    const totalAmountCents = cents(
+      selectedSalesAgreement?.totalAmountCents ??
+      selectedSalesAgreement?.rateAmountCents ??
+      selectedContract?.rate ??
+      0
+    ) || subtotalAmountCents || cents(job.rate);
     const dueDate = new Date();
     dueDate.setDate(dueDate.getDate() + 14);
 
@@ -1689,14 +1939,19 @@ const JobDetailView = () => {
       ...(existingInvoice || {}),
       id,
       companyId: recentlySelectedCompany,
-      companyName: authCtx?.recentlySelectedCompanyName || selectedContract?.senderName || "",
+      companyName: authCtx?.recentlySelectedCompanyName || selectedContract?.senderName || selectedSalesAgreement?.companyName || "",
       customerId: job.customerId || customer.id || "",
-      customerUserId: customer.customerUserId || customer.userId || null,
+      customerUserId: getCustomerUserId(),
       customerName: getCustomerDisplayName(),
+      customerEmail: email,
+      billingEmail: customer.billingEmail || email,
+      customerPhoneNumber: customer.phoneNumber || customer.phone || "",
+      relationshipId: customer.relationshipId || customer.customerCompanyRelationshipId || "",
+      customerCompanyRelationshipId: customer.customerCompanyRelationshipId || customer.relationshipId || "",
       email,
-      agreementId: agreementId || existingInvoice?.agreementId || linkedSalesAgreement?.id || "",
+      agreementId: agreementId || existingInvoice?.agreementId || selectedSalesAgreement?.id || linkedSalesAgreement?.id || "",
       jobId,
-      contractId: selectedContract?.id || "",
+      contractId: selectedContract?.id || selectedSalesAgreement?.contractId || "",
       billingSubscriptionId: existingInvoice?.billingSubscriptionId || "",
       stripeConnectedAccountId: authCtx?.stripeConnectedAccountId || "",
       stripeInvoiceId: existingInvoice?.stripeInvoiceId || "",
@@ -1718,7 +1973,7 @@ const JobDetailView = () => {
       amountPaidCents: existingInvoice?.amountPaidCents || 0,
       amountDueCents: Math.max(totalAmountCents - cents(existingInvoice?.amountPaidCents), 0),
       writeOffAmountCents: existingInvoice?.writeOffAmountCents || 0,
-      memo: selectedContract?.notes || job.description || "",
+      memo: selectedSalesAgreement?.description || selectedSalesAgreement?.termsSummary || selectedContract?.notes || job.description || "",
       lineItems,
       updatedAt: serverTimestamp(),
       createdAt: existingInvoice?.createdAt || serverTimestamp(),
@@ -1736,6 +1991,20 @@ const JobDetailView = () => {
     if (selectedContract?.id) {
       await updateDoc(doc(db, "contracts", selectedContract.id), {
         salesInvoiceId: id,
+        receiverName: selectedContract.receiverName || getCustomerDisplayName(),
+        receiverEmail: selectedContract.receiverEmail || email,
+        customerId: selectedContract.customerId || job.customerId || customer.id || "",
+        customerName: selectedContract.customerName || getCustomerDisplayName(),
+        customerEmail: selectedContract.customerEmail || email,
+        email: selectedContract.email || email,
+        billingEmail: selectedContract.billingEmail || customer.billingEmail || email,
+        customerUserId: getCustomerUserId(selectedContract) || getCustomerUserId(),
+        relationshipId: selectedContract.relationshipId || customer.relationshipId || customer.customerCompanyRelationshipId || "",
+        customerCompanyRelationshipId:
+          selectedContract.customerCompanyRelationshipId ||
+          customer.customerCompanyRelationshipId ||
+          customer.relationshipId ||
+          "",
         updatedAt: serverTimestamp(),
       });
     }
@@ -1914,8 +2183,10 @@ const JobDetailView = () => {
 
   const openCreateContractModal = () => {
     setShowCreateContractModal(true);
-    //init contract details
-    const id = "con_" + uuidv4();
+    const id = "sa_" + uuidv4();
+    const customerDisplayName = getCustomerDisplayName();
+    const customerEmail = getCustomerEmail();
+    const acceptByDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
     const defaultTerms = [
       {
@@ -1979,28 +2250,36 @@ const JobDetailView = () => {
       senderName:
         `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
         getUserName(),
-      senderId: recentlySelectedCompany, // important so this matches your contracts query
+      senderId: recentlySelectedCompany,
       senderUserId: getUserId() || "",
       senderAcceptance: true,
-      receiverName: `${customer.firstName || ""} ${customer.lastName || ""}`.trim() || "",
-      receiverId: customer.id || "",
+      receiverName: customerDisplayName,
+      receiverId: customer.id || job.customerId || "",
+      receiverEmail: customerEmail,
       receiverAcceptance: false,
       dateSent: null,
-      lastDateToAccept: Timestamp.fromDate(
-        new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-      ),
+      lastDateToAccept: format(acceptByDate, "yyyy-MM-dd"),
       dateAccepted: null,
-      status: "Draft",
+      status: SalesAgreementStatus.draft,
       terms: defaultTerms,
       notes: job.description || "",
-      rate: Number(job.rate || 0),
+      rate: dollarsFromCents(job.rate),
       lineItems,
       jobId: jobId || "", // requested
       jobInternalId: job.internalId || "",
-      customerName: `${customer.firstName || ""} ${customer.lastName || ""}`.trim(),
+      customerId: job.customerId || customer.id || "",
+      customerName: customerDisplayName,
+      customerEmail,
+      email: customerEmail,
+      billingEmail: customer.billingEmail || customerEmail,
+      customerUserId: getCustomerUserId(),
+      relationshipId: customer.relationshipId || customer.customerCompanyRelationshipId || "",
+      customerCompanyRelationshipId: customer.customerCompanyRelationshipId || customer.relationshipId || "",
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
-      version: (contracts?.length || 0) + 1,
+      sourceType: SalesAgreementSourceType.oneOffJob,
+      sourceId: jobId || "",
+      version: (jobSalesAgreements?.length || 0) + 1,
     })
   };
 
@@ -2316,11 +2595,26 @@ const JobDetailView = () => {
       setSavingContract(true);
 
       const contractRef = doc(db, "contracts", contractForm.id);
+      const customerEmail = getCustomerEmail();
+      const nextRateCents = centsFromCurrencyInput(contractForm.rate);
 
       await updateDoc(contractRef, {
         receiverName: contractForm.receiverName || "",
+        receiverEmail: selectedContract?.receiverEmail || customerEmail,
+        customerId: selectedContract?.customerId || job.customerId || customer.id || "",
+        customerName: selectedContract?.customerName || getCustomerDisplayName(),
+        customerEmail: selectedContract?.customerEmail || customerEmail,
+        email: selectedContract?.email || customerEmail,
+        billingEmail: selectedContract?.billingEmail || customer.billingEmail || customerEmail,
+        customerUserId: getCustomerUserId(selectedContract) || getCustomerUserId(),
+        relationshipId: selectedContract?.relationshipId || customer.relationshipId || customer.customerCompanyRelationshipId || "",
+        customerCompanyRelationshipId:
+          selectedContract?.customerCompanyRelationshipId ||
+          customer.customerCompanyRelationshipId ||
+          customer.relationshipId ||
+          "",
         notes: contractForm.notes || "",
-        rate: Math.round(Number(contractForm.rate || 0) * 100),
+        rate: nextRateCents,
         status: contractForm.status || "Draft",
         lastDateToAccept: contractForm.lastDateToAccept
           ? Timestamp.fromDate(new Date(contractForm.lastDateToAccept))
@@ -2333,7 +2627,7 @@ const JobDetailView = () => {
         title: "Estimate / contract updated",
         changes: [
           buildHistoryChange("receiverName", "Receiver", selectedContract?.receiverName, contractForm.receiverName || ""),
-          buildHistoryChange("rate", "Contract Total", moneyFromCents(selectedContract?.rate || 0), moneyFromCents(Math.round(Number(contractForm.rate || 0) * 100))),
+          buildHistoryChange("rate", "Contract Total", moneyFromCents(selectedContract?.rate || 0), moneyFromCents(nextRateCents)),
           buildHistoryChange("status", "Status", selectedContract?.status || "—", contractForm.status || "Draft"),
           buildHistoryChange("lastDateToAccept", "Accept By", formatDateValue(selectedContract?.lastDateToAccept), formatDateValue(contractForm.lastDateToAccept)),
         ],
@@ -2383,8 +2677,8 @@ const JobDetailView = () => {
   };
 
   // MARK: initial load
-  useEffect(() => {
-    if (!recentlySelectedCompany || !jobId) return;
+	  useEffect(() => {
+	    if (!recentlySelectedCompany || !jobId) return;
 
     (async () => {
       try {
@@ -2485,11 +2779,12 @@ const JobDetailView = () => {
           const c = customerSnap.data();
           setCustomer((prev) => ({
             ...prev,
-            id: c.id,
-            firstName: c.firstName,
-            lastName: c.lastName,
-            phoneNumber: c.phoneNumber,
-            email: c.email,
+            ...c,
+            id: c.id || customerSnap.id,
+            firstName: c.firstName || "",
+            lastName: c.lastName || "",
+            phoneNumber: c.phoneNumber || "",
+            email: c.email || "",
             billingStreetAddress: c.billingAddress?.streetAddress || "",
             billingCity: c.billingAddress?.city || "",
             billingState: c.billingAddress?.state || "",
@@ -2712,6 +3007,59 @@ const JobDetailView = () => {
 
     return () => unsub();
   }, [recentlySelectedCompany, jobId]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId) return;
+
+    setSalesAgreementsLoading(true);
+
+    const agreementsQ = query(
+      collection(db, salesCollectionNames.agreements),
+      where("companyId", "==", recentlySelectedCompany),
+      where("sourceType", "==", SalesAgreementSourceType.oneOffJob),
+      where("sourceId", "==", jobId)
+    );
+
+    const unsub = onSnapshot(
+      agreementsQ,
+      (snap) => {
+        const list = snap.docs
+          .map((d) => ({ ...d.data(), id: d.data().id || d.id }))
+          .sort((a, b) => {
+            const aDate =
+              a.updatedAt?.toDate?.()?.getTime?.() ||
+              a.createdAt?.toDate?.()?.getTime?.() ||
+              0;
+            const bDate =
+              b.updatedAt?.toDate?.()?.getTime?.() ||
+              b.createdAt?.toDate?.()?.getTime?.() ||
+              0;
+            return bDate - aDate;
+          });
+
+        const activeAgreement =
+          list.find((agreement) => agreement.id === selectedSalesAgreementId) ||
+          list[0] ||
+          null;
+
+        setJobSalesAgreements(list);
+        setLinkedSalesAgreement(activeAgreement);
+        if (!selectedSalesAgreementId && list.length) {
+          setSelectedSalesAgreementId(list[0].id);
+        } else if (!list.length) {
+          setSelectedSalesAgreementId("");
+        }
+        setSalesAgreementsLoading(false);
+      },
+      (err) => {
+        console.error(err);
+        setSalesAgreementsLoading(false);
+        toast.error("Failed to load service agreements");
+      }
+    );
+
+    return () => unsub();
+  }, [recentlySelectedCompany, jobId, selectedSalesAgreementId]);
 
   // contracts subscription
   useEffect(() => {
@@ -3292,7 +3640,8 @@ const JobDetailView = () => {
       const id = "comp_wo_tas_" + uuidv4();
       const costCents = Math.round(parseFloat(taskLaborCost) * 100);
       const estMin = parseFloat(estimatedTime);
-      const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
+      const linkedShoppingListItemId = "";
+      const linkedPartApprovalRequestId = taskNeedsInstallItem ? "cpa_" + uuidv4() : "";
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
 
       await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), {
@@ -3324,6 +3673,9 @@ const JobDetailView = () => {
         dataBaseItemId: taskNeedsInstallItem ? selectedTaskDbItem?.id || "" : "",
         shoppingListItemId: linkedShoppingListItemId,
         shoppingListItemIds: linkedShoppingListItemId ? [linkedShoppingListItemId] : [],
+        customerApprovalRequired: taskNeedsInstallItem,
+        customerApprovalStatus: taskNeedsInstallItem ? "pending" : "notRequired",
+        customerApprovalRequestId: linkedPartApprovalRequestId,
       });
 
       if (taskNeedsInstallItem) {
@@ -3337,52 +3689,22 @@ const JobDetailView = () => {
         const plannedTotalCostCents = Math.round(plannedUnitCostCents * quantity);
         const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * quantity);
 
-        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
-          id: linkedShoppingListItemId,
-          category: "Job",
-          subCategory: "Data Base",
-          status: "Need to Purchase",
-          purchaserId: "",
-          purchaserName: "",
-          genericItemId: selectedTaskDbItem?.genericItemId || "",
-          name: selectedTaskDbItem?.name || "",
-          description: selectedTaskDbItem?.description || "",
-          datePurchased: null,
-          quantity: String(quantity),
-          jobId: jobId || "",
-          jobName: job.internalId || "Job",
-          linkedTaskId: id,
-          linkedTaskName: taskDescription,
-          linkedTaskType: selectedTaskType.value,
-          customerId: job.customerId || "",
-          customerName:
-            job.customerName ||
-            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
-            "",
-          userId: "",
-          userName: "",
-          serviceStopId: "",
-          serviceStopInternalId: "",
-          serviceLocationId: job.serviceLocationId || "",
-          serviceLocationName: serviceLocation.nickName || "",
-          scheduledDate: null,
-          prepKeys: [
-            jobId ? `job:${jobId}` : "",
-            job.customerId ? `customer:${job.customerId}` : "",
-            job.serviceLocationId ? `serviceLocation:${job.serviceLocationId}` : "",
-            `jobTask:${id}`,
-          ].filter(Boolean),
-          needsAction: true,
-          actionDate: Timestamp.fromDate(new Date()),
-          assignedTechIds: [],
+        const materialName = selectedTaskDbItem?.name || "";
+        const materialDescription = selectedTaskDbItem?.description || "";
+
+        await createCustomerPartApprovalRequest({
+          approvalRequestId: linkedPartApprovalRequestId,
+          shoppingListItemId: "",
+          linkedTask: {
+            id,
+            name: taskDescription,
+            type: selectedTaskType.value,
+          },
+          itemName: materialName,
+          itemDescription: materialDescription,
+          quantity,
           dbItemId: selectedTaskDbItem?.id || "",
-          dbItemName: selectedTaskDbItem?.name || "",
-          purchasedItem: "",
-          invoiced: true,
-          itemId: selectedTaskDbItem?.id || "",
-          itemType: "Data Base",
-          cost: plannedUnitCostCents,
-          price: plannedUnitPriceCents,
+          dbItemName: materialName,
           plannedUnitCostCents,
           plannedUnitPriceCents,
           plannedTotalCostCents,
@@ -3588,6 +3910,7 @@ const JobDetailView = () => {
       jobName: job.internalId || "",
       dbItemId: "",
       linkedTaskId: "",
+      customerApprovalRequired: true,
     });
   };
 
@@ -3624,6 +3947,8 @@ const JobDetailView = () => {
       const plannedTotalCostCents = Math.round(plannedUnitCostCents * qty);
       const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * qty);
       const id = "comp_shop_" + uuidv4();
+      const customerApprovalRequired = Boolean(shoppingFormData.customerApprovalRequired);
+      const approvalRequestId = customerApprovalRequired ? "cpa_" + uuidv4() : "";
       const materialName = requiresShoppingDbItem
         ? selectedShoppingDbItem?.name || shoppingFormData.name || ""
         : shoppingFormData.name.trim();
@@ -3643,86 +3968,131 @@ const JobDetailView = () => {
         )
       );
 
-      await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", id), {
-        id,
-        category: "Job",
-        subCategory: shoppingFormData.subCategory,
-        status: shoppingFormData.status,
-        purchaserId: shoppingFormData.purchaserId || "",
-        purchaserName: shoppingFormData.purchaserName || "",
-        genericItemId: shoppingFormData.genericItemId || "",
-        name: materialName,
-        description: materialDescription,
-        datePurchased: shoppingFormData.datePurchased
-          ? Timestamp.fromDate(new Date(shoppingFormData.datePurchased))
-          : null,
+      if (!customerApprovalRequired) {
+        await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", id), {
+          id,
+          category: "Job",
+          subCategory: shoppingFormData.subCategory,
+          status: shoppingFormData.status,
+          purchaserId: shoppingFormData.purchaserId || "",
+          purchaserName: shoppingFormData.purchaserName || "",
+          genericItemId: shoppingFormData.genericItemId || "",
+          name: materialName,
+          description: materialDescription,
+          datePurchased: shoppingFormData.datePurchased
+            ? Timestamp.fromDate(new Date(shoppingFormData.datePurchased))
+            : null,
 
-        // iOS: var quantity: String?
-        quantity: String(qty),
+          // iOS: var quantity: String?
+          quantity: String(qty),
 
-        // Job
-        jobId: jobId || "",
-        jobName: job.internalId || "Job",
-        linkedTaskId: linkedTask?.id || "",
-        linkedTaskName: linkedTask?.name || "",
-        linkedTaskType: linkedTask?.type || "",
+          // Job
+          jobId: jobId || "",
+          jobName: job.internalId || "Job",
+          linkedTaskId: linkedTask?.id || "",
+          linkedTaskName: linkedTask?.name || "",
+          linkedTaskType: linkedTask?.type || "",
 
-        // Customer
-        customerId: job.customerId || "",
-        customerName:
-          job.customerName ||
-          [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
-          "",
+          // Customer
+          customerId: job.customerId || "",
+          customerName:
+            job.customerName ||
+            [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+            "",
 
-        // Personal
-        userId: "",
-        userName: "",
+          // Personal
+          userId: "",
+          userName: "",
 
-        serviceStopId: "",
-        serviceStopInternalId: "",
-        serviceLocationId: job.serviceLocationId || "",
-        serviceLocationName: serviceLocation.nickName || "",
-        scheduledDate: null,
-        prepKeys,
-        needsAction: true,
-        actionDate: Timestamp.fromDate(new Date()),
-        assignedTechIds: [],
+          serviceStopId: "",
+          serviceStopInternalId: "",
+          serviceLocationId: job.serviceLocationId || "",
+          serviceLocationName: serviceLocation.nickName || "",
+          scheduledDate: null,
+          prepKeys,
+          needsAction: true,
+          actionDate: Timestamp.fromDate(new Date()),
+          assignedTechIds: [],
 
-        // DataBaseItem
-        dbItemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
-        dbItemName: requiresShoppingDbItem ? materialName : "",
-        purchasedItem: "",
-        invoiced: false,
+          // DataBaseItem
+          dbItemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
+          dbItemName: requiresShoppingDbItem ? materialName : "",
+          purchasedItem: "",
+          invoiced: false,
+          customerApprovalRequired,
+          customerApprovalStatus: "notRequired",
+          customerApprovalRequestedAt: null,
+          approvalRequestId,
+          partApprovalRequestId: approvalRequestId,
 
-        // Legacy web fields for backward compatibility
-        itemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
-        itemType: shoppingFormData.subCategory,
-        cost: plannedUnitCostCents,
-        price: plannedUnitPriceCents,
+          // Legacy web fields for backward compatibility
+          itemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
+          itemType: shoppingFormData.subCategory,
+          cost: plannedUnitCostCents,
+          price: plannedUnitPriceCents,
 
-        // iOS-compatible planned material pricing snapshot
-        plannedUnitCostCents,
-        plannedUnitPriceCents,
-        plannedTotalCostCents,
-        plannedTotalPriceCents,
-      });
+          // iOS-compatible planned material pricing snapshot
+          plannedUnitCostCents,
+          plannedUnitPriceCents,
+          plannedTotalCostCents,
+          plannedTotalPriceCents,
+        });
+      }
+
+      if (customerApprovalRequired) {
+        await createCustomerPartApprovalRequest({
+          approvalRequestId,
+          shoppingListItemId: "",
+          linkedTask,
+          itemName: materialName,
+          itemDescription: materialDescription,
+          quantity: qty,
+          dbItemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
+          dbItemName: requiresShoppingDbItem ? materialName : "",
+          plannedUnitCostCents,
+          plannedUnitPriceCents,
+          plannedTotalCostCents,
+          plannedTotalPriceCents,
+        });
+      }
 
       if (linkedTask?.id) {
-        await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTask.id), {
-          shoppingListItemId: id,
-          shoppingListItemIds: arrayUnion(id),
-        });
-        setTaskList((prev) =>
-          prev.map((task) =>
-            task.id === linkedTask.id
-              ? {
-                ...task,
-                shoppingListItemId: id,
-                shoppingListItemIds: Array.from(new Set([...(task.shoppingListItemIds || []), id])),
-              }
-              : task
-          )
-        );
+        if (customerApprovalRequired) {
+          await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTask.id), {
+            customerApprovalRequired: true,
+            customerApprovalStatus: "pending",
+            customerApprovalRequestId: approvalRequestId,
+            updatedAt: serverTimestamp(),
+          });
+          setTaskList((prev) =>
+            prev.map((task) =>
+              task.id === linkedTask.id
+                ? {
+                  ...task,
+                  customerApprovalRequired: true,
+                  customerApprovalStatus: "pending",
+                  customerApprovalRequestId: approvalRequestId,
+                }
+                : task
+            )
+          );
+        } else {
+          await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", linkedTask.id), {
+            shoppingListItemId: id,
+            shoppingListItemIds: arrayUnion(id),
+          });
+          setTaskList((prev) =>
+            prev.map((task) =>
+              task.id === linkedTask.id
+                ? {
+                  ...task,
+                  shoppingListItemId: id,
+                  shoppingListItemIds: Array.from(new Set([...(task.shoppingListItemIds || []), id])),
+                }
+                : task
+            )
+          );
+        }
       }
 
       await recordJobHistory({
@@ -3731,14 +4101,16 @@ const JobDetailView = () => {
         description: materialDescription || "",
         changes: [
           buildHistoryChange("quantity", "Quantity", "—", qty),
-          buildHistoryChange("status", "Status", "—", shoppingFormData.status),
+          buildHistoryChange("status", "Status", "—", customerApprovalRequired ? "Needs Customer Approval" : shoppingFormData.status),
           buildHistoryChange("plannedTotalCostCents", "Planned Cost", "—", moneyFromCents(plannedTotalCostCents)),
           buildHistoryChange("plannedTotalPriceCents", "Planned Billable", "—", moneyFromCents(plannedTotalPriceCents)),
         ],
         metadata: {
-          shoppingListItemId: id,
+          shoppingListItemId: customerApprovalRequired ? "" : id,
           subCategory: shoppingFormData.subCategory,
           linkedTaskId: linkedTask?.id || "",
+          approvalRequestId,
+          customerApprovalRequired,
         },
       });
 
@@ -3757,7 +4129,7 @@ const JobDetailView = () => {
         currentShoppingList: items,
       });
 
-      toast.success("Added item");
+      toast.success(customerApprovalRequired ? "Part approval request created" : "Added item");
       clearNewShoppingListItem({ preventDefault: () => { } });
     } catch (err) {
       console.error(err);
@@ -3840,6 +4212,15 @@ const JobDetailView = () => {
       case "Need To Purchase":
       case "needToPurchase":
         return "bg-amber-100 text-amber-800 border-amber-200";
+      case "Needs Customer Approval":
+      case "needsCustomerApproval":
+        return "bg-purple-100 text-purple-800 border-purple-200";
+      case "Ready to Purchase":
+      case "readyToPurchase":
+        return "bg-emerald-100 text-emerald-800 border-emerald-200";
+      case "Customer Rejected":
+      case "customerRejected":
+        return "bg-red-100 text-red-800 border-red-200";
       default:
         return "bg-gray-100 text-gray-800 border-gray-200";
     }
@@ -4054,6 +4435,15 @@ const JobDetailView = () => {
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
               Task: {linkedTask?.name || item.linkedTaskName}
             </span>
+          )}
+
+          {item.customerApprovalRequired && (
+            <Link
+              to="/company/part-approvals"
+              className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
+            >
+              Approval: {formatStatusLabel(item.customerApprovalStatus || "pending")}
+            </Link>
           )}
         </div>
 
@@ -4367,29 +4757,40 @@ const JobDetailView = () => {
     window.open(url, "_blank");
   };
 
-  const createDraftContract = async () => {
+  const createDraftServiceAgreement = async () => {
     try {
       if (!recentlySelectedCompany || !jobId) return;
-      const contractRef = doc(db, "contracts", draftContractData.id);
+      const draftSource = {
+        ...draftContractData,
+        status: SalesAgreementStatus.draft,
+        rateAmountCents: centsFromCurrencyInput(draftContractData.rate),
+        totalAmountCents: centsFromCurrencyInput(draftContractData.rate),
+      };
 
-      await setDoc(contractRef, draftContractData);
-      await recordJobHistory({
-        eventType: "Billing",
-        title: "Estimate draft created",
-        description: draftContractData.notes || "",
-        changes: [
-          buildHistoryChange("rate", "Contract Total", "—", moneyFromCents(draftContractData.rate || 0)),
-          buildHistoryChange("version", "Version", "—", draftContractData.version || 1),
-        ],
-        metadata: { contractId: draftContractData.id },
+      const salesAgreement = await ensureJobSalesAgreement({
+        sourceRecord: draftSource,
+        forceNew: true,
+        status: SalesAgreementStatus.draft,
       });
 
-      toast.success("Draft contract created");
+      await recordJobHistory({
+        eventType: "Billing",
+        title: "Service agreement draft created",
+        description: salesAgreement.description || salesAgreement.termsSummary || "",
+        changes: [
+          buildHistoryChange("rate", "Agreement Total", "—", moneyFromCents(salesAgreement.totalAmountCents || 0)),
+          buildHistoryChange("version", "Version", "—", draftContractData.version || 1),
+        ],
+        metadata: { salesAgreementId: salesAgreement.id },
+      });
+
+      toast.success("Draft service agreement created");
+      setSelectedSalesAgreementId(salesAgreement.id);
       setShowCreateContractModal(false);
       setActiveTab("Billing");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to create draft contract");
+      toast.error("Failed to create draft service agreement");
     }
   };
 
@@ -4608,8 +5009,83 @@ const JobDetailView = () => {
   const handleMarkEstimateAccepted = async () => {
     try {
       if (!recentlySelectedCompany || !jobId) return;
-      if (selectedContract) {
 
+      if (salesWorkflowEnabled) {
+        const salesAgreement = selectedSalesAgreement || await ensureJobSalesAgreement();
+        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+        const nextOperationStatus =
+          !job.operationStatus || job.operationStatus === "Estimate Pending"
+            ? "Unscheduled"
+            : job.operationStatus;
+
+        await updateDoc(doc(db, salesCollectionNames.agreements, salesAgreement.id), {
+          status: SalesAgreementStatus.accepted,
+          acceptedAt: serverTimestamp(),
+          acceptedByUserId: getUserId() || "",
+          acceptedByUserName: getUserName(),
+          updatedAt: serverTimestamp(),
+        });
+
+        if (selectedContract?.id) {
+          await updateDoc(doc(db, "contracts", selectedContract.id), {
+            status: "Accepted",
+            receiverAcceptance: true,
+            dateAccepted: serverTimestamp(),
+            salesAgreementId: salesAgreement.id,
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        await updateDoc(jobRef, {
+          billingStatus: "Accepted",
+          operationStatus: nextOperationStatus,
+          salesAgreementId: salesAgreement.id,
+          salesEstimateAgreementId: salesAgreement.id,
+        });
+        const readyShoppingItemCount = await markShoppingItemsReadyForAcceptedEstimate();
+
+        setJob((prev) => ({
+          ...prev,
+          billingStatus: "Accepted",
+          operationStatus: !prev.operationStatus || prev.operationStatus === "Estimate Pending"
+            ? "Unscheduled"
+            : prev.operationStatus,
+          salesAgreementId: salesAgreement.id,
+          salesEstimateAgreementId: salesAgreement.id,
+        }));
+        setLinkedSalesAgreement({
+          ...salesAgreement,
+          status: SalesAgreementStatus.accepted,
+        });
+        setSelectedSalesAgreementId(salesAgreement.id);
+        setSelectedBillingStatus({ value: "Accepted", label: "Accepted" });
+        if (!job.operationStatus || job.operationStatus === "Estimate Pending") {
+          setSelectedOperationStatus({ value: "Unscheduled", label: "Unscheduled" });
+        }
+        await recordJobHistory({
+          eventType: "Billing",
+          title: "Service agreement accepted",
+          changes: [
+            buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Accepted"),
+            buildHistoryChange(
+              "operationStatus",
+              "Operation Status",
+              job.operationStatus || "—",
+              nextOperationStatus
+            ),
+          ],
+          metadata: {
+            salesAgreementId: salesAgreement.id,
+            contractId: selectedContract?.id || "",
+            readyShoppingItemCount,
+          },
+        });
+
+        toast.success("Service agreement marked as accepted");
+        return;
+      }
+
+      if (selectedContract) {
         const contractRef = doc(
           db,
           "contracts",
@@ -4657,7 +5133,6 @@ const JobDetailView = () => {
 
         toast.success("Estimate marked as accepted");
       } else {
-
         const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
         await updateDoc(jobRef, { billingStatus: "Accepted", operationStatus: "Unscheduled" });
         const readyShoppingItemCount = await markShoppingItemsReadyForAcceptedEstimate();
@@ -5429,7 +5904,32 @@ const JobDetailView = () => {
   }
 
   const commentFilters = ["All", "Open", "Resolved"];
-  const normalizedSelectedTerms = normalizeTerms(selectedContract?.terms || []);
+  const normalizedSelectedTerms = selectedSalesAgreement?.termsList?.length
+    ? normalizeTerms(selectedSalesAgreement.termsList)
+    : selectedSalesAgreement?.termsSummary
+      ? [{
+        id: "agreement_terms_summary",
+        title: "Agreement Terms",
+        description: selectedSalesAgreement.termsSummary,
+        value: "",
+      }]
+      : normalizeTerms(selectedContract?.terms || []);
+  const billingRecordDisplay = {
+    sender: selectedSalesAgreement?.companyName || selectedContract?.senderName || "—",
+    receiver: selectedSalesAgreement?.customerName || selectedContract?.receiverName || "—",
+    sentAt: selectedSalesAgreement?.sentAt || selectedSalesAgreement?.emailDelivery?.lastSentAt || selectedContract?.dateSent,
+    acceptedAt: selectedSalesAgreement?.acceptedAt || selectedContract?.dateAccepted,
+    acceptBy: selectedSalesAgreement?.expiresAt || selectedContract?.lastDateToAccept,
+    totalAmountCents: contractTotalCents,
+    notes: selectedSalesAgreement?.description || selectedSalesAgreement?.termsSummary || selectedContract?.notes || "—",
+    status: selectedSalesAgreement?.status || selectedContract?.status || "",
+    detailUrl: selectedSalesAgreement?.id
+      ? `/company/sales/agreements/${selectedSalesAgreement.id}`
+      : selectedContract?.id
+        ? `/company/contract/detail/${selectedContract.id}`
+        : "",
+    detailLabel: selectedSalesAgreement?.id ? "View Service Agreement" : "View Legacy Estimate",
+  };
   const selectedSection = tabs.find((tab) => tab === activeTab) || "Info";
   const sectionMeta = {
     Info: {
@@ -5460,7 +5960,7 @@ const JobDetailView = () => {
     Billing: {
       label: "Billing",
       helper: "Estimate, invoice, and payment lifecycle",
-      count: selectedContract ? "1" : "",
+      count: selectedBillingRecord ? "1" : "",
     },
     Actual: {
       label: "Actuals",
@@ -5891,7 +6391,7 @@ const JobDetailView = () => {
                       onClick={openCreateContractModal}
                       className="w-full py-2 px-4 bg-amber-50 border border-amber-200 text-amber-800 font-semibold rounded-lg hover:bg-amber-100 transition text-center"
                     >
-                      Create Estimate / Contract
+                      Create Service Agreement
                     </button>
                   </div>
                 </div>
@@ -6492,6 +6992,21 @@ const JobDetailView = () => {
                         ))}
                       </select>
                     </div>
+
+                    <label className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(shoppingFormData.customerApprovalRequired)}
+                        onChange={(e) => handleShoppingFormChange("customerApprovalRequired", e.target.checked)}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="block font-bold text-amber-900">Require customer approval</span>
+                        <span className="mt-1 block text-amber-800">
+                          Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
+                        </span>
+                      </span>
+                    </label>
                   </div>
 
                   <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
@@ -7181,12 +7696,12 @@ const JobDetailView = () => {
                 </div>
 
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={openCreateContractModal}
-                    className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                  >
-                    New Estimate Draft
-                  </button>
+	                  <button
+	                    onClick={openCreateContractModal}
+	                    className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+	                  >
+	                    New Service Agreement
+	                  </button>
 
                   <button
                     onClick={handleSendEstimate}
@@ -7195,11 +7710,11 @@ const JobDetailView = () => {
                   >
                     {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
                   </button>
-                  <button
-                    onClick={handleMarkEstimateAccepted}
-                    disabled={!selectedContract}
-                    className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
-                  >
+	                  <button
+	                    onClick={handleMarkEstimateAccepted}
+	                    disabled={!salesWorkflowEnabled && !selectedContract}
+	                    className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
+	                  >
                     Mark Accepted
                   </button>
                   <button
@@ -7234,13 +7749,13 @@ const JobDetailView = () => {
                 </div>
 
                 <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
-                  <button
-                    type="button"
-                    onClick={openCreateContractModal}
-                    className="px-4 py-3 text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                  >
-                    Create Estimate Draft
-                  </button>
+	                  <button
+	                    type="button"
+	                    onClick={openCreateContractModal}
+	                    className="px-4 py-3 text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+	                  >
+	                    Create Agreement Draft
+	                  </button>
 
                   <button
                     type="button"
@@ -7251,12 +7766,12 @@ const JobDetailView = () => {
                     {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
                   </button>
 
-                  <button
-                    type="button"
-                    onClick={handleMarkEstimateAccepted}
-                    disabled={!selectedContract}
-                    className="px-4 py-3 text-sm font-semibold text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
-                  >
+	                  <button
+	                    type="button"
+	                    onClick={handleMarkEstimateAccepted}
+	                    disabled={!salesWorkflowEnabled && !selectedContract}
+	                    className="px-4 py-3 text-sm font-semibold text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
+	                  >
                     Mark Accepted
                   </button>
 
@@ -7302,179 +7817,227 @@ const JobDetailView = () => {
             </div>
 
             <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-              <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-gray-800">Estimate History</h4>
-                    <p className="text-gray-600 mt-1 text-sm">Every version tied to this job</p>
-                  </div>
-                </div>
+	              <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
+	                <div className="flex items-start justify-between gap-3">
+	                  <div>
+	                    <h4 className="text-lg font-bold text-gray-800">Service Agreements</h4>
+	                    <p className="text-gray-600 mt-1 text-sm">Drafts and sent agreements tied to this job</p>
+	                  </div>
+	                </div>
 
-                <div className="mt-6 space-y-3">
-                  {contractsLoading ? (
-                    <div className="text-gray-500">Loading contracts…</div>
-                  ) : !contracts.length ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                      <p className="text-gray-700 font-medium">No estimates or contracts yet.</p>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Create a draft to start the billing lifecycle for this job.
-                      </p>
-                      <button
-                        onClick={openCreateContractModal}
-                        className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                      >
-                        Create Draft
-                      </button>
-                    </div>
-                  ) : (
-                    contracts.map((contract, index) => {
-                      const active = selectedContract?.id === contract.id;
-                      return (
-                        <button
-                          key={contract.id}
-                          type="button"
-                          onClick={() => setSelectedContractId(contract.id)}
-                          className={[
-                            "w-full text-left p-4 rounded-xl border transition",
-                            active
-                              ? "border-blue-300 bg-blue-50 shadow-sm"
-                              : "border-gray-200 bg-gray-50 hover:bg-white",
+	                <div className="mt-6 space-y-3">
+	                  {salesAgreementsLoading ? (
+	                    <div className="text-gray-500">Loading service agreements…</div>
+	                  ) : !jobSalesAgreements.length ? (
+	                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+	                      <p className="text-gray-700 font-medium">No service agreements yet.</p>
+	                      <p className="text-sm text-gray-500 mt-1">
+	                        Create a draft agreement to start the billing lifecycle for this job.
+	                      </p>
+	                      <button
+	                        onClick={openCreateContractModal}
+	                        className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+	                      >
+	                        Create Agreement Draft
+	                      </button>
+	                    </div>
+	                  ) : (
+	                    jobSalesAgreements.map((agreement, index) => {
+	                      const active = selectedSalesAgreement?.id === agreement.id;
+	                      return (
+		                        <div
+		                          key={agreement.id}
+		                          role="button"
+		                          tabIndex={0}
+		                          onClick={() => {
+		                            setSelectedSalesAgreementId(agreement.id);
+		                            setLinkedSalesAgreement(agreement);
+		                          }}
+		                          onKeyDown={(e) => {
+		                            if (e.key === "Enter" || e.key === " ") {
+		                              e.preventDefault();
+		                              setSelectedSalesAgreementId(agreement.id);
+		                              setLinkedSalesAgreement(agreement);
+		                            }
+		                          }}
+		                          className={[
+		                            "w-full cursor-pointer text-left p-4 rounded-xl border transition",
+		                            active
+	                              ? "border-blue-300 bg-blue-50 shadow-sm"
+	                              : "border-gray-200 bg-gray-50 hover:bg-white",
                           ].join(" ")}
                         >
                           <div className="flex items-start justify-between gap-3">
-                            <div>
-                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                                Version {contract.version || contracts.length - index}
-                              </p>
-                              <p className="mt-1 text-base font-bold text-gray-800">
-                                {formatCurrency((Number(contract.rate || 0) / 100) || 0)}
-                              </p>
-                              <p className="mt-1 text-sm text-gray-600">
-                                Sent: {formatDateTimeValue(contract.dateSent)}
-                              </p>
-                              <p className="mt-1 text-sm text-gray-600">
-                                Accept By: {formatDateValue(contract.lastDateToAccept)}
-                              </p>
-                            </div>
+	                            <div>
+	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+	                                Agreement {agreement.version || jobSalesAgreements.length - index}
+	                              </p>
+	                              <p className="mt-1 text-base font-bold text-gray-800">
+	                                {formatCurrency((Number(agreement.totalAmountCents ?? agreement.rateAmountCents ?? 0) / 100) || 0)}
+	                              </p>
+	                              <p className="mt-1 text-sm text-gray-600">
+	                                Sent: {formatDateTimeValue(agreement.sentAt || agreement.emailDelivery?.lastSentAt)}
+	                              </p>
+	                              <p className="mt-1 text-sm text-gray-600">
+	                                Accept By: {formatDateValue(agreement.expiresAt)}
+	                              </p>
+	                            </div>
 
-                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(contract.status)}`}>
-                              {contract.status || "—"}
-                            </span>
-                          </div>
+	                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(agreement.status)}`}>
+	                              {formatStatusLabel(agreement.status) || "—"}
+	                            </span>
+	                          </div>
 
-                          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-                            <div className="mt-4 flex flex-wrap gap-2">
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setSelectedContractId(contract.id);
-                                  openContractModal(contract);
-                                }}
-                                className="px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition"
-                              >
-                                View / Edit
-                              </button>
+	                          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+	                            <div className="mt-4 flex flex-wrap gap-2">
+	                              <Link
+	                                to={`/company/sales/agreements/${agreement.id}`}
+	                                onClick={(e) => e.stopPropagation()}
+	                                className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+	                              >
+	                                Open Agreement
+	                              </Link>
+	                            </div>
+	                            <div>
+	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</p>
+	                              <p className="mt-1 text-gray-800">
+	                                {agreement.customerName || customer.firstName || "—"}
+	                              </p>
+	                            </div>
+	                            <div>
+	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted</p>
+	                              <p className="mt-1 text-gray-800">
+	                                {agreement.status === SalesAgreementStatus.accepted ? "Yes" : "No"}
+	                              </p>
+	                            </div>
+	                          </div>
+		                        </div>
+	                      );
+	                    })
+	                  )}
 
-                              <Link
-                                to={`/company/contract/detail/${contract.id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
-                              >
-                                Open Detail
-                              </Link>
-                            </div>
-                            <div>
-                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
-                              <p className="mt-1 text-gray-800">
-                                {contract.receiverName || customer.firstName || "—"}
-                              </p>
-                            </div>
-                            <div>
-                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted</p>
-                              <p className="mt-1 text-gray-800">
-                                {contract.receiverAcceptance ? "Yes" : "No"}
-                              </p>
-                            </div>
-                          </div>
-                        </button>
-                      );
-                    })
-                  )}
-                </div>
-              </div>
+	                  {contractsLoading ? (
+	                    <div className="pt-4 text-sm text-gray-500">Loading legacy contracts…</div>
+	                  ) : contracts.length ? (
+	                    <div className="pt-4 border-t border-gray-200 space-y-3">
+	                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+	                        Legacy Contracts
+	                      </p>
+	                      {contracts.map((contract, index) => (
+	                        <div key={contract.id} className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+	                          <div className="flex items-start justify-between gap-3">
+	                            <div>
+	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+	                                Legacy Version {contract.version || contracts.length - index}
+	                              </p>
+	                              <p className="mt-1 text-base font-bold text-gray-800">
+	                                {formatCurrency((Number(contract.rate || 0) / 100) || 0)}
+	                              </p>
+	                              <p className="mt-1 text-sm text-gray-600">
+	                                Sent: {formatDateTimeValue(contract.dateSent)}
+	                              </p>
+	                            </div>
+	                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(contract.status)}`}>
+	                              {formatStatusLabel(contract.status) || "—"}
+	                            </span>
+	                          </div>
+
+	                          <div className="mt-4 flex flex-wrap gap-2">
+	                            <button
+	                              type="button"
+	                              onClick={() => {
+	                                setSelectedContractId(contract.id);
+	                                openContractModal(contract);
+	                              }}
+	                              className="px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition"
+	                            >
+	                              Edit Legacy
+	                            </button>
+	                            <Link
+	                              to={`/company/contract/detail/${contract.id}`}
+	                              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+	                            >
+	                              Open Legacy
+	                            </Link>
+	                          </div>
+	                        </div>
+	                      ))}
+	                    </div>
+	                  ) : null}
+	                </div>
+	              </div>
 
               <div className="xl:col-span-3 space-y-6">
                 <div className="bg-white shadow-lg rounded-xl p-6">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <h4 className="text-lg font-bold text-gray-800">Contract Snapshot</h4>
-                      <p className="text-gray-600 mt-1 text-sm">
-                        Snapshot of the selected estimate / contract
-                      </p>
-                    </div>
-                    <div>
-                      {selectedContract && (
-                        <Link
-                          to={`/company/contract/detail/${selectedContract.id}`}
-                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition"
-                        >
-                          View Estimate Detail
-                        </Link>
-                      )}
-                    </div>
-                    {selectedContract && (
-                      <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(selectedContract.status)}`}>
-                        {selectedContract.status || "—"}
-                      </span>
-                    )}
-                  </div>
+	                      <h4 className="text-lg font-bold text-gray-800">Agreement Snapshot</h4>
+	                      <p className="text-gray-600 mt-1 text-sm">
+	                        Snapshot of the selected service agreement
+	                      </p>
+	                    </div>
+	                    <div>
+	                      {billingRecordDisplay.detailUrl && (
+	                        <Link
+	                          to={billingRecordDisplay.detailUrl}
+	                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition"
+	                        >
+	                          {billingRecordDisplay.detailLabel}
+	                        </Link>
+	                      )}
+	                    </div>
+	                    {selectedBillingRecord && (
+	                      <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(billingRecordDisplay.status)}`}>
+	                        {formatStatusLabel(billingRecordDisplay.status) || "—"}
+	                      </span>
+	                    )}
+	                  </div>
 
-                  {!selectedContract ? (
-                    <div className="mt-6 text-gray-500">Select a contract to see its snapshot.</div>
-                  ) : (
-                    <>
-                      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sender</p>
-                          <p className="mt-1 text-gray-800 font-semibold">{selectedContract.senderName || "—"}</p>
-                        </div>
+	                  {!selectedBillingRecord ? (
+	                    <div className="mt-6 text-gray-500">Select or create a service agreement to see its snapshot.</div>
+	                  ) : (
+	                    <>
+	                      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sender</p>
+	                          <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.sender}</p>
+	                        </div>
 
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
-                          <p className="mt-1 text-gray-800 font-semibold">{selectedContract.receiverName || "—"}</p>
-                        </div>
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
+	                          <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.receiver}</p>
+	                        </div>
 
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Sent</p>
-                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(selectedContract.dateSent)}</p>
-                        </div>
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Sent</p>
+	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.sentAt)}</p>
+	                        </div>
 
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted On</p>
-                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(selectedContract.dateAccepted)}</p>
-                        </div>
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted On</p>
+	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.acceptedAt)}</p>
+	                        </div>
 
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Date To Accept</p>
-                          <p className="mt-1 text-gray-800 font-semibold">{formatDateValue(selectedContract.lastDateToAccept)}</p>
-                        </div>
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Date To Accept</p>
+	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateValue(billingRecordDisplay.acceptBy)}</p>
+	                        </div>
 
-                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Estimate</p>
-                          <p className="mt-1 text-gray-800 font-bold text-lg">
-                            {formatCurrency((contractTotalCents / 100) || 0)}
-                          </p>
-                        </div>
+	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Estimate</p>
+	                          <p className="mt-1 text-gray-800 font-bold text-lg">
+	                            {formatCurrency((billingRecordDisplay.totalAmountCents / 100) || 0)}
+	                          </p>
+	                        </div>
                       </div>
 
                       <div className="mt-6">
-                        <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Scope / Terms</h5>
+	                        <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Scope / Terms</h5>
 
-                        {!normalizedSelectedTerms.length ? (
-                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
-                            No terms added to this contract.
-                          </div>
+	                        {!normalizedSelectedTerms.length ? (
+	                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
+	                            No terms added to this agreement.
+	                          </div>
                         ) : (
                           <div className="mt-3 space-y-3">
                             {normalizedSelectedTerms.map((term) => (
@@ -7507,10 +8070,10 @@ const JobDetailView = () => {
                       <div className="mt-6">
                         <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Estimate Snapshot</h5>
 
-                        {!contractSnapshotItems.length ? (
-                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
-                            No line items found.
-                          </div>
+	                        {!billingSnapshotItems.length ? (
+	                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
+	                            No line items found.
+	                          </div>
                         ) : (
                           <div className="mt-3 overflow-x-auto rounded-xl border border-gray-200">
                             <table className="min-w-full bg-white">
@@ -7534,7 +8097,7 @@ const JobDetailView = () => {
                                 </tr>
                               </thead>
                               <tbody className="divide-y divide-gray-200">
-                                {contractSnapshotItems.map((item) => (
+	                                {billingSnapshotItems.map((item) => (
                                   <tr key={item.id}>
                                     <td className="p-4 text-sm text-gray-700">{item.type || "—"}</td>
                                     <td className="p-4 text-sm font-medium text-gray-800">{item.name || "—"}</td>
@@ -7549,12 +8112,12 @@ const JobDetailView = () => {
                         )}
                       </div>
 
-                      <div className="mt-6 p-4 rounded-xl bg-gray-50 border border-gray-200">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
-                        <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">
-                          {selectedContract.notes || "—"}
-                        </p>
-                      </div>
+	                      <div className="mt-6 p-4 rounded-xl bg-gray-50 border border-gray-200">
+	                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
+	                        <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">
+	                          {billingRecordDisplay.notes}
+	                        </p>
+	                      </div>
                     </>
                   )}
                 </div>
@@ -8113,10 +8676,10 @@ const JobDetailView = () => {
           <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex items-start justify-between gap-3">
               <div>
-                <h3 className="text-xl font-bold text-gray-800">Contract Details</h3>
-                <p className="mt-1 text-sm text-gray-600">
-                  Review and Edit Contract Before Sending
-                </p>
+	                <h3 className="text-xl font-bold text-gray-800">Service Agreement Details</h3>
+	                <p className="mt-1 text-sm text-gray-600">
+	                  Review and edit the service agreement before sending
+	                </p>
               </div>
             </div>
 
@@ -8135,17 +8698,17 @@ const JobDetailView = () => {
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
                     Status
                   </label>
-                  <select
-                    value={draftContractData.status}
-                    onChange={(e) => handleDraftContractDataChange("status", e.target.value)}
-                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-                  >
-                    {contractStatusOptions.map((status) => (
-                      <option key={status} value={status}>
-                        {status}
-                      </option>
-                    ))}
-                  </select>
+	                  <select
+	                    value={normalizeSalesAgreementStatus(draftContractData.status)}
+	                    onChange={(e) => handleDraftContractDataChange("status", e.target.value)}
+	                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
+	                  >
+	                    {Object.values(SalesAgreementStatus).map((status) => (
+	                      <option key={status} value={status}>
+	                        {formatStatusLabel(status)}
+	                      </option>
+	                    ))}
+	                  </select>
                 </div>
 
                 <div>
@@ -8266,13 +8829,13 @@ const JobDetailView = () => {
               >
                 Cancel
               </button>
-              <button
-                type="button"
-                onClick={createDraftContract}
-                className="px-4 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100 transition"
-              >
-                Confirm & Create Draft
-              </button>
+	              <button
+	                type="button"
+	                onClick={createDraftServiceAgreement}
+	                className="px-4 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100 transition"
+	              >
+	                Confirm & Create Agreement
+	              </button>
             </div>
           </div>
         </div>

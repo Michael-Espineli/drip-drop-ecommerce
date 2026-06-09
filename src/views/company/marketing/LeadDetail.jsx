@@ -785,6 +785,20 @@ export default function LeadDetail() {
         homeownerEmail,
         homeownerPhone
     } = lead;
+    const publicIntake = lead.publicLeadIntake || lead.leadIntake || {};
+    const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater) ? publicIntake.bodiesOfWater : [];
+    const publicEquipment = [
+        ...(Array.isArray(publicIntake.equipment) ? publicIntake.equipment : []),
+        ...publicBodiesOfWater.flatMap((body) => Array.isArray(body.equipment) ? body.equipment : []),
+    ];
+    const hasPublicIntakeDetails = Boolean(
+        lead.publicLead ||
+        source === 'Public' ||
+        publicIntake.preferredContactMethod ||
+        publicIntake.serviceType ||
+        publicBodiesOfWater.length ||
+        publicEquipment.length
+    );
 
     const renderActions = () => {
         if (!customerId) {
@@ -986,6 +1000,137 @@ export default function LeadDetail() {
                                 )}
                             </dl>
                         </div>
+
+                        {hasPublicIntakeDetails && (
+                            <div className="bg-white p-8 rounded-2xl shadow-lg">
+                                <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-gray-900">Public Intake Details</h3>
+                                        <p className="mt-1 text-sm text-gray-600">
+                                            Submitted through the public no-account service request form.
+                                        </p>
+                                    </div>
+                                    <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-800">
+                                        Public form
+                                    </span>
+                                </div>
+
+                                <dl className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                    {publicIntake.serviceType && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Service Type</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.serviceType}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.urgency && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Urgency</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.urgency}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.preferredContactMethod && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Preferred Contact</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.preferredContactMethod}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.bestTimeToContact && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Best Time to Contact</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.bestTimeToContact}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.preferredStartDate && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Preferred Start</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.preferredStartDate}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.currentProvider && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Current Provider</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.currentProvider}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.propertyType && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Property Type</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.propertyType}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.treeTypes && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Trees Around Pool</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.treeTypes}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.treeDebrisLevel && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Tree Debris Level</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.treeDebrisLevel}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.overhangingTrees && (
+                                        <div className="md:col-span-2">
+                                            <dt className="text-sm font-medium text-gray-500">Overhanging Trees / Landscaping</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.overhangingTrees}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.gateCode && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Gate Code</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.gateCode}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.petsOnProperty && (
+                                        <div>
+                                            <dt className="text-sm font-medium text-gray-500">Pets</dt>
+                                            <dd className="mt-1 text-base text-gray-900">{publicIntake.petsOnProperty}</dd>
+                                        </div>
+                                    )}
+                                    {publicIntake.accessNotes && (
+                                        <div className="md:col-span-2">
+                                            <dt className="text-sm font-medium text-gray-500">Access Notes</dt>
+                                            <dd className="mt-1 whitespace-pre-wrap text-base text-gray-900">{publicIntake.accessNotes}</dd>
+                                        </div>
+                                    )}
+                                </dl>
+
+                                {publicBodiesOfWater.length > 0 && (
+                                    <div className="mt-6">
+                                        <h4 className="text-base font-semibold text-gray-900">Pools & Spas</h4>
+                                        <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                            {publicBodiesOfWater.map((body, index) => (
+                                                <div key={body.id || `public-body-${index}`} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                                    <p className="font-semibold text-gray-900">{body.name || body.type || `Pool / Spa ${index + 1}`}</p>
+                                                    <p className="mt-1 text-sm text-gray-600">
+                                                        {[body.type, body.sizeCategory, body.gallons ? `${body.gallons} gal` : '', body.waterType, body.condition, body.material].filter(Boolean).join(' / ') || 'No pool details submitted'}
+                                                    </p>
+                                                    {[body.length, body.width, body.depth].filter(Boolean).length > 0 && (
+                                                        <p className="mt-1 text-sm text-gray-600">
+                                                            Dimensions: {[body.length ? `${body.length} L` : '', body.width ? `${body.width} W` : '', body.depth ? `${body.depth} D` : ''].filter(Boolean).join(' / ')}
+                                                        </p>
+                                                    )}
+                                                    {body.notes && <p className="mt-2 whitespace-pre-wrap text-sm text-gray-700">{body.notes}</p>}
+                                                    {Array.isArray(body.equipment) && body.equipment.length > 0 && (
+                                                        <div className="mt-3 space-y-2">
+                                                            {body.equipment.map((equipment, equipmentIndex) => (
+                                                                <div key={equipment.id || `public-equipment-${index}-${equipmentIndex}`} className="rounded-md bg-white px-3 py-2 text-sm text-gray-700">
+                                                                    <span className="font-semibold">{equipment.name || equipment.type || 'Equipment'}</span>
+                                                                    {[equipment.make, equipment.model].filter(Boolean).length > 0 && (
+                                                                        <span> - {[equipment.make, equipment.model].filter(Boolean).join(' ')}</span>
+                                                                    )}
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
 
                         <div className="bg-white p-8 rounded-2xl shadow-lg">
                             <h3 className="text-xl font-bold text-gray-900 mb-6">Homeowner & Location</h3>

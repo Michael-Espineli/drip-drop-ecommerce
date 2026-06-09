@@ -13,7 +13,12 @@ import {
 } from "react-icons/fa";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { SalesAgreementSourceType, salesCollectionNames } from "../../../utils/models/Sales";
+import { salesCollectionNames } from "../../../utils/models/Sales";
+import {
+  agreementNeedsRecurringRouting,
+  buildRecurringRoutingIndex,
+  recurringStopHasAssignedRoute,
+} from "../../../utils/sales/agreementRouting";
 
 const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -68,14 +73,7 @@ const techLabel = (tech) => tech?.userName || tech?.label || tech?.name || tech?
 
 const routeTitle = (route) => route?.description || route?.name || `${route?.tech || "Technician"} ${route?.day || ""} Route`.trim();
 
-const normalizeStatus = (value) => String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
-
-const hasAssignedRoute = (stop) => {
-  const days = normalizeDays(stop?.daysOfWeek);
-  const hasDay = days.length > 0 || !!stop?.day;
-  const hasTech = !!(stop?.techId || stop?.tech);
-  return hasDay && hasTech;
-};
+const hasAssignedRoute = recurringStopHasAssignedRoute;
 
 const StatTile = ({ icon: Icon, label, value, helper, to, tone = "slate" }) => {
   const tones = {
@@ -180,49 +178,16 @@ const RouteOverviewDashboard = () => {
     loadRoutes();
   }, [recentlySelectedCompany]);
 
-  const recurringStopsByServiceLocation = useMemo(() => {
-    const set = new Set();
-    recurringStops.forEach((stop) => {
-      if (hasAssignedRoute(stop) && stop.serviceLocationId) {
-        set.add(stop.serviceLocationId);
-      }
-    });
-    return set;
-  }, [recurringStops]);
-
-  const recurringStopsByCustomer = useMemo(() => {
-    const set = new Set();
-    recurringStops.forEach((stop) => {
-      if (hasAssignedRoute(stop) && stop.customerId) {
-        set.add(stop.customerId);
-      }
-    });
-    return set;
-  }, [recurringStops]);
+  const recurringRoutingIndex = useMemo(
+    () => buildRecurringRoutingIndex(recurringStops),
+    [recurringStops]
+  );
 
   const agreementsNeedRouting = useMemo(() => (
     serviceAgreements
-      .filter((agreement) => {
-        const status = normalizeStatus(agreement.status);
-        const sourceType = agreement.sourceType || "";
-        const isJobAgreement =
-          sourceType === SalesAgreementSourceType.oneOffJob ||
-          agreement.rateType === "oneTime" ||
-          agreement.serviceCadence === "oneTime" ||
-          Boolean(agreement.jobId || agreement.workOrderId);
-
-        if (status !== "accepted" || isJobAgreement) return false;
-
-        const serviceLocationIds = Array.isArray(agreement.serviceLocationIds)
-          ? agreement.serviceLocationIds.filter(Boolean)
-          : [];
-        const hasLocationMatch = serviceLocationIds.some((serviceLocationId) => recurringStopsByServiceLocation.has(serviceLocationId));
-        const hasCustomerFallbackMatch = serviceLocationIds.length === 0 && agreement.customerId && recurringStopsByCustomer.has(agreement.customerId);
-
-        return !agreement.recurringServiceStopId && !hasLocationMatch && !hasCustomerFallbackMatch;
-      })
+      .filter((agreement) => agreementNeedsRecurringRouting(agreement, recurringRoutingIndex))
       .sort((left, right) => toMillis(right.acceptedAt || right.updatedAt || right.createdAt) - toMillis(left.acceptedAt || left.updatedAt || left.createdAt))
-  ), [recurringStopsByCustomer, recurringStopsByServiceLocation, serviceAgreements]);
+  ), [recurringRoutingIndex, serviceAgreements]);
 
   const daySummaries = useMemo(() => (
     daysOfWeek.map((day) => {
@@ -323,7 +288,7 @@ const RouteOverviewDashboard = () => {
         <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatTile icon={FaRoute} label="Route Templates" value={routes.length} helper={`${coveredDays} day(s) covered`} to="/company/route-management" tone="blue" />
           <StatTile icon={FaClipboardList} label="Assigned Stops" value={totalRouteStops} helper="Recurring stops with tech and day" to="/company/recurringServiceStop" tone="emerald" />
-          <StatTile icon={FaFileContract} label="Needs Routing" value={agreementsNeedRouting.length} helper="Accepted service agreements" to="/company/sales/agreements" tone={agreementsNeedRouting.length ? "amber" : "emerald"} />
+          <StatTile icon={FaFileContract} label="Needs Routing" value={agreementsNeedRouting.length} helper="Accepted recurring agreements" to="/company/sales/agreements/needs-routing" tone={agreementsNeedRouting.length ? "amber" : "emerald"} />
           <StatTile icon={FaMapMarkedAlt} label="Today" value={serviceStopsToday.length} helper={`${dailyRoutes.length} active daily route(s)`} to="/company/route-day-management" tone="blue" />
         </section>
 
@@ -384,7 +349,7 @@ const RouteOverviewDashboard = () => {
                 })}
               </ListCard>
 
-              <ListCard title="Accepted Agreements Needing Routing" helper="Accepted recurring service agreements without a routed recurring stop." to="/company/sales/agreements">
+              <ListCard title="Accepted Agreements Needing Routing" helper="Accepted recurring service agreements without a routed recurring stop." to="/company/sales/agreements/needs-routing">
                 {agreementsNeedRouting.length === 0 ? (
                   <EmptyRow>No accepted service agreements are waiting on routing.</EmptyRow>
                 ) : agreementsNeedRouting.slice(0, 8).map((agreement) => (

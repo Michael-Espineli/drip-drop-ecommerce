@@ -53,6 +53,9 @@ const ShoppingListListView = () => {
                     userId: data.userId || "",
                     userName: data.userName || "",
                     dbItemId: data.dbItemId || "",
+                    customerApprovalRequired: !!data.customerApprovalRequired,
+                    customerApprovalStatus: data.customerApprovalStatus || "",
+                    partApprovalRequestId: data.partApprovalRequestId || data.approvalRequestId || "",
                 };
             });
 
@@ -131,6 +134,9 @@ const ShoppingListListView = () => {
                         >
                             <option value="All">All Statuses</option>
                             <option value="Need to Purchase">Need to Purchase</option>
+                            <option value="Needs Customer Approval">Needs Customer Approval</option>
+                            <option value="Ready to Purchase">Ready to Purchase</option>
+                            <option value="Customer Rejected">Customer Rejected</option>
                             <option value="Purchased">Purchased</option>
                             <option value="Installed">Installed</option>
                         </select>
@@ -148,6 +154,7 @@ const ShoppingListListView = () => {
                                         <th className="py-3 px-4">Sub Category</th>
                                         <th className="py-3 px-4">Status</th>
                                         <th className="py-3 px-4">Purchaser</th>
+                                        <th className="py-3 px-4">Approval</th>
                                         <th className="py-3 px-4">Quantity</th>
                                         <th className="py-3 px-4">Date Purchased</th>
                                         <th className="py-3 px-4"></th>
@@ -163,6 +170,9 @@ const ShoppingListListView = () => {
                                             <td className="py-3 px-4">{item.subCategory || "—"}</td>
                                             <td className="py-3 px-4">{item.status || "—"}</td>
                                             <td className="py-3 px-4">{item.purchaserName || "—"}</td>
+                                            <td className="py-3 px-4">
+                                                {item.customerApprovalRequired ? item.customerApprovalStatus || "pending" : "—"}
+                                            </td>
                                             <td className="py-3 px-4">{item.quantity || "—"}</td>
                                             <td className="py-3 px-4">{item.datePurchased || "—"}</td>
 

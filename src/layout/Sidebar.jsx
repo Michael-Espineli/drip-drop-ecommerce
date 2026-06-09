@@ -15,18 +15,19 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0 });
-
-    const featureFlagsEnabledForItem = (item) => {
-        const featureFlagIds = [
-            item.featureFlagId,
-            ...(Array.isArray(item.featureFlagIds) ? item.featureFlagIds : []),
-        ].filter(Boolean);
-
-        return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
-    };
+    const categoryLabel = (category) => category === 'Users' ? 'Users, Vendors & Fleet' : category;
 
     useEffect(() => {
         if (role) {
+            const featureFlagsEnabledForItem = (item) => {
+                const featureFlagIds = [
+                    item.featureFlagId,
+                    ...(Array.isArray(item.featureFlagIds) ? item.featureFlagIds : []),
+                ].filter(Boolean);
+
+                return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
+            };
+
             const savedCategoryOrder = dataBaseUser?.settings?.companyNavigationCategoryOrder;
             const navs = getNav(role, savedCategoryOrder);
             const filteredNavs = Object.entries(navs).reduce((acc, [category, items]) => {
@@ -187,7 +188,7 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
                         {Object.keys(navItemsByCategory).map(category => (
                             <div key={category} className="mb-3">
                                 {category !== 'NA' && (
-                                    <h3 className="px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider">{category}</h3>
+                                    <h3 className="px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider">{categoryLabel(category)}</h3>
                                 )}
                                 <ul className='flex flex-col gap-1'>
                                     {navItemsByCategory[category].map(item => {

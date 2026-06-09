@@ -5,6 +5,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
 import * as pdfjsLib from "pdfjs-dist/webpack";
+import { FaCheckCircle, FaReceipt, FaSpinner } from "react-icons/fa";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
 import { fetchCompanyVendors } from "../../../utils/vendors";
@@ -509,6 +510,22 @@ const extractTextFromPdfFile = async (file) => {
   return pageTexts.join("\n\n").trim();
 };
 
+const isPdfSourceFile = (file) =>
+  Boolean(file) && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+
+const isImageSourceFile = (file) =>
+  Boolean(file) && (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(file.name));
+
+const getSourceLabelForFile = (file) => {
+  if (isPdfSourceFile(file)) return "PDF";
+  return file.name.toLowerCase().endsWith(".eml") ? "email" : "text file";
+};
+
+const readSourceFileText = async (file) => {
+  if (isPdfSourceFile(file)) return extractTextFromPdfFile(file);
+  return file.text();
+};
+
 const AlphaWaterReceiptImport = () => {
   const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
@@ -521,8 +538,12 @@ const AlphaWaterReceiptImport = () => {
   const [selectedVendorId, setSelectedVendorId] = useState("");
   const [selectedTechId, setSelectedTechId] = useState("");
   const [sourceFile, setSourceFile] = useState(null);
+  const [bulkQueue, setBulkQueue] = useState([]);
+  const [bulkIndex, setBulkIndex] = useState(0);
+  const [bulkSavedCount, setBulkSavedCount] = useState(0);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState("");
   const [parsing, setParsing] = useState(false);
+  const [receiptLoading, setReceiptLoading] = useState(null);
   const [parseFeedback, setParseFeedback] = useState({
     type: "idle",
     title: "Upload a PDF, email file, or paste invoice text.",
@@ -534,14 +555,16 @@ const AlphaWaterReceiptImport = () => {
   const [creatingDatabaseItem, setCreatingDatabaseItem] = useState(false);
   const [databaseItemForm, setDatabaseItemForm] = useState(blankDatabaseItemForm);
   const [sourceInputKey, setSourceInputKey] = useState(0);
+  const [pendingSaveOptions, setPendingSaveOptions] = useState(null);
 
   const selectedVendor = vendors.find((vendor) => vendor.id === selectedVendorId) || null;
   const selectedTech = companyUsers.find((user) => user.userId === selectedTechId || user.id === selectedTechId) || null;
   const sourceFileName = sourceFile?.name || "";
-  const sourceFileType = sourceFile?.type || "";
-  const sourceIsPdf = Boolean(sourceFile) && (sourceFileType === "application/pdf" || sourceFileName.toLowerCase().endsWith(".pdf"));
-  const sourceIsImage = Boolean(sourceFile) && (sourceFileType.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(sourceFileName));
+  const sourceIsPdf = isPdfSourceFile(sourceFile);
+  const sourceIsImage = isImageSourceFile(sourceFile);
   const sourceIsText = Boolean(sourceFile) && !sourceIsPdf && !sourceIsImage;
+  const isBulkImport = bulkQueue.length > 1;
+  const isFinalBulkReceipt = isBulkImport && bulkIndex >= bulkQueue.length - 1;
   const feedbackClass =
     parseFeedback.type === "success"
       ? "border-emerald-200 bg-emerald-50 text-emerald-900"
@@ -612,6 +635,10 @@ const AlphaWaterReceiptImport = () => {
 
     return { subtotal, tax, total };
   }, [lines, receipt.tax, receipt.total]);
+  const newDatabaseItemCount = useMemo(
+    () => lines.filter((line) => !line.matchedItemId && line.createDatabaseItem).length,
+    [lines]
+  );
 
   const buildParseFeedback = (parsed, sourceLabel, extractedText = "") => {
     const details = [];
@@ -641,9 +668,10 @@ const AlphaWaterReceiptImport = () => {
     };
   };
 
-  const applyParsedReceipt = (parsed, sourceLabel = "text", extractedText = "") => {
+  const applyParsedReceipt = (parsed, sourceLabel = "text", extractedText = "", parseContext = {}) => {
     const parsedTechMatch = findMatchingCompanyUser(parsed.parsedTechnicianName, companyUsers);
     const parsedTechName = String(parsed.parsedTechnicianName || "").trim();
+    const itemsForMatching = parseContext.databaseItems || databaseItems;
     let parsedNotes = "";
     parsedNotes = appendNote(parsedNotes, parsed.poNumber ? `Alpha Water PO #: ${parsed.poNumber}` : "");
     parsedNotes = appendNote(
@@ -651,7 +679,7 @@ const AlphaWaterReceiptImport = () => {
       parsedTechName && !parsedTechMatch ? `PO#: ${parsedTechName}` : ""
     );
     const hydratedLines = (parsed.lines || []).map((line) => {
-      const match = findMatchingItem(line, databaseItems);
+      const match = findMatchingItem(line, itemsForMatching);
       return {
         ...line,
         matchedItemId: match?.id || "",
@@ -675,7 +703,14 @@ const AlphaWaterReceiptImport = () => {
     const defaultTech = findMatchingCompanyUser(DEFAULT_PURCHASE_TECH_NAME, companyUsers);
     setSelectedTechId(getCompanyUserId(parsedTechMatch) || getCompanyUserId(defaultTech));
     setLines(hydratedLines);
-    setParseFeedback(buildParseFeedback({ ...parsed, lines: hydratedLines }, sourceLabel, extractedText));
+    const nextFeedback = buildParseFeedback({ ...parsed, lines: hydratedLines }, sourceLabel, extractedText);
+    if (parseContext.total > 1) {
+      nextFeedback.details = [
+        `Bulk receipt ${parseContext.index + 1} of ${parseContext.total}: ${parseContext.fileName}`,
+        ...nextFeedback.details,
+      ];
+    }
+    setParseFeedback(nextFeedback);
   };
 
   const handleRawTextChange = (value) => {
@@ -687,32 +722,35 @@ const AlphaWaterReceiptImport = () => {
     applyParsedReceipt(parsed, "pasted text", receipt.rawText);
   };
 
-  const handleFileChange = async (event) => {
-    const file = event.target.files?.[0];
+  const parseSourceFile = async (file, parseContext = {}) => {
     if (!file) return;
 
+    const total = parseContext.total || 1;
+    const index = parseContext.index || 0;
+    const bulkSuffix = total > 1 ? ` (${index + 1} of ${total})` : "";
+
     setSourceFile(file);
+    setReceipt(blankParsedReceipt);
+    setLines([]);
+    setCreateItemModalOpen(false);
+    setDatabaseItemForm(blankDatabaseItemForm);
     setParsing(true);
+    setReceiptLoading({
+      fileName: file.name,
+      index,
+      total,
+    });
     setParseFeedback({
       type: "info",
-      title: `Reading ${file.name}...`,
+      title: `Reading ${file.name}${bulkSuffix}...`,
       details: ["Extracting invoice text and looking for Alpha Water line items."],
     });
 
     try {
-      let text = "";
-      let sourceLabel = "file";
-
-      if (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
-        sourceLabel = "PDF";
-        text = await extractTextFromPdfFile(file);
-      } else {
-        sourceLabel = file.name.toLowerCase().endsWith(".eml") ? "email" : "text file";
-        text = await file.text();
-      }
-
+      const sourceLabel = getSourceLabelForFile(file);
+      const text = await readSourceFileText(file);
       const parsed = parseAlphaWaterInvoiceText(text);
-      applyParsedReceipt(parsed, sourceLabel, text);
+      applyParsedReceipt(parsed, sourceLabel, text, { ...parseContext, fileName: file.name });
       if (parsed.lines?.length) {
         toast.success(`Found ${parsed.lines.length} line item${parsed.lines.length === 1 ? "" : "s"}`);
       } else {
@@ -724,14 +762,34 @@ const AlphaWaterReceiptImport = () => {
         type: "error",
         title: "Could not read this upload.",
         details: [
+          total > 1 ? `Bulk receipt ${index + 1} of ${total}: ${file.name}` : "",
           error?.message || "The file could not be parsed.",
           "Try the original Alpha Water email/PDF, or paste the invoice text below and parse again.",
-        ],
+        ].filter(Boolean),
       });
       toast.error("Could not parse upload");
     } finally {
       setParsing(false);
+      setReceiptLoading(null);
     }
+  };
+
+  const handleFileChange = async (event) => {
+    const files = Array.from(event.target.files || []);
+    if (!files.length) return;
+
+    const nextQueue =
+      files.length > 1
+        ? files.map((file) => ({
+          id: `${file.name}-${file.lastModified}-${uuidv4()}`,
+          file,
+        }))
+        : [];
+
+    setBulkQueue(nextQueue);
+    setBulkIndex(0);
+    setBulkSavedCount(0);
+    await parseSourceFile(files[0], { index: 0, total: files.length });
   };
 
   const updateLine = (lineId, updates) => {
@@ -867,7 +925,12 @@ const AlphaWaterReceiptImport = () => {
     }
   };
 
-  const resetImportForm = () => {
+  const resetImportForm = ({ clearBulkQueue = true } = {}) => {
+    if (clearBulkQueue) {
+      setBulkQueue([]);
+      setBulkIndex(0);
+      setBulkSavedCount(0);
+    }
     setSourceFile(null);
     setSourceInputKey((current) => current + 1);
     setReceipt(blankParsedReceipt);
@@ -881,6 +944,56 @@ const AlphaWaterReceiptImport = () => {
     setDatabaseItemForm(blankDatabaseItemForm);
   };
 
+  const parseQueuedSourceFile = async (nextIndex, queue = bulkQueue, nextDatabaseItems = databaseItems) => {
+    const nextQueueItem = queue[nextIndex];
+    if (!nextQueueItem) return false;
+
+    setBulkIndex(nextIndex);
+    await parseSourceFile(nextQueueItem.file, {
+      index: nextIndex,
+      total: queue.length,
+      databaseItems: nextDatabaseItems,
+    });
+    return true;
+  };
+
+  const clearBulkImport = () => {
+    if (saving || parsing) return;
+    resetImportForm();
+  };
+
+  const requestSaveReceipt = (options = {}) => {
+    if (recentlySelectedCompany !== MURDOCK_COMPANY_ID) {
+      toast.error("This importer is only enabled for Murdock Pool Service.");
+      return;
+    }
+    if (!receipt.invoiceNum.trim()) {
+      toast.error("Invoice number is required.");
+      return;
+    }
+    if (!selectedVendor) {
+      toast.error("Select a vendor before saving.");
+      return;
+    }
+    if (!lines.length) {
+      toast.error("Add at least one line item.");
+      return;
+    }
+
+    setPendingSaveOptions(options);
+  };
+
+  const closeSaveConfirmation = () => {
+    if (saving) return;
+    setPendingSaveOptions(null);
+  };
+
+  const confirmSaveReceipt = async () => {
+    const options = pendingSaveOptions || {};
+    setPendingSaveOptions(null);
+    await saveReceipt(options);
+  };
+
   const saveReceipt = async ({ addAnother = false } = {}) => {
     if (recentlySelectedCompany !== MURDOCK_COMPANY_ID) {
       toast.error("This importer is only enabled for Murdock Pool Service.");
@@ -890,15 +1003,14 @@ const AlphaWaterReceiptImport = () => {
     if (!selectedVendor) return toast.error("Select a vendor before saving.");
     if (!lines.length) return toast.error("Add at least one line item.");
 
-    const confirmed = window.confirm(`Create receipt ${receipt.invoiceNum} with ${lines.length} line item(s)?`);
-    if (!confirmed) return;
-
     setSaving(true);
     try {
       const receiptId = "com_rec_" + uuidv4();
       const receiptDate = receipt.invoiceDate ? new Date(`${receipt.invoiceDate}T12:00:00`) : new Date();
       const purchasedItemIds = [];
       const pdfUrlList = [];
+      const createdDatabaseItems = [];
+      let databaseItemsForNextReceipt = databaseItems;
 
       if (sourceFile) {
         const fileRef = ref(
@@ -941,6 +1053,8 @@ const AlphaWaterReceiptImport = () => {
             doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId),
             databaseItem
           );
+          createdDatabaseItems.push(databaseItem);
+          databaseItemsForNextReceipt = [...databaseItemsForNextReceipt, databaseItem];
         }
 
         const purchaseId = "comp_pi_" + uuidv4();
@@ -1018,7 +1132,30 @@ const AlphaWaterReceiptImport = () => {
         rawVendorName: receipt.vendorName || "",
       });
 
-      if (addAnother) {
+      if (createdDatabaseItems.length) {
+        setDatabaseItems((prev) => {
+          const existingIds = new Set(prev.map((item) => item.id));
+          const mergedItems = [
+            ...prev,
+            ...createdDatabaseItems.filter((item) => !existingIds.has(item.id)),
+          ];
+          return mergedItems.sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+        });
+      }
+
+      if (isBulkImport) {
+        const nextSavedCount = bulkSavedCount + 1;
+        const nextIndex = bulkIndex + 1;
+        setBulkSavedCount(nextSavedCount);
+
+        if (nextIndex < bulkQueue.length) {
+          toast.success(`Receipt saved. Loading ${nextIndex + 1} of ${bulkQueue.length}.`);
+          await parseQueuedSourceFile(nextIndex, bulkQueue, databaseItemsForNextReceipt);
+        } else {
+          toast.success(`Bulk import complete. ${nextSavedCount} receipt${nextSavedCount === 1 ? "" : "s"} created.`);
+          resetImportForm();
+        }
+      } else if (addAnother) {
         toast.success("Receipt created. Ready for the next one.");
         resetImportForm();
       } else {
@@ -1069,12 +1206,60 @@ const AlphaWaterReceiptImport = () => {
                 <input
                   key={sourceInputKey}
                   type="file"
+                  multiple
                   accept=".txt,.eml,.pdf,.png,.jpg,.jpeg,.webp,text/plain,message/rfc822,application/pdf,image/*"
                   onChange={handleFileChange}
-                  disabled={parsing}
+                  disabled={parsing || saving}
                   className="block w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
                 />
-                {sourceFile ? <p className="text-sm text-gray-500">{sourceFile.name}</p> : null}
+                {sourceFile ? (
+                  <p className="text-sm text-gray-500">
+                    {isBulkImport ? `Reviewing ${bulkIndex + 1} of ${bulkQueue.length}: ` : ""}
+                    {sourceFile.name}
+                  </p>
+                ) : null}
+                {isBulkImport ? (
+                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="font-semibold text-gray-900">Bulk queue</p>
+                      <p className="text-xs font-semibold text-gray-500">
+                        {bulkSavedCount} saved / {bulkQueue.length} selected
+                      </p>
+                    </div>
+                    <div className="mt-3 max-h-44 space-y-2 overflow-y-auto">
+                      {bulkQueue.map((queueItem, queueIndex) => {
+                        const isCurrent = queueIndex === bulkIndex;
+                        const isComplete = queueIndex < bulkIndex;
+
+                        return (
+                          <div
+                            key={queueItem.id}
+                            className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
+                              isCurrent
+                                ? "border-blue-200 bg-blue-50 text-blue-900"
+                                : isComplete
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                                  : "border-gray-200 bg-white text-gray-600"
+                            }`}
+                          >
+                            <span className="min-w-0 truncate">{queueItem.file.name}</span>
+                            <span className="shrink-0 text-xs font-semibold">
+                              {isCurrent ? "Reviewing" : isComplete ? "Done" : "Waiting"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={clearBulkImport}
+                      disabled={parsing || saving}
+                      className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                    >
+                      Clear Queue
+                    </button>
+                  </div>
+                ) : null}
                 <div className={`rounded-lg border p-3 text-sm ${feedbackClass}`}>
                   <p className="font-semibold">{parsing ? "Working..." : parseFeedback.title}</p>
                   {parseFeedback.details?.length ? (
@@ -1385,22 +1570,34 @@ const AlphaWaterReceiptImport = () => {
               ) : null}
             </div>
 
-            <div className="mt-6 flex flex-col justify-end gap-3 sm:flex-row">
+            <div className="mt-6 flex flex-col justify-end gap-3 sm:flex-row sm:items-center">
+              {isBulkImport ? (
+                <p className="text-sm font-semibold text-gray-500 sm:mr-auto">
+                  Bulk receipt {bulkIndex + 1} of {bulkQueue.length}
+                </p>
+              ) : (
+                <button
+                  type="button"
+                  disabled={loading || parsing || saving || !lines.length}
+                  onClick={() => requestSaveReceipt({ addAnother: true })}
+                  className="rounded-xl border border-green-200 bg-white px-5 py-2 text-sm font-semibold text-green-700 shadow-sm hover:bg-green-50 disabled:opacity-60"
+                >
+                  {saving ? "Saving..." : "Save and Add Another"}
+                </button>
+              )}
               <button
                 type="button"
-                disabled={loading || saving || !lines.length}
-                onClick={() => saveReceipt({ addAnother: true })}
-                className="rounded-xl border border-green-200 bg-white px-5 py-2 text-sm font-semibold text-green-700 shadow-sm hover:bg-green-50 disabled:opacity-60"
-              >
-                {saving ? "Saving..." : "Save and Add Another"}
-              </button>
-              <button
-                type="button"
-                disabled={loading || saving || !lines.length}
-                onClick={() => saveReceipt()}
+                disabled={loading || parsing || saving || !lines.length}
+                onClick={() => requestSaveReceipt()}
                 className="rounded-xl bg-green-600 px-5 py-2 text-sm font-semibold text-white shadow-sm hover:bg-green-700 disabled:opacity-60"
               >
-                {saving ? "Saving..." : "Save Confirmed Receipt"}
+                {saving
+                  ? "Saving..."
+                  : isBulkImport
+                    ? isFinalBulkReceipt
+                      ? "Save Final Receipt"
+                      : "Save and Continue"
+                    : "Save Confirmed Receipt"}
               </button>
             </div>
           </div>
@@ -1486,6 +1683,110 @@ const AlphaWaterReceiptImport = () => {
           </div>
         </div>
       </div>
+      {receiptLoading ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="rounded-md bg-blue-50 p-2 text-blue-700">
+                <FaSpinner className="animate-spin" />
+              </span>
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Loading Receipt</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  {receiptLoading.total > 1
+                    ? `Reading receipt ${receiptLoading.index + 1} of ${receiptLoading.total}.`
+                    : "Reading the selected receipt."}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              <p className="font-semibold text-slate-900">{receiptLoading.fileName}</p>
+              <p className="mt-1">Extracting invoice text and matching Alpha Water line items.</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {pendingSaveOptions ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="rounded-md bg-emerald-50 p-2 text-emerald-700">
+                <FaReceipt />
+              </span>
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Create Receipt</h2>
+                <p className="mt-2 text-sm text-slate-600">
+                  Confirm the parsed receipt before creating the receipt and purchased item records.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm sm:grid-cols-2">
+              <div>
+                <p className="font-semibold text-slate-500">Invoice</p>
+                <p className="mt-1 font-bold text-slate-950">{receipt.invoiceNum || "--"}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-slate-500">Vendor</p>
+                <p className="mt-1 font-bold text-slate-950">{selectedVendor?.name || "Not selected"}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-slate-500">Line Items</p>
+                <p className="mt-1 font-bold text-slate-950">{lines.length}</p>
+              </div>
+              <div>
+                <p className="font-semibold text-slate-500">Total</p>
+                <p className="mt-1 font-bold text-slate-950">{money(lineTotals.total)}</p>
+              </div>
+              {isBulkImport ? (
+                <div className="sm:col-span-2">
+                  <p className="font-semibold text-slate-500">Bulk Queue</p>
+                  <p className="mt-1 font-bold text-slate-950">
+                    Receipt {bulkIndex + 1} of {bulkQueue.length}
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            <div className="mt-4 rounded-md border border-emerald-100 bg-emerald-50 p-3 text-sm text-emerald-900">
+              <div className="flex items-start gap-2">
+                <FaCheckCircle className="mt-0.5 shrink-0" />
+                <p>
+                  This will create {lines.length} purchased item{lines.length === 1 ? "" : "s"}
+                  {newDatabaseItemCount ? ` and ${newDatabaseItemCount} new database item${newDatabaseItemCount === 1 ? "" : "s"}` : ""}.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={closeSaveConfirmation}
+                disabled={saving}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmSaveReceipt}
+                disabled={saving}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaCheckCircle className="text-xs" />
+                {isBulkImport
+                  ? isFinalBulkReceipt
+                    ? "Create Final Receipt"
+                    : "Create and Continue"
+                  : pendingSaveOptions.addAnother
+                    ? "Create and Add Another"
+                    : "Create Receipt"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
       {createItemModalOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
           <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-xl">

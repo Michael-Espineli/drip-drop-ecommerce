@@ -14,6 +14,8 @@ const About = lazy(() => import("../../views/public/About"))
 const Products = lazy(() => import("../../views/public/Products"))
 const Homeowners = lazy(() => import("../../views/public/Homeowners"))
 const Company = lazy(() => import("../../views/public/Company"))
+const Companies = lazy(() => import("../../views/public/Companies"))
+const CompanyPublicProfile = lazy(() => import("../../views/public/CompanyPublicProfile"))
 const PrivacyPolicy = lazy(() => import("../../views/public/PrivacyPolicy"))
 const Terms = lazy(() => import("../../views/public/Terms"))
 const Info = lazy(() => import("../../views/public/Info"))
@@ -22,6 +24,8 @@ const Feedback = lazy(() => import("../../views/public/Feedback"))
 const AdminSignIn = lazy(() => import("../../views/auth/AdminSignIn"))
 const SuccessfulSubscription = lazy(() => import("../../views/SuccessfulSubscription"))
 const ClientAccountInviteLanding = lazy(() => import("../../views/client/ClientAccountInviteLanding"))
+const PublicServiceRequest = lazy(() => import("../../views/public/PublicServiceRequest"))
+const PublicServiceRequestVerification = lazy(() => import("../../views/public/PublicServiceRequestVerification"))
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
 
@@ -44,6 +48,16 @@ const publicRoutes = [
   {
     path: "/company",
     element: <Company />,
+  }
+  ,
+  {
+    path: "/companies",
+    element: <Companies />,
+  }
+  ,
+  {
+    path: "/companies/profile/:companyId",
+    element: <CompanyPublicProfile />,
   }
   ,
   {
@@ -84,6 +98,26 @@ const publicRoutes = [
   {
     path: "/client/claim-account/:inviteId",
     element: <ClientAccountInviteLanding />,
+  }
+  ,
+  {
+    path: "/request-service/:companyId",
+    element: <PublicServiceRequest />,
+  }
+  ,
+  {
+    path: "/public/service-request/:companyId",
+    element: <PublicServiceRequest />,
+  }
+  ,
+  {
+    path: "/public-service-request/verify/:verificationId",
+    element: <PublicServiceRequestVerification />,
+  }
+  ,
+  {
+    path: "/service-request/verify/:verificationId",
+    element: <PublicServiceRequestVerification />,
   }
   ,
   {

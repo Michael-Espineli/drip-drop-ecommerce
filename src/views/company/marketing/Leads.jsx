@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext'; // Adjust path if necessary
 import { ClipLoader } from 'react-spinners';
 import { subDays, startOfDay } from 'date-fns';
+import toast from 'react-hot-toast';
+import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 
 // StatCard component for displaying header stats
 const StatCard = ({ title, count, icon, color }) => (
@@ -18,6 +20,15 @@ const StatCard = ({ title, count, icon, color }) => (
     </div>
 );
 
+const getNormalizedLeadSource = (lead = {}) => {
+    const source = String(lead.source || '').trim().toLowerCase();
+
+    if (source === 'manual') return 'Manual';
+    if (source === 'public' || lead.publicLead || lead.sourceType === 'publicNoAccount') return 'Public';
+
+    return 'Customer';
+};
+
 export default function Leads() {
     const [leads, setLeads] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -28,6 +39,11 @@ export default function Leads() {
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
     const navigate = useNavigate();
+    const publicLeadFormUrl = useMemo(() => (
+        recentlySelectedCompany && typeof window !== 'undefined'
+            ? `${window.location.origin}/request-service/${recentlySelectedCompany}`
+            : ''
+    ), [recentlySelectedCompany]);
 
     const toDate = (value) => {
         if (!value) return null;
@@ -97,7 +113,7 @@ export default function Leads() {
                 lead.id,
             ].some((value) => String(value || '').toLowerCase().includes(term));
             const matchesStatus = statusFilter === 'All' || lead.status === statusFilter;
-            const normalizedSource = lead.source === 'Manual' ? 'Manual' : 'Customer';
+            const normalizedSource = getNormalizedLeadSource(lead);
             const matchesSource = sourceFilter === 'All' || normalizedSource === sourceFilter;
 
             return matchesSearch && matchesStatus && matchesSource;
@@ -114,10 +130,30 @@ export default function Leads() {
         return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${colors[status] || 'bg-gray-200'}`}>{status}</span>;
     };
 
-    const renderSource = (source) => {
-        return source === 'Manual'
-            ? <span className="px-2 py-1 text-xs font-semibold rounded-full bg-indigo-200 text-indigo-800">Manual</span>
-            : <span className="px-2 py-1 text-xs font-semibold rounded-full bg-teal-200 text-teal-800">Customer</span>;
+    const renderSource = (lead) => {
+        const source = getNormalizedLeadSource(lead);
+        const colors = {
+            Manual: 'bg-indigo-200 text-indigo-800',
+            Public: 'bg-orange-100 text-orange-800',
+            Customer: 'bg-teal-200 text-teal-800',
+        };
+
+        return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${colors[source] || colors.Customer}`}>{source}</span>;
+    };
+
+    const copyPublicLeadLink = async () => {
+        if (!publicLeadFormUrl) {
+            toast.error('Select a company before copying the public lead link.');
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(publicLeadFormUrl);
+            toast.success('Public lead form link copied.');
+        } catch (error) {
+            console.error('Failed to copy public lead form link', error);
+            toast.error('Could not copy the public lead link.');
+        }
     };
 
     const renderLinkStatus = (lead) => {
@@ -149,7 +185,15 @@ export default function Leads() {
                     <h1 className="text-3xl font-bold text-gray-900">Leads</h1>
                     <p className="mt-1 text-sm text-gray-600">Manage and track all incoming homeowner service requests.</p>
                 </div>
-                <div className="mt-4 sm:mt-0 sm:ml-16 sm:flex-none">
+                <div className="mt-4 flex flex-wrap gap-3 sm:mt-0 sm:ml-16 sm:flex-none">
+                    <button
+                        type="button"
+                        onClick={copyPublicLeadLink}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto"
+                    >
+                        <ClipboardDocumentIcon className="h-4 w-4" />
+                        Copy Public Form Link
+                    </button>
                     <button
                         type="button"
                         onClick={() => navigate('/company/leads/new')}
@@ -157,6 +201,33 @@ export default function Leads() {
                     >
                         Add Lead
                     </button>
+                </div>
+            </div>
+
+            <div className="mb-6 rounded-md border border-blue-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <p className="text-sm font-semibold text-gray-900">Public no-account service request form</p>
+                        <p className="mt-1 text-sm text-gray-600">
+                            Share this link on a website, text message, or service email so new homeowners can request service without signing in first.
+                        </p>
+                    </div>
+                    <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center lg:w-[32rem]">
+                        <input
+                            type="text"
+                            readOnly
+                            value={publicLeadFormUrl}
+                            className="min-w-0 flex-1 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                        />
+                        <button
+                            type="button"
+                            onClick={copyPublicLeadLink}
+                            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                        >
+                            <ClipboardDocumentIcon className="h-4 w-4" />
+                            Copy
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -187,6 +258,7 @@ export default function Leads() {
                     <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-gray-300 px-3 py-2 text-sm">
                         <option value="All">All sources</option>
                         <option value="Customer">Customer</option>
+                        <option value="Public">Public</option>
                         <option value="Manual">Manual</option>
                     </select>
                 </div>
@@ -224,12 +296,12 @@ export default function Leads() {
                                         <td className="px-6 py-4 whitespace-nowrap">
                                             <div className="font-medium text-gray-900">{lead.homeownerName}</div>
                                         </td>
-                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{lead.serviceLocationAddress.streetAddress}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{lead.serviceLocationAddress?.streetAddress || 'No address'}</td>
                                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                                             {toDate(lead.createdAt)?.toLocaleDateString() || 'N/A'}
                                         </td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderStatus(lead.status)}</td>
-                                        <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead.source)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderLinkStatus(lead)}</td>
                                     </tr>
                                 ))}

@@ -121,11 +121,11 @@ export default function Terms() {
             <address className="not-italic mb-10">
                 <strong>Drip Drop Pool App</strong>
                 <br />
-                Email: <a href="mailto:[info@dripdrop-poolapp.com]" className="text-blue-600 underline">[info@dripdrop-poolapp.com]</a>
+                Email: <a href="mailto:[info@dripdrop-poolapp.com]" className="text-cyan-700 underline">[info@dripdrop-poolapp.com]</a>
                 <br />
                 Phone: (619)324-3222
                 <br />
-                Website: <a href="https://[dripdrop-poolapp.com]" className="text-blue-600 underline">[dripdrop-poolapp.com]</a>
+                Website: <a href="https://[dripdrop-poolapp.com]" className="text-cyan-700 underline">[dripdrop-poolapp.com]</a>
             </address>
         </div>
 

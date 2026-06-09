@@ -21,7 +21,7 @@ export default function Homeowners() {
 
     return (
         <div className="bg-gray-50 text-gray-800">
-            <header className="fixed top-0 left-0 right-0 z-50 bg-blue-600 shadow-md">
+            <header className="fixed top-0 left-0 right-0 z-50 bg-cyan-600 shadow-md">
                 <div className="container mx-auto px-4">
                     <PublicHeader />
                 </div>
@@ -29,10 +29,10 @@ export default function Homeowners() {
 
             <div className="pt-24">
                 {/* Hero Section */}
-                <main className="bg-blue-600 text-white py-20">
+                <main className="bg-cyan-600 text-white py-20">
                     <div className="container mx-auto px-4 text-center">
                         <h1 className="text-4xl md:text-5xl font-bold">A Clear View of Your Pool Care</h1>
-                        <p className="mt-4 text-lg max-w-3xl mx-auto text-blue-100">
+                        <p className="mt-4 text-lg max-w-3xl mx-auto text-cyan-50">
                             As a customer of a Drip Drop-powered pool company, you get a transparent, convenient, and reliable way to manage your pool service.
                         </p>
                     </div>
@@ -48,7 +48,7 @@ export default function Homeowners() {
                                 <p className="text-gray-600 mb-6">Sign in to view your service history, pay invoices, and communicate with your pool professional.</p>
                                 <Link
                                     to="/homeownerSignIn"
-                                    className="inline-flex items-center bg-blue-600 text-white px-6 py-3 rounded-full font-semibold hover:bg-blue-700 transition"
+                                    className="inline-flex items-center bg-cyan-600 text-white px-6 py-3 rounded-md font-semibold hover:bg-cyan-700 transition"
                                 >
                                     <span>Homeowner Sign In</span>
                                     <ArrowRightIcon className="h-5 w-5 ml-2" />
@@ -77,17 +77,17 @@ export default function Homeowners() {
                         </div>
                         <div className="grid md:grid-cols-3 gap-12 text-center">
                             <div className="flex flex-col items-center">
-                                <CalendarDaysIcon className="h-12 w-12 text-blue-500 mb-4" />
+                                <CalendarDaysIcon className="h-12 w-12 text-cyan-500 mb-4" />
                                 <h3 className="text-xl font-semibold mb-2">Service History</h3>
                                 <p className="text-gray-600">View detailed records of every service visit, including chemical readings, tasks performed, and notes from your technician.</p>
                             </div>
                             <div className="flex flex-col items-center">
-                                <ChatBubbleBottomCenterTextIcon className="h-12 w-12 text-blue-500 mb-4" />
+                                <ChatBubbleBottomCenterTextIcon className="h-12 w-12 text-cyan-500 mb-4" />
                                 <h3 className="text-xl font-semibold mb-2">Easy Communication</h3>
                                 <p className="text-gray-600">Communicate directly with your pool service company, report issues, and ask questions all through the portal.</p>
                             </div>
                             <div className="flex flex-col items-center">
-                                <HomeIcon className="h-12 w-12 text-blue-500 mb-4" />
+                                <HomeIcon className="h-12 w-12 text-cyan-500 mb-4" />
                                 <h3 className="text-xl font-semibold mb-2">All Your Properties in One Place</h3>
                                 <p className="text-gray-600">If you have multiple properties, you can manage and view the service history for all of them under a single account.</p>
                             </div>
