@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
     HomeIcon,
@@ -13,11 +13,12 @@ import {
     CreditCardIcon
 } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
+import { Context } from '../context/AuthContext';
 
 const clientNavItems = {
     'Menu': [
         { title: 'Home', icon: <HomeIcon />, path: '/client/dashboard' },
-        { title: 'Chats', icon: <ChatBubbleOvalLeftEllipsisIcon />, path: '/client/chat' },
+        { title: 'Messages', icon: <ChatBubbleOvalLeftEllipsisIcon />, path: '/client/chat', featureFlagId: 'feature_flag_001' },
     ],
     'My Property': [
         { title: 'My Pool', icon: <WrenchScrewdriverIcon />, path: '/client/my-pool' },
@@ -28,10 +29,13 @@ const clientNavItems = {
         { title: 'Browse Companies', icon: <BuildingStorefrontIcon />, path: '/client/companies' },
         { title: 'Saved Companies', icon: <HeartIcon />, path: '/client/saved-companies' },
     ],
-    'Agreements': [
-        { title: 'Service Agreements', icon: <DocumentTextIcon />, path: '/client/service-agreements' },
-        { title: 'Part Approvals', icon: <WrenchScrewdriverIcon />, path: '/client/part-approvals' },
-        { title: 'Billing', icon: <CreditCardIcon />, path: '/client/billing' },
+    'Finance': [
+        {
+            title: 'Finance',
+            icon: <CreditCardIcon />,
+            path: '/client/finance',
+            aliases: ['/client/billing', '/client/service-agreements', '/client/part-approvals'],
+        },
     ],
     'NA': [
         { title: 'Settings', icon: <CogIcon />, path: '/client/settings' },
@@ -41,6 +45,7 @@ const clientNavItems = {
 const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
     const auth = getAuth();
     const { pathname } = useLocation();
+    const { featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
 
     const logout = async () => {
         try {
@@ -74,10 +79,17 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
                                      <h3 className="px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider">{category}</h3>
                                 )}
                                 <ul className='flex flex-col gap-1'>
-                                    {clientNavItems[category].map(item => {
+                                    {clientNavItems[category].filter((item) => (
+                                        !item.featureFlagId || (featureFlagsLoaded && isFeatureEnabled(item.featureFlagId))
+                                    )).map(item => {
                                         const itemPath = item.path.toLowerCase();
                                         const currentPath = pathname.toLowerCase();
-                                        const isActive = currentPath === itemPath || currentPath.startsWith(`${itemPath}/`);
+                                        const aliasPaths = (item.aliases || []).map(alias => alias.toLowerCase());
+                                        const isActive = (
+                                            currentPath === itemPath ||
+                                            currentPath.startsWith(`${itemPath}/`) ||
+                                            aliasPaths.some(alias => currentPath === alias || currentPath.startsWith(`${alias}/`))
+                                        );
                                         return (
                                             <li key={`${item.path}-${item.title}`}>
                                                 <Link 

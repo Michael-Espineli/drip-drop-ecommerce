@@ -41,10 +41,14 @@ const isLeadServiceEstimateVisit = (visit = {}) => {
 
     return (
         useCase === SERVICE_STOP_TYPE_USE_CASES.serviceEstimate ||
-        useCase === SERVICE_STOP_TYPE_USE_CASES.estimate ||
+        useCase === 'serviceEstimate' ||
+        useCase === 'serviceAgreementEstimate' ||
+        useCase === 'estimate' ||
         typeId === 'initialEstimate' ||
         typeId === 'system_service_estimate_stop' ||
+        typeId === 'system_service_agreement_estimate_service_stop' ||
         normalizedType.includes('service estimate') ||
+        normalizedType.includes('service agreement estimate') ||
         normalizedType.includes('initial estimate') ||
         normalizedType.includes('pre estimate') ||
         normalizedType.includes('pre-estimate') ||
@@ -274,6 +278,7 @@ const PreEstimateVisitCard = ({
                 typeId: resolvedTypeFields.typeId,
                 type: resolvedTypeFields.type,
                 typeImage: resolvedTypeFields.typeImage,
+                category: resolvedTypeFields.category,
                 serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
 
                 jobId: '',

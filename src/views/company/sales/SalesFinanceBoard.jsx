@@ -1,8 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { collection, doc, onSnapshot, query, runTransaction, serverTimestamp, where } from 'firebase/firestore';
+import { Link, useNavigate } from 'react-router-dom';
+import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import {
   FaCheckCircle,
@@ -18,12 +17,18 @@ import {
 import { Context } from '../../../context/AuthContext';
 import { db, functions } from '../../../utils/config';
 import {
+  SalesBillingCollectionMethod,
   SalesInvoiceStatus,
   SalesPaymentMethod,
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
+import {
+  createManualSubscriptionInvoice,
+  invoiceBalanceCents,
+  recordManualSalesPayment,
+} from '../../../utils/sales/manualBilling';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -77,16 +82,6 @@ const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amo
 const dollarsToCents = (value) => {
   const amount = Number(value || 0);
   return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
-};
-
-const invoiceBalanceCents = (invoice) => {
-  if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) return Number(invoice.amountDueCents) || 0;
-
-  const total = Number(invoice.totalAmountCents || invoice.totalCents) || 0;
-  const paid = Number(invoice.amountPaidCents) || 0;
-  const writtenOff = Number(invoice.writeOffAmountCents) || 0;
-
-  return Math.max(total - paid - writtenOff, 0);
 };
 
 const daysUntil = (value) => {
@@ -197,6 +192,7 @@ const InvoiceSourceLinks = ({ invoice }) => (
 const customerLink = (customerId) => (customerId ? `/company/customers/details/${customerId}` : '');
 
 const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
+  const navigate = useNavigate();
   const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
   const [loading, setLoading] = useState(true);
   const [invoices, setInvoices] = useState([]);
@@ -213,6 +209,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
   });
   const [savingPayment, setSavingPayment] = useState(false);
   const [startingCheckoutId, setStartingCheckoutId] = useState('');
+  const [creatingInvoiceId, setCreatingInvoiceId] = useState('');
 
   const activeView = ['invoices', 'payments', 'subscriptions'].includes(defaultView) ? defaultView : 'invoices';
   const pageMeta = {
@@ -412,55 +409,15 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
     setSavingPayment(true);
 
     try {
-      const invoiceRef = doc(db, salesCollectionNames.invoices, recordPaymentInvoice.id);
-      const paymentId = `sp_${uuidv4()}`;
-      const paymentRef = doc(db, salesCollectionNames.payments, paymentId);
-
-      await runTransaction(db, async (transaction) => {
-        const invoiceSnap = await transaction.get(invoiceRef);
-        if (!invoiceSnap.exists()) throw new Error('Invoice no longer exists.');
-
-        const invoice = { id: invoiceSnap.id, ...invoiceSnap.data() };
-        const previousPaidCents = Number(invoice.amountPaidCents || 0);
-        const totalAmountCents = Number(invoice.totalAmountCents || 0);
-        const writeOffAmountCents = Number(invoice.writeOffAmountCents || 0);
-        const nextPaidCents = previousPaidCents + amountCents;
-        const nextDueCents = Math.max(totalAmountCents - nextPaidCents - writeOffAmountCents, 0);
-        const isPaid = nextDueCents <= 0;
-
-        transaction.set(paymentRef, {
-          id: paymentId,
-          companyId: recentlySelectedCompany,
-          customerId: invoice.customerId || '',
-          customerUserId: invoice.customerUserId || null,
-          customerName: invoice.customerName || '',
-          email: invoice.email || '',
-          invoiceId: invoice.id,
-          agreementId: invoice.agreementId || '',
-          jobId: invoice.jobId || '',
-          billingProfileId: invoice.billingProfileId || '',
-          billingSubscriptionId: invoice.billingSubscriptionId || '',
-          stripeConnectedAccountId: stripeConnectedAccountId || invoice.stripeConnectedAccountId || '',
-          method: paymentForm.method,
-          status: SalesPaymentStatus.posted,
-          amountCents,
-          currency: invoice.currency || 'usd',
-          referenceNumber: paymentForm.referenceNumber.trim(),
-          memo: paymentForm.memo.trim(),
-          recordedByUserId: user?.uid || '',
-          receivedAt: serverTimestamp(),
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-
-        transaction.update(invoiceRef, {
-          amountPaidCents: nextPaidCents,
-          amountDueCents: nextDueCents,
-          status: isPaid ? SalesInvoiceStatus.paid : SalesInvoiceStatus.partiallyPaid,
-          paidAt: isPaid ? serverTimestamp() : invoice.paidAt || null,
-          lastPaymentAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
+      await recordManualSalesPayment(db, recordPaymentInvoice.id, {
+        amountCents,
+        method: paymentForm.method,
+        referenceNumber: paymentForm.referenceNumber,
+        memo: paymentForm.memo,
+      }, {
+        companyId: recentlySelectedCompany,
+        stripeConnectedAccountId,
+        userId: user?.uid || '',
       });
 
       toast.success('Payment recorded.');
@@ -469,6 +426,28 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
       console.error('Failed to record payment', error);
       toast.error(error.message || 'Failed to record payment.');
       setSavingPayment(false);
+    }
+  };
+
+  const createSubscriptionInvoice = async (subscription) => {
+    if (!subscription?.id || creatingInvoiceId) return;
+
+    setCreatingInvoiceId(subscription.id);
+
+    try {
+      const result = await createManualSubscriptionInvoice(db, subscription, {
+        companyName: recentlySelectedCompanyName,
+        stripeConnectedAccountId,
+        userId: user?.uid || '',
+      });
+
+      toast.success(result.created ? 'Recurring invoice created.' : 'Invoice for this billing period already exists.');
+      navigate(`/company/sales/invoices/${result.invoiceId}`);
+    } catch (error) {
+      console.error('Unable to create recurring manual invoice', error);
+      toast.error(error.message || 'Failed to create recurring invoice.');
+    } finally {
+      setCreatingInvoiceId('');
     }
   };
 
@@ -601,7 +580,13 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
             ) : activeView === 'payments' ? (
               <PaymentsTable payments={recordsForView} />
             ) : activeView === 'subscriptions' ? (
-              <SubscriptionsTable subscriptions={recordsForView} onStartCheckout={startSubscriptionCheckout} startingCheckoutId={startingCheckoutId} />
+              <SubscriptionsTable
+                subscriptions={recordsForView}
+                onStartCheckout={startSubscriptionCheckout}
+                startingCheckoutId={startingCheckoutId}
+                onCreateInvoice={createSubscriptionInvoice}
+                creatingInvoiceId={creatingInvoiceId}
+              />
             ) : (
               <InvoicesTable invoices={recordsForView} onRecordPayment={openRecordPaymentModal} />
             )}
@@ -635,9 +620,9 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Billing Flow</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-600">
-                <p>Service agreements can create recurring billing subscriptions.</p>
-                <p>Job detail can create one-time invoices from the job estimate line items.</p>
-                <p>Manual payments update invoice balances now; Stripe payments can use the same payment model later.</p>
+                <p>Accepted service agreements create recurring billing subscriptions.</p>
+                <p>Recurring subscriptions default to manual invoices until the customer completes automatic payment setup.</p>
+                <p>Stripe subscriptions sync invoices, payments, and receipt links back into the same finance records.</p>
               </div>
             </div>
 
@@ -854,7 +839,13 @@ const PaymentsTable = ({ payments }) => (
   </div>
 );
 
-const SubscriptionsTable = ({ subscriptions, onStartCheckout, startingCheckoutId }) => (
+const SubscriptionsTable = ({
+  subscriptions,
+  onStartCheckout,
+  startingCheckoutId,
+  onCreateInvoice,
+  creatingInvoiceId,
+}) => (
   <div className="overflow-x-auto">
     <table className="min-w-full divide-y divide-slate-200 text-sm">
       <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -872,7 +863,12 @@ const SubscriptionsTable = ({ subscriptions, onStartCheckout, startingCheckoutId
         {subscriptions.map((subscription) => {
           const statusKey = normalizeStatus(subscription.stripeStatus || subscription.status);
           const isActive = ['active', 'trialing'].includes(statusKey);
-          const canCheckout = !isActive && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
+          const billingCollectionMethod = subscription.billingCollectionMethod || SalesBillingCollectionMethod.manualUntilAutopay;
+          const isStripeManagedBilling = billingCollectionMethod === SalesBillingCollectionMethod.automaticStripe || isActive;
+          const manualBillingAllowed = subscription.manualBillingEnabled !== false && !isStripeManagedBilling;
+          const workflowLabel = isStripeManagedBilling ? 'Automatic Stripe billing' : 'Manual invoices until autopay';
+          const canCheckout = !isStripeManagedBilling && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
+          const canCreateInvoice = manualBillingAllowed && Number(subscription.amountCents || 0) > 0;
 
           return (
             <tr key={subscription.id} className="transition hover:bg-slate-50">
@@ -887,6 +883,7 @@ const SubscriptionsTable = ({ subscriptions, onStartCheckout, startingCheckoutId
                 <p className="mt-1 text-xs text-slate-500">
                   Every {subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}{subscription.interval || 'month'}
                 </p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">{workflowLabel}</p>
               </td>
               <td className="px-5 py-4">
                 {subscription.agreementId ? (
@@ -902,7 +899,8 @@ const SubscriptionsTable = ({ subscriptions, onStartCheckout, startingCheckoutId
               </td>
               <td className="px-5 py-4">
                 <p className="max-w-44 truncate text-xs text-slate-500">{subscription.stripeSubscriptionId || 'Not created'}</p>
-                {subscription.checkoutUrl && !isActive && (
+                <p className="mt-1 text-xs font-semibold text-slate-500">{labelize(subscription.autopayStatus || 'not setup')}</p>
+                {subscription.checkoutUrl && !isStripeManagedBilling && (
                   <a href={subscription.checkoutUrl} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:text-blue-900">
                     Existing checkout <FaExternalLinkAlt />
                   </a>
@@ -924,6 +922,14 @@ const SubscriptionsTable = ({ subscriptions, onStartCheckout, startingCheckoutId
                     className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {startingCheckoutId === subscription.id ? 'Opening...' : isActive ? 'Active' : 'Start Checkout'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onCreateInvoice(subscription)}
+                    disabled={!canCreateInvoice || creatingInvoiceId === subscription.id}
+                    className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {creatingInvoiceId === subscription.id ? 'Creating...' : 'Create Invoice'}
                   </button>
                 </div>
               </td>

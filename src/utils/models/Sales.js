@@ -85,6 +85,21 @@ export const SalesBillingMode = {
   connectedAccountDestinationCharge: 'connectedAccountDestinationCharge',
 };
 
+export const SalesBillingCollectionMethod = {
+  manualUntilAutopay: 'manualUntilAutopay',
+  manualInvoices: 'manualInvoices',
+  automaticStripe: 'automaticStripe',
+};
+
+export const SalesAutopayStatus = {
+  unavailable: 'unavailable',
+  available: 'available',
+  checkoutStarted: 'checkoutStarted',
+  active: 'active',
+  pastDue: 'pastDue',
+  canceled: 'canceled',
+};
+
 export const SalesCatalogItemType = {
   service: 'service',
   recurringService: 'recurringService',
@@ -256,6 +271,12 @@ export class SalesAgreement {
     status = SalesAgreementStatus.draft,
     billingProfileId = '',
     billingSubscriptionId = '',
+    billingFlowStatus = '',
+    billingFlowNextAction = '',
+    billingCollectionMethod = SalesBillingCollectionMethod.manualUntilAutopay,
+    autopayStatus = SalesAutopayStatus.unavailable,
+    manualBillingEnabled = true,
+    customerCanPayImmediately = false,
     rateAmountCents = 0,
     subtotalAmountCents = 0,
     taxAmountCents = 0,
@@ -265,6 +286,8 @@ export class SalesAgreement {
     serviceCadenceCount = 1,
     paymentTerms = 'dueOnReceipt',
     invoiceDeliveryMethod = SalesInvoiceDeliveryMethod.email,
+    receiptDeliveryMethod = SalesInvoiceDeliveryMethod.email,
+    receiptsEnabled = true,
     includedServices = [],
     excludedServices = [],
     startDate = null,
@@ -309,6 +332,12 @@ export class SalesAgreement {
     this.status = status;
     this.billingProfileId = billingProfileId;
     this.billingSubscriptionId = billingSubscriptionId;
+    this.billingFlowStatus = billingFlowStatus;
+    this.billingFlowNextAction = billingFlowNextAction;
+    this.billingCollectionMethod = billingCollectionMethod;
+    this.autopayStatus = autopayStatus;
+    this.manualBillingEnabled = manualBillingEnabled;
+    this.customerCanPayImmediately = customerCanPayImmediately;
     this.rateAmountCents = rateAmountCents;
     this.subtotalAmountCents = subtotalAmountCents;
     this.taxAmountCents = taxAmountCents;
@@ -318,6 +347,8 @@ export class SalesAgreement {
     this.serviceCadenceCount = serviceCadenceCount;
     this.paymentTerms = paymentTerms;
     this.invoiceDeliveryMethod = invoiceDeliveryMethod;
+    this.receiptDeliveryMethod = receiptDeliveryMethod;
+    this.receiptsEnabled = receiptsEnabled;
     this.includedServices = includedServices;
     this.excludedServices = excludedServices;
     this.startDate = startDate;
@@ -381,8 +412,11 @@ export class SalesBillingSubscription {
     stripeLatestInvoiceId = '',
     stripeDefaultPaymentMethodId = '',
     billingMode = SalesBillingMode.connectedAccountDirectCharge,
+    billingCollectionMethod = SalesBillingCollectionMethod.manualUntilAutopay,
     status = SalesBillingSubscriptionStatus.notStarted,
     stripeStatus = '',
+    autopayStatus = SalesAutopayStatus.unavailable,
+    autopayEnabled = false,
     amountCents = 0,
     currency = 'usd',
     interval = 'month',
@@ -399,6 +433,12 @@ export class SalesBillingSubscription {
     nextAction = 'collectPaymentMethod',
     customerCanPayImmediately = false,
     stripeReadiness = {},
+    manualBillingEnabled = true,
+    manualBillingStatus = 'readyToInvoice',
+    manualBillingReason = '',
+    receiptDeliveryMethod = SalesInvoiceDeliveryMethod.email,
+    receiptsEnabled = true,
+    lastBillingSource = '',
     currentPeriodStart = null,
     currentPeriodEnd = null,
     cancelAtPeriodEnd = false,
@@ -427,8 +467,11 @@ export class SalesBillingSubscription {
     this.stripeLatestInvoiceId = stripeLatestInvoiceId;
     this.stripeDefaultPaymentMethodId = stripeDefaultPaymentMethodId;
     this.billingMode = billingMode;
+    this.billingCollectionMethod = billingCollectionMethod;
     this.status = status;
     this.stripeStatus = stripeStatus;
+    this.autopayStatus = autopayStatus;
+    this.autopayEnabled = autopayEnabled;
     this.amountCents = amountCents;
     this.currency = currency;
     this.interval = interval;
@@ -445,6 +488,12 @@ export class SalesBillingSubscription {
     this.nextAction = nextAction;
     this.customerCanPayImmediately = customerCanPayImmediately;
     this.stripeReadiness = stripeReadiness;
+    this.manualBillingEnabled = manualBillingEnabled;
+    this.manualBillingStatus = manualBillingStatus;
+    this.manualBillingReason = manualBillingReason;
+    this.receiptDeliveryMethod = receiptDeliveryMethod;
+    this.receiptsEnabled = receiptsEnabled;
+    this.lastBillingSource = lastBillingSource;
     this.currentPeriodStart = currentPeriodStart;
     this.currentPeriodEnd = currentPeriodEnd;
     this.cancelAtPeriodEnd = cancelAtPeriodEnd;

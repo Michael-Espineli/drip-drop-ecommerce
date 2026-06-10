@@ -19,10 +19,15 @@ import { db, functions } from '../../../utils/config';
 import {
   SalesInvoiceDeliveryMethod,
   SalesInvoiceStatus,
+  SalesPaymentMethod,
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
+import {
+  invoiceBalanceCents,
+  recordManualSalesPayment,
+} from '../../../utils/sales/manualBilling';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -79,15 +84,13 @@ const centsToInput = (amountCents = 0) => ((Number(amountCents) || 0) / 100).toF
 
 const moneyInputToCents = (value) => Math.round((Number(value) || 0) * 100);
 
-const invoiceBalanceCents = (invoice) => {
-  if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) return Number(invoice.amountDueCents) || 0;
-
-  const total = Number(invoice.totalAmountCents || invoice.totalCents) || 0;
-  const paid = Number(invoice.amountPaidCents) || 0;
-  const writtenOff = Number(invoice.writeOffAmountCents) || 0;
-
-  return Math.max(total - paid - writtenOff, 0);
-};
+const manualPaymentMethods = [
+  SalesPaymentMethod.cash,
+  SalesPaymentMethod.check,
+  SalesPaymentMethod.externalCard,
+  SalesPaymentMethod.bankTransfer,
+  SalesPaymentMethod.other,
+];
 
 const statusTone = {
   draft: 'border-slate-200 bg-slate-50 text-slate-700',
@@ -195,7 +198,7 @@ const blankLineItem = () => ({
 
 const SalesInvoiceDetail = () => {
   const { invoiceId } = useParams();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
   const [invoice, setInvoice] = useState(null);
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -205,6 +208,14 @@ const SalesInvoiceDetail = () => {
   const [saving, setSaving] = useState(false);
   const [sending, setSending] = useState(false);
   const [voiding, setVoiding] = useState(false);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [paymentForm, setPaymentForm] = useState({
+    amount: '',
+    method: SalesPaymentMethod.cash,
+    referenceNumber: '',
+    memo: '',
+  });
+  const [savingPayment, setSavingPayment] = useState(false);
 
   useEffect(() => {
     if (!invoiceId) {
@@ -312,6 +323,14 @@ const SalesInvoiceDetail = () => {
     !voiding &&
     !['paid', 'void'].includes(normalizeStatus(invoice.status))
   );
+  const canRecordPayment = Boolean(
+    invoice &&
+    !companyMismatch &&
+    !editing &&
+    balanceCents > 0 &&
+    !savingPayment &&
+    !['void', 'uncollectible'].includes(normalizeStatus(invoice.status))
+  );
 
   const updateDraft = (field, value) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -348,6 +367,54 @@ const SalesInvoiceDetail = () => {
   const cancelEditing = () => {
     setDraft(createDraft(invoice));
     setEditing(false);
+  };
+
+  const openPaymentModal = () => {
+    setPaymentForm({
+      amount: balanceCents > 0 ? centsToInput(balanceCents) : '',
+      method: SalesPaymentMethod.cash,
+      referenceNumber: '',
+      memo: '',
+    });
+    setPaymentModalOpen(true);
+  };
+
+  const closePaymentModal = () => {
+    setPaymentModalOpen(false);
+    setSavingPayment(false);
+  };
+
+  const handleRecordPayment = async (event) => {
+    event.preventDefault();
+    if (!invoice || savingPayment || companyMismatch) return;
+
+    const amountCents = moneyInputToCents(paymentForm.amount);
+    if (amountCents <= 0) {
+      toast.error('Payment amount must be greater than zero.');
+      return;
+    }
+
+    setSavingPayment(true);
+
+    try {
+      await recordManualSalesPayment(db, invoice.id, {
+        amountCents,
+        method: paymentForm.method,
+        referenceNumber: paymentForm.referenceNumber,
+        memo: paymentForm.memo,
+      }, {
+        companyId: recentlySelectedCompany,
+        stripeConnectedAccountId,
+        userId: user?.uid || '',
+      });
+
+      toast.success(amountCents >= balanceCents ? 'Invoice marked paid.' : 'Payment recorded.');
+      closePaymentModal();
+    } catch (paymentError) {
+      console.error('Unable to record invoice payment', paymentError);
+      toast.error(paymentError.message || 'Failed to record payment.');
+      setSavingPayment(false);
+    }
   };
 
   const saveInvoice = async (event) => {
@@ -517,6 +584,15 @@ const SalesInvoiceDetail = () => {
               >
                 <FaEnvelope className="text-xs" />
                 {sending ? 'Sending...' : 'Send Email'}
+              </button>
+              <button
+                type="button"
+                onClick={openPaymentModal}
+                disabled={!canRecordPayment}
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaReceipt className="text-xs" />
+                Mark Paid
               </button>
               {!editing ? (
                 <button
@@ -826,6 +902,7 @@ const SalesInvoiceDetail = () => {
                         <StatusBadge status={payment.status || SalesPaymentStatus.posted} />
                       </div>
                       {payment.referenceNumber && <p className="mt-2 text-xs text-slate-500">{payment.referenceNumber}</p>}
+                      {payment.memo && <p className="mt-2 whitespace-pre-wrap text-xs leading-5 text-slate-600">{payment.memo}</p>}
                     </div>
                   ))}
                 </div>
@@ -865,6 +942,76 @@ const SalesInvoiceDetail = () => {
           </div>
         )}
       </div>
+
+      {paymentModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <form onSubmit={handleRecordPayment} className="w-full max-w-lg rounded-lg bg-white p-6 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-950">Mark Invoice Paid</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {invoice?.invoiceNumber || 'Invoice'} - Balance {formatCurrency(balanceCents)}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closePaymentModal}
+                className="rounded-md border border-slate-200 px-3 py-1 text-sm font-semibold text-slate-600"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4">
+              <TextInput
+                label="Amount"
+                value={paymentForm.amount}
+                onChange={(value) => setPaymentForm((current) => ({ ...current, amount: value }))}
+                type="number"
+                min="0"
+                step="0.01"
+              />
+              <SelectInput
+                label="Payment Method"
+                value={paymentForm.method}
+                onChange={(value) => setPaymentForm((current) => ({ ...current, method: value }))}
+                options={manualPaymentMethods}
+              />
+              <TextInput
+                label="Reference Number"
+                value={paymentForm.referenceNumber}
+                onChange={(value) => setPaymentForm((current) => ({ ...current, referenceNumber: value }))}
+              />
+              <label className="space-y-1.5">
+                <span className="text-sm font-semibold text-slate-700">Notes</span>
+                <textarea
+                  value={paymentForm.memo}
+                  onChange={(event) => setPaymentForm((current) => ({ ...current, memo: event.target.value }))}
+                  className="min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                  placeholder="Optional internal payment note"
+                />
+              </label>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-3 border-t border-slate-200 pt-4">
+              <button
+                type="button"
+                onClick={closePaymentModal}
+                className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={savingPayment}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {savingPayment ? 'Saving...' : 'Save Payment'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

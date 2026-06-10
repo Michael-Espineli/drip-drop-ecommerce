@@ -30,11 +30,9 @@ const NewRequest = lazy(() => import("../../views/client/serviceRequests/NewRequ
 const ServiceRequests = lazy(() => import("../../views/client/serviceRequests/ServiceRequests"));
 const ServiceRequestDetail = lazy(() => import("../../views/client/serviceRequests/ServiceRequestDetail"));
 const EditServiceRequest = lazy(() => import("../../views/client/serviceRequests/EditServiceRequest"));
-const ServiceAgreements = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreements"));
 const ServiceAgreementDetail = lazy(() => import("../../views/client/serviceAgreements/ServiceAgreementDetail"));
-const PartApprovals = lazy(() => import("../../views/client/partApprovals/PartApprovals"));
 const PartApprovalDetail = lazy(() => import("../../views/client/partApprovals/PartApprovalDetail"));
-const ClientBilling = lazy(() => import("../../views/client/billing/ClientBilling"));
+const ClientFinance = lazy(() => import("../../views/client/finance/ClientFinance"));
 const ClientInvoiceDetail = lazy(() => import("../../views/client/billing/ClientInvoiceDetail"));
 
 const NewBodyOfWater = lazy(() => import("../../views/client/pools/NewBodyOfWater"));
@@ -135,19 +133,22 @@ export const clientRoutes = [
         path:'/messages/newCompany/:companyId',
         element: <NewCompanyChat/>,
         ability :['Admin','Client'],
-        role:'Client'
+        role:'Client',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path:'/client/chat', 
         element: <Messages/>,
         ability :['Admin','Client'], 
-        role:'Client'
+        role:'Client',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path:'/client/chat/details/:chatId',
         element: <CompanyConversation/>,
         ability :['Admin','Client'],
-        role:'Client'
+        role:'Client',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path:'/client/companies', 
@@ -217,7 +218,7 @@ export const clientRoutes = [
     },
     {
         path: '/client/service-agreements',
-        element: <ServiceAgreements />,
+        element: <ClientFinance />,
         ability: ['Admin', 'Client'],
         role: 'Client'
     },
@@ -229,7 +230,7 @@ export const clientRoutes = [
     },
     {
         path: '/client/part-approvals',
-        element: <PartApprovals />,
+        element: <ClientFinance />,
         ability: ['Admin', 'Client'],
         role: 'Client'
     },
@@ -252,8 +253,14 @@ export const clientRoutes = [
         role: 'Client'
     },
     {
+        path: '/client/finance',
+        element: <ClientFinance />,
+        ability: ['Admin', 'Client'],
+        role: 'Client'
+    },
+    {
         path: '/client/billing',
-        element: <ClientBilling />,
+        element: <ClientFinance />,
         ability: ['Admin', 'Client'],
         role: 'Client'
     },

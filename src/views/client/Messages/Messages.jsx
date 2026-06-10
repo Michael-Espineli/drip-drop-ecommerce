@@ -4,18 +4,20 @@ import { useNavigate } from 'react-router-dom';
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { timeSince } from '../../../utils/timeFormatter';
-import { ChatBubbleLeftRightIcon, ArrowLeftIcon } from '@heroicons/react/24/outline';
+import { ChatBubbleLeftRightIcon, ArrowLeftIcon, PlusIcon } from '@heroicons/react/24/outline';
 import {
     getChatDisplayTitle,
     getChatPreview,
     isChatUnreadFor,
     listenVisibleChats,
 } from '../../../utils/chatMessaging';
+import StartChatModal from '../../components/chat/StartChatModal';
 
 const Messages = () => {
     const navigate = useNavigate();
     const { user } = useContext(Context);
     const [chats, setChats] = useState([]);
+    const [isNewChatOpen, setIsNewChatOpen] = useState(false);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
 
@@ -62,7 +64,11 @@ const Messages = () => {
     return (
         <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
             <div className="max-w-4xl mx-auto">
-                <Header onBack={() => navigate(-1)} />
+                <Header onBack={() => navigate(-1)} onNewChat={() => setIsNewChatOpen(true)} />
+
+                {isNewChatOpen && (
+                    <StartChatModal mode="client" closeModal={() => setIsNewChatOpen(false)} />
+                )}
 
                 {chats.length === 0 ? (
                     <NoChatsView />
@@ -85,12 +91,21 @@ const Messages = () => {
     );
 };
 
-const Header = ({ onBack }) => (
-    <div className="flex items-center gap-4">
-        <button onClick={onBack} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
-            <ArrowLeftIcon className="w-6 h-6" />
+const Header = ({ onBack, onNewChat }) => (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-center gap-4">
+            <button onClick={onBack} className="p-2 text-gray-600 hover:bg-gray-100 rounded-full">
+                <ArrowLeftIcon className="w-6 h-6" />
+            </button>
+            <h1 className="text-3xl font-bold text-gray-900">Messages</h1>
+        </div>
+        <button
+            onClick={onNewChat}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white shadow-md transition-colors hover:bg-blue-700 sm:w-auto"
+        >
+            <PlusIcon className="h-5 w-5" />
+            <span>Start a new chat</span>
         </button>
-        <h1 className="text-3xl font-bold text-gray-900">Messages</h1>
     </div>
 );
 

@@ -11,6 +11,7 @@ import {
     where,
     arrayUnion,
     Timestamp,
+    serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -920,12 +921,19 @@ const CreateNewJob = () => {
             const customerName = getCustomerDisplayName(selectedCustomer);
             const adminId = getAdminIdForJob(selectedAdmin);
             const adminName = getAdminNameForJob(selectedAdmin);
+            const now = new Date();
+            const nowTimestamp = Timestamp.fromDate(now);
+            const nowMillis = now.getTime();
 
             const jobData = {
                 id: jobId,
                 internalId: nextInternalId,
                 type: "",
-                dateCreated: Timestamp.fromDate(new Date()),
+                dateCreated: nowTimestamp,
+                updatedAt: nowTimestamp,
+                updatedAtMillis: nowMillis,
+                lastHistoryEventTitle: "Job initially created",
+                lastHistoryEventType: "Created",
                 description: description || "",
 
                 operationStatus: "Estimate Pending",
@@ -1050,6 +1058,42 @@ const CreateNewJob = () => {
                     }
                 );
             }
+
+            const historyId = "comp_job_hist_" + uuidv4();
+            await setDoc(
+                doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId),
+                {
+                    id: historyId,
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    jobInternalId: nextInternalId,
+                    eventType: "Created",
+                    title: "Job initially created",
+                    description: selectedTemplate?.name
+                        ? `Started from template: ${selectedTemplate.name}`
+                        : "Created from the web job flow.",
+                    changes: [
+                        { field: "adminName", label: "Admin", before: "—", after: adminName || "—" },
+                        { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
+                        { field: "serviceLocationName", label: "Service Location", before: "—", after: selectedServiceLocation.label || "—" },
+                        { field: "rate", label: "Customer Price", before: "—", after: `$${(Number(rateCents || 0) / 100).toFixed(2)}` },
+                        { field: "tasks", label: "Tasks", before: "—", after: String(taskList.length) },
+                        { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(plannedServiceStops.length) },
+                        { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(shoppingList.length) },
+                    ],
+                    metadata: {
+                        sourceTemplateId: selectedTemplate?.id || "",
+                        sourceTemplateName: selectedTemplate?.name || "",
+                        repairRequestId: repairRequest?.id || "",
+                    },
+                    severity: "success",
+                    actorUserId: createdByUserId || "",
+                    actorUserName: createdByUserName,
+                    actorCompanyUserId: dataBaseUser?.id || "",
+                    createdAt: serverTimestamp(),
+                    createdAtMillis: nowMillis,
+                }
+            );
 
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {

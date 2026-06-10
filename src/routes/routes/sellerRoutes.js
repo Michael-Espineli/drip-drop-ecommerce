@@ -115,6 +115,7 @@ const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNew
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
 const MigrationDashboard = lazy(() => import("../../views/company/migration/MigrationDashboard"))
 const CustomerExportImport = lazy(() => import("../../views/company/migration/CustomerExportImport"))
+const EquipmentImport = lazy(() => import("../../views/company/migration/EquipmentImport"))
 const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
 
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
@@ -723,12 +724,14 @@ export const sellerRoutes = [
         path: '/company/messages',
         element: <Chat />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        featureFlagId: 'feature_flag_001',
     }, {
         path: '/company/messages/:clientId',
         element: <ChatInitiation />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        featureFlagId: 'feature_flag_001',
     }, {
         path: '/company/public-profile',
         element: <PublicPage />,
@@ -890,6 +893,15 @@ export const sellerRoutes = [
     {
         path: '/company/migration/customer-export-import',
         element: <CustomerExportImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/equipment-import',
+        element: <EquipmentImport />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
         permissionId: '800',

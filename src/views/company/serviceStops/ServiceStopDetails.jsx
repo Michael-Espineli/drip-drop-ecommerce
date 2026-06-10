@@ -11,8 +11,10 @@ import {
     updateDoc,
     arrayUnion,
     writeBatch,
+    Timestamp,
 } from "firebase/firestore";
-import { db } from "../../../utils/config";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { ServiceStop } from "../../../utils/models/ServiceStop";
 import { format } from "date-fns";
@@ -52,6 +54,160 @@ const equipmentTaskTypes = new Set([
 
 const taskNeedsEquipment = (type) => equipmentTaskTypes.has(type);
 
+const getDateValue = (value) => {
+    if (!value) return null;
+    if (typeof value?.toDate === "function") return value.toDate();
+    if (value instanceof Date) return value;
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const startOfDay = (value) => {
+    const date = getDateValue(value);
+    if (!date) return null;
+
+    const next = new Date(date);
+    next.setHours(0, 0, 0, 0);
+    return next;
+};
+
+const endOfDay = (value) => {
+    const date = getDateValue(value);
+    if (!date) return null;
+
+    const next = new Date(date);
+    next.setHours(23, 59, 59, 999);
+    return next;
+};
+
+const formatDateInput = (value) => {
+    const date = getDateValue(value);
+    return date ? format(date, "yyyy-MM-dd") : "";
+};
+
+const parseDateInput = (value) => {
+    if (!value) return null;
+
+    const [year, month, day] = value.split("-").map((part) => Number(part));
+    if (!year || !month || !day) return null;
+
+    const date = new Date(year, month - 1, day);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const sameDay = (left, right) => {
+    const leftDate = startOfDay(left);
+    const rightDate = startOfDay(right);
+    return !!leftDate && !!rightDate && leftDate.getTime() === rightDate.getTime();
+};
+
+const isFinishedStatus = (status) => {
+    const normalized = String(status || "").toLowerCase();
+    return ["finished", "completed", "done", "complete"].includes(normalized);
+};
+
+const isServiceStopFinished = (stop) => (
+    isFinishedStatus(stop?.operationStatus) ||
+    Boolean(getDateValue(stop?.endTime) || getDateValue(stop?.finishedAt) || getDateValue(stop?.completedAt))
+);
+
+const minutesBetween = (start, end) => {
+    const startDate = getDateValue(start);
+    const endDate = getDateValue(end);
+    if (!startDate || !endDate) return 0;
+
+    return Math.max(0, Math.round((endDate.getTime() - startDate.getTime()) / 60000));
+};
+
+const normalizeCompanyUser = (docSnap) => {
+    const data = docSnap.data();
+    const label =
+        data.userName ||
+        data.displayName ||
+        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
+        data.name ||
+        data.email ||
+        "Unnamed User";
+    const userId = data.userId || data.id || docSnap.id;
+
+    return {
+        ...data,
+        id: data.id || docSnap.id,
+        userId,
+        userName: data.userName || label,
+        value: userId,
+        label,
+    };
+};
+
+const activeRouteDocumentId = (date, techId) => (
+    `com_ar_${format(startOfDay(date) || new Date(date), "yyyyMMdd")}_${String(techId || "").replace(/\//g, "_")}`
+);
+
+const routeHasWorkActivity = (route) => Boolean(
+    getDateValue(route?.startTime) ||
+    getDateValue(route?.endTime) ||
+    (route?.status && route.status !== "Did Not Start")
+);
+
+const pickCanonicalRoute = (routes = []) => (
+    [...routes].sort((left, right) => {
+        const leftHasWork = routeHasWorkActivity(left);
+        const rightHasWork = routeHasWorkActivity(right);
+
+        if (leftHasWork !== rightHasWork) return leftHasWork ? -1 : 1;
+
+        const stopDelta = (right.serviceStopsIds?.length || 0) - (left.serviceStopsIds?.length || 0);
+        if (stopDelta !== 0) return stopDelta;
+
+        return String(left.id || "").localeCompare(String(right.id || ""));
+    })[0] || null
+);
+
+const buildRouteOrder = (stops = [], existingOrder = []) => {
+    const stopIds = new Set(stops.map((stop) => stop.id));
+    const activeOrder = (Array.isArray(existingOrder) ? existingOrder : [])
+        .filter((item) => stopIds.has(item.serviceStopId || item.id))
+        .sort((left, right) => Number(left.order || 0) - Number(right.order || 0));
+    const orderedStopIds = new Set(activeOrder.map((item) => item.serviceStopId || item.id));
+
+    stops.forEach((stop) => {
+        if (orderedStopIds.has(stop.id)) return;
+
+        activeOrder.push({
+            id: `route_order_${crypto.randomUUID()}`,
+            order: activeOrder.length + 1,
+            serviceStopId: stop.id,
+            recurringServiceStopId: stop.recurringServiceStopId || "",
+        });
+        orderedStopIds.add(stop.id);
+    });
+
+    return activeOrder.map((item, index) => ({
+        ...item,
+        id: item.id || `route_order_${crypto.randomUUID()}`,
+        serviceStopId: item.serviceStopId || item.id,
+        order: index + 1,
+    }));
+};
+
+const getRouteStatusFromStops = (stops = [], existingRoute = null) => {
+    if (!stops.length) return "Did Not Start";
+
+    const finishedStops = stops.filter(isServiceStopFinished).length;
+    const inProgressStops = stops.filter((stop) => getDateValue(stop.startTime) && !isServiceStopFinished(stop)).length;
+
+    if (finishedStops === stops.length) return "Finished";
+    if (inProgressStops > 0 || finishedStops > 0) return "In Progress";
+
+    if (["In Progress", "Traveling", "On Break"].includes(existingRoute?.status)) {
+        return existingRoute.status;
+    }
+
+    return "Did Not Start";
+};
+
 const ServiceStopDetails = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
@@ -60,6 +216,7 @@ const ServiceStopDetails = () => {
 
     const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
+    const [companyUsers, setCompanyUsers] = useState([]);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
     const [readingTemplates, setReadingTemplates] = useState([]);
@@ -71,6 +228,15 @@ const ServiceStopDetails = () => {
     const [observationDraft, setObservationDraft] = useState("");
     const [savingStopData, setSavingStopData] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [editEnabled, setEditEnabled] = useState(false);
+    const [editForm, setEditForm] = useState({
+        serviceDate: "",
+        techId: "",
+        description: "",
+    });
+    const [savingEdit, setSavingEdit] = useState(false);
+    const [showManualStopData, setShowManualStopData] = useState(false);
+    const [finishingStop, setFinishingStop] = useState(false);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
 
@@ -115,6 +281,11 @@ const ServiceStopDetails = () => {
                 if (docSnap.exists()) {
                     const stopData = ServiceStop.fromFirestore(docSnap);
                     setServiceStop(stopData);
+                    setEditForm({
+                        serviceDate: formatDateInput(stopData.serviceDate),
+                        techId: stopData.techId || "",
+                        description: stopData.description || "",
+                    });
 
                     const taskQuery = query(
                         collection(
@@ -133,9 +304,10 @@ const ServiceStopDetails = () => {
                     }));
                     setTaskList(tasks);
 
-                    const [readingTemplatesSnapshot, dosageTemplatesSnapshot, loadedStopData] = await Promise.all([
+                    const [readingTemplatesSnapshot, dosageTemplatesSnapshot, userSnapshot, loadedStopData] = await Promise.all([
                         getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings")),
                         getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages")),
+                        getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
                         fetchStopDataForServiceStop({
                             db,
                             companyId: recentlySelectedCompany,
@@ -154,6 +326,11 @@ const ServiceStopDetails = () => {
                             id: dosageDoc.id,
                             ...dosageDoc.data(),
                         }))
+                    );
+                    setCompanyUsers(
+                        userSnapshot.docs
+                            .map(normalizeCompanyUser)
+                            .sort((a, b) => a.label.localeCompare(b.label))
                     );
                     setStopDataRecords(loadedStopData);
 
@@ -343,6 +520,387 @@ const ServiceStopDetails = () => {
             {children ? children : <p className="text-gray-800">{value || "—"}</p>}
         </div>
     );
+
+    const findCompanyUser = (userId) => (
+        companyUsers.find((user) => user.userId === userId || user.id === userId) || null
+    );
+
+    const syncActiveRouteForServiceStops = async ({ date, techId, techName }) => {
+        if (!recentlySelectedCompany || !date || !techId) return null;
+
+        const dayStart = startOfDay(date);
+        const dayEnd = endOfDay(date);
+        if (!dayStart || !dayEnd) return null;
+
+        const [stopsSnapshot, routesSnapshot] = await Promise.all([
+            getDocs(
+                query(
+                    collection(db, "companies", recentlySelectedCompany, "serviceStops"),
+                    where("serviceDate", ">=", dayStart),
+                    where("serviceDate", "<=", dayEnd)
+                )
+            ),
+            getDocs(
+                query(
+                    collection(db, "companies", recentlySelectedCompany, "activeRoutes"),
+                    where("date", ">=", dayStart),
+                    where("date", "<=", dayEnd)
+                )
+            ),
+        ]);
+
+        const stops = stopsSnapshot.docs
+            .map((stopDoc) => ({ id: stopDoc.id, ...stopDoc.data() }))
+            .filter((stop) => stop.techId === techId || (!stop.techId && stop.tech === techName));
+        const existingRoutes = routesSnapshot.docs
+            .map((routeDoc) => ({ id: routeDoc.id, ref: routeDoc.ref, ...routeDoc.data() }))
+            .filter((route) => !route.duplicateOf && route.techId === techId);
+        const routeForTech = pickCanonicalRoute(existingRoutes);
+
+        if (!stops.length && !existingRoutes.length) return null;
+
+        const batch = writeBatch(db);
+        const duplicateRoutes = existingRoutes.filter((route) => route.id !== routeForTech?.id);
+
+        if (!stops.length) {
+            if (routeForTech?.ref) {
+                batch.update(routeForTech.ref, {
+                    serviceStopsIds: [],
+                    order: [],
+                    totalStops: 0,
+                    finishedStops: 0,
+                    status: "Did Not Start",
+                });
+            }
+
+            duplicateRoutes.forEach((route) => {
+                batch.update(route.ref, {
+                    duplicateOf: routeForTech?.id || "",
+                    serviceStopsIds: [],
+                    order: [],
+                    totalStops: 0,
+                    finishedStops: 0,
+                });
+            });
+
+            await batch.commit();
+            return null;
+        }
+
+        const routeId = routeForTech?.id || activeRouteDocumentId(dayStart, techId);
+        const routeRef = doc(db, "companies", recentlySelectedCompany, "activeRoutes", routeId);
+        const serviceStopsIds = stops.map((stop) => stop.id);
+        const finishedStops = stops.filter(isServiceStopFinished).length;
+        const routePayload = {
+            id: routeId,
+            name: routeForTech?.name || `${techName || "Technician"}'s Route - ${format(dayStart, "MM/dd/yyyy")}`,
+            date: Timestamp.fromDate(dayStart),
+            techId,
+            techName: techName || "",
+            serviceStopsIds,
+            order: buildRouteOrder(stops, routeForTech?.order || []),
+            totalStops: serviceStopsIds.length,
+            finishedStops,
+            durationMin: stops.reduce((total, stop) => total + Number(stop.duration || stop.estimatedDuration || 0), 0),
+            status: getRouteStatusFromStops(stops, routeForTech),
+            distanceMiles: Number(routeForTech?.distanceMiles || routeForTech?.distance || 0),
+            vehicalId: routeForTech?.vehicalId || "",
+            vehicleSource: routeForTech?.vehicleSource || "",
+            personalVehicleOwnerId: routeForTech?.personalVehicleOwnerId || "",
+            vehicleLabel: routeForTech?.vehicleLabel || "",
+            vehiclePlate: routeForTech?.vehiclePlate || "",
+            vehicleKind: routeForTech?.vehicleKind || "",
+        };
+
+        batch.set(routeRef, routePayload, { merge: true });
+        duplicateRoutes.forEach((route) => {
+            batch.update(route.ref, {
+                duplicateOf: routeId,
+                serviceStopsIds: [],
+                order: [],
+                totalStops: 0,
+                finishedStops: 0,
+            });
+        });
+
+        await batch.commit();
+        return routePayload;
+    };
+
+    const handleEditFieldChange = (field, value) => {
+        setEditForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const toggleEditEnabled = (nextValue) => {
+        setEditEnabled(nextValue);
+        if (!nextValue) {
+            setShowDeleteConfirm(false);
+            setShowAddTask(false);
+            resetTaskForm();
+            setEditForm({
+                serviceDate: formatDateInput(serviceStop?.serviceDate),
+                techId: serviceStop?.techId || "",
+                description: serviceStop?.description || "",
+            });
+        }
+    };
+
+    const saveServiceStopEdits = async (event) => {
+        event.preventDefault();
+        if (!requirePermission("244", "update service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
+
+        const nextServiceDate = parseDateInput(editForm.serviceDate);
+        if (!nextServiceDate) {
+            toast.error("Select a valid service date");
+            return;
+        }
+
+        const selectedTechnician = findCompanyUser(editForm.techId);
+        if (!selectedTechnician) {
+            toast.error("Select a technician");
+            return;
+        }
+
+        const techChanged = selectedTechnician.userId !== serviceStop.techId;
+        const dateChanged = !sameDay(nextServiceDate, serviceStop.serviceDate);
+        const description = editForm.description || "";
+        const updatedAt = new Date();
+
+        try {
+            setSavingEdit(true);
+            const batch = writeBatch(db);
+            const serviceStopRef = doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId);
+
+            batch.update(serviceStopRef, {
+                serviceDate: Timestamp.fromDate(nextServiceDate),
+                techId: selectedTechnician.userId,
+                tech: selectedTechnician.userName,
+                description,
+                updatedAt: Timestamp.fromDate(updatedAt),
+            });
+
+            if (techChanged) {
+                taskList
+                    .filter((task) => task.id && task.status !== "Finished")
+                    .forEach((task) => {
+                        batch.update(
+                            doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks", task.id),
+                            {
+                                workerId: selectedTechnician.userId,
+                                workerName: selectedTechnician.userName,
+                                workerType: selectedTechnician.workerType || task.workerType || "",
+                                updatedAt: Timestamp.fromDate(updatedAt),
+                            }
+                        );
+                    });
+            }
+
+            await batch.commit();
+
+            if (dateChanged || techChanged) {
+                const syncs = [
+                    syncActiveRouteForServiceStops({
+                        date: serviceStop.serviceDate,
+                        techId: serviceStop.techId,
+                        techName: serviceStop.tech,
+                    }),
+                ];
+
+                if (dateChanged || serviceStop.techId !== selectedTechnician.userId) {
+                    syncs.push(
+                        syncActiveRouteForServiceStops({
+                            date: nextServiceDate,
+                            techId: selectedTechnician.userId,
+                            techName: selectedTechnician.userName,
+                        })
+                    );
+                }
+
+                await Promise.all(syncs);
+            }
+
+            setServiceStop((current) => ({
+                ...current,
+                serviceDate: nextServiceDate,
+                techId: selectedTechnician.userId,
+                tech: selectedTechnician.userName,
+                description,
+            }));
+            setNewTask((current) => ({
+                ...current,
+                workerId: selectedTechnician.userId,
+                workerName: selectedTechnician.userName,
+            }));
+
+            if (techChanged) {
+                setTaskList((current) =>
+                    current.map((task) =>
+                        task.status === "Finished"
+                            ? task
+                            : {
+                                ...task,
+                                workerId: selectedTechnician.userId,
+                                workerName: selectedTechnician.userName,
+                                workerType: selectedTechnician.workerType || task.workerType || "",
+                            }
+                    )
+                );
+            }
+
+            toast.success("Service stop updated");
+        } catch (error) {
+            console.error("Failed to update service stop:", error);
+            toast.error("Failed to update service stop");
+        } finally {
+            setSavingEdit(false);
+        }
+    };
+
+    const finishServiceStopManually = async () => {
+        if (!requirePermission("244", "update service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
+
+        if (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus)) {
+            toast.success("Service stop is already finished");
+            return;
+        }
+
+        const unfinishedTasks = taskList.filter((task) => task.status !== "Finished");
+        const confirmMessage = unfinishedTasks.length
+            ? `Finish this service stop and mark ${unfinishedTasks.length} unfinished task(s) as finished?`
+            : "Finish this service stop manually?";
+
+        if (!window.confirm(confirmMessage)) return;
+
+        const taskPlans = [];
+        for (const task of unfinishedTasks) {
+            const installDetails = promptForReplacementInstallDetails(task);
+            if (installDetails === null) {
+                toast.error("Replacement install details are required before finishing this service stop");
+                return;
+            }
+            taskPlans.push({ task, installDetails });
+        }
+
+        try {
+            setFinishingStop(true);
+            const completedAt = new Date();
+            const fallbackDuration = Number(serviceStop.estimatedDuration || serviceStop.duration || 0);
+            const startAt = getDateValue(serviceStop.startTime) || new Date(completedAt.getTime() - fallbackDuration * 60000);
+            const duration = minutesBetween(startAt, completedAt) || fallbackDuration;
+            let nextTasks = [...taskList];
+
+            for (const { task, installDetails } of taskPlans) {
+                const taskRef = doc(
+                    db,
+                    "companies",
+                    recentlySelectedCompany,
+                    "serviceStops",
+                    serviceStopId,
+                    "tasks",
+                    task.id
+                );
+                const finishedTask = {
+                    ...task,
+                    ...installDetails,
+                    status: "Finished",
+                    workerId: task.workerId || serviceStop.techId || "",
+                    workerName: task.workerName || serviceStop.tech || "",
+                };
+                const effects = await runWorkCompletionEffects({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    task: finishedTask,
+                    serviceStop,
+                    currentJobOperationStatus: serviceStop?.operationStatus || "",
+                    syncJobStatus: true,
+                });
+                const taskUpdates = {
+                    status: "Finished",
+                    workerId: finishedTask.workerId,
+                    workerName: finishedTask.workerName,
+                    completedAt: Timestamp.fromDate(completedAt),
+                    updatedAt: Timestamp.fromDate(completedAt),
+                    ...(installDetails?.installedEquipmentName ? { installedEquipmentName: installDetails.installedEquipmentName } : {}),
+                    ...(installDetails?.installedEquipmentType ? { installedEquipmentType: installDetails.installedEquipmentType } : {}),
+                    ...(installDetails?.installedEquipmentMake ? { installedEquipmentMake: installDetails.installedEquipmentMake } : {}),
+                    ...(installDetails?.installedEquipmentModel ? { installedEquipmentModel: installDetails.installedEquipmentModel } : {}),
+                    ...(installDetails?.installedEquipmentNotes ? { installedEquipmentNotes: installDetails.installedEquipmentNotes } : {}),
+                    ...(effects.equipmentHistory?.replacementEquipmentId
+                        ? {
+                            replacementEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                            installedEquipmentId: effects.equipmentHistory.replacementEquipmentId,
+                        }
+                        : {}),
+                    ...(effects.equipmentHistory?.installedPurchasedItemId
+                        ? {
+                            purchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                            installedPurchasedItemId: effects.equipmentHistory.installedPurchasedItemId,
+                        }
+                        : {}),
+                };
+
+                await updateDoc(taskRef, taskUpdates);
+                const syncedTask = { ...finishedTask, ...taskUpdates };
+                nextTasks = nextTasks.map((item) => (item.id === task.id ? syncedTask : item));
+            }
+
+            const stopUpdates = {
+                operationStatus: "Finished",
+                startTime: Timestamp.fromDate(startAt),
+                endTime: Timestamp.fromDate(completedAt),
+                finishedAt: Timestamp.fromDate(completedAt),
+                completedAt: Timestamp.fromDate(completedAt),
+                duration,
+                manuallyFinished: true,
+                manualFinishSource: "admin_web",
+                updatedAt: Timestamp.fromDate(completedAt),
+            };
+
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId), stopUpdates);
+
+            const nextStop = {
+                ...serviceStop,
+                operationStatus: "Finished",
+                startTime: startAt,
+                endTime: completedAt,
+                finishedAt: completedAt,
+                completedAt,
+                duration,
+                manuallyFinished: true,
+                manualFinishSource: "admin_web",
+            };
+
+            setServiceStop(nextStop);
+            setTaskList(nextTasks);
+            await syncActiveRouteForServiceStops({
+                date: nextStop.serviceDate,
+                techId: nextStop.techId,
+                techName: nextStop.tech,
+            });
+
+            try {
+                const sendServiceReportOnFinish = httpsCallable(functions, "sendServiceReportOnFinish");
+                await sendServiceReportOnFinish({
+                    companyId: recentlySelectedCompany,
+                    serviceStopId,
+                });
+            } catch (emailError) {
+                console.warn("Service stop finished, but the service report callable failed:", emailError);
+            }
+
+            toast.success("Service stop finished");
+        } catch (error) {
+            console.error("Failed to finish service stop:", error);
+            toast.error("Failed to finish service stop");
+        } finally {
+            setFinishingStop(false);
+        }
+    };
 
     const resetTaskForm = () => {
         setNewTask({
@@ -778,7 +1336,7 @@ const ServiceStopDetails = () => {
                         <h2 className="text-3xl font-bold text-gray-800">Service Stop Details</h2>
                         <p className="text-sm text-gray-500">#{serviceStop.internalId || "—"}</p>
                     </div>
-                    {can("246") && (
+                    {editEnabled && can("246") && (
                         <button
                             type="button"
                             onClick={() => setShowDeleteConfirm(true)}
@@ -869,12 +1427,24 @@ const ServiceStopDetails = () => {
                                         <h3 className="text-xl font-bold text-gray-800">Stop Data</h3>
                                         <p className="text-sm text-gray-600 mt-1">Readings, dosages, and observations for this service stop.</p>
                                     </div>
-                                    <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700">
-                                        {selectedStopDataRecord ? "Saved" : "Not saved"}
-                                    </span>
+                                    <div className="flex flex-col items-start gap-2 sm:items-end">
+                                        <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700">
+                                            {selectedStopDataRecord ? "Saved" : "Not saved"}
+                                        </span>
+                                        <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                            <input
+                                                type="checkbox"
+                                                checked={showManualStopData}
+                                                onChange={(event) => setShowManualStopData(event.target.checked)}
+                                                className="h-4 w-4 rounded border-gray-300 text-cyan-600"
+                                            />
+                                            Manually input stop data
+                                        </label>
+                                    </div>
                                 </div>
 
-                                {bodiesOfWater.length ? (
+                                {showManualStopData ? (
+                                    bodiesOfWater.length ? (
                                     <div className="mt-5 space-y-5">
                                         <div>
                                             <label className="block text-sm font-semibold text-gray-600 mb-1">
@@ -997,6 +1567,18 @@ const ServiceStopDetails = () => {
                                     <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
                                         Add a body of water to this service location before recording stop data.
                                     </div>
+                                    )
+                                ) : (
+                                    <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-5 text-sm text-gray-600">
+                                        <p className="font-semibold text-gray-800">
+                                            {stopDataRecords.length
+                                                ? `${stopDataRecords.length} stop data record${stopDataRecords.length === 1 ? "" : "s"} saved`
+                                                : "No stop data entered"}
+                                        </p>
+                                        <p className="mt-1">
+                                            Manual readings, dosages, and observations are hidden until enabled.
+                                        </p>
+                                    </div>
                                 )}
                             </div>
                         )}
@@ -1019,6 +1601,112 @@ const ServiceStopDetails = () => {
                     </div>
 
                     <div className="space-y-6">
+                        {(can("244") || can("246")) && (
+                            <div className="bg-white shadow-lg rounded-xl p-6">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-gray-800">Admin Edit</h3>
+                                        <p className="text-sm text-gray-600">Scheduling, technician, description, and completion controls</p>
+                                    </div>
+                                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                        <input
+                                            type="checkbox"
+                                            checked={editEnabled}
+                                            onChange={(event) => toggleEditEnabled(event.target.checked)}
+                                            className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                                        />
+                                        Edit enabled
+                                    </label>
+                                </div>
+
+                                {editEnabled ? (
+                                    <div className="mt-5 space-y-4">
+                                        {can("244") && (
+                                            <form onSubmit={saveServiceStopEdits} className="space-y-4">
+                                                <div>
+                                                    <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                        Scheduled Date
+                                                    </label>
+                                                    <input
+                                                        type="date"
+                                                        value={editForm.serviceDate}
+                                                        onChange={(event) => handleEditFieldChange("serviceDate", event.target.value)}
+                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                    />
+                                                </div>
+
+                                                <div>
+                                                    <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                        Technician
+                                                    </label>
+                                                    <select
+                                                        value={editForm.techId}
+                                                        onChange={(event) => handleEditFieldChange("techId", event.target.value)}
+                                                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
+                                                    >
+                                                        <option value="">Select technician</option>
+                                                        {companyUsers.map((user) => (
+                                                            <option key={user.id} value={user.userId}>
+                                                                {user.label}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </div>
+
+                                                <label className="block">
+                                                    <span className="block text-sm font-semibold text-gray-600 mb-1">
+                                                        Description
+                                                    </span>
+                                                    <textarea
+                                                        value={editForm.description}
+                                                        onChange={(event) => handleEditFieldChange("description", event.target.value)}
+                                                        rows={4}
+                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                                        placeholder="Service stop description"
+                                                    />
+                                                </label>
+
+                                                <button
+                                                    type="submit"
+                                                    disabled={savingEdit}
+                                                    className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    {savingEdit ? "Saving..." : "Save Changes"}
+                                                </button>
+                                            </form>
+                                        )}
+
+                                        <div className="grid grid-cols-1 gap-3">
+                                            {can("244") && (
+                                                <button
+                                                    type="button"
+                                                    onClick={finishServiceStopManually}
+                                                    disabled={finishingStop || (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus))}
+                                                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                >
+                                                    {finishingStop ? "Finishing..." : "Finish Service Stop Manually"}
+                                                </button>
+                                            )}
+
+                                            {can("246") && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => setShowDeleteConfirm(true)}
+                                                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+                                                >
+                                                    Delete Service Stop
+                                                </button>
+                                            )}
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                                        Enable editing to change scheduling, finish manually, add tasks, or delete this stop.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         <div className="bg-white shadow-lg rounded-xl p-6">
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
@@ -1028,7 +1716,7 @@ const ServiceStopDetails = () => {
                                     </p>
                                 </div>
 
-                                {!showAddTask && can("244") && (
+                                {editEnabled && !showAddTask && can("244") && (
                                     <button
                                         onClick={() => setShowAddTask(true)}
                                         className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition"
@@ -1038,7 +1726,7 @@ const ServiceStopDetails = () => {
                                 )}
                             </div>
 
-                            {showAddTask && (
+                            {editEnabled && showAddTask && (
                                 <form
                                     onSubmit={saveNewTask}
                                     className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4"
@@ -1279,7 +1967,7 @@ const ServiceStopDetails = () => {
                                                 </span>
                                             </div>
 
-                                            {task.status !== "Finished" && can("244") && (
+                                            {editEnabled && task.status !== "Finished" && can("244") && (
                                                 <div className="mt-3">
                                                     <button
                                                         type="button"

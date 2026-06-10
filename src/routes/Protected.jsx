@@ -20,6 +20,17 @@ export function Protected({ route, children }) {
         return <Navigate to={`${signInPath}?redirect=${redirectTarget}`} />;
 
     } else {
+        if (requiredFeatureFlagIds.length > 0) {
+            if (!featureFlagsLoaded) {
+                return null;
+            }
+
+            if (!requiredFeatureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId))) {
+                const fallbackPath = routeRole === 'client' ? '/client/dashboard' : routeRole === 'company' ? '/company/dashboard' : '/';
+                return <Navigate to={fallbackPath} replace />
+            }
+        }
+
         if (accountType === 'Admin') {
             if (routeRole === 'admin') {
                 return children
@@ -27,16 +38,6 @@ export function Protected({ route, children }) {
                 return <Navigate to='/' replace />
             }
         } else if (accountType === 'Company') {
-            if (routeRole === 'company' && requiredFeatureFlagIds.length > 0) {
-                if (!featureFlagsLoaded) {
-                    return null;
-                }
-
-                if (!requiredFeatureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId))) {
-                    return <Navigate to='/company/dashboard' replace />
-                }
-            }
-
             if (companySubscription === null) {
                 return children;
             } else {

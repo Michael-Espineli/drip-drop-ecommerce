@@ -106,7 +106,100 @@ const otherProductionPayBasis = (payBasis) =>
 const payrollSourceIds = {
   recurringServiceStop: "system_recurring_service_stop",
   jobServiceStop: "system_job_service_stop",
+  jobEstimateServiceStop: "system_job_estimate_service_stop",
+  serviceAgreementEstimateServiceStop: "system_service_agreement_estimate_service_stop",
+  customerRelationshipServiceStop: "system_customer_relationship_service_stop",
   unknownServiceStop: "system_unknown_service_stop",
+};
+
+const normalizedCategory = (value = "") =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[_/-]/g, "");
+
+const payrollSourceIdForCategory = (category = "") => {
+  switch (normalizedCategory(category)) {
+    case "route":
+    case "recurringroute":
+    case "recurringservicestop":
+      return payrollSourceIds.recurringServiceStop;
+    case "job":
+    case "jobvisit":
+    case "jobservicestop":
+      return payrollSourceIds.jobServiceStop;
+    case "jobestimate":
+    case "estimateforjob":
+      return payrollSourceIds.jobEstimateServiceStop;
+    case "serviceagreementestimate":
+    case "recurringserviceestimate":
+    case "serviceestimate":
+    case "startup":
+      return payrollSourceIds.serviceAgreementEstimateServiceStop;
+    case "customerrelationship":
+    case "customervisit":
+      return payrollSourceIds.customerRelationshipServiceStop;
+    default:
+      return "";
+  }
+};
+
+export const inferPayrollServiceStopSourceId = (serviceStop = {}, serviceStopType = null) => {
+  const explicitCategorySource =
+    payrollSourceIdForCategory(serviceStopType?.category) ||
+    payrollSourceIdForCategory(serviceStop?.category) ||
+    payrollSourceIdForCategory(serviceStop?.serviceStopCategory);
+
+  if (explicitCategorySource) return explicitCategorySource;
+
+  const typeId = String(serviceStopType?.id || serviceStop?.typeId || serviceStop?.serviceStopTypeId || "").trim();
+  const knownSourceIds = new Set(Object.values(payrollSourceIds));
+  if (knownSourceIds.has(typeId)) return typeId;
+
+  const useCaseSource = payrollSourceIdForCategory(
+    serviceStop?.serviceStopTypeUseCaseRawValue ||
+    serviceStopType?.serviceStopTypeUseCaseRawValue ||
+    ""
+  );
+
+  if (useCaseSource) return useCaseSource;
+
+  const typeText = `${serviceStopType?.name || ""} ${serviceStop?.type || ""} ${serviceStop?.serviceStopTypeName || ""} ${serviceStop?.description || ""}`;
+  const normalizedText = normalizedCategory(typeText);
+
+  if (
+    normalizedText.includes("customerrelationship") ||
+    normalizedText.includes("customervisit") ||
+    normalizedText.includes("followup") ||
+    normalizedText.includes("courtesyvisit")
+  ) {
+    return payrollSourceIds.customerRelationshipServiceStop;
+  }
+
+  if (
+    normalizedText.includes("serviceagreementestimate") ||
+    normalizedText.includes("recurringserviceestimate") ||
+    normalizedText.includes("newserviceestimate") ||
+    normalizedText.includes("serviceestimate") ||
+    normalizedText.includes("startup") ||
+    normalizedText.includes("newpool")
+  ) {
+    return payrollSourceIds.serviceAgreementEstimateServiceStop;
+  }
+
+  if (
+    normalizedText.includes("jobestimate") ||
+    normalizedText.includes("estimateforjob") ||
+    normalizedText.includes("bidvisit")
+  ) {
+    return payrollSourceIds.jobEstimateServiceStop;
+  }
+
+  if (serviceStop?.recurringServiceStopId) return payrollSourceIds.recurringServiceStop;
+  if (serviceStop?.jobId) return payrollSourceIds.jobServiceStop;
+
+  return payrollSourceIds.recurringServiceStop;
 };
 
 const mappedWorkTypeIds = ({ mappings, sourceType, sourceId }) =>
@@ -359,11 +452,7 @@ export const estimateServiceStopPay = ({
   const serviceStopTypeId = serviceStopType?.id || serviceStop?.typeId || "";
   const inferredServiceStopSourceId =
     serviceStopUseCaseSourceId ||
-    (serviceStop?.recurringServiceStopId
-      ? payrollSourceIds.recurringServiceStop
-      : serviceStop?.jobId
-        ? payrollSourceIds.jobServiceStop
-        : payrollSourceIds.unknownServiceStop);
+    inferPayrollServiceStopSourceId(serviceStop, serviceStopType);
   const defaultStopWorkTypeIds = uniqueIds(serviceStopType?.defaultWorkTypeIds || []);
   const explicitStopWorkTypeIds = mappedWorkTypeIds({
     mappings,

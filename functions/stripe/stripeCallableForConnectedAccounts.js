@@ -336,8 +336,11 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     stripeLatestInvoiceId: '',
     stripeDefaultPaymentMethodId: '',
     billingMode: 'connectedAccountDirectCharge',
+    billingCollectionMethod: 'manualUntilAutopay',
     status: canStartStripeCheckout ? 'pendingPaymentMethod' : 'notStarted',
     stripeStatus: '',
+    autopayStatus: canStartStripeCheckout ? 'available' : 'unavailable',
+    autopayEnabled: false,
     amountCents,
     currency: agreement.currency || 'usd',
     interval: cadenceToStripeInterval(agreement.serviceCadence, agreement.rateType),
@@ -366,6 +369,12 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     checkoutStatus: 'notStarted',
     nextAction: canStartStripeCheckout ? 'collectPaymentMethod' : 'connectStripeAccount',
     customerCanPayImmediately: canStartStripeCheckout,
+    manualBillingEnabled: true,
+    manualBillingStatus: 'readyToInvoice',
+    manualBillingReason: canStartStripeCheckout ? 'autopayNotSetup' : 'stripeUnavailable',
+    receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod || 'email',
+    receiptsEnabled: agreement.receiptsEnabled !== false,
+    lastBillingSource: '',
     stripeReadiness: {
       canStartStripeCheckout,
       hasConnectedAccount: Boolean(stripeConnectedAccountId),
@@ -418,6 +427,15 @@ const buildStripeSubscriptionUpdateData = ({ stripeSubscription, connectedAccoun
   const stripeStatus = stripeSubscription.status || '';
   const status = mapStripeSubscriptionStatus(stripeStatus);
   const nextAction = nextActionForStripeSubscriptionStatus(stripeStatus);
+  const autopayIsActive = ['active', 'trialing'].includes(stripeStatus);
+  const stripeManagedBilling = ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(stripeStatus);
+  const autopayStatus = autopayIsActive
+    ? 'active'
+    : status === 'pastDue'
+      ? 'pastDue'
+      : status === 'canceled'
+        ? 'canceled'
+        : 'checkoutStarted';
 
   return {
     stripeConnectedAccountId: connectedAccount || stripeSubscription.metadata?.stripeConnectedAccountId || '',
@@ -439,6 +457,23 @@ const buildStripeSubscriptionUpdateData = ({ stripeSubscription, connectedAccoun
     stripeStatus,
     status,
     nextAction,
+    billingCollectionMethod: stripeManagedBilling ? 'automaticStripe' : 'manualUntilAutopay',
+    autopayStatus,
+    autopayEnabled: autopayIsActive,
+    manualBillingEnabled: !stripeManagedBilling,
+    manualBillingStatus: autopayIsActive
+      ? 'disabledAutopayActive'
+      : stripeManagedBilling
+        ? 'disabledStripeBillingActive'
+        : 'readyToInvoice',
+    manualBillingReason: autopayIsActive
+      ? 'stripeAutopayActive'
+      : stripeManagedBilling
+        ? 'stripeAutopayNeedsAttention'
+        : 'autopayNotActive',
+    receiptDeliveryMethod: stripeManagedBilling ? 'stripeHostedInvoice' : 'email',
+    receiptsEnabled: true,
+    lastBillingSource: 'stripeSubscriptionSync',
     customerCanPayImmediately: false,
     checkoutStatus: ['active', 'trialing'].includes(stripeStatus) ? 'completed' : 'synced',
     currentPeriodStart: timestampFromStripeSeconds(stripeSubscription.current_period_start),
@@ -475,6 +510,9 @@ const syncSalesSubscriptionRecordFromStripe = async ({
       billingFlowStatus: updateData.status,
       billingFlowNextAction: updateData.nextAction,
       billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      billingCollectionMethod: updateData.billingCollectionMethod,
+      autopayStatus: updateData.autopayStatus,
+      manualBillingEnabled: updateData.manualBillingEnabled,
       customerCanPayImmediately: false,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -612,6 +650,9 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
+    const existingStatusKey = normalizeStatus(existingSubscription?.stripeStatus || existingSubscription?.status);
+    const existingAutopayActive = hasStripeSubscription && ['active', 'trialing'].includes(existingStatusKey);
+    const existingStripeManagedBilling = hasStripeSubscription && ['active', 'trialing', 'pastdue', 'unpaid', 'paused'].includes(existingStatusKey);
     const nextSubscription = {
       ...subscriptionDraft,
       ...existingSubscription,
@@ -626,8 +667,25 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       agreementId: subscriptionDraft.agreementId,
       billingProfileId: subscriptionDraft.billingProfileId,
       stripeConnectedAccountId: subscriptionDraft.stripeConnectedAccountId,
+      billingCollectionMethod: hasStripeSubscription
+        ? existingSubscription.billingCollectionMethod || (
+          existingStripeManagedBilling ? 'automaticStripe' : subscriptionDraft.billingCollectionMethod
+        )
+        : subscriptionDraft.billingCollectionMethod,
       status: hasStripeSubscription ? existingSubscription.status : subscriptionDraft.status,
       stripeStatus: hasStripeSubscription ? existingSubscription.stripeStatus : subscriptionDraft.stripeStatus,
+      autopayStatus: hasStripeSubscription
+        ? existingSubscription.autopayStatus || (
+          existingAutopayActive
+            ? 'active'
+            : existingStatusKey === 'pastdue' || existingStatusKey === 'unpaid'
+              ? 'pastDue'
+              : subscriptionDraft.autopayStatus
+        )
+        : subscriptionDraft.autopayStatus,
+      autopayEnabled: hasStripeSubscription
+        ? existingAutopayActive || Boolean(existingSubscription.autopayEnabled)
+        : subscriptionDraft.autopayEnabled,
       amountCents: subscriptionDraft.amountCents,
       currency: subscriptionDraft.currency,
       interval: subscriptionDraft.interval,
@@ -644,6 +702,32 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       checkoutStatus: hasStripeSubscription ? existingSubscription.checkoutStatus : subscriptionDraft.checkoutStatus,
       nextAction: hasStripeSubscription ? existingSubscription.nextAction : subscriptionDraft.nextAction,
       customerCanPayImmediately: hasStripeSubscription ? existingSubscription.customerCanPayImmediately : subscriptionDraft.customerCanPayImmediately,
+      manualBillingEnabled: hasStripeSubscription
+        ? existingSubscription.manualBillingEnabled !== undefined
+          ? existingSubscription.manualBillingEnabled !== false
+          : !existingStripeManagedBilling
+        : subscriptionDraft.manualBillingEnabled,
+      manualBillingStatus: hasStripeSubscription
+        ? existingSubscription.manualBillingStatus || (
+          existingAutopayActive
+            ? 'disabledAutopayActive'
+            : existingStripeManagedBilling
+              ? 'disabledStripeBillingActive'
+              : subscriptionDraft.manualBillingStatus
+        )
+        : subscriptionDraft.manualBillingStatus,
+      manualBillingReason: hasStripeSubscription
+        ? existingSubscription.manualBillingReason || (
+          existingAutopayActive
+            ? 'stripeAutopayActive'
+            : existingStripeManagedBilling
+              ? 'stripeAutopayNeedsAttention'
+              : subscriptionDraft.manualBillingReason
+        )
+        : subscriptionDraft.manualBillingReason,
+      receiptDeliveryMethod: existingSubscription?.receiptDeliveryMethod || subscriptionDraft.receiptDeliveryMethod,
+      receiptsEnabled: existingSubscription?.receiptsEnabled !== false && subscriptionDraft.receiptsEnabled !== false,
+      lastBillingSource: existingSubscription?.lastBillingSource || subscriptionDraft.lastBillingSource,
       stripeReadiness: subscriptionDraft.stripeReadiness,
       createdAt: existingSubscription?.createdAt || acceptedAt,
       updatedAt: acceptedAt,
@@ -672,11 +756,17 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         billingSubscriptionId: subscriptionDraft.id,
         billingFlowStatus: nextSubscription.status,
         billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
       },
       billingSubscriptionId: subscriptionDraft.id,
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
+      billingCollectionMethod: nextSubscription.billingCollectionMethod,
+      autopayStatus: nextSubscription.autopayStatus,
+      manualBillingEnabled: nextSubscription.manualBillingEnabled,
       customerUserId: freshAgreement.customerUserId || callableAuth.uid,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       operationsSetupStatus: freshAgreement.operationsSetupStatus || 'needsRecurringServiceStop',
@@ -800,6 +890,12 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       checkoutUrl: session.url || '',
       checkoutStatus: 'created',
       status: 'pendingStripe',
+      billingCollectionMethod: 'manualUntilAutopay',
+      autopayStatus: 'checkoutStarted',
+      autopayEnabled: false,
+      manualBillingEnabled: subscription.manualBillingEnabled !== false,
+      manualBillingStatus: subscription.manualBillingStatus || 'readyToInvoice',
+      manualBillingReason: 'autopayCheckoutStarted',
       nextAction: 'completeCheckout',
       customerCanPayImmediately: true,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -823,6 +919,9 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
         billingFlowStatus: 'pendingStripe',
         billingFlowNextAction: 'completeCheckout',
         billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        billingCollectionMethod: 'manualUntilAutopay',
+        autopayStatus: 'checkoutStarted',
+        manualBillingEnabled: subscription.manualBillingEnabled !== false,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }

@@ -1,13 +1,13 @@
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { collection, query, where, getDocs, setDoc, doc, getDoc, getCountFromServer } from 'firebase/firestore';
+import { setDoc, doc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
-import MapComponent from '../../components/MapComponent';
 import UpgradeModal from '../../components/modals/UpgradeModal';
 import { toast } from 'react-hot-toast';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const InfoSection = ({ title, children }) => (
     <div className="border-b border-gray-200 pb-6 mb-6">
@@ -60,70 +60,25 @@ const CreateNewCustomer = () => {
 
     const [bodyOfWater, setBodyOfWater] = useState({ name: 'Main', gallons: '16000', waterType: 'Chlorine', material: 'Plaster', notes: '', shape: '' });
     const [equipment, setEquipment] = useState([
-        { name: 'Pump', category: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, customCategory: '', customMake: '', customModel: '' },
-        { name: 'Filter', category: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: true, customCategory: '', customMake: '', customModel: '' }
+        { name: 'Pump', category: 'Pump', type: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: false },
+        { name: 'Filter', category: 'Filter', type: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', universalEquipmentId: '', manualPdfLink: '', notes: '', needsService: true }
     ]);
-
-    const [equipmentTypes, setEquipmentTypes] = useState([]);
-    const [equipmentMakes, setEquipmentMakes] = useState([[], []]);
-    const [equipmentModels, setEquipmentModels] = useState([[], []]);
 
     // Generic handler for simple state updates
     const handleStateChange = (setter, name, value) => setter(prev => ({ ...prev, [name]: value }));
 
-    // Fetch universal equipment types
-    useEffect(() => {
-        const fetchEquipmentTypes = async () => {
-            const q = query(collection(db, 'universal', 'equipment', 'equipmentTypes'));
-            const snap = await getDocs(q);
-            setEquipmentTypes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        };
-        fetchEquipmentTypes();
-    }, []);
-
-    const fetchMakesAndModels = async (category, make, index) => {
-        // Fetch Makes
-        if (category && category !== 'Other') {
-            const type = equipmentTypes.find(t => t.name === category);
-            if (type) {
-                const makesQuery = query(collection(db, 'universal', 'equipment', 'equipmentMakes'), where('types', 'array-contains', type.id));
-                const makesSnap = await getDocs(makesQuery);
-                const makesList = makesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                setEquipmentMakes(prev => { const next = [...prev]; next[index] = makesList; return next; });
-
-                // Fetch Models
-                if (make && make !== 'Other') {
-                    const makeData = makesList.find(m => m.name === make);
-                    if (makeData) {
-                        const modelsQuery = query(collection(db, 'universal', 'equipment', 'equipment'), where('typeId', '==', type.id), where('makeId', '==', makeData.id));
-                        const modelsSnap = await getDocs(modelsQuery);
-                        const modelsList = modelsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                        setEquipmentModels(prev => { const next = [...prev]; next[index] = modelsList; return next; });
-                    }
-                }
-            }
-        } else {
-            setEquipmentMakes(prev => { const next = [...prev]; next[index] = []; return next; });
-            setEquipmentModels(prev => { const next = [...prev]; next[index] = []; return next; });
-        }
-    };
-
-    useEffect(() => { fetchMakesAndModels(equipment[0].category, equipment[0].make, 0); }, [equipment[0].category, equipment[0].make, equipmentTypes]);
-    useEffect(() => { fetchMakesAndModels(equipment[1].category, equipment[1].make, 1); }, [equipment[1].category, equipment[1].make, equipmentTypes]);
-
     const handleEquipmentChange = (index, field, value) => {
         setEquipment(prev => {
             const next = [...prev];
-            let item = { ...next[index], [field]: value };
+            next[index] = { ...next[index], [field]: value };
+            return next;
+        });
+    };
 
-            if (field === 'category') {
-                item.make = ''; item.model = ''; item.customCategory = '';
-                if (value === 'Other') { item.make = 'Other'; item.model = 'Other'; }
-            }
-            if (field === 'make') { item.model = ''; item.customMake = ''; }
-            if (field === 'model') { item.customModel = ''; }
-
-            next[index] = item;
+    const handleEquipmentCatalogChange = (index, nextEquipment) => {
+        setEquipment(prev => {
+            const next = [...prev];
+            next[index] = nextEquipment;
             return next;
         });
     };
@@ -202,18 +157,18 @@ const CreateNewCustomer = () => {
             for (const eq of equipment) {
                 if (eq.name) {
                     const equipmentId = 'com_equ_' + uuidv4();
-                    const finalCategory = eq.category === 'Other' ? eq.customCategory : eq.category;
-                    const finalMake = eq.make === 'Other' ? eq.customMake : eq.make;
-                    const finalModel = eq.model === 'Other' ? eq.customModel : eq.model;
+                    const finalCategory = eq.type || eq.category || '';
 
                     await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
                         id: equipmentId, name: eq.name, notes: eq.notes, needsService: eq.needsService,
                         type: finalCategory,
-                        typeId: "",
-                        make: finalMake,
-                        makeId: "",
-                        model: finalModel,
-                        modelId: "",
+                        typeId: eq.typeId || "",
+                        make: eq.make || "",
+                        makeId: eq.makeId || "",
+                        model: eq.model || "",
+                        modelId: eq.modelId || eq.universalEquipmentId || "",
+                        universalEquipmentId: eq.universalEquipmentId || eq.modelId || "",
+                        manualPdfLink: eq.manualPdfLink || "",
                         customerId,
                         serviceLocationId,
                         bodyOfWaterId,
@@ -316,26 +271,22 @@ const CreateNewCustomer = () => {
                                 <h3 className="font-bold">Equipment #{index + 1}</h3>
                                 <FormInput label="Name" name="name" value={eq.name} onChange={(e) => handleEquipmentChange(index, 'name', e.target.value)} />
 
-                                <FormSelect label="Category" name="category" value={eq.category} onChange={(e) => handleEquipmentChange(index, 'category', e.target.value)}>
-                                    <option value="">Select a Category</option>
-                                    {equipmentTypes.map(type => <option key={type.id} value={type.name}>{type.name}</option>)}
-                                    <option value="Other">Other</option>
-                                </FormSelect>
-                                {eq.category === 'Other' && <FormInput label="Custom Category" name="customCategory" value={eq.customCategory} onChange={(e) => handleEquipmentChange(index, 'customCategory', e.target.value)} />}
-
-                                <FormSelect label="Make" name="make" value={eq.make} onChange={(e) => handleEquipmentChange(index, 'make', e.target.value)}>
-                                    <option value="">Select a Make</option>
-                                    {equipmentMakes[index].map(make => <option key={make.id} value={make.name}>{make.name}</option>)}
-                                    <option value="Other">Other</option>
-                                </FormSelect>
-                                {eq.make === 'Other' && <FormInput label="Custom Make" name="customMake" value={eq.customMake} onChange={(e) => handleEquipmentChange(index, 'customMake', e.target.value)} />}
-
-                                <FormSelect label="Model" name="model" value={eq.model} onChange={(e) => handleEquipmentChange(index, 'model', e.target.value)}>
-                                    <option value="">Select a Model</option>
-                                    {equipmentModels[index].map(model => <option key={model.id} value={model.model}>{model.model}</option>)}
-                                    <option value="Other">Other</option>
-                                </FormSelect>
-                                {eq.model === 'Other' && <FormInput label="Custom Model" name="customModel" value={eq.customModel} onChange={(e) => handleEquipmentChange(index, 'customModel', e.target.value)} />}
+                                <EquipmentCatalogPicker
+                                    value={eq}
+                                    onChange={(nextEquipment) => handleEquipmentCatalogChange(index, nextEquipment)}
+                                    onModelSelected={(selectedModel) => {
+                                        if (!eq.name?.trim()) {
+                                            handleEquipmentCatalogChange(index, {
+                                                ...eq,
+                                                model: selectedModel.model || selectedModel.name || '',
+                                                modelId: selectedModel.id || '',
+                                                universalEquipmentId: selectedModel.id || '',
+                                                manualPdfLink: selectedModel.manualPdfLink || '',
+                                                name: selectedModel.name || selectedModel.model || '',
+                                            });
+                                        }
+                                    }}
+                                />
 
                                 <FormTextarea label="Notes" name="notes" value={eq.notes} onChange={(e) => handleEquipmentChange(index, 'notes', e.target.value)} />
                                 <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={(e) => handleEquipmentChange(index, 'needsService', e.target.checked)} className="mr-2 h-4 w-4" />Needs Service</label>

@@ -44,11 +44,11 @@ const buildChecklistSteps = (counts) => [
   },
   {
     title: "Move equipment details",
-    description: "Bring pumps, filters, heaters, and equipment notes over once core customer/location records are stable.",
-    path: "",
+    description: "Import pumps, filters, cleaners, heaters, maintenance dates, and equipment notes once core customer/location records are stable.",
+    path: "/company/migration/equipment-import",
     icon: FaSwimmingPool,
-    status: counts.equipment > 0 ? "review" : "planned",
-    statusLabel: counts.equipment > 0 ? "Review" : "Planned",
+    status: counts.equipment > 0 ? "review" : counts.serviceLocations > 0 ? "active" : "planned",
+    statusLabel: counts.equipment > 0 ? "Review" : counts.serviceLocations > 0 ? "Ready" : "Waiting",
     detail: `${counts.equipment || 0} equipment records`,
   },
   {

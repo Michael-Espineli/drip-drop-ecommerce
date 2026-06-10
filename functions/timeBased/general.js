@@ -83,7 +83,8 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
   if (
     rssData.typeId !== recurringServiceStopTypeFields.typeId ||
     rssData.type !== recurringServiceStopTypeFields.type ||
-    rssData.typeImage !== recurringServiceStopTypeFields.typeImage
+    rssData.typeImage !== recurringServiceStopTypeFields.typeImage ||
+    rssData.category !== recurringServiceStopTypeFields.category
   ) {
     await rssRef.set(recurringServiceStopTypeFields, { merge: true });
     rssData = {
@@ -221,6 +222,7 @@ function normalizeServiceStopTypeFields(source, contextLabel) {
     typeId: "system_recurring_service_stop",
     type: "Recurring Service Stop",
     typeImage: "figure.pool.swim",
+    category: "Route",
   };
 
   const fields = {
@@ -229,6 +231,9 @@ function normalizeServiceStopTypeFields(source, contextLabel) {
     typeImage: typeof source?.typeImage === "string" && source.typeImage.trim().length > 0
       ? source.typeImage
       : fallback.typeImage,
+    category: typeof source?.category === "string" && source.category.trim().length > 0
+      ? source.category
+      : fallback.category,
   };
 
   if (!hasTypeId || !hasType) {
@@ -316,6 +321,7 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
     typeId: serviceStopTypeFields.typeId,
     type: serviceStopTypeFields.type,
     typeImage: serviceStopTypeFields.typeImage,
+    category: serviceStopTypeFields.category,
 
     jobId: "",
     jobName: "",

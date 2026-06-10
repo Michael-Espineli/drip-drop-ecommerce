@@ -71,6 +71,39 @@ const defaultServiceStopCategoryEmailSettings = (companyName = "your pool compan
   },
 });
 
+const DEFAULT_COMPANY_SERVICE_STOP_TYPES = [
+  {
+    id: "system_recurring_service_stop",
+    name: "Recurring Service Stop",
+    imageName: "figure.pool.swim",
+    category: "Route",
+  },
+  {
+    id: "system_job_service_stop",
+    name: "Job Visit",
+    imageName: "briefcase",
+    category: "Job",
+  },
+  {
+    id: "system_job_estimate_service_stop",
+    name: "Job Estimate",
+    imageName: "doc.text.magnifyingglass",
+    category: "Job Estimate",
+  },
+  {
+    id: "system_service_agreement_estimate_service_stop",
+    name: "Service Agreement Estimate",
+    imageName: "list.clipboard",
+    category: "Service Agreement Estimate",
+  },
+  {
+    id: "system_customer_relationship_service_stop",
+    name: "Customer Relationship",
+    imageName: "person.wave.2",
+    category: "Customer Relationship",
+  },
+];
+
 const REQUIRED_UNIVERSAL_READING_TEMPLATES = [
   {
     id: "univ_rt_total_alkalinity",
@@ -1222,6 +1255,7 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
         typeId: "system_recurring_service_stop",
         type: "Recurring Service Stop",
         typeImage: "figure.pool.swim",
+        category: "Route",
       };
 
       const fields = {
@@ -1230,6 +1264,9 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
         typeImage: typeof source?.typeImage === "string" && source.typeImage.trim().length > 0
           ? source.typeImage
           : fallback.typeImage,
+        category: typeof source?.category === "string" && source.category.trim().length > 0
+          ? source.category
+          : fallback.category,
       };
 
       if (!hasTypeId || !hasType) {
@@ -1310,6 +1347,7 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
       typeId: recurringServiceStopTypeFields.typeId,
       type: recurringServiceStopTypeFields.type,
       typeImage: recurringServiceStopTypeFields.typeImage,
+      category: recurringServiceStopTypeFields.category,
     };
 
     upLoadRSSData.dateCreated =
@@ -1461,6 +1499,7 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
         type: recurringServiceStopTypeFields.type,
         typeId: recurringServiceStopTypeFields.typeId,
         typeImage: recurringServiceStopTypeFields.typeImage,
+        category: recurringServiceStopTypeFields.category,
 
         jobId: "",
         jobName: "",
@@ -2843,6 +2882,18 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       recalculateUnapprovedPayWhenRatesChange: true
     }
     await getFirestore().collection("companies").doc(companyId).collection("paySettings").doc("main").set(CompanyPaySettings);
+    const serviceStopTypesRef = getFirestore().collection("companies").doc(companyId).collection("companyServiceStopTypes");
+    await Promise.all(DEFAULT_COMPANY_SERVICE_STOP_TYPES.map((serviceStopType, index) =>
+      serviceStopTypesRef.doc(serviceStopType.id).set({
+        ...serviceStopType,
+        companyId,
+        isActive: true,
+        sortOrder: index,
+        defaultWorkTypeIds: [],
+        createdAt: new Date(),
+        createdByUserId: ownerId,
+      }, { merge: true })
+    ));
     //WO
     const WOIncrement = { category: "workOrders", increment: 0 }
     await getFirestore().collection("companies").doc(companyId).collection("settings").doc("workOrders").set(WOIncrement);
@@ -5301,6 +5352,9 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       typeImage: typeof rss?.typeImage === "string" && rss.typeImage.trim().length > 0
         ? rss.typeImage
         : "figure.pool.swim",
+      category: typeof rss?.category === "string" && rss.category.trim().length > 0
+        ? rss.category
+        : "Route",
     };
 
     if (!hasTypeId || !hasType) {
@@ -5329,6 +5383,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       type: serviceStopTypeFields.type,
       typeId: serviceStopTypeFields.typeId,
       typeImage: serviceStopTypeFields.typeImage,
+      category: serviceStopTypeFields.category,
       customerName: rss.customerName,
       customerId: rss.customerId,
       address: rss.address,

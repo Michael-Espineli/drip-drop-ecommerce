@@ -74,6 +74,17 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
     if (!subscriptionRef) return false;
 
     const item = subscription.items?.data?.[0] || {};
+    const stripeStatus = subscription.status || '';
+    const status = mapStripeSubscriptionStatus(stripeStatus);
+    const autopayIsActive = ['active', 'trialing'].includes(stripeStatus);
+    const stripeManagedBilling = ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(stripeStatus);
+    const autopayStatus = autopayIsActive
+        ? 'active'
+        : status === 'pastDue'
+            ? 'pastDue'
+            : status === 'canceled'
+                ? 'canceled'
+                : 'checkoutStarted';
     const updateData = {
         stripeConnectedAccountId: connectedAccount || metadata.stripeConnectedAccountId || '',
         stripeCustomerId: subscription.customer || checkoutSession?.customer || '',
@@ -87,10 +98,27 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
         stripeDefaultPaymentMethodId: typeof subscription.default_payment_method === 'string'
             ? subscription.default_payment_method
             : subscription.default_payment_method?.id || '',
-        stripeStatus: subscription.status || '',
-        status: mapStripeSubscriptionStatus(subscription.status),
+        stripeStatus,
+        status,
         checkoutStatus: checkoutSession ? 'completed' : 'synced',
-        nextAction: nextActionForStripeSubscriptionStatus(subscription.status),
+        nextAction: nextActionForStripeSubscriptionStatus(stripeStatus),
+        billingCollectionMethod: stripeManagedBilling ? 'automaticStripe' : 'manualUntilAutopay',
+        autopayStatus,
+        autopayEnabled: autopayIsActive,
+        manualBillingEnabled: !stripeManagedBilling,
+        manualBillingStatus: autopayIsActive
+            ? 'disabledAutopayActive'
+            : stripeManagedBilling
+                ? 'disabledStripeBillingActive'
+                : 'readyToInvoice',
+        manualBillingReason: autopayIsActive
+            ? 'stripeAutopayActive'
+            : stripeManagedBilling
+                ? 'stripeAutopayNeedsAttention'
+                : 'autopayNotActive',
+        receiptDeliveryMethod: stripeManagedBilling ? 'stripeHostedInvoice' : 'email',
+        receiptsEnabled: true,
+        lastBillingSource: 'stripeSubscriptionWebhook',
         customerCanPayImmediately: false,
         currentPeriodStart: timestampFromStripeSeconds(subscription.current_period_start),
         currentPeriodEnd: timestampFromStripeSeconds(subscription.current_period_end),
@@ -113,6 +141,10 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
             billingFlowStatus: updateData.status,
             billingFlowNextAction: updateData.nextAction,
             billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            billingCollectionMethod: updateData.billingCollectionMethod,
+            autopayStatus: updateData.autopayStatus,
+            manualBillingEnabled: updateData.manualBillingEnabled,
+            customerCanPayImmediately: false,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
     }
@@ -153,6 +185,8 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
     const isPaid = invoice.status === 'paid' && amountPaid > 0;
     const isPaymentFailed = eventType === 'invoice.payment_failed';
     const currency = String(invoice.currency || subscription.currency || 'usd').toLowerCase();
+    const receiptUrl = invoice.hosted_invoice_url || invoice.invoice_pdf || '';
+    const receiptDeliveryMethod = 'stripeHostedInvoice';
     const basePaymentFields = {
         companyId: subscription.companyId || '',
         customerId: subscription.customerId || '',
@@ -171,6 +205,11 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         stripeSubscriptionId,
         stripeInvoiceId: invoice.id,
         stripePaymentIntentId: paymentIntentId,
+        billingCollectionMethod: 'automaticStripe',
+        receiptDeliveryMethod,
+        receiptsEnabled: true,
+        receiptUrl,
+        receiptEmail: invoice.customer_email || subscription.email || '',
         referenceNumber: invoice.number || invoice.id,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -189,6 +228,10 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         agreementId: subscription.agreementId || '',
         type: 'subscription',
         status: mapStripeInvoiceStatus(invoice.status),
+        deliveryMethod: receiptDeliveryMethod,
+        billingCollectionMethod: 'automaticStripe',
+        receiptDeliveryMethod,
+        receiptsEnabled: true,
         currency,
         amountDueCents: amountRemaining,
         amountPaidCents: amountPaid,
@@ -209,6 +252,8 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         stripePaymentIntentId: paymentIntentId,
         stripeHostedInvoiceUrl: invoice.hosted_invoice_url || '',
         stripeInvoicePdfUrl: invoice.invoice_pdf || '',
+        receiptUrl,
+        receiptEmail: invoice.customer_email || subscription.email || '',
         lastStripeEventType: eventType,
         lastStripeEventId: eventId,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -266,6 +311,9 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         stripeInvoiceId: invoice.id,
         stripePaymentIntentId: paymentIntentId,
         stripeEventId: eventId,
+        billingCollectionMethod: 'automaticStripe',
+        receiptDeliveryMethod,
+        receiptUrl,
         receivedAt: admin.firestore.FieldValue.serverTimestamp(),
         processedAt: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -279,6 +327,11 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         nextAction: salesSubscription.data.nextAction || 'reviewStripeStatus',
         lastPaymentStatus: isPaymentFailed ? 'failed' : isPaid ? 'posted' : mapStripeInvoiceStatus(invoice.status),
         lastPaymentEventId: paymentEventId,
+        lastBillingSource: 'stripeInvoiceWebhook',
+        lastStripeInvoiceSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+        lastReceiptUrl: receiptUrl,
+        receiptDeliveryMethod,
+        receiptsEnabled: true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         stripeSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -287,6 +340,12 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         subscriptionUpdate.status = 'active';
         subscriptionUpdate.stripeStatus = 'active';
         subscriptionUpdate.nextAction = 'monitorBilling';
+        subscriptionUpdate.billingCollectionMethod = 'automaticStripe';
+        subscriptionUpdate.autopayStatus = 'active';
+        subscriptionUpdate.autopayEnabled = true;
+        subscriptionUpdate.manualBillingEnabled = false;
+        subscriptionUpdate.manualBillingStatus = 'disabledAutopayActive';
+        subscriptionUpdate.manualBillingReason = 'stripeAutopayActive';
         subscriptionUpdate.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
         subscriptionUpdate.lastPaymentFailedAt = null;
 
@@ -301,6 +360,12 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         subscriptionUpdate.status = 'pastDue';
         subscriptionUpdate.stripeStatus = 'past_due';
         subscriptionUpdate.nextAction = 'collectPaymentMethod';
+        subscriptionUpdate.billingCollectionMethod = 'automaticStripe';
+        subscriptionUpdate.autopayStatus = 'pastDue';
+        subscriptionUpdate.autopayEnabled = false;
+        subscriptionUpdate.manualBillingEnabled = false;
+        subscriptionUpdate.manualBillingStatus = 'disabledStripeBillingActive';
+        subscriptionUpdate.manualBillingReason = 'stripePaymentFailed';
         subscriptionUpdate.lastPaymentFailedAt = admin.firestore.FieldValue.serverTimestamp();
         subscriptionUpdate.lastPaymentFailedInvoiceId = invoice.id;
     }
@@ -313,6 +378,11 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
             billingFlowStatus: subscriptionUpdate.status,
             billingFlowNextAction: subscriptionUpdate.nextAction,
             billingFlowUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            billingCollectionMethod: subscriptionUpdate.billingCollectionMethod || subscription.billingCollectionMethod || 'automaticStripe',
+            autopayStatus: subscriptionUpdate.autopayStatus || subscription.autopayStatus || '',
+            manualBillingEnabled: subscriptionUpdate.manualBillingEnabled !== undefined
+                ? subscriptionUpdate.manualBillingEnabled
+                : subscription.manualBillingEnabled !== false,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 

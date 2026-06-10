@@ -2,7 +2,8 @@ import React, { useCallback, useContext, useEffect, useMemo, useState } from "re
 import * as XLSX from "xlsx";
 import Select from "react-select";
 import toast from "react-hot-toast";
-import { collection, getDocs, query, where, writeBatch } from "firebase/firestore";
+import { arrayUnion, collection, doc, getDocs, query, setDoc, where, writeBatch } from "firebase/firestore";
+import { v4 as uuidv4 } from "uuid";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import {
@@ -260,6 +261,33 @@ const discoverReportColumns = (rows, columns) => {
 const skimmerAddressText = (source = {}) =>
   compact([source.address, compact([source.city, source.state, source.zip]).join(" ")]).join(", ");
 
+const sourceSiteKey = (sourceLocation = {}) =>
+  [
+    sourceLocation.customerName,
+    sourceLocation.customerCode,
+    sourceLocation.address,
+    sourceLocation.city,
+    sourceLocation.state,
+    sourceLocation.zip,
+  ]
+    .map(normalizeText)
+    .join("|");
+
+const buildSourcePoolCountsBySiteKey = (sourceLocations = []) => {
+  const poolsBySiteKey = new Map();
+
+  sourceLocations.forEach((sourceLocation) => {
+    const key = sourceSiteKey(sourceLocation);
+    if (!poolsBySiteKey.has(key)) poolsBySiteKey.set(key, new Set());
+    poolsBySiteKey.get(key).add(normalizeText(sourceLocation.poolName) || "pool");
+  });
+
+  return new Map(Array.from(poolsBySiteKey.entries()).map(([key, pools]) => [key, pools.size]));
+};
+
+const sourceLocationHasMultiplePools = (sourceLocation, sourcePoolCountsBySiteKey) =>
+  (sourcePoolCountsBySiteKey.get(sourceSiteKey(sourceLocation)) || 0) > 1;
+
 const parseSkimmerServiceHistoryRows = (rows) => {
   const issues = [];
   const columns = Object.keys(rows[0] || {});
@@ -414,6 +442,7 @@ const buildSourceLocations = (records) => {
         state: record.state,
         zip: record.zip,
         poolName: record.poolName,
+        gallons: record.gallons || "",
         recordsCount: 0,
         dosageLineCount: 0,
         readingLineCount: 0,
@@ -429,6 +458,7 @@ const buildSourceLocations = (records) => {
     sourceLocation.recordsCount += 1;
     sourceLocation.dosageLineCount += record.dosages.length;
     sourceLocation.readingLineCount += record.readings.length;
+    if (sourceLocation.gallons === "" && record.gallons !== "") sourceLocation.gallons = record.gallons;
     record.dosages.forEach((dosage) => {
       sourceLocation.dosageKeys.add(dosage.key);
       sourceLocation.dosageNames.add(dosage.displayName);
@@ -509,14 +539,15 @@ const findMatchingServiceLocation = (sourceLocation, serviceLocations, customerI
   );
 };
 
-const findMatchingBodyOfWater = (poolName, bodiesOfWater, serviceLocationId) => {
+const findMatchingBodyOfWater = (poolName, bodiesOfWater, serviceLocationId, options = {}) => {
+  const { allowSingleFallback = true } = options;
   const poolKey = normalizeText(poolName);
   const candidateBodies = bodiesOfWater.filter((bodyOfWater) => bodyOfWater.serviceLocationId === serviceLocationId && bodyOfWater.isActive !== false);
   const allCandidateBodies = candidateBodies.length
     ? candidateBodies
     : bodiesOfWater.filter((bodyOfWater) => bodyOfWater.serviceLocationId === serviceLocationId);
 
-  if (!poolKey) return allCandidateBodies.length === 1 ? allCandidateBodies[0] : null;
+  if (!poolKey) return allowSingleFallback && allCandidateBodies.length === 1 ? allCandidateBodies[0] : null;
 
   return (
     allCandidateBodies.find((bodyOfWater) => normalizeText(bodyOfWater.name) === poolKey) ||
@@ -524,7 +555,7 @@ const findMatchingBodyOfWater = (poolName, bodiesOfWater, serviceLocationId) => 
       const bodyKey = normalizeText(bodyOfWater.name);
       return bodyKey && (bodyKey.includes(poolKey) || poolKey.includes(bodyKey));
     }) ||
-    (allCandidateBodies.length === 1 ? allCandidateBodies[0] : null)
+    (allowSingleFallback && allCandidateBodies.length === 1 ? allCandidateBodies[0] : null)
   );
 };
 
@@ -586,13 +617,16 @@ const buildAutoDosageMappings = ({ sourceDosages, dosageTemplates }) =>
     return acc;
   }, {});
 
-const buildAutoMappings = ({ sourceLocations, customers, serviceLocations, bodiesOfWater }) =>
+const buildAutoMappings = ({ sourceLocations, customers, serviceLocations, bodiesOfWater, sourcePoolCountsBySiteKey }) =>
   sourceLocations.reduce((acc, sourceLocation) => {
     const customer = findMatchingCustomer(sourceLocation.customerName, customers);
     const serviceLocation = customer
       ? findMatchingServiceLocation(sourceLocation, serviceLocations, customer.id)
       : null;
-    const bodyOfWater = serviceLocation ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocation.id) : null;
+    const allowSingleFallback = !sourceLocationHasMultiplePools(sourceLocation, sourcePoolCountsBySiteKey);
+    const bodyOfWater = serviceLocation
+      ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocation.id, { allowSingleFallback })
+      : null;
 
     acc[sourceLocation.id] = {
       customerId: customer?.id || "",
@@ -728,6 +762,7 @@ function SkimmerPreviousDosagesUpload() {
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [deletingHistory, setDeletingHistory] = useState(false);
   const [deleteProgress, setDeleteProgress] = useState({ current: 0, total: 0 });
+  const [creatingBodyOfWaterIds, setCreatingBodyOfWaterIds] = useState({});
 
   useEffect(() => {
     if (!recentlySelectedCompany) return undefined;
@@ -775,15 +810,63 @@ function SkimmerPreviousDosagesUpload() {
   }, [recentlySelectedCompany]);
 
   const sourceLocations = useMemo(() => buildSourceLocations(records), [records]);
+  const sourcePoolCountsBySiteKey = useMemo(
+    () => buildSourcePoolCountsBySiteKey(sourceLocations),
+    [sourceLocations]
+  );
+
+  const multiPoolSourceGroups = useMemo(() => {
+    const groups = new Map();
+
+    sourceLocations.forEach((sourceLocation) => {
+      const key = sourceSiteKey(sourceLocation);
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          customerName: sourceLocation.customerName,
+          address: skimmerAddressText(sourceLocation),
+          poolNames: new Map(),
+          recordsCount: 0,
+        });
+      }
+
+      const group = groups.get(key);
+      group.poolNames.set(normalizeText(sourceLocation.poolName) || "pool", sourceLocation.poolName || "Pool");
+      group.recordsCount += sourceLocation.recordsCount;
+    });
+
+    return Array.from(groups.values())
+      .filter((group) => group.poolNames.size > 1)
+      .map((group) => ({
+        ...group,
+        poolNames: Array.from(group.poolNames.values()).sort((a, b) => a.localeCompare(b)),
+      }))
+      .sort((a, b) => a.customerName.localeCompare(b.customerName) || a.address.localeCompare(b.address));
+  }, [sourceLocations]);
 
   const autoMappings = useMemo(
-    () => buildAutoMappings({ sourceLocations, customers, serviceLocations, bodiesOfWater }),
-    [sourceLocations, customers, serviceLocations, bodiesOfWater]
+    () => buildAutoMappings({ sourceLocations, customers, serviceLocations, bodiesOfWater, sourcePoolCountsBySiteKey }),
+    [sourceLocations, customers, serviceLocations, bodiesOfWater, sourcePoolCountsBySiteKey]
   );
 
   useEffect(() => {
-    setMappings(autoMappings);
-  }, [autoMappings]);
+    setMappings((current) => {
+      if (!sourceLocations.length) return autoMappings;
+
+      return sourceLocations.reduce((next, sourceLocation) => {
+        const existing = current[sourceLocation.id] || {};
+        const automatic = autoMappings[sourceLocation.id] || {};
+
+        next[sourceLocation.id] = {
+          customerId: existing.customerId || automatic.customerId || "",
+          serviceLocationId: existing.serviceLocationId || automatic.serviceLocationId || "",
+          bodyOfWaterId: existing.bodyOfWaterId || automatic.bodyOfWaterId || "",
+        };
+
+        return next;
+      }, {});
+    });
+  }, [autoMappings, sourceLocations]);
 
   const sourceReadings = useMemo(() => {
     const byKey = new Map();
@@ -1008,6 +1091,7 @@ function SkimmerPreviousDosagesUpload() {
     setReadingMappings({});
     setDosageMappings({});
     setUploadProgress({ current: 0, total: 0 });
+    setCreatingBodyOfWaterIds({});
 
     const reader = new FileReader();
     reader.onload = (loadEvent) => {
@@ -1046,8 +1130,9 @@ function SkimmerPreviousDosagesUpload() {
       const serviceLocation = customerId
         ? findMatchingServiceLocation(sourceLocation, serviceLocations, customerId)
         : null;
+      const allowSingleFallback = !sourceLocationHasMultiplePools(sourceLocation, sourcePoolCountsBySiteKey);
       const bodyOfWater = serviceLocation
-        ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocation.id)
+        ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocation.id, { allowSingleFallback })
         : null;
 
       setMappings((current) => ({
@@ -1059,13 +1144,14 @@ function SkimmerPreviousDosagesUpload() {
         },
       }));
     },
-    [bodiesOfWater, serviceLocations]
+    [bodiesOfWater, serviceLocations, sourcePoolCountsBySiteKey]
   );
 
   const handleServiceLocationChange = useCallback(
     (sourceLocation, customerId, serviceLocationId) => {
+      const allowSingleFallback = !sourceLocationHasMultiplePools(sourceLocation, sourcePoolCountsBySiteKey);
       const bodyOfWater = serviceLocationId
-        ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocationId)
+        ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, serviceLocationId, { allowSingleFallback })
         : null;
 
       setMappings((current) => ({
@@ -1078,7 +1164,7 @@ function SkimmerPreviousDosagesUpload() {
         },
       }));
     },
-    [bodiesOfWater]
+    [bodiesOfWater, sourcePoolCountsBySiteKey]
   );
 
   const handleBodyOfWaterChange = useCallback((sourceLocationId, bodyOfWaterId) => {
@@ -1090,6 +1176,128 @@ function SkimmerPreviousDosagesUpload() {
       },
     }));
   }, []);
+
+  const handleCreateBodyOfWaterFromSource = useCallback(
+    async (sourceLocation) => {
+      if (!recentlySelectedCompany) {
+        toast.error("Select a company before adding a body of water.");
+        return;
+      }
+
+      const mapping = mappings[sourceLocation.id] || {};
+      if (!mapping.customerId || !mapping.serviceLocationId) {
+        toast.error("Select a customer and service location first.");
+        return;
+      }
+
+      const poolName = cleanString(sourceLocation.poolName) || "Pool";
+      const existingBodyOfWater = findMatchingBodyOfWater(
+        poolName,
+        bodiesOfWater,
+        mapping.serviceLocationId,
+        { allowSingleFallback: false }
+      );
+
+      if (existingBodyOfWater) {
+        setMappings((current) => ({
+          ...current,
+          [sourceLocation.id]: {
+            ...(current[sourceLocation.id] || {}),
+            customerId: mapping.customerId,
+            serviceLocationId: mapping.serviceLocationId,
+            bodyOfWaterId: existingBodyOfWater.id,
+          },
+        }));
+        toast.success(`Matched ${poolName} to an existing body of water.`);
+        return;
+      }
+
+      setCreatingBodyOfWaterIds((current) => ({ ...current, [sourceLocation.id]: true }));
+
+      try {
+        const bodyOfWaterId = `com_bow_${uuidv4()}`;
+        const sourceRecords = recordsBySourceLocationId.get(sourceLocation.id) || [];
+        const sourceRows = Array.from(
+          new Set(sourceRecords.flatMap((record) => record.sourceRows || [record.rowNumber]).filter(Boolean))
+        );
+        const sourceGallons = sourceLocation.gallons || sourceRecords.find((record) => record.gallons !== "")?.gallons || "";
+        const bodyOfWater = {
+          id: bodyOfWaterId,
+          name: poolName,
+          label: poolName,
+          gallons: sourceGallons === "" ? "" : String(sourceGallons),
+          material: "",
+          customerId: mapping.customerId,
+          serviceLocationId: mapping.serviceLocationId,
+          notes: "Created from Skimmer Service History Upload",
+          shape: "",
+          length: ["", ""],
+          depth: ["", ""],
+          width: ["", ""],
+          photoUrls: [],
+          lastFilled: new Date(),
+          isActive: true,
+          imported: "From Skimmer",
+          importedFrom: "skimmer",
+          migrationSource: {
+            provider: "Skimmer",
+            featureFlagId: "feature_flag_009",
+            reportName: "Service History",
+            fileName,
+            sheetName: sourceSheetName,
+            importedAt: new Date(),
+            importedBy: user?.uid || "",
+            sourceCustomerName: sourceLocation.customerName,
+            sourceCustomerCode: sourceLocation.customerCode,
+            sourceAddress: skimmerAddressText(sourceLocation),
+            sourcePoolName: poolName,
+            sourceRows,
+          },
+        };
+
+        await Promise.all([
+          setDoc(doc(db, "companies", recentlySelectedCompany, "bodiesOfWater", bodyOfWaterId), bodyOfWater),
+          setDoc(
+            doc(db, "companies", recentlySelectedCompany, "serviceLocations", mapping.serviceLocationId),
+            { bodiesOfWaterId: arrayUnion(bodyOfWaterId) },
+            { merge: true }
+          ),
+        ]);
+
+        setBodiesOfWater((current) =>
+          [...current, bodyOfWater].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+        );
+        setMappings((current) => ({
+          ...current,
+          [sourceLocation.id]: {
+            ...(current[sourceLocation.id] || {}),
+            customerId: mapping.customerId,
+            serviceLocationId: mapping.serviceLocationId,
+            bodyOfWaterId,
+          },
+        }));
+        toast.success(`Added ${poolName} as a body of water.`);
+      } catch (error) {
+        console.error("Failed to add Skimmer body of water:", error);
+        toast.error(`Could not add ${poolName}.`);
+      } finally {
+        setCreatingBodyOfWaterIds((current) => {
+          const next = { ...current };
+          delete next[sourceLocation.id];
+          return next;
+        });
+      }
+    },
+    [
+      bodiesOfWater,
+      fileName,
+      mappings,
+      recentlySelectedCompany,
+      recordsBySourceLocationId,
+      sourceSheetName,
+      user?.uid,
+    ]
+  );
 
   const handleReadingMappingChange = useCallback((sourceReadingKey, readingTemplateId) => {
     setReadingMappings((current) => ({
@@ -1407,6 +1615,32 @@ function SkimmerPreviousDosagesUpload() {
           </div>
         )}
 
+        {multiPoolSourceGroups.length > 0 && (
+          <div className="mx-4 border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+              <p className="font-semibold">Multiple bodies of water detected</p>
+              <p className="text-xs font-medium text-blue-800">
+                {multiPoolSourceGroups.length} service location{multiPoolSourceGroups.length === 1 ? "" : "s"}
+              </p>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
+              {multiPoolSourceGroups.slice(0, 4).map((group) => (
+                <div key={group.key} className="border border-blue-200 bg-white px-3 py-2">
+                  <p className="font-medium text-slate-950">{group.customerName}</p>
+                  <p className="text-xs text-slate-600">{group.address}</p>
+                  <p className="mt-1 text-xs font-semibold text-blue-900">{group.poolNames.join(", ")}</p>
+                </div>
+              ))}
+            </div>
+            {multiPoolSourceGroups.length > 4 && (
+              <p className="mt-2 text-xs font-medium text-blue-800">
+                {multiPoolSourceGroups.length - 4} more service location
+                {multiPoolSourceGroups.length - 4 === 1 ? "" : "s"} with multiple bodies of water.
+              </p>
+            )}
+          </div>
+        )}
+
         {sourceDosages.length > 0 && (
           <section className="border border-slate-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
@@ -1558,6 +1792,19 @@ function SkimmerPreviousDosagesUpload() {
                     const readyStopCount = sourceRecords.filter(recordIsUploadable).length;
                     const ready = locationReady && dosagesReady && readyStopCount > 0;
                     const visibleDosageNames = sourceLocation.dosageNames.slice(0, 4).join(", ");
+                    const hasMultipleSourcePools = sourceLocationHasMultiplePools(sourceLocation, sourcePoolCountsBySiteKey);
+                    const strictBodyOfWaterMatch = mapping.serviceLocationId
+                      ? findMatchingBodyOfWater(sourceLocation.poolName, bodiesOfWater, mapping.serviceLocationId, {
+                          allowSingleFallback: false,
+                        })
+                      : null;
+                    const shouldOfferCreateBodyOfWater = Boolean(
+                      mapping.serviceLocationId &&
+                        sourceLocation.poolName &&
+                        !strictBodyOfWaterMatch &&
+                        !mapping.bodyOfWaterId
+                    );
+                    const creatingBodyOfWater = Boolean(creatingBodyOfWaterIds[sourceLocation.id]);
 
                     return (
                       <tr key={sourceLocation.id} className="align-top">
@@ -1609,6 +1856,26 @@ function SkimmerPreviousDosagesUpload() {
                               </option>
                             ))}
                           </select>
+                          {hasMultipleSourcePools && (
+                            <p className="mt-1 text-xs font-medium text-blue-700">
+                              Skimmer pool: {sourceLocation.poolName}
+                            </p>
+                          )}
+                          {shouldOfferCreateBodyOfWater && (
+                            <div className="mt-2 border border-amber-200 bg-amber-50 p-2">
+                              <p className="text-xs font-medium text-amber-800">
+                                No Drip Drop body of water matches {sourceLocation.poolName}.
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => handleCreateBodyOfWaterFromSource(sourceLocation)}
+                                disabled={creatingBodyOfWater || uploading || deletingHistory}
+                                className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
+                              >
+                                {creatingBodyOfWater ? "Adding..." : `Add ${sourceLocation.poolName}`}
+                              </button>
+                            </div>
+                          )}
                         </td>
                         <td className="min-w-[300px] px-4 py-4">
                           <div className="space-y-1 text-slate-700">

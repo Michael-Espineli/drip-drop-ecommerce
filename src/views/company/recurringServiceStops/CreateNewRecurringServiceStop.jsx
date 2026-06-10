@@ -332,6 +332,7 @@ const CreateNewRecurringServiceStop = () => {
             type: resolvedTypeFields.type,
             typeId: resolvedTypeFields.typeId,
             typeImage: resolvedTypeFields.typeImage,
+            category: resolvedTypeFields.category,
             serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
             customerName: `${customer.firstName} ${customer.lastName}`,
             customerId: customer.id,

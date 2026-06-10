@@ -2,20 +2,21 @@ import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
 import { getNav } from '../navigation/index';
-import { ArrowLeftOnRectangleIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
 import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 
-const Sidebar = ({ showSidebar, setShowSidebar }) => {
+const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0 });
     const categoryLabel = (category) => category === 'Users' ? 'Users, Vendors & Fleet' : category;
+    const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
 
     useEffect(() => {
         if (role) {
@@ -31,13 +32,17 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             const savedCategoryOrder = dataBaseUser?.settings?.companyNavigationCategoryOrder;
             const navs = getNav(role, savedCategoryOrder);
             const filteredNavs = Object.entries(navs).reduce((acc, [category, items]) => {
-                const visibleItems = items.filter((item) => (
-                    item.role !== "Company" ||
-                    (
-                        (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
-                        featureFlagsEnabledForItem(item)
-                    )
-                ));
+                const visibleItems = items.filter((item) => {
+                    if (item.path === "/company/setup-guide") return false;
+
+                    return (
+                        item.role !== "Company" ||
+                        (
+                            (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
+                            featureFlagsEnabledForItem(item)
+                        )
+                    );
+                });
 
                 if (visibleItems.length > 0) {
                     acc[category] = visibleItems;
@@ -90,22 +95,29 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             setCounts(prev => ({ ...prev, leads: snapshot.size }));
         });
 
-        const unsubscribeMessages = listenVisibleChats({
-            db,
-            userId: user.uid,
-            companyId: recentlySelectedCompany,
-            onChange: (visibleChats) => {
-                const unreadCount = visibleChats.filter((chat) => (
-                    isChatUnreadFor(chat, user.uid, recentlySelectedCompany)
-                )).length;
+        const messagesEnabled = featureFlagsLoaded && isFeatureEnabled("feature_flag_001");
+        let unsubscribeMessages = () => {};
 
-                setCounts(prev => ({ ...prev, messages: unreadCount }));
-            },
-            onError: (error) => {
-                console.error("Error loading message count:", error);
-                setCounts(prev => ({ ...prev, messages: 0 }));
-            },
-        });
+        if (messagesEnabled) {
+            unsubscribeMessages = listenVisibleChats({
+                db,
+                userId: user.uid,
+                companyId: recentlySelectedCompany,
+                onChange: (visibleChats) => {
+                    const unreadCount = visibleChats.filter((chat) => (
+                        isChatUnreadFor(chat, user.uid, recentlySelectedCompany)
+                    )).length;
+
+                    setCounts(prev => ({ ...prev, messages: unreadCount }));
+                },
+                onError: (error) => {
+                    console.error("Error loading message count:", error);
+                    setCounts(prev => ({ ...prev, messages: 0 }));
+                },
+            });
+        } else {
+            setCounts(prev => ({ ...prev, messages: 0 }));
+        }
 
         const unsubscribeShopping = onSnapshot(shoppingQuery, snapshot => {
             setCounts(prev => ({ ...prev, shopping: snapshot.size }));
@@ -150,7 +162,7 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             unsubscribeInternalRepairRequests();
             unsubscribeExternalRepairRequests();
         };
-    }, [recentlySelectedCompany, user]);
+    }, [recentlySelectedCompany, user, featureFlagsLoaded, isFeatureEnabled]);
 
     const logout = async () => {
         try {
@@ -174,21 +186,52 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-black/50 top-0 left-0 z-10' : 'w-0'}`}></div>
 
             {/* Sidebar */}
-            <div className={`w-[260px] fixed bg-white z-50 top-0 h-screen shadow-lg transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
+            <div className={`fixed top-0 z-50 h-screen w-[260px] bg-white shadow-lg transition-all duration-200 ${isCollapsed ? 'lg:w-[76px]' : 'lg:w-[260px]'} ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
                 <div className='flex flex-col h-full'>
                     {/* Header */}
-                    <div className='h-[95px] flex justify-center items-center border-b border-b-slate-200 shrink-0'>
-                        <Link to='/' className='text-gray-800 font-bold text-3xl'>
-                            Drip Drop
+                    <div className={`h-[95px] flex items-center gap-2 border-b border-b-slate-200 px-4 shrink-0 ${isCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
+                        <Link to='/' className='min-w-0 text-gray-800 font-bold text-3xl'>
+                            <span className={isCollapsed ? 'hidden lg:inline' : 'hidden'}>DD</span>
+                            <span className={isCollapsed ? 'lg:hidden' : ''}>Drip Drop</span>
                         </Link>
+                        <button
+                            type="button"
+                            onClick={() => setIsCollapsed((current) => !current)}
+                            className={`hidden h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-100 lg:flex ${isCollapsed ? 'lg:absolute lg:-right-4 lg:bg-white lg:shadow-sm' : ''}`}
+                            aria-label={isCollapsed ? "Expand navigation" : "Collapse navigation"}
+                            title={isCollapsed ? "Expand navigation" : "Collapse navigation"}
+                        >
+                            {isCollapsed ? (
+                                <ChevronDoubleRightIcon className="h-5 w-5" />
+                            ) : (
+                                <ChevronDoubleLeftIcon className="h-5 w-5" />
+                            )}
+                        </button>
                     </div>
 
                     {/* Navigation */}
-                    <nav className='px-2 pt-5 text-gray-700 flex-grow overflow-y-auto'>
-                        {Object.keys(navItemsByCategory).map(category => (
-                            <div key={category} className="mb-3">
+                    <nav className={`px-2 pt-5 text-gray-700 flex-grow overflow-y-auto ${isCollapsed ? 'lg:px-2' : ''}`}>
+                        {Object.keys(navItemsByCategory).map((category, categoryIndex) => (
+                            <div
+                                key={category}
+                                className={`mb-3 ${isCollapsed && categoryIndex > 0 ? 'lg:mt-5 lg:pt-2' : ''}`}
+                            >
+                                {categoryIndex > 0 && (
+                                    <div
+                                        className={`hidden items-center px-1 pb-3 ${isCollapsed ? 'lg:flex' : ''}`}
+                                        role="separator"
+                                        aria-label={`${categoryLabel(category)} section`}
+                                        title={categoryLabel(category)}
+                                    >
+                                        <span className="h-[2px] flex-1 bg-slate-500" />
+                                        <span className="mx-2 shrink-0 text-[11px] font-bold uppercase leading-none text-slate-700">
+                                            {categoryInitial(category)}
+                                        </span>
+                                        <span className="h-[2px] flex-1 bg-slate-500" />
+                                    </div>
+                                )}
                                 {category !== 'NA' && (
-                                    <h3 className="px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider">{categoryLabel(category)}</h3>
+                                    <h3 className={`px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider ${isCollapsed ? 'lg:hidden' : ''}`}>{categoryLabel(category)}</h3>
                                 )}
                                 <ul className='flex flex-col gap-1'>
                                     {navItemsByCategory[category].map(item => {
@@ -208,12 +251,13 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
                                             <li key={`${item.path}-${item.title}`}>
                                                 <Link
                                                     to={getPath(item.path)}
-                                                    className={`w-full px-3 py-2 rounded-md flex justify-start items-center gap-3 font-medium transition-all ${isActive ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100'}`}>
-                                                    <span className={`w-6 h-6 ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>{item.icon}</span>
-                                                    <span>{item.title}</span>
+                                                    title={item.title}
+                                                    className={`relative w-full px-3 py-2 rounded-md flex justify-start items-center gap-3 font-medium transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''} ${isActive ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100'}`}>
+                                                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center ${isActive ? 'text-blue-600' : 'text-gray-500'} [&>svg]:h-5 [&>svg]:w-5`}>{item.icon}</span>
+                                                    <span className={isCollapsed ? 'lg:hidden' : ''}>{item.title}</span>
                                                     {count > 0 && (
-                                                        <span className="ml-auto bg-red-500 text-white text-xs font-semibold px-2.5 py-0.5 rounded-full">
-                                                            {count}
+                                                        <span className={`ml-auto rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white ${isCollapsed ? 'lg:absolute lg:-right-1 lg:-top-1 lg:ml-0 lg:flex lg:h-[18px] lg:min-w-[18px] lg:items-center lg:justify-center lg:px-1 lg:text-[10px]' : ''}`}>
+                                                            {count > 99 ? '99+' : count}
                                                         </span>
                                                     )}
                                                 </Link>
@@ -227,9 +271,13 @@ const Sidebar = ({ showSidebar, setShowSidebar }) => {
 
                     {/* Logout Button */}
                     <div className="p-4 border-t border-t-slate-200 shrink-0">
-                        <button onClick={logout} className="w-full flex items-center px-4 py-3 text-left text-red-500 hover:bg-red-50 rounded-lg font-medium">
-                            <ArrowLeftOnRectangleIcon className="w-6 h-6 mr-3" />
-                            Logout
+                        <button
+                            onClick={logout}
+                            className={`w-full flex items-center px-4 py-3 text-left text-red-500 hover:bg-red-50 rounded-lg font-medium ${isCollapsed ? 'lg:justify-center lg:px-2' : ''}`}
+                            title="Logout"
+                        >
+                            <ArrowLeftOnRectangleIcon className={`w-6 h-6 ${isCollapsed ? 'lg:mr-0' : 'mr-3'}`} />
+                            <span className={isCollapsed ? 'lg:hidden' : ''}>Logout</span>
                         </button>
                     </div>
                 </div>

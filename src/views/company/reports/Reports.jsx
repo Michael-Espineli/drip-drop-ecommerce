@@ -1,6 +1,14 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query, where } from "firebase/firestore";
 import { endOfMonth, format, startOfMonth } from "date-fns";
+import * as XLSX from "xlsx";
+import {
+  DocumentTextIcon,
+  MagnifyingGlassIcon,
+  PrinterIcon,
+  TableCellsIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
@@ -12,22 +20,36 @@ import {
   getRoleCustomerTagAccess,
 } from "../../../utils/customerTags";
 
+const reportCategories = [
+  { value: "operations", label: "Operations" },
+  { value: "finance", label: "Finance / Accounting" },
+];
+
 const reportCatalog = [
-  { value: "readings", label: "Readings", status: "Ready", source: "stopData readings" },
-  { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages" },
-  { value: "waste", label: "Waste", status: "Ready", source: "dosages and chemical purchases" },
-  { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll" },
-  { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items" },
-  { value: "pnl", label: "P.N.L.", status: "Ready", source: "jobs, purchases, payroll" },
-  { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll" },
-  { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes" },
-  { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs" },
+  { value: "readings", label: "Readings Summary", status: "Ready", source: "stopData readings", category: "operations" },
+  { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
+  { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
+  { value: "waste", label: "Waste", status: "Ready", source: "dosages and chemical purchases", category: "operations" },
+  { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll", category: "operations" },
+  { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll", category: "operations" },
+  { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes", category: "operations" },
+  { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items", category: "finance" },
+  { value: "pnl", label: "P.N.L.", status: "Ready", source: "jobs, purchases, payroll", category: "finance" },
+  { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
 const groupOptions = [
   { value: "company", label: "Company" },
   { value: "user", label: "User" },
   { value: "customer", label: "Customer" },
+];
+
+const readingOperatorOptions = [
+  { value: "gt", label: "Over" },
+  { value: "gte", label: "At or over" },
+  { value: "lt", label: "Below" },
+  { value: "lte", label: "At or below" },
+  { value: "eq", label: "Equal to" },
 ];
 
 const moneyFromCents = (value) =>
@@ -69,6 +91,106 @@ const templateName = (item, templatesById, fallback) =>
   item.name || templatesById.get(item.templateId)?.name || templatesById.get(item.universalTemplateId)?.name || fallback;
 
 const valueWithUnit = (item) => [item.amount ?? "", item.UOM || item.uom || ""].filter(Boolean).join(" ").trim() || "-";
+
+const customerDisplayName = (customer = {}) => {
+  if (!customer) return "";
+  const personalName = `${customer.firstName || ""} ${customer.lastName || ""}`.trim();
+  if (customer.displayAsCompany) {
+    return customer.company || customer.companyName || customer.businessName || customer.displayName || customer.customerName || customer.label || personalName || "";
+  }
+  return customer.customerName || customer.displayName || customer.name || personalName || customer.label || customer.company || customer.companyName || customer.email || "";
+};
+
+const customerContactInfo = (customer = {}) =>
+  Array.from(new Set([
+    customer.email,
+    customer.phoneNumber || customer.phone,
+    customer.mainContact?.email,
+    customer.mainContact?.phoneNumber,
+  ].filter(Boolean))).join(" | ");
+
+const readingTemplateKey = (template = {}) =>
+  String(template.id || template.templateId || template.readingsTemplateId || template.universalTemplateId || "");
+
+const readingTemplateLabel = (template = {}) =>
+  [template.name || template.chemType || "Reading", template.UOM || template.uom || ""]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+
+const sortReadingTemplates = (templates = []) =>
+  [...templates].sort((a, b) => readingTemplateLabel(a).localeCompare(readingTemplateLabel(b)));
+
+const hasNumericValue = (value) => value !== "" && value !== null && value !== undefined && Number.isFinite(Number(value));
+
+const defaultReadingHealthFilterFor = (template = {}) => {
+  const templateId = readingTemplateKey(template);
+  if (hasNumericValue(template.highWarning)) {
+    return { templateId, operator: "gt", threshold: String(template.highWarning) };
+  }
+  if (hasNumericValue(template.lowWarning)) {
+    return { templateId, operator: "lt", threshold: String(template.lowWarning) };
+  }
+  return { templateId, operator: "gt", threshold: "" };
+};
+
+const parseReadingNumber = (value) => {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const raw = String(value ?? "").replaceAll(",", "").trim();
+  if (!raw) return null;
+  const direct = Number(raw);
+  if (Number.isFinite(direct)) return direct;
+  const match = raw.match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const compareReadingValue = (value, operator, threshold) => {
+  if (!Number.isFinite(value) || !Number.isFinite(threshold)) return false;
+  switch (operator) {
+    case "gte":
+      return value >= threshold;
+    case "lt":
+      return value < threshold;
+    case "lte":
+      return value <= threshold;
+    case "eq":
+      return Math.abs(value - threshold) < 0.00001;
+    case "gt":
+    default:
+      return value > threshold;
+  }
+};
+
+const readingOperatorLabel = (operator) =>
+  readingOperatorOptions.find((option) => option.value === operator)?.label || readingOperatorOptions[0].label;
+
+const readingMatchesTemplate = (reading = {}, template = {}) => {
+  const templateIds = [
+    template.id,
+    template.templateId,
+    template.readingsTemplateId,
+    template.universalTemplateId,
+  ].filter(Boolean).map(String);
+  const readingIds = [
+    reading.templateId,
+    reading.universalTemplateId,
+    reading.readingsTemplateId,
+    reading.templateUniversalId,
+  ].filter(Boolean).map(String);
+
+  if (templateIds.some((templateId) => readingIds.includes(templateId))) return true;
+
+  const templateNames = [template.name, template.chemType]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+  const readingNames = [reading.name, reading.chemType, reading.dosageType]
+    .filter(Boolean)
+    .map((value) => String(value).trim().toLowerCase());
+
+  return templateNames.some((name) => readingNames.includes(name));
+};
 
 const itemDate = (item, fields) => {
   for (const field of fields) {
@@ -171,6 +293,210 @@ const getDatabaseItems = async (companyId) => {
   return normalizeDocs(snap);
 };
 
+const safeFilePart = (value) =>
+  String(value || "report")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || "report";
+
+const reportFileName = (reportData, extension) =>
+  `${safeFilePart(reportData?.title)}_${format(new Date(), "yyyy-MM-dd_HH-mm")}.${extension}`;
+
+const displayColumnValue = (column, row) => {
+  const value = column.render ? column.render(row) : row[column.key];
+  if (React.isValidElement(value)) return "";
+  if (value === null || value === undefined) return "";
+  return String(value);
+};
+
+const reportRowsForExport = (reportData) => {
+  if (!reportData) return [];
+
+  return (reportData.groups || []).flatMap((group) => {
+    const dataRows = (group.rows || []).map((row) => {
+      const exportRow = { Group: group.name };
+      reportData.columns.forEach((column) => {
+        exportRow[column.label] = displayColumnValue(column, row);
+      });
+      return exportRow;
+    });
+
+    if (!group.footerRow) return dataRows;
+
+    const footerExportRow = { Group: `${group.name} Total` };
+    reportData.columns.forEach((column) => {
+      footerExportRow[column.label] = displayColumnValue(column, group.footerRow);
+    });
+    return [...dataRows, footerExportRow];
+  });
+};
+
+const reportStatsForExport = (reportData) =>
+  (reportData?.stats || []).map((stat) => ({
+    Metric: stat.label,
+    Value: stat.value,
+    Subtitle: stat.subtitle || "",
+  }));
+
+const csvCell = (value) => {
+  const text = String(value ?? "");
+  return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+};
+
+const downloadBlob = (blob, fileName) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+};
+
+const exportReportCsv = (reportData) => {
+  if (!reportData) {
+    toast.error("Generate a report before exporting.");
+    return;
+  }
+
+  const columnLabels = ["Group", ...reportData.columns.map((column) => column.label)];
+  const csvRows = [
+    [reportData.title || "Report"],
+    [],
+    ["Metric", "Value", "Subtitle"],
+    ...reportStatsForExport(reportData).map((stat) => [stat.Metric, stat.Value, stat.Subtitle]),
+    [],
+    columnLabels,
+    ...reportRowsForExport(reportData).map((row) => columnLabels.map((label) => row[label] || "")),
+  ];
+  const csv = csvRows.map((row) => row.map(csvCell).join(",")).join("\n");
+  downloadBlob(new Blob([csv], { type: "text/csv;charset=utf-8;" }), reportFileName(reportData, "csv"));
+  toast.success("CSV export ready.");
+};
+
+const exportReportExcel = (reportData) => {
+  if (!reportData) {
+    toast.error("Generate a report before exporting.");
+    return;
+  }
+
+  const workbook = XLSX.utils.book_new();
+  const summarySheet = XLSX.utils.json_to_sheet(reportStatsForExport(reportData));
+  const rows = reportRowsForExport(reportData);
+  const dataSheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Message: "No rows in this report." }]);
+
+  XLSX.utils.book_append_sheet(workbook, summarySheet, "Summary");
+  XLSX.utils.book_append_sheet(workbook, dataSheet, "Report Data");
+  XLSX.writeFile(workbook, reportFileName(reportData, "xlsx"));
+  toast.success("Excel export ready.");
+};
+
+const escapeHtml = (value) =>
+  String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
+const printableReportHtml = (reportData) => {
+  const statsHtml = reportStatsForExport(reportData)
+    .map((stat) => `
+      <div class="stat">
+        <span>${escapeHtml(stat.Metric)}</span>
+        <strong>${escapeHtml(stat.Value)}</strong>
+        ${stat.Subtitle ? `<small>${escapeHtml(stat.Subtitle)}</small>` : ""}
+      </div>
+    `)
+    .join("");
+
+  const groupsHtml = (reportData.groups || [])
+    .map((group) => {
+      const tableRows = (group.rows || []).map((row) => `
+        <tr>
+          ${reportData.columns.map((column) => `<td>${escapeHtml(displayColumnValue(column, row))}</td>`).join("")}
+        </tr>
+      `).join("");
+      const footerRow = group.footerRow ? `
+        <tr class="footer">
+          ${reportData.columns.map((column) => `<td>${escapeHtml(displayColumnValue(column, group.footerRow))}</td>`).join("")}
+        </tr>
+      ` : "";
+
+      return `
+        <section>
+          <h2>${escapeHtml(group.name)}</h2>
+          <table>
+            <thead>
+              <tr>${reportData.columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
+            </thead>
+            <tbody>
+              ${tableRows || `<tr><td colspan="${reportData.columns.length}">No rows in this group.</td></tr>`}
+              ${footerRow}
+            </tbody>
+          </table>
+        </section>
+      `;
+    })
+    .join("");
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <title>${escapeHtml(reportData.title || "Report")}</title>
+        <style>
+          body { color: #0f172a; font-family: Arial, sans-serif; margin: 28px; }
+          h1 { font-size: 24px; margin: 0 0 4px; }
+          .generated { color: #64748b; font-size: 12px; margin-bottom: 18px; }
+          .stats { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); margin-bottom: 18px; }
+          .stat { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; }
+          .stat span { color: #64748b; display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+          .stat strong { display: block; font-size: 18px; margin-top: 4px; }
+          .stat small { color: #64748b; display: block; margin-top: 2px; }
+          section { break-inside: avoid; margin-top: 18px; }
+          h2 { font-size: 16px; margin-bottom: 8px; }
+          table { border-collapse: collapse; font-size: 11px; width: 100%; }
+          th { background: #f1f5f9; color: #475569; font-size: 10px; text-align: left; text-transform: uppercase; }
+          th, td { border: 1px solid #cbd5e1; padding: 6px; vertical-align: top; }
+          .footer td { background: #f8fafc; font-weight: 700; }
+          @media print { body { margin: 18px; } .stats { grid-template-columns: repeat(2, 1fr); } }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtml(reportData.title || "Report")}</h1>
+        <div class="generated">Generated ${escapeHtml(format(new Date(), "MM/dd/yyyy h:mm a"))}</div>
+        <div class="stats">${statsHtml}</div>
+        ${groupsHtml}
+      </body>
+    </html>
+  `;
+};
+
+const exportReportPdf = (reportData) => {
+  if (!reportData) {
+    toast.error("Generate a report before exporting.");
+    return;
+  }
+
+  const printWindow = window.open("", "_blank");
+  if (!printWindow) {
+    toast.error("Allow popups to export PDF.");
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(printableReportHtml(reportData));
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => {
+    printWindow.print();
+  }, 250);
+};
+
 const buildReadingReport = ({ stopData, readingTemplates, mode, groupBy }) => {
   const readingTemplatesById = templateMap(readingTemplates, "readingsTemplateId");
   const groups = new Map();
@@ -232,6 +558,162 @@ const buildReadingReport = ({ stopData, readingTemplates, mode, groupBy }) => {
           { key: "values", label: "Readings" },
         ],
     groups: [...groups.values()],
+  };
+};
+
+const buildReadingHealthReport = ({
+  stopData,
+  readingTemplates,
+  bodiesOfWater,
+  customersById = new Map(),
+  readingHealthFilters,
+  mode,
+}) => {
+  const selectedTemplate =
+    readingTemplates.find((template) => readingTemplateKey(template) === readingHealthFilters.templateId) ||
+    readingTemplates[0] ||
+    {};
+  const operator = readingHealthFilters.operator || "gt";
+  const threshold = parseReadingNumber(readingHealthFilters.threshold);
+  const readingName = selectedTemplate.name || selectedTemplate.chemType || "Reading";
+  const unit = selectedTemplate.UOM || selectedTemplate.uom || "";
+  const bodiesById = new Map((bodiesOfWater || []).map((body) => [body.id, body]));
+  const poolsById = new Map();
+  const detailRows = [];
+
+  stopData.forEach((stop) => {
+    const readings = Array.isArray(stop.readings) ? stop.readings : [];
+
+    readings.forEach((reading) => {
+      if (!readingMatchesTemplate(reading, selectedTemplate)) return;
+
+      const readingValue = parseReadingNumber(reading.amount);
+      if (!compareReadingValue(readingValue, operator, threshold)) return;
+
+      const bodyOfWaterId = reading.bodyOfWaterId || stop.bodyOfWaterId || "unknown";
+      const bodyOfWater = bodiesById.get(bodyOfWaterId) || {};
+      const customerId = stop.customerId || reading.customerId || bodyOfWater.customerId || stop.internalCustomerId || "";
+      const customer = customerId ? customersById.get(customerId) : null;
+      const readingDate = dateFromValue(stop.date);
+      const displayValue = [
+        readingValue.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+        reading.UOM || reading.uom || unit,
+      ].filter(Boolean).join(" ");
+      const poolName =
+        bodyOfWater.name ||
+        bodyOfWater.nickName ||
+        stop.bodyOfWaterName ||
+        stop.poolName ||
+        "Unknown Pool";
+      const customerName =
+        customerDisplayName(customer) ||
+        bodyOfWater.customerName ||
+        stop.customerName ||
+        customerId ||
+        "-";
+      const contact = customerContactInfo(customer) || "-";
+      const workerName =
+        stop.userName ||
+        stop.techName ||
+        stop.tech ||
+        stop.workerName ||
+        stop.companyUserName ||
+        "-";
+      const row = {
+        id: `${stop.id || stop.serviceStopId || "stop"}-${reading.id || reading.templateId || detailRows.length}`,
+        sortTime: readingDate ? readingDate.getTime() : 0,
+        date: shortDate(stop.date),
+        pool: poolName,
+        customer: customerName,
+        contact,
+        customerId: customerId || "-",
+        worker: workerName,
+        reading: reading.name || readingName,
+        value: displayValue,
+        rule: `${readingOperatorLabel(operator)} ${readingHealthFilters.threshold}${unit ? ` ${unit}` : ""}`,
+        serviceStop: stop.serviceStopId || stop.id || "-",
+        bodyOfWaterId,
+      };
+
+      detailRows.push(row);
+
+      const poolKey = bodyOfWaterId || `${poolName}-${customerName}`;
+      const existingPool = poolsById.get(poolKey);
+      if (existingPool) {
+        existingPool.matches += 1;
+        existingPool.contact = existingPool.contact !== "-" ? existingPool.contact : contact;
+        existingPool.customer = existingPool.customer !== "-" ? existingPool.customer : customerName;
+        if (row.sortTime >= existingPool.latestSortTime) {
+          existingPool.latestSortTime = row.sortTime;
+          existingPool.latestDate = row.date;
+          existingPool.latestValue = row.value;
+          existingPool.lastWorker = row.worker;
+        }
+      } else {
+        poolsById.set(poolKey, {
+          id: poolKey,
+          pool: poolName,
+          customer: customerName,
+          contact,
+          customerId: customerId || "-",
+          matches: 1,
+          latestSortTime: row.sortTime,
+          latestDate: row.date,
+          latestValue: row.value,
+          lastWorker: row.worker,
+          bodyOfWaterId: bodyOfWaterId === "unknown" ? "-" : bodyOfWaterId,
+        });
+      }
+    });
+  });
+
+  const summaryRows = [...poolsById.values()]
+    .sort((a, b) => b.latestSortTime - a.latestSortTime || b.matches - a.matches)
+    .map(({ latestSortTime, ...row }) => row);
+  const detailReportRows = detailRows
+    .sort((a, b) => b.sortTime - a.sortTime)
+    .map(({ sortTime, ...row }) => row);
+  const ruleLabel = `${readingOperatorLabel(operator)} ${readingHealthFilters.threshold}${unit ? ` ${unit}` : ""}`;
+
+  return {
+    title: "Reading Health Report",
+    stats: [
+      numberMetric("Matching Pools", summaryRows.length),
+      numberMetric("Matching Readings", detailRows.length),
+      { label: "Rule", value: ruleLabel, subtitle: readingName },
+      numberMetric("Templates", readingTemplates.length),
+    ],
+    columns: mode === "summary"
+      ? [
+          { key: "pool", label: "Pool" },
+          { key: "customer", label: "Customer" },
+          { key: "contact", label: "Contact" },
+          { key: "matches", label: "Matches", align: "right" },
+          { key: "latestValue", label: "Latest Match", align: "right" },
+          { key: "latestDate", label: "Latest Date" },
+          { key: "lastWorker", label: "Worker" },
+        ]
+      : [
+          { key: "date", label: "Date" },
+          { key: "pool", label: "Pool" },
+          { key: "customer", label: "Customer" },
+          { key: "contact", label: "Contact" },
+          { key: "worker", label: "Worker" },
+          { key: "reading", label: "Reading" },
+          { key: "value", label: "Value", align: "right" },
+          { key: "serviceStop", label: "Service Stop" },
+        ],
+    groups: [
+      {
+        id: "reading-health",
+        name: "Matching Pools",
+        metrics: {
+          pools: summaryRows.length,
+          readings: detailRows.length,
+        },
+        rows: mode === "summary" ? summaryRows : detailReportRows,
+      },
+    ],
   };
 };
 
@@ -671,9 +1153,9 @@ const buildTaxReport = ({ purchases, jobs, groupBy }) => {
 };
 
 const StatCard = ({ title, value, subtitle }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
-    <p className="mt-2 text-2xl font-bold text-slate-900">{value}</p>
+    <p className="mt-2 break-words text-xl font-bold text-slate-900 sm:text-2xl">{value}</p>
     {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
   </div>
 );
@@ -682,7 +1164,7 @@ const ReportCatalogCard = ({ report, selected, onSelect }) => (
   <button
     type="button"
     onClick={() => onSelect(report.value)}
-    className={`rounded-lg border p-4 text-left shadow-sm transition ${
+    className={`h-full rounded-lg border p-3 text-left shadow-sm transition ${
       selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:border-slate-400"
     }`}
   >
@@ -740,44 +1222,113 @@ const ReportTable = ({ columns, rows, footerRow }) => (
 
 const GeneratedReportView = ({ data }) => {
   if (!data) {
-    return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Generate a report to see results.</div>;
+    return (
+      <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-slate-200 bg-white p-6 text-center text-slate-500 shadow-sm xl:h-full xl:min-h-0">
+        Generate a report to see results.
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="grid gap-4 md:grid-cols-3">
-        {data.stats.map((stat) => (
-          <StatCard key={stat.label} title={stat.label} value={stat.value} subtitle={stat.subtitle} />
-        ))}
-      </div>
-
-      {data.total ? (
-        <div className="rounded-lg border border-slate-300 bg-slate-900 p-5 text-white shadow-sm">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">{data.total.label}</p>
-          <p className="mt-1 text-3xl font-bold">{data.total.value}</p>
-          {data.total.subtitle ? <p className="mt-1 text-sm text-slate-300">{data.total.subtitle}</p> : null}
+    <section className="flex min-h-[520px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm xl:h-full xl:min-h-0">
+      <div className="shrink-0 border-b border-slate-200 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">{data.title || "Generated Report"}</h2>
+          </div>
         </div>
-      ) : null}
 
-      {data.groups.length ? (
-        <div className="grid gap-4">
-          {data.groups.map((group) => (
-            <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
-                {Object.keys(group.metrics || {}).length ? (
-                  <p className="mt-1 text-sm text-slate-500">
-                    {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
-                  </p>
-                ) : null}
-              </div>
-              <ReportTable columns={data.columns} rows={group.rows} footerRow={group.footerRow} />
-            </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {data.stats.map((stat) => (
+            <StatCard key={stat.label} title={stat.label} value={stat.value} subtitle={stat.subtitle} />
           ))}
         </div>
-      ) : (
-        <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No data found for this date range.</div>
-      )}
+
+        {data.total ? (
+          <div className="mt-4 rounded-lg border border-slate-300 bg-slate-900 p-4 text-white shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">{data.total.label}</p>
+            <p className="mt-1 text-2xl font-bold">{data.total.value}</p>
+            {data.total.subtitle ? <p className="mt-1 text-sm text-slate-300">{data.total.subtitle}</p> : null}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        {data.groups.length ? (
+          <div className="grid gap-4">
+            {data.groups.map((group) => (
+              <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
+                  {Object.keys(group.metrics || {}).length ? (
+                    <p className="mt-1 text-sm text-slate-500">
+                      {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
+                    </p>
+                  ) : null}
+                </div>
+                <ReportTable columns={data.columns} rows={group.rows} footerRow={group.footerRow} />
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No data found for this date range.</div>
+        )}
+      </div>
+    </section>
+  );
+};
+
+const ExportSection = ({ reportData }) => {
+  const disabled = !reportData;
+  const buttonClass = (accent) =>
+    `flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+      accent === "dark"
+        ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+        : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+    }`;
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-bold text-slate-900">Export</h3>
+          <p className="mt-1 text-xs text-slate-500">Current report data</p>
+        </div>
+      </div>
+      <div className="mt-3 grid gap-2">
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={() => exportReportPdf(reportData)}
+          className={buttonClass("dark")}
+          title="Export PDF"
+        >
+          <PrinterIcon className="h-4 w-4" />
+          PDF
+        </button>
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => exportReportExcel(reportData)}
+            className={buttonClass()}
+            title="Export Excel"
+          >
+            <TableCellsIcon className="h-4 w-4" />
+            Excel
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => exportReportCsv(reportData)}
+            className={buttonClass()}
+            title="Export CSV"
+          >
+            <DocumentTextIcon className="h-4 w-4" />
+            CSV
+          </button>
+        </div>
+      </div>
     </div>
   );
 };
@@ -789,17 +1340,37 @@ const Reports = () => {
   const [groupBy, setGroupBy] = useState("company");
   const [availableCustomerTags, setAvailableCustomerTags] = useState([]);
   const [selectedCustomerTags, setSelectedCustomerTags] = useState([]);
+  const [availableReadingTemplates, setAvailableReadingTemplates] = useState([]);
+  const [readingHealthFilters, setReadingHealthFilters] = useState({
+    templateId: "",
+    operator: "gt",
+    threshold: "",
+  });
   const [dateRange, setDateRange] = useState({
     start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
     end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
   });
   const [reportData, setReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [reportSearchDraft, setReportSearchDraft] = useState("");
+  const [reportSearchTerm, setReportSearchTerm] = useState("");
 
   const selectedReport = useMemo(
     () => reportCatalog.find((report) => report.value === reportType) || reportCatalog[0],
     [reportType]
   );
+
+  const filteredReportCatalog = useMemo(() => {
+    const search = reportSearchTerm.trim().toLowerCase();
+    if (!search) return reportCatalog;
+
+    return reportCatalog.filter((report) => {
+      const category = reportCategories.find((item) => item.value === report.category)?.label || "";
+      return [report.label, report.source, category]
+        .filter(Boolean)
+        .some((value) => value.toLowerCase().includes(search));
+    });
+  }, [reportSearchTerm]);
 
   const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
 
@@ -826,8 +1397,63 @@ const Reports = () => {
     fetchCustomerTags();
   }, [recentlySelectedCompany, companyRole]);
 
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setAvailableReadingTemplates([]);
+      setReadingHealthFilters({ templateId: "", operator: "gt", threshold: "" });
+      return;
+    }
+
+    let isActive = true;
+    const fetchReadingTemplates = async () => {
+      try {
+        const readingsSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings"));
+        const templates = sortReadingTemplates(normalizeDocs(readingsSnap));
+        if (!isActive) return;
+        setAvailableReadingTemplates(templates);
+        setReadingHealthFilters((currentFilters) => {
+          if (!templates.length) return { templateId: "", operator: "gt", threshold: "" };
+          const currentTemplateExists = templates.some((template) => readingTemplateKey(template) === currentFilters.templateId);
+          return currentTemplateExists ? currentFilters : defaultReadingHealthFilterFor(templates[0]);
+        });
+      } catch (error) {
+        console.error("Failed to load reading templates for reports:", error);
+      }
+    };
+
+    fetchReadingTemplates();
+
+    return () => {
+      isActive = false;
+    };
+  }, [recentlySelectedCompany]);
+
   const handleReportSelect = (value) => {
     setReportType(value);
+    setReportData(null);
+  };
+
+  const handleReportSearch = (event) => {
+    event.preventDefault();
+    setReportSearchTerm(reportSearchDraft.trim());
+  };
+
+  const clearReportSearch = () => {
+    setReportSearchDraft("");
+    setReportSearchTerm("");
+  };
+
+  const handleReadingTemplateChange = (templateId) => {
+    const nextTemplate = availableReadingTemplates.find((template) => readingTemplateKey(template) === templateId);
+    setReadingHealthFilters(nextTemplate ? defaultReadingHealthFilterFor(nextTemplate) : { templateId, operator: "gt", threshold: "" });
+    setReportData(null);
+  };
+
+  const handleReadingHealthFilterChange = (field, value) => {
+    setReadingHealthFilters((currentFilters) => ({
+      ...currentFilters,
+      [field]: value,
+    }));
     setReportData(null);
   };
 
@@ -844,6 +1470,21 @@ const Reports = () => {
     if (!recentlySelectedCompany) {
       toast.error("Please select a company.");
       return;
+    }
+
+    if (reportType === "readingHealth") {
+      if (!availableReadingTemplates.length) {
+        toast.error("No reading templates found for this company.");
+        return;
+      }
+      if (!readingHealthFilters.templateId) {
+        toast.error("Select a reading to check.");
+        return;
+      }
+      if (!Number.isFinite(parseReadingNumber(readingHealthFilters.threshold))) {
+        toast.error("Enter a numeric reading threshold.");
+        return;
+      }
     }
 
     setIsLoading(true);
@@ -869,7 +1510,7 @@ const Reports = () => {
         records: normalizeDocs(stopDataSnap),
         ...tagFilterContext,
       });
-      const readingTemplates = normalizeDocs(readingsSnap);
+      const readingTemplates = sortReadingTemplates(normalizeDocs(readingsSnap));
       const dosageTemplates = normalizeDocs(dosagesSnap);
 
       const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users"].includes(reportType);
@@ -877,6 +1518,7 @@ const Reports = () => {
       const needsPayroll = ["pnl", "job", "users"].includes(reportType);
       const needsUsers = reportType === "users";
       const needsFleet = reportType === "vehicle";
+      const needsBodiesOfWater = reportType === "readingHealth";
 
       const [
         purchasesRaw,
@@ -887,6 +1529,7 @@ const Reports = () => {
         usersRaw,
         vehiclesRaw,
         activeRoutesRaw,
+        bodiesOfWaterRaw,
       ] = await Promise.all([
         needsPurchases ? getCollection(recentlySelectedCompany, "purchasedItems") : Promise.resolve([]),
         needsPurchases ? getDatabaseItems(recentlySelectedCompany) : Promise.resolve([]),
@@ -896,6 +1539,7 @@ const Reports = () => {
         needsUsers ? getCollection(recentlySelectedCompany, "companyUsers") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "vehicals") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "activeRoutes") : Promise.resolve([]),
+        needsBodiesOfWater ? getCollection(recentlySelectedCompany, "bodiesOfWater") : Promise.resolve([]),
       ]);
 
       const purchases = filterRecordsByCustomerTags({
@@ -914,6 +1558,10 @@ const Reports = () => {
         records: serviceStopsRaw.filter((item) => inRange(item, startDate, endDate, ["serviceDate", "date", "createdAt"])),
         ...tagFilterContext,
       });
+      const bodiesOfWater = filterRecordsByCustomerTags({
+        records: bodiesOfWaterRaw,
+        ...tagFilterContext,
+      });
       const activeRoutes = activeRoutesRaw.filter((item) => inRange(item, startDate, endDate, ["date", "routeDate", "startTime", "createdAt"]));
       const databaseItemById = new Map(databaseItemsRaw.map((item) => [item.id, item]));
 
@@ -921,6 +1569,9 @@ const Reports = () => {
         stopData,
         readingTemplates,
         dosageTemplates,
+        readingHealthFilters,
+        bodiesOfWater,
+        customersById,
         purchases,
         databaseItemById,
         jobs,
@@ -935,6 +1586,7 @@ const Reports = () => {
 
       const builders = {
         readings: buildReadingReport,
+        readingHealth: buildReadingHealthReport,
         chemicals: buildChemicalReport,
         purchases: buildPurchaseReport,
         waste: buildWasteReport,
@@ -964,115 +1616,251 @@ const Reports = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-6">
+    <div className="min-h-screen bg-slate-50 p-3 sm:p-4 lg:p-5">
+      <div className="mx-auto w-full max-w-[1800px]">
+        <header className="mb-4">
           <h1 className="text-3xl font-bold text-slate-900">Reports</h1>
-          <p className="mt-1 text-slate-600">iOS report families with live web reporting.</p>
+          <p className="mt-1 text-slate-600">Operations and finance reporting.</p>
         </header>
 
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-          {reportCatalog.map((report) => (
-            <ReportCatalogCard key={report.value} report={report} selected={report.value === reportType} onSelect={handleReportSelect} />
-          ))}
-        </div>
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-[320px_1fr]">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900">Report Controls</h2>
-            <div className="mt-4 space-y-4">
+        <div className="grid gap-4 xl:h-[calc(100vh-112px)] xl:grid-cols-[minmax(0,1fr)_340px] xl:overflow-hidden">
+          <div className="grid min-h-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:h-full xl:overflow-y-auto">
               <div>
-                <label className="block text-sm font-semibold text-slate-700">Report Type</label>
-                <select value={reportType} onChange={(event) => handleReportSelect(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm">
-                  {reportCatalog.map((report) => (
-                    <option key={report.value} value={report.value}>{report.label}</option>
-                  ))}
-                </select>
+                <h2 className="text-lg font-bold text-slate-900">Report Controls</h2>
+                <p className="mt-1 text-sm font-semibold text-slate-500">{selectedReport.label}</p>
               </div>
+              <div className="mt-4 space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Output</label>
+                  <select
+                    value={mode}
+                    onChange={(event) => {
+                      setMode(event.target.value);
+                      setReportData(null);
+                    }}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                  >
+                    <option value="summary">Summary</option>
+                    <option value="detail">Detail</option>
+                  </select>
+                </div>
 
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Output</label>
-                <select value={mode} onChange={(event) => setMode(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm">
-                  <option value="summary">Summary</option>
-                  <option value="detail">Detail</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Group By</label>
-                <select value={groupBy} onChange={(event) => setGroupBy(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm">
-                  {groupOptions.map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between gap-3">
-                  <label className="block text-sm font-semibold text-slate-700">Customer Tags</label>
-                  {selectedCustomerTags.length > 0 ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSelectedCustomerTags([]);
+                {reportType !== "readingHealth" ? (
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700">Group By</label>
+                    <select
+                      value={groupBy}
+                      onChange={(event) => {
+                        setGroupBy(event.target.value);
                         setReportData(null);
                       }}
-                      className="text-xs font-semibold text-slate-500 hover:text-slate-800"
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
                     >
-                      Clear
-                    </button>
-                  ) : null}
-                </div>
-                {roleTagAccess.length > 0 ? (
-                  <p className="mt-1 text-xs text-blue-700">
-                    Role limited to {roleTagAccess.join(", ")}.
-                  </p>
+                      {groupOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
                 ) : null}
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {availableCustomerTags.length > 0 ? (
-                    availableCustomerTags.map((tag) => {
-                      const selected = selectedCustomerTags.includes(tag);
-                      return (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => toggleCustomerTagFilter(tag)}
-                          className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                            selected
-                              ? "border-blue-600 bg-blue-600 text-white"
-                              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
-                          }`}
+
+                {reportType === "readingHealth" ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <label className="block text-sm font-semibold text-slate-700">Reading</label>
+                    <select
+                      value={readingHealthFilters.templateId}
+                      onChange={(event) => handleReadingTemplateChange(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                    >
+                      {availableReadingTemplates.length ? (
+                        availableReadingTemplates.map((template) => (
+                          <option key={readingTemplateKey(template)} value={readingTemplateKey(template)}>
+                            {readingTemplateLabel(template)}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No readings found</option>
+                      )}
+                    </select>
+
+                    <div className="mt-3 grid grid-cols-[1fr_96px] gap-2">
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Rule</label>
+                        <select
+                          value={readingHealthFilters.operator}
+                          onChange={(event) => handleReadingHealthFilterChange("operator", event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
                         >
-                          {tag}
-                        </button>
-                      );
-                    })
-                  ) : (
-                    <p className="text-sm text-slate-500">No customer tags found.</p>
-                  )}
-                </div>
-              </div>
+                          {readingOperatorOptions.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Value</label>
+                        <input
+                          type="number"
+                          step="any"
+                          value={readingHealthFilters.threshold}
+                          onChange={(event) => handleReadingHealthFilterChange("threshold", event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                ) : null}
 
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Date Range</label>
-                <div className="mt-1 grid grid-cols-2 gap-2">
-                  <input type="date" value={dateRange.start} onChange={(event) => setDateRange((prev) => ({ ...prev, start: event.target.value }))} className="rounded-md border border-slate-300 p-2 text-sm" />
-                  <input type="date" value={dateRange.end} onChange={(event) => setDateRange((prev) => ({ ...prev, end: event.target.value }))} className="rounded-md border border-slate-300 p-2 text-sm" />
+                <div>
+                  <div className="flex items-center justify-between gap-3">
+                    <label className="block text-sm font-semibold text-slate-700">Customer Tags</label>
+                    {selectedCustomerTags.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCustomerTags([]);
+                          setReportData(null);
+                        }}
+                        className="text-xs font-semibold text-slate-500 hover:text-slate-800"
+                      >
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  {roleTagAccess.length > 0 ? (
+                    <p className="mt-1 text-xs text-blue-700">
+                      Role limited to {roleTagAccess.join(", ")}.
+                    </p>
+                  ) : null}
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {availableCustomerTags.length > 0 ? (
+                      availableCustomerTags.map((tag) => {
+                        const selected = selectedCustomerTags.includes(tag);
+                        return (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => toggleCustomerTagFilter(tag)}
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                              selected
+                                ? "border-blue-600 bg-blue-600 text-white"
+                                : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <p className="text-sm text-slate-500">No customer tags found.</p>
+                    )}
+                  </div>
                 </div>
-              </div>
 
-              <button
-                type="button"
-                onClick={handleGenerateReport}
-                disabled={isLoading}
-                className="w-full rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isLoading ? "Generating..." : "Generate"}
-              </button>
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700">Date Range</label>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    <input
+                      type="date"
+                      value={dateRange.start}
+                      onChange={(event) => {
+                        setDateRange((prev) => ({ ...prev, start: event.target.value }));
+                        setReportData(null);
+                      }}
+                      className="rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                    <input
+                      type="date"
+                      value={dateRange.end}
+                      onChange={(event) => {
+                        setDateRange((prev) => ({ ...prev, end: event.target.value }));
+                        setReportData(null);
+                      }}
+                      className="rounded-md border border-slate-300 p-2 text-sm"
+                    />
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleGenerateReport}
+                  disabled={isLoading}
+                  className="w-full rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isLoading ? "Generating..." : "Generate"}
+                </button>
+
+                <ExportSection reportData={reportData} />
+              </div>
             </div>
+
+            <GeneratedReportView data={reportData} />
           </div>
 
-          <GeneratedReportView data={reportData} />
+          <aside className="order-first min-h-0 xl:order-none">
+            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:flex xl:h-full xl:flex-col">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Report Library</h2>
+                  <p className="mt-1 text-sm text-slate-500">{filteredReportCatalog.length} report(s)</p>
+                </div>
+                {reportSearchTerm ? (
+                  <button
+                    type="button"
+                    onClick={clearReportSearch}
+                    className="rounded-md border border-slate-200 p-2 text-slate-500 transition hover:border-slate-400 hover:text-slate-900"
+                    title="Clear search"
+                  >
+                    <XMarkIcon className="h-4 w-4" />
+                  </button>
+                ) : null}
+              </div>
+
+              <form onSubmit={handleReportSearch} className="mt-4 flex gap-2">
+                <div className="relative min-w-0 flex-1">
+                  <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={reportSearchDraft}
+                    onChange={(event) => setReportSearchDraft(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm"
+                    placeholder="Search reports"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
+                  title="Search reports"
+                >
+                  <MagnifyingGlassIcon className="h-4 w-4" />
+                  Search
+                </button>
+              </form>
+
+              <div className="mt-4 max-h-[calc(100vh-220px)] space-y-4 overflow-y-auto pr-1 xl:min-h-0 xl:flex-1 xl:max-h-none">
+                {reportCategories.map((category) => {
+                  const reports = filteredReportCatalog.filter((report) => report.category === category.value);
+                  if (!reports.length) return null;
+
+                  return (
+                    <section key={category.value}>
+                      <h3 className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-500">{category.label}</h3>
+                      <div className="grid gap-2">
+                        {reports.map((report) => (
+                          <ReportCatalogCard key={report.value} report={report} selected={report.value === reportType} onSelect={handleReportSelect} />
+                        ))}
+                      </div>
+                    </section>
+                  );
+                })}
+
+                {!filteredReportCatalog.length ? (
+                  <div className="rounded-lg border border-dashed border-slate-300 p-4 text-center text-sm text-slate-500">
+                    No reports match that search.
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </aside>
         </div>
       </div>
     </div>

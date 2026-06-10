@@ -1,8 +1,12 @@
 export const SERVICE_STOP_TYPE_USE_CASES = {
     jobVisit: "jobVisit",
+    jobEstimate: "jobEstimate",
+    serviceAgreementEstimate: "serviceAgreementEstimate",
+    customerRelationship: "customerRelationship",
     recurringRoute: "recurringRoute",
-    estimate: "estimate",
-    serviceEstimate: "serviceEstimate",
+    estimate: "jobEstimate",
+    serviceEstimate: "serviceAgreementEstimate",
+    startup: "serviceAgreementEstimate",
     unknown: "unknown",
 };
 
@@ -11,34 +15,46 @@ const FALLBACKS = {
         typeId: "system_job_service_stop",
         type: "Job Visit",
         typeImage: "briefcase",
+        category: "Job",
+    },
+    jobEstimate: {
+        typeId: "system_job_estimate_service_stop",
+        type: "Job Estimate",
+        typeImage: "doc.text.magnifyingglass",
+        category: "Job Estimate",
+    },
+    serviceAgreementEstimate: {
+        typeId: "system_service_agreement_estimate_service_stop",
+        type: "Service Agreement Estimate",
+        typeImage: "list.clipboard",
+        category: "Service Agreement Estimate",
+    },
+    customerRelationship: {
+        typeId: "system_customer_relationship_service_stop",
+        type: "Customer Relationship",
+        typeImage: "person.wave.2",
+        category: "Customer Relationship",
     },
     recurringRoute: {
         typeId: "system_recurring_service_stop",
         type: "Recurring Service Stop",
         typeImage: "figure.pool.swim",
-    },
-    estimate: {
-        typeId: "system_unknown_service_stop",
-        type: "Estimate",
-        typeImage: "doc.text.magnifyingglass",
-    },
-    serviceEstimate: {
-        typeId: "system_service_estimate_stop",
-        type: "Service Estimate",
-        typeImage: "doc.text.magnifyingglass",
+        category: "Route",
     },
     unknown: {
         typeId: "system_unknown_service_stop",
         type: "Unknown Service Stop",
         typeImage: "questionmark.circle",
+        category: "Customer Relationship",
     },
 };
 
 const CANDIDATE_NAMES = {
     jobVisit: ["Job Visit", "Service Call", "Job"],
+    jobEstimate: ["Job Estimate", "Estimate For Job", "Estimate", "Bid Visit"],
+    serviceAgreementEstimate: ["Service Agreement Estimate", "Recurring Service Estimate", "New Service Estimate", "Service Estimate", "Startup", "Start Up", "New Pool"],
+    customerRelationship: ["Customer Relationship", "Customer Visit", "Follow Up", "Courtesy Visit", "Mistake Fix"],
     recurringRoute: ["Weekly Route", "Residential Route", "Recurring Service Stop", "Standard Route", "Pool Route", "Route", "Routes"],
-    estimate: ["Estimate", "Initial Estimate Visit", "Pre Estimate Visit", "Service Estimate"],
-    serviceEstimate: ["Service Estimate", "Estimate Visit", "Initial Estimate Visit", "Pre Estimate Visit", "Estimate"],
     unknown: [],
 };
 
@@ -121,6 +137,7 @@ export const resolveServiceStopTypeFields = ({
             type: matchedType.name || fallbackName || fallback.type,
             typeImage: imageNameForType(matchedType) || fallbackImage || fallback.typeImage,
             serviceStopTypeUseCaseRawValue: normalizedUseCase,
+            category: matchedType.category || fallback.category,
             defaultWorkTypeIds: Array.isArray(matchedType.defaultWorkTypeIds) ? matchedType.defaultWorkTypeIds : [],
             source: "companyServiceStopType",
         };
@@ -142,6 +159,7 @@ export const resolveServiceStopTypeFields = ({
         type: fallbackName || selectedType?.name || fallback.type,
         typeImage: fallbackImage || imageNameForType(selectedType) || fallback.typeImage,
         serviceStopTypeUseCaseRawValue: normalizedUseCase,
+        category: selectedType?.category || fallback.category,
         defaultWorkTypeIds: [],
         source: "systemFallback",
     };

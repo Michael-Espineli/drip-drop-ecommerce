@@ -111,7 +111,7 @@ export default function ScheduleEstimate() {
         try {
             const resolvedTypeFields = resolveServiceStopTypeFields({
                 companyServiceStopTypes,
-                fallbackName: 'Service Estimate',
+                fallbackName: 'Service Agreement Estimate',
                 useCase: SERVICE_STOP_TYPE_USE_CASES.serviceEstimate,
                 context: 'ScheduleEstimate.handleSubmit',
             });
@@ -136,6 +136,7 @@ export default function ScheduleEstimate() {
                 typeId: resolvedTypeFields.typeId,
                 type: resolvedTypeFields.type,
                 typeImage: resolvedTypeFields.typeImage,
+                category: resolvedTypeFields.category,
                 serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
                 jobId: '',
                 jobName: '',

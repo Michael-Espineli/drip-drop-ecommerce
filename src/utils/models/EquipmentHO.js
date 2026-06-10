@@ -12,8 +12,14 @@ export class EquipmentHO {
     customerName = "",
     dateInstalled = null,
     lastServiceDate = null,
+    type = "",
+    typeId = "",
     make = "",
+    makeId = "",
     model = "",
+    modelId = "",
+    universalEquipmentId = "",
+    manualPdfLink = "",
     name = "",
     needsService = false,
     isActive = false,
@@ -36,8 +42,14 @@ export class EquipmentHO {
     this.dateInstalled = dateInstalled;
     this.lastServiceDate = lastServiceDate;
     this.isActive = isActive;
+    this.type = type;
+    this.typeId = typeId;
     this.make = make;
+    this.makeId = makeId;
     this.model = model;
+    this.modelId = modelId;
+    this.universalEquipmentId = universalEquipmentId;
+    this.manualPdfLink = manualPdfLink;
     this.name = name;
     this.needsService = needsService;
     this.nextServiceDate = nextServiceDate;
@@ -61,8 +73,14 @@ export class EquipmentHO {
       dateInstalled: this.dateInstalled,
       lastServiceDate: this.lastServiceDate,
       isActive: this.isActive,
+      type: this.type,
+      typeId: this.typeId,
       make: this.make,
+      makeId: this.makeId,
       model: this.model,
+      modelId: this.modelId,
+      universalEquipmentId: this.universalEquipmentId,
+      manualPdfLink: this.manualPdfLink,
       name: this.name,
       needsService: this.needsService,
       nextServiceDate: this.nextServiceDate,
@@ -89,8 +107,14 @@ export class EquipmentHO {
       customerName: data.customerName || "",
       dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
       lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,
+      type: data.type || data.category || "",
+      typeId: data.typeId || "",
       make: data.make || "",
+      makeId: data.makeId || "",
       model: data.model || "",
+      modelId: data.modelId || data.universalEquipmentId || "",
+      universalEquipmentId: data.universalEquipmentId || data.modelId || "",
+      manualPdfLink: data.manualPdfLink || "",
       name: data.name || "",
       needsService: data.needsService || false,
       isActive: data.isActive || false,

@@ -26,6 +26,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { functions } from '../../utils/config';
 import AddressAutocomplete from '../components/AddressAutocomplete';
+import EquipmentCatalogPicker from '../components/equipment/EquipmentCatalogPicker';
 
 const serviceOptions = [
     {
@@ -126,8 +127,14 @@ const newEquipment = () => ({
     id: `equipment_${Date.now()}_${Math.random().toString(16).slice(2)}`,
     name: '',
     type: '',
+    category: '',
+    typeId: '',
     make: '',
+    makeId: '',
     model: '',
+    modelId: '',
+    universalEquipmentId: '',
+    manualPdfLink: '',
     needsService: false,
     notes: '',
 });
@@ -488,6 +495,22 @@ export default function PublicServiceRequest() {
                         ...body,
                         equipment: body.equipment.map((equipment) => (
                             equipment.id === equipmentId ? { ...equipment, [field]: value } : equipment
+                        )),
+                    }
+                    : body
+            )),
+        }));
+    };
+
+    const updateEquipmentCatalog = (bodyId, equipmentId, nextCatalogEquipment) => {
+        setFormData((current) => ({
+            ...current,
+            bodiesOfWater: current.bodiesOfWater.map((body) => (
+                body.id === bodyId
+                    ? {
+                        ...body,
+                        equipment: body.equipment.map((equipment) => (
+                            equipment.id === equipmentId ? { ...equipment, ...nextCatalogEquipment } : equipment
                         )),
                     }
                     : body
@@ -914,15 +937,27 @@ export default function PublicServiceRequest() {
                                                             <Field label="Name">
                                                                 <input value={equipment.name} onChange={(event) => updateEquipment(body.id, equipment.id, 'name', event.target.value)} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" placeholder="Pump, filter, heater" />
                                                             </Field>
-                                                            <Field label="Type">
-                                                                <input value={equipment.type} onChange={(event) => updateEquipment(body.id, equipment.id, 'type', event.target.value)} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                                                            </Field>
-                                                            <Field label="Make">
-                                                                <input value={equipment.make} onChange={(event) => updateEquipment(body.id, equipment.id, 'make', event.target.value)} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                                                            </Field>
-                                                            <Field label="Model">
-                                                                <input value={equipment.model} onChange={(event) => updateEquipment(body.id, equipment.id, 'model', event.target.value)} className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
-                                                            </Field>
+                                                            <div className="sm:col-span-2">
+                                                                <EquipmentCatalogPicker
+                                                                    value={equipment}
+                                                                    onChange={(nextCatalogEquipment) => updateEquipmentCatalog(body.id, equipment.id, nextCatalogEquipment)}
+                                                                    onModelSelected={(selectedModel) => {
+                                                                        if (!equipment.name?.trim()) {
+                                                                            updateEquipmentCatalog(body.id, equipment.id, {
+                                                                                ...equipment,
+                                                                                model: selectedModel.model || selectedModel.name || '',
+                                                                                modelId: selectedModel.id || '',
+                                                                                universalEquipmentId: selectedModel.id || '',
+                                                                                manualPdfLink: selectedModel.manualPdfLink || '',
+                                                                                name: selectedModel.name || selectedModel.model || '',
+                                                                            });
+                                                                        }
+                                                                    }}
+                                                                    inputClassName="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                                                                    labelClassName="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1"
+                                                                    gridClassName="grid gap-3 sm:grid-cols-3"
+                                                                />
+                                                            </div>
                                                         </div>
                                                         <label className="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
                                                             <input type="checkbox" checked={equipment.needsService} onChange={(event) => updateEquipment(body.id, equipment.id, 'needsService', event.target.checked)} className="h-4 w-4 rounded border-slate-300 text-cyan-600" />

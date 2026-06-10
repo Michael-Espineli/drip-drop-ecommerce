@@ -5,7 +5,7 @@ import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
 import { ArrowLeftIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
-import { createClientCompanyChat } from '../../../utils/chatMessaging';
+import { createClientCompanyChat, findVisibleChatWithParticipant } from '../../../utils/chatMessaging';
 
 const NewCompanyChat = () => {
     const { companyId } = useParams();
@@ -23,7 +23,22 @@ const NewCompanyChat = () => {
             try {
                 const companyDoc = await getDoc(doc(db, 'companies', companyId));
                 if (companyDoc.exists()) {
-                    setCompany({ id: companyDoc.id, ...companyDoc.data() });
+                    const companyData = { id: companyDoc.id, ...companyDoc.data() };
+                    const existingChat = user?.uid
+                        ? await findVisibleChatWithParticipant({
+                            db,
+                            currentUserId: user.uid,
+                            participantId: companyData.ownerId || companyData.userId || companyData.id,
+                            participantCompanyId: companyData.id,
+                        })
+                        : null;
+
+                    if (existingChat) {
+                        navigate(`/client/chat/details/${existingChat.id}`, { replace: true });
+                        return;
+                    }
+
+                    setCompany(companyData);
                 } else {
                     setError("Company not found.");
                 }
@@ -37,7 +52,7 @@ const NewCompanyChat = () => {
         if (companyId) {
             fetchCompany();
         }
-    }, [companyId]);
+    }, [companyId, navigate, user]);
 
     const handleSendMessage = async (e) => {
         e.preventDefault();

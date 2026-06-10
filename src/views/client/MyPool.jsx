@@ -1,13 +1,83 @@
 
-import React, { useState, useContext, useEffect } from 'react';
+import React, { useState, useContext, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { db } from '../../utils/config';
 import { query, collection, getDocs, where, orderBy, doc, updateDoc, writeBatch } from 'firebase/firestore';
 import { Context } from '../../context/AuthContext';
-import { PlusIcon, ChevronRightIcon, WrenchScrewdriverIcon, TruckIcon, DocumentTextIcon, BeakerIcon, PencilSquareIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import {
+    PlusIcon,
+    ChevronRightIcon,
+    WrenchScrewdriverIcon,
+    TruckIcon,
+    DocumentTextIcon,
+    BeakerIcon,
+    PencilSquareIcon,
+    TrashIcon,
+    XMarkIcon,
+    CalendarDaysIcon,
+    CheckCircleIcon,
+    ClipboardDocumentListIcon,
+    UserIcon,
+} from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
+
+const toDate = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value.toDate === 'function') return value.toDate();
+    if (typeof value === 'number') return new Date(value);
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const dateMillis = (value) => toDate(value)?.getTime() || 0;
+
+const formatDate = (value, fallback = 'Not recorded') => {
+    const date = toDate(value);
+    return date ? format(date, 'MMM d, yyyy') : fallback;
+};
+
+const getStopDateValue = (stop = {}) => (
+    stop.serviceDate ||
+    stop.date ||
+    stop.finishedAt ||
+    stop.completedAt ||
+    stop.createdAt
+);
+
+const getStopDataDateValue = (record = {}) => (
+    record.date ||
+    record.serviceDate ||
+    record.finishedAt ||
+    record.createdAt
+);
+
+const sortByDateDesc = (records, dateGetter) => (
+    [...records].sort((left, right) => dateMillis(dateGetter(right)) - dateMillis(dateGetter(left)))
+);
+
+const compact = (items) => items.filter((item) => item !== undefined && item !== null && item !== '');
+
+const labelize = (value, fallback = 'Not recorded') => {
+    if (!value) return fallback;
+    return String(value)
+        .replace(/([A-Z])/g, ' $1')
+        .replace(/[_-]/g, ' ')
+        .trim()
+        .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const formatStopDataItem = (item = {}, fallbackLabel = 'Item') => {
+    const label = item.name || item.label || item.readingName || item.dosageName || fallbackLabel;
+    const amount = item.amount ?? item.value ?? item.quantity ?? '';
+    const unit = item.UOM || item.uom || item.unit || item.units || '';
+    return compact([label, compact([amount, unit]).join(' ')]).join(': ');
+};
+
+const firstText = (...values) => compact(values.map((value) => String(value || '').trim()))[0] || '';
 
 const MyPool = () => {
     const { user } = useContext(Context);
@@ -19,6 +89,7 @@ const MyPool = () => {
         equipment: [],
         repairRequests: [],
         serviceStops: [],
+        stopData: [],
         serviceAgreements: [],
     });
 
@@ -26,6 +97,8 @@ const MyPool = () => {
         bodiesOfWater: [],
         equipment: [],
         repairRequests: [],
+        serviceStops: [],
+        stopData: [],
         lastService: null,
         nextService: null,
         serviceAgreements: [],
@@ -57,14 +130,16 @@ const MyPool = () => {
                 const equipQuery = query(collection(db, 'homeownerEquipment'), where('userId', '==', user.uid));
                 const repairQuery = query(collection(db, 'homeownerRepairRequests'), where('userId', '==', user.uid), orderBy('createdAt', 'desc'));
                 const serviceQuery = query(collection(db, 'homeownerServiceStops'), where('userId', '==', user.uid), orderBy('serviceDate', 'desc'));
+                const stopDataQuery = query(collection(db, 'stopData'), where('userId', '==', user.uid));
                 const agreementQuery = query(collection(db, salesCollectionNames.agreements), where('customerUserId', '==', user.uid));
 
-                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, agreementSnap] = await Promise.all([
+                const [locSnap, bowSnap, equipSnap, repairSnap, serviceSnap, stopDataSnap, agreementSnap] = await Promise.all([
                     getDocs(locationQuery),
                     getDocs(bowQuery),
                     getDocs(equipQuery),
                     getDocs(repairQuery),
                     getDocs(serviceQuery),
+                    getDocs(stopDataQuery),
                     getDocs(agreementQuery)
                 ]);
 
@@ -73,7 +148,14 @@ const MyPool = () => {
                     bodiesOfWater: bowSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     equipment: equipSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
                     repairRequests: repairSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
-                    serviceStops: serviceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                    serviceStops: sortByDateDesc(
+                        serviceSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                        getStopDateValue
+                    ),
+                    stopData: sortByDateDesc(
+                        stopDataSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })),
+                        getStopDataDateValue
+                    ),
                     serviceAgreements: agreementSnap.docs.map(doc => ({ id: doc.id, ...doc.data() }))
                 });
 
@@ -96,6 +178,7 @@ const MyPool = () => {
         let filteredRepairRequests = allData.repairRequests;
         let filteredServiceAgreements = allData.serviceAgreements;
         let filteredServiceStops = allData.serviceStops;
+        let filteredStopData = allData.stopData;
 
         if (selectedLocation !== 'all') {
             filteredBodiesOfWater = allData.bodiesOfWater.filter(item => item.serviceLocationId === selectedLocation);
@@ -105,6 +188,13 @@ const MyPool = () => {
                 Array.isArray(item.serviceLocationIds) && item.serviceLocationIds.includes(selectedLocation)
             ));
             filteredServiceStops = allData.serviceStops.filter(item => item.serviceLocationId === selectedLocation);
+            const filteredBodyIds = new Set(filteredBodiesOfWater.map(item => item.id));
+            const filteredServiceStopIds = new Set(filteredServiceStops.map(item => item.id));
+            filteredStopData = allData.stopData.filter(item => (
+                item.serviceLocationId === selectedLocation ||
+                filteredBodyIds.has(item.bodyOfWaterId) ||
+                filteredServiceStopIds.has(item.serviceStopId)
+            ));
         }
 
         const lastService = filteredServiceStops.length > 0 ? filteredServiceStops[0] : null;
@@ -114,6 +204,8 @@ const MyPool = () => {
             equipment: filteredEquipment.slice(0, 5),
             repairRequests: filteredRepairRequests.slice(0, 5),
             serviceAgreements: filteredServiceAgreements,
+            serviceStops: filteredServiceStops,
+            stopData: filteredStopData,
             lastService: lastService,
             nextService: null,
         });
@@ -200,6 +292,7 @@ const MyPool = () => {
                 query(collection(db, 'homeownerBodiesOfWater'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
                 query(collection(db, 'homeownerEquipment'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
                 query(collection(db, 'homeownerServiceStops'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
+                query(collection(db, 'stopData'), where('serviceLocationId', '==', location.id), where('userId', '==', user.uid)),
                 query(collection(db, 'homeownerRepairRequests'), where('locationId', '==', location.id), where('userId', '==', user.uid)),
                 query(collection(db, 'homeownerServiceRequests'), where('homeownerServiceLocationId', '==', location.id), where('homeownerId', '==', user.uid)),
             ];
@@ -218,6 +311,7 @@ const MyPool = () => {
                 bodiesOfWater: prev.bodiesOfWater.filter(item => item.serviceLocationId !== location.id),
                 equipment: prev.equipment.filter(item => item.serviceLocationId !== location.id),
                 serviceStops: prev.serviceStops.filter(item => item.serviceLocationId !== location.id),
+                stopData: prev.stopData.filter(item => item.serviceLocationId !== location.id),
                 repairRequests: prev.repairRequests.filter(item => item.locationId !== location.id),
             }));
             setSelectedLocation('all');
@@ -258,24 +352,34 @@ const MyPool = () => {
 
                 {loading ? (
                     <div className="text-center py-10">Loading dashboard...</div>
-                ) : (
-                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        <div className="lg:col-span-2 space-y-8">
-                            <BodiesOfWaterWidget bodiesOfWater={displayData.bodiesOfWater} />
-                            <EquipmentWidget equipment={displayData.equipment} />
-                            <RepairRequestsWidget repairRequests={displayData.repairRequests} />
+	                ) : (
+	                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+	                        <div className="lg:col-span-2 space-y-8">
+	                            <BodiesOfWaterWidget bodiesOfWater={displayData.bodiesOfWater} />
+	                            <EquipmentWidget equipment={displayData.equipment} />
+	                            <RepairRequestsWidget repairRequests={displayData.repairRequests} />
+	                        </div>
+                            <div className="lg:col-span-1 space-y-8">
+                                <ServiceRecapWidget
+                                    lastService={displayData.lastService}
+                                    nextService={displayData.nextService}
+                                    serviceAgreements={displayData.serviceAgreements}
+                                    selectedLocation={selectedLocation}
+                                />
+                            </div>
                         </div>
-                        <div className="lg:col-span-1 space-y-8">
-                            <ServiceRecapWidget
-                                lastService={displayData.lastService}
-                                nextService={displayData.nextService}
-                                serviceAgreements={displayData.serviceAgreements}
-                                selectedLocation={selectedLocation}
+                    )}
+                    {!loading && (
+                        <div className="mt-8">
+                            <ServiceHistoryWidget
+                                serviceStops={displayData.serviceStops}
+                                stopDataRecords={displayData.stopData}
+                                bodiesOfWater={allData.bodiesOfWater}
+                                serviceLocations={serviceLocations}
                             />
                         </div>
-                    </div>
-                )}
-            </div>
+                    )}
+                </div>
             {editingLocation && (
                 <EditServiceLocationModal
                     form={locationForm}
@@ -529,6 +633,370 @@ const ServiceRecapWidget = ({ lastService, nextService, serviceAgreements, selec
                 </div>
             )}
         </Widget>
+    );
+};
+
+const arrayValue = (value) => (Array.isArray(value) ? value : []);
+
+const observationText = (item) => {
+    if (item === undefined || item === null) return '';
+    if (typeof item === 'string' || typeof item === 'number') return String(item);
+    return firstText(item.name, item.label, item.value, item.notes, item.description, 'Observation');
+};
+
+const observationValues = (record = {}) => {
+    if (Array.isArray(record.observation)) return record.observation.map(observationText).filter(Boolean);
+    if (Array.isArray(record.observations)) return record.observations.map(observationText).filter(Boolean);
+    if (typeof record.observation === 'string') return record.observation.split('\n').map(item => item.trim()).filter(Boolean);
+    if (typeof record.observations === 'string') return record.observations.split('\n').map(item => item.trim()).filter(Boolean);
+    return [];
+};
+
+const normalizedStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const statusBadgeClasses = (status) => {
+    const normalized = normalizedStatus(status);
+    if (['finished', 'complete', 'completed', 'done'].includes(normalized)) {
+        return 'bg-emerald-50 text-emerald-700 border-emerald-100';
+    }
+    if (['scheduled', 'pending', 'notstarted'].includes(normalized)) {
+        return 'bg-amber-50 text-amber-700 border-amber-100';
+    }
+    if (['canceled', 'cancelled', 'void'].includes(normalized)) {
+        return 'bg-slate-100 text-slate-600 border-slate-200';
+    }
+    return 'bg-blue-50 text-blue-700 border-blue-100';
+};
+
+const stopMatchKeys = (stop = {}) => compact([
+    stop.id,
+    stop.serviceStopId,
+    stop.linkedCompanyServiceStopId,
+    stop.sourceCompanyServiceStopId,
+]);
+
+const stopDataMatchKeys = (record = {}) => compact([
+    record.serviceStopId,
+    record.linkedCompanyServiceStopId,
+    record.sourceCompanyServiceStopId,
+]);
+
+const taskIsComplete = (task = {}) => {
+    const status = normalizedStatus(task.status || task.operationStatus || task.completedStatus);
+    return ['finished', 'complete', 'completed', 'done'].includes(status) || task.completed === true || task.isComplete === true;
+};
+
+const ServiceHistoryWidget = ({ serviceStops, stopDataRecords, bodiesOfWater, serviceLocations }) => {
+    const [showAllHistory, setShowAllHistory] = useState(false);
+
+    const bodyNameById = useMemo(() => new Map(
+        bodiesOfWater.map(body => [body.id, body.name || body.type || 'Body of water'])
+    ), [bodiesOfWater]);
+
+    const locationNameById = useMemo(() => new Map(
+        serviceLocations.map(location => [location.id, getLocationLabel(location)])
+    ), [serviceLocations]);
+
+    const stopDataByStopKey = useMemo(() => {
+        const recordsByKey = new Map();
+        stopDataRecords.forEach(record => {
+            stopDataMatchKeys(record).forEach(key => {
+                const existing = recordsByKey.get(key) || [];
+                existing.push(record);
+                recordsByKey.set(key, existing);
+            });
+        });
+        return recordsByKey;
+    }, [stopDataRecords]);
+
+    const stats = useMemo(() => {
+        const readingsCount = stopDataRecords.reduce((total, record) => total + arrayValue(record.readings).length, 0);
+        const dosagesCount = stopDataRecords.reduce((total, record) => total + arrayValue(record.dosages).length, 0);
+        const completedCount = serviceStops.filter(stop => (
+            ['finished', 'complete', 'completed', 'done'].includes(normalizedStatus(stop.operationStatus || stop.status))
+        )).length;
+        const latestStop = serviceStops[0];
+
+        return {
+            totalStops: serviceStops.length,
+            completedCount,
+            readingsCount,
+            dosagesCount,
+            latestLabel: latestStop ? formatDate(getStopDateValue(latestStop)) : 'None',
+        };
+    }, [serviceStops, stopDataRecords]);
+
+    const visibleStops = showAllHistory ? serviceStops : serviceStops.slice(0, 6);
+    const hiddenCount = Math.max(serviceStops.length - visibleStops.length, 0);
+
+    const getStopDataRecords = (stop) => {
+        const seen = new Set();
+        return stopMatchKeys(stop).flatMap(key => stopDataByStopKey.get(key) || []).filter(record => {
+            const recordKey = record.id || `${record.serviceStopId}-${getStopDataDateValue(record)}`;
+            if (seen.has(recordKey)) return false;
+            seen.add(recordKey);
+            return true;
+        });
+    };
+
+    return (
+        <section className="bg-white rounded-lg shadow-md overflow-hidden">
+            <div className="flex flex-col gap-3 border-b border-gray-100 p-4 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                    <ClipboardDocumentListIcon className="h-6 w-6 text-gray-600" />
+                    <div>
+                        <h2 className="text-xl font-bold text-gray-800">Service History</h2>
+                        <p className="text-sm text-gray-500">Completed stops, technician notes, readings, dosages, and tasks.</p>
+                    </div>
+                </div>
+                <span className="rounded-full border border-blue-100 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                    {stats.totalStops} stop{stats.totalStops === 1 ? '' : 's'}
+                </span>
+            </div>
+
+            <div className="grid gap-3 border-b border-gray-100 bg-gray-50 p-4 sm:grid-cols-2 lg:grid-cols-4">
+                <HistoryStat icon={CalendarDaysIcon} label="Latest Stop" value={stats.latestLabel} />
+                <HistoryStat icon={CheckCircleIcon} label="Completed" value={stats.completedCount} />
+                <HistoryStat icon={BeakerIcon} label="Readings" value={stats.readingsCount} />
+                <HistoryStat icon={DocumentTextIcon} label="Dosages" value={stats.dosagesCount} />
+            </div>
+
+            {serviceStops.length > 0 ? (
+                <>
+                    <div className="divide-y divide-gray-100">
+                        {visibleStops.map(stop => (
+                            <ServiceHistoryRow
+                                key={stop.id}
+                                stop={stop}
+                                stopDataRecords={getStopDataRecords(stop)}
+                                bodyName={bodyNameById.get(stop.bodyOfWaterId)}
+                                locationName={locationNameById.get(stop.serviceLocationId)}
+                            />
+                        ))}
+                    </div>
+                    {hiddenCount > 0 && (
+                        <div className="border-t border-gray-100 bg-gray-50 p-4 text-center">
+                            <button
+                                type="button"
+                                onClick={() => setShowAllHistory(true)}
+                                className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Show {hiddenCount} more stop{hiddenCount === 1 ? '' : 's'}
+                            </button>
+                        </div>
+                    )}
+                    {showAllHistory && serviceStops.length > 6 && (
+                        <div className="border-t border-gray-100 bg-gray-50 p-4 text-center">
+                            <button
+                                type="button"
+                                onClick={() => setShowAllHistory(false)}
+                                className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Show Recent Stops
+                            </button>
+                        </div>
+                    )}
+                </>
+            ) : (
+                <div className="p-8 text-center">
+                    <ClipboardDocumentListIcon className="mx-auto h-10 w-10 text-gray-300" />
+                    <p className="mt-3 font-semibold text-gray-800">No service history yet.</p>
+                    <p className="mt-1 text-sm text-gray-500">Completed service stops from connected companies will appear here.</p>
+                </div>
+            )}
+        </section>
+    );
+};
+
+const HistoryStat = ({ icon: Icon, label, value }) => (
+    <div className="rounded-lg border border-gray-200 bg-white p-3">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+            <Icon className="h-4 w-4" />
+            {label}
+        </div>
+        <p className="mt-2 text-lg font-bold text-gray-900">{value}</p>
+    </div>
+);
+
+const ServiceHistoryRow = ({ stop, stopDataRecords, bodyName, locationName }) => {
+    const readings = [
+        ...arrayValue(stop.readings),
+        ...stopDataRecords.flatMap(record => arrayValue(record.readings)),
+    ];
+    const dosages = [
+        ...arrayValue(stop.dosages),
+        ...stopDataRecords.flatMap(record => arrayValue(record.dosages)),
+    ];
+    const observations = [
+        ...observationValues(stop),
+        ...stopDataRecords.flatMap(observationValues),
+    ];
+    const tasks = arrayValue(stop.tasks);
+    const completedTaskCount = tasks.filter(taskIsComplete).length;
+    const status = stop.operationStatus || stop.status || 'Completed';
+    const stopTitle = firstText(stop.type, stop.serviceType, stop.jobName, stop.description, 'Service stop');
+    const techName = firstText(stop.techName, stop.tech, stop.technicianName, 'Technician not recorded');
+    const companyName = firstText(stop.companyName, stop.linkedCompanyName, 'Pool service company');
+    const locationLabel = firstText(locationName, stop.serviceLocationName, stop.address?.streetAddress, 'Service location');
+    const bodyLabel = firstText(bodyName, stop.bodyOfWaterName, stop.poolName, stop.spaName, '');
+    const notes = firstText(stop.notes, stop.serviceNotes, stop.description, '');
+    const photoCount = arrayValue(stop.photoUrls).length;
+
+    return (
+        <article className="p-4 md:p-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+                <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700">
+                            <CalendarDaysIcon className="h-4 w-4" />
+                            {formatDate(getStopDateValue(stop))}
+                        </span>
+                        <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusBadgeClasses(status)}`}>
+                            {labelize(status, 'Completed')}
+                        </span>
+                    </div>
+                    <h3 className="mt-3 break-words text-lg font-bold text-gray-900">{stopTitle}</h3>
+                    <p className="mt-1 text-sm text-gray-500">{companyName}</p>
+                </div>
+                <Link
+                    to={`/serviceStop/detail/${stop.id}`}
+                    className="inline-flex shrink-0 items-center justify-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                    <span>View Details</span>
+                    <ChevronRightIcon className="h-4 w-4" />
+                </Link>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <HistoryField label="Technician" value={techName} icon={UserIcon} />
+                <HistoryField label="Location" value={locationLabel} icon={DocumentTextIcon} />
+                <HistoryField label="Body of Water" value={bodyLabel || 'Not specified'} icon={BeakerIcon} />
+            </div>
+
+            {notes && (
+                <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Service Notes</p>
+                    <p className="mt-1 whitespace-pre-wrap break-words text-sm text-gray-700">{notes}</p>
+                </div>
+            )}
+
+            <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                <StopDataPreview readings={readings} dosages={dosages} observations={observations} />
+                <TaskPreview tasks={tasks} completedTaskCount={completedTaskCount} photoCount={photoCount} />
+            </div>
+        </article>
+    );
+};
+
+const HistoryField = ({ label, value, icon: Icon }) => (
+    <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-gray-500">
+            <Icon className="h-4 w-4" />
+            {label}
+        </div>
+        <p className="mt-1 break-words text-sm font-semibold text-gray-800">{value}</p>
+    </div>
+);
+
+const StopDataPreview = ({ readings, dosages, observations }) => {
+    const visibleReadings = readings.slice(0, 4);
+    const visibleDosages = dosages.slice(0, 4);
+    const visibleObservations = observations.slice(0, 2);
+    const hasStopData = readings.length > 0 || dosages.length > 0 || observations.length > 0;
+
+    return (
+        <div className="rounded-lg border border-cyan-100 bg-cyan-50/50 p-3">
+            <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-bold text-gray-800">Stop Data</p>
+                <span className="text-xs font-semibold text-cyan-700">
+                    {readings.length} readings / {dosages.length} dosages
+                </span>
+            </div>
+
+            {hasStopData ? (
+                <div className="mt-3 space-y-3">
+                    {visibleReadings.length > 0 && (
+                        <DataGroup
+                            label="Readings"
+                            items={visibleReadings.map(item => formatStopDataItem(item, 'Reading'))}
+                            hiddenCount={Math.max(readings.length - visibleReadings.length, 0)}
+                        />
+                    )}
+                    {visibleDosages.length > 0 && (
+                        <DataGroup
+                            label="Dosages"
+                            items={visibleDosages.map(item => formatStopDataItem(item, 'Dosage'))}
+                            hiddenCount={Math.max(dosages.length - visibleDosages.length, 0)}
+                        />
+                    )}
+                    {visibleObservations.length > 0 && (
+                        <DataGroup
+                            label="Observations"
+                            items={visibleObservations}
+                            hiddenCount={Math.max(observations.length - visibleObservations.length, 0)}
+                        />
+                    )}
+                </div>
+            ) : (
+                <p className="mt-3 text-sm text-gray-500">No readings, dosages, or observations saved for this stop.</p>
+            )}
+        </div>
+    );
+};
+
+const DataGroup = ({ label, items, hiddenCount }) => (
+    <div>
+        <p className="text-xs font-bold uppercase tracking-wide text-gray-500">{label}</p>
+        <div className="mt-2 flex flex-wrap gap-2">
+            {items.map((item, index) => (
+                <span key={`${label}-${index}-${item}`} className="rounded-full border border-white bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 shadow-sm">
+                    {item}
+                </span>
+            ))}
+            {hiddenCount > 0 && (
+                <span className="rounded-full border border-cyan-200 bg-cyan-100 px-2.5 py-1 text-xs font-semibold text-cyan-700">
+                    +{hiddenCount} more
+                </span>
+            )}
+        </div>
+    </div>
+);
+
+const TaskPreview = ({ tasks, completedTaskCount, photoCount }) => {
+    const visibleTasks = tasks.slice(0, 4);
+    const hiddenTaskCount = Math.max(tasks.length - visibleTasks.length, 0);
+
+    return (
+        <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-bold text-gray-800">Work Completed</p>
+                <span className="text-xs font-semibold text-gray-600">
+                    {completedTaskCount}/{tasks.length} tasks
+                </span>
+            </div>
+
+            {visibleTasks.length > 0 ? (
+                <ul className="mt-3 space-y-2">
+                    {visibleTasks.map((task, index) => (
+                        <li key={task.id || `${task.name}-${index}`} className="flex items-start gap-2 text-sm text-gray-700">
+                            <CheckCircleIcon className={`mt-0.5 h-4 w-4 shrink-0 ${taskIsComplete(task) ? 'text-emerald-600' : 'text-gray-300'}`} />
+                            <span className="break-words">{firstText(task.name, task.title, task.description, 'Task')}</span>
+                        </li>
+                    ))}
+                    {hiddenTaskCount > 0 && (
+                        <li className="text-xs font-semibold text-gray-500">+{hiddenTaskCount} more task{hiddenTaskCount === 1 ? '' : 's'}</li>
+                    )}
+                </ul>
+            ) : (
+                <p className="mt-3 text-sm text-gray-500">No task checklist saved for this stop.</p>
+            )}
+
+            {photoCount > 0 && (
+                <p className="mt-3 text-xs font-semibold text-gray-500">
+                    {photoCount} photo{photoCount === 1 ? '' : 's'} attached
+                </p>
+            )}
+        </div>
     );
 };
 

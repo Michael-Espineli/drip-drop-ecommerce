@@ -264,8 +264,8 @@ const ServiceAgreementsWidget = () => {
                     </div>
                 )}
             </div>
-            <Link to={agreements.length > 0 ? "/client/service-agreements" : "/client/companies"} className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition-colors">
-                {agreements.length > 0 ? 'View Agreements' : 'Browse Companies'}
+            <Link to={agreements.length > 0 ? "/client/finance" : "/client/companies"} className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-indigo-600 hover:bg-indigo-700 transition-colors">
+                {agreements.length > 0 ? 'View Finance' : 'Browse Companies'}
             </Link>
         </div>
     );
@@ -325,7 +325,7 @@ const BillingWidget = () => {
         <div className="bg-white rounded-xl shadow-lg p-6 flex flex-col h-full">
             <div className="flex items-center mb-4">
                 <CreditCardIcon className="w-8 h-8 text-emerald-500 mr-3" />
-                <h3 className="text-xl font-bold text-gray-800">Billing</h3>
+                <h3 className="text-xl font-bold text-gray-800">Finance</h3>
             </div>
             <div className="flex-grow">
                 {loading ? renderSkeleton() : invoices.length > 0 ? (
@@ -352,8 +352,8 @@ const BillingWidget = () => {
                     </div>
                 )}
             </div>
-            <Link to="/client/billing" className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition-colors">
-                View Billing
+            <Link to="/client/finance" className="block w-full text-center mt-6 text-white font-semibold py-2 px-4 rounded-lg bg-emerald-600 hover:bg-emerald-700 transition-colors">
+                View Finance
             </Link>
         </div>
     );

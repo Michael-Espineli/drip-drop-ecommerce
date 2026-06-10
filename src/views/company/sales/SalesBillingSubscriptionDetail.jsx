@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useLocation, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { doc, onSnapshot, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
@@ -9,6 +9,7 @@ import {
   FaCreditCard,
   FaEdit,
   FaExternalLinkAlt,
+  FaFileInvoiceDollar,
   FaFileContract,
   FaRoute,
   FaSave,
@@ -21,10 +22,15 @@ import { Context } from '../../../context/AuthContext';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
 import {
+  SalesBillingCollectionMethod,
   SalesBillingSubscriptionStatus,
   SalesInvoiceDeliveryMethod,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
+import {
+  createManualSubscriptionInvoice,
+  getSubscriptionBillingPeriodPreview,
+} from '../../../utils/sales/manualBilling';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -165,7 +171,8 @@ const createDraft = (subscription) => ({
 const SalesBillingSubscriptionDetail = () => {
   const { billingSubscriptionId } = useParams();
   const location = useLocation();
-  const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
+  const navigate = useNavigate();
+  const { recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -174,6 +181,7 @@ const SalesBillingSubscriptionDetail = () => {
   const [saving, setSaving] = useState(false);
   const [startingCheckout, setStartingCheckout] = useState(false);
   const [stripeAction, setStripeAction] = useState('');
+  const [creatingManualInvoice, setCreatingManualInvoice] = useState(false);
 
   useEffect(() => {
     if (!billingSubscriptionId) {
@@ -217,14 +225,31 @@ const SalesBillingSubscriptionDetail = () => {
   );
   const statusKey = normalizeStatus(subscription?.stripeStatus || subscription?.status);
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(statusKey);
+  const billingCollectionMethod = subscription?.billingCollectionMethod || SalesBillingCollectionMethod.manualUntilAutopay;
+  const isStripeManagedBilling = billingCollectionMethod === SalesBillingCollectionMethod.automaticStripe || hasActiveStripeSubscription;
+  const manualBillingAllowed = Boolean(subscription?.manualBillingEnabled !== false && !isStripeManagedBilling);
+  const billingWorkflowLabel = isStripeManagedBilling ? 'Automatic Stripe billing' : 'Manual invoices until autopay';
+  const receiptWorkflowLabel = subscription?.receiptsEnabled === false
+    ? 'Receipts disabled'
+    : labelize(subscription?.receiptDeliveryMethod || subscription?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email);
   const canStartCheckout = Boolean(
     subscription &&
     !companyMismatch &&
+    !isStripeManagedBilling &&
     !hasActiveStripeSubscription &&
     Number(subscription.amountCents || 0) > 0 &&
     subscription.stripeConnectedAccountId &&
     !startingCheckout &&
     !stripeAction
+  );
+  const canCreateManualInvoice = Boolean(
+    subscription &&
+    !companyMismatch &&
+    manualBillingAllowed &&
+    !hasActiveStripeSubscription &&
+    !editing &&
+    !creatingManualInvoice &&
+    Number(subscription.amountCents || 0) > 0
   );
 
   const lineItems = useMemo(
@@ -263,6 +288,10 @@ const SalesBillingSubscriptionDetail = () => {
     returnTo,
   });
   const recurringSetupUrl = `/company/recurring-service-stops/create/${encodeURIComponent(subscription?.customerId || 'NA')}?${recurringSetupQuery.toString()}`;
+  const manualInvoicePreview = useMemo(
+    () => (subscription ? getSubscriptionBillingPeriodPreview(subscription) : null),
+    [subscription]
+  );
 
   const updateDraft = (field, value) => {
     setDraft((current) => ({ ...current, [field]: value }));
@@ -385,6 +414,28 @@ const SalesBillingSubscriptionDetail = () => {
     }
   };
 
+  const createManualInvoice = async () => {
+    if (!canCreateManualInvoice) return;
+
+    setCreatingManualInvoice(true);
+
+    try {
+      const result = await createManualSubscriptionInvoice(db, subscription, {
+        companyName: recentlySelectedCompanyName,
+        stripeConnectedAccountId,
+        userId: user?.uid || '',
+      });
+
+      toast.success(result.created ? 'Manual recurring invoice created.' : 'Invoice for this billing period already exists.');
+      navigate(`/company/sales/invoices/${result.invoiceId}`);
+    } catch (invoiceError) {
+      console.error('Unable to create manual recurring invoice', invoiceError);
+      toast.error(invoiceError.message || 'Failed to create manual invoice.');
+    } finally {
+      setCreatingManualInvoice(false);
+    }
+  };
+
   const runStripeAction = async ({ callableName, payload = {}, successMessage }) => {
     if (!subscription || !subscriptionCompanyId || stripeAction || companyMismatch) return;
 
@@ -476,6 +527,15 @@ const SalesBillingSubscriptionDetail = () => {
                 <FaCreditCard className="text-xs" />
                 {startingCheckout ? 'Opening Stripe...' : hasActiveStripeSubscription ? 'Stripe Active' : 'Start Checkout'}
               </button>
+              <button
+                type="button"
+                onClick={createManualInvoice}
+                disabled={!canCreateManualInvoice}
+                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 shadow-sm transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaFileInvoiceDollar className="text-xs" />
+                {creatingManualInvoice ? 'Creating...' : 'Create Manual Invoice'}
+              </button>
               {!editing ? (
                 <button
                   type="button"
@@ -521,6 +581,24 @@ const SalesBillingSubscriptionDetail = () => {
         {hasActiveStripeSubscription && editing && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
             This subscription is active in Stripe. These edits update DripDrop billing records only; they do not change the Stripe subscription amount, price, or schedule yet.
+          </div>
+        )}
+
+        {subscription && !companyMismatch && (
+          <div className={`rounded-lg border p-4 text-sm ${isStripeManagedBilling ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : 'border-blue-200 bg-blue-50 text-blue-800'}`}>
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
+              <div className="mt-0.5">
+                {isStripeManagedBilling ? <FaCreditCard className="text-base" /> : <FaFileInvoiceDollar className="text-base" />}
+              </div>
+              <div>
+                <p className="font-bold">{billingWorkflowLabel}</p>
+                <p className="mt-1 leading-6">
+                  {isStripeManagedBilling
+                    ? 'Stripe is the billing source for this recurring agreement. DripDrop records invoices, payments, and receipt links from Stripe events, while manual recurring invoices stay disabled.'
+                    : 'Manual recurring invoices are the default for this agreement until the customer completes automatic payment setup.'}
+                </p>
+              </div>
+            </div>
           </div>
         )}
 
@@ -607,6 +685,10 @@ const SalesBillingSubscriptionDetail = () => {
                   </div>
                 ) : (
                   <dl className="mt-5 grid gap-5 md:grid-cols-2">
+                    <Field label="Billing Workflow" value={billingWorkflowLabel} />
+                    <Field label="Autopay Status" value={labelize(subscription.autopayStatus)} />
+                    <Field label="Manual Invoicing" value={manualBillingAllowed ? 'Enabled' : 'Disabled'} />
+                    <Field label="Receipts" value={receiptWorkflowLabel} />
                     <Field label="Amount" value={formatCurrency(subscription.amountCents)} />
                     <Field label="Cadence" value={`Every ${subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}${subscription.interval || 'month'}`} />
                     <Field label="Payment Terms" value={labelize(subscription.paymentTerms)} />
@@ -656,6 +738,42 @@ const SalesBillingSubscriptionDetail = () => {
             </main>
 
             <aside className="space-y-6">
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-950">Manual Billing</h2>
+                <dl className="mt-4 space-y-4">
+                  <Field label="Manual Status" value={labelize(subscription.manualBillingStatus || (manualBillingAllowed ? 'readyToInvoice' : 'disabled'))} />
+                  <Field label="Reason" value={labelize(subscription.manualBillingReason || (manualBillingAllowed ? 'manualUntilAutopay' : 'automaticBilling'))} />
+                  <Field label="Next Invoice Period" value={manualInvoicePreview ? `${formatDate(manualInvoicePreview.periodStart)} - ${formatDate(manualInvoicePreview.periodEnd)}` : 'Not set'} />
+                  <Field label="Invoice Number" value={manualInvoicePreview?.invoiceNumber} />
+                  <Field label="Last Manual Invoice">
+                    {subscription.manualBillingLastInvoiceId ? (
+                      <Link to={`/company/sales/invoices/${subscription.manualBillingLastInvoiceId}`} className="text-blue-700 hover:text-blue-900">
+                        {subscription.manualBillingLastInvoiceNumber || 'Open invoice'}
+                      </Link>
+                    ) : 'Not created'}
+                  </Field>
+                  <Field label="Last Generated" value={formatDate(subscription.manualBillingLastInvoiceAt)} />
+                </dl>
+                <button
+                  type="button"
+                  onClick={createManualInvoice}
+                  disabled={!canCreateManualInvoice}
+                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaFileInvoiceDollar className="text-xs" />
+                  {creatingManualInvoice ? 'Creating...' : 'Create Invoice For Period'}
+                </button>
+                {manualBillingAllowed ? (
+                  <p className="mt-3 text-xs leading-5 text-slate-500">
+                    Use manual invoices for each recurring period until the customer completes automatic payment setup.
+                  </p>
+                ) : (
+                  <p className="mt-3 text-xs leading-5 text-slate-500">
+                    Manual recurring invoices are disabled while Stripe is managing this billing subscription.
+                  </p>
+                )}
+              </section>
+
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Stripe</h2>
                 <dl className="mt-4 space-y-4">
@@ -711,7 +829,7 @@ const SalesBillingSubscriptionDetail = () => {
                     {lineItemsMissingStripePrices.length} line item{lineItemsMissingStripePrices.length === 1 ? '' : 's'} will get connected-account Stripe prices when you apply items to Stripe.
                   </div>
                 )}
-                {subscription.checkoutUrl && !hasActiveStripeSubscription && (
+                {subscription.checkoutUrl && !isStripeManagedBilling && (
                   <a
                     href={subscription.checkoutUrl}
                     target="_blank"

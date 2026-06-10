@@ -14,6 +14,26 @@ const getParticipantName = (data = {}) => {
   return fullName || data.name || data.email || 'User';
 };
 
+const getCustomerName = (data = {}) => (
+  data.customerName
+  || (data.displayAsCompany ? data.company : '')
+  || getParticipantName(data)
+);
+
+const getCustomerUserId = (data = {}) => {
+  const linkedCustomerIds = Array.isArray(data.linkedCustomerIds) ? data.linkedCustomerIds : [];
+
+  return data.customerUserId
+    || data.linkedCustomerUserId
+    || data.linkedHomeownerUserId
+    || data.homeownerUserId
+    || data.userId
+    || data.clientId
+    || data.homeownerId
+    || linkedCustomerIds[0]
+    || '';
+};
+
 const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
   const params = useParams();
   const participantId = params.participantId || params.clientId;
@@ -81,7 +101,7 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
             const customerDoc = await getDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', participantId));
             if (customerDoc.exists()) {
               const data = customerDoc.data();
-              const customerUserId = data.customerUserId || data.userId || data.clientId || data.homeownerId || '';
+              const customerUserId = getCustomerUserId(data);
               if (!customerUserId) {
                 setError('This customer is not linked to a homeowner account yet.');
                 setIsLoading(false);
@@ -93,8 +113,8 @@ const CompanyChatInitiationView = ({ backPath = '/companies-chat' }) => {
                 customerId: customerDoc.id,
                 userId: customerUserId,
                 customerUserId,
-                name: data.customerName || getParticipantName(data),
-                customerName: data.customerName || getParticipantName(data),
+                name: getCustomerName(data),
+                customerName: getCustomerName(data),
                 image: data.photoUrl || data.profileImageUrl || '',
                 email: data.email || data.customerEmail || '',
                 accountType: 'Client',

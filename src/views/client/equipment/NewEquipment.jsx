@@ -7,6 +7,7 @@ import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { EquipmentHO } from '../../../utils/models/EquipmentHO';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const NewEquipment = () => {
     const { user } = useContext(Context);
@@ -46,6 +47,10 @@ const NewEquipment = () => {
 
     const handleEquipmentChange = (field, value) => {
         setEquipment(new EquipmentHO({ ...equipment, [field]: value }));
+    };
+
+    const handleEquipmentCatalogChange = (nextEquipment) => {
+        setEquipment(new EquipmentHO(nextEquipment));
     };
 
     const handleSave = async (e) => {
@@ -118,10 +123,23 @@ const NewEquipment = () => {
                     </div>
                     <div className="p-3 border rounded-lg space-y-3">
                         <input type="text" placeholder="Equipment Name (e.g., Main Filter)" value={equipment.name} onChange={(e) => handleEquipmentChange('name', e.target.value)} className={formInputClasses} />
+                        <EquipmentCatalogPicker
+                            value={equipment}
+                            onChange={handleEquipmentCatalogChange}
+                            onModelSelected={(selectedModel) => {
+                                if (!equipment.name?.trim()) {
+                                    handleEquipmentCatalogChange(new EquipmentHO({
+                                        ...equipment,
+                                        model: selectedModel.model || selectedModel.name || '',
+                                        modelId: selectedModel.id || '',
+                                        universalEquipmentId: selectedModel.id || '',
+                                        manualPdfLink: selectedModel.manualPdfLink || '',
+                                        name: selectedModel.name || selectedModel.model || '',
+                                    }));
+                                }
+                            }}
+                        />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input type="text" placeholder="Category (e.g., Filter)" value={equipment.category} onChange={(e) => handleEquipmentChange('category', e.target.value)} className={formInputClasses} />
-                            <input type="text" placeholder="Make (e.g., Pentair)" value={equipment.make} onChange={(e) => handleEquipmentChange('make', e.target.value)} className={formInputClasses} />
-                            <input type="text" placeholder="Model (e.g., FNS Plus 60)" value={equipment.model} onChange={(e) => handleEquipmentChange('model', e.target.value)} className={formInputClasses} />
                             <input type="date" placeholder="Date Installed" value={equipment.dateInstalled} onChange={(e) => handleEquipmentChange('dateInstalled', e.target.value)} className={formInputClasses} />
                         </div>
                         <textarea placeholder="Notes" value={equipment.notes} onChange={(e) => handleEquipmentChange('notes', e.target.value)} className={`${formInputClasses} h-20`}></textarea>

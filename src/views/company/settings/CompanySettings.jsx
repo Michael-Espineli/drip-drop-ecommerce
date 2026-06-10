@@ -10,6 +10,8 @@ import {
     CreditCardIcon,
     CurrencyDollarIcon,
     DocumentTextIcon,
+    BuildingStorefrontIcon,
+    TruckIcon,
     ArrowDownIcon,
     ArrowUpIcon
 } from '@heroicons/react/24/outline';
@@ -208,16 +210,22 @@ const CompanySettings = () => {
                 description: 'Set up measurement units and chemical dosages.'
             },
             {
-                to: '/Company/Items',
-                icon: <ArchiveBoxIcon className="w-6 h-6" />,
-                title: 'Database Items',
-                description: 'Manage your company\'s internal database of items.'
-            },
-            {
                 to: '/Company/Roles',
                 icon: <UsersIcon className="w-6 h-6" />,
                 title: 'User Roles',
                 description: 'Define and manage roles and permissions for your team.'
+            },
+            {
+                to: '/company/vendors',
+                icon: <BuildingStorefrontIcon className="w-6 h-6" />,
+                title: 'Vendors',
+                description: 'Manage vendors used for purchases, receipts, parts, and company records.'
+            },
+            {
+                to: '/company/fleet',
+                icon: <TruckIcon className="w-6 h-6" />,
+                title: 'Fleet',
+                description: 'Manage company vehicles used for routing, reports, and route assignments.'
             },
             {
                 to: '/company/reports',
@@ -227,6 +235,18 @@ const CompanySettings = () => {
             }
         ],
         billing: [
+            {
+                to: '/Company/Items',
+                icon: <ArchiveBoxIcon className="w-6 h-6" />,
+                title: 'Database Items',
+                description: 'Manage your company\'s internal database of items.'
+            },
+            {
+                to: '/company/sales/catalog-items',
+                icon: <BiPurchaseTagAlt className="w-6 h-6" />,
+                title: 'Sales Catalog Items',
+                description: 'Manage billable services, recurring charges, materials, fees, and discounts.'
+            },
             // Update 3.1
             // {
             //     to: '/Company/StripeProfile',

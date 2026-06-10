@@ -9,19 +9,10 @@ import { BodyOfWaterHO } from '../../../utils/models/BodyOfWaterHO';
 import { EquipmentHO } from '../../../utils/models/EquipmentHO';
 import { ServiceLocationHO } from '../../../utils/models/ServiceLocationHO';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const BODY_OF_WATER_MATERIAL_OPTIONS = ['Plaster', 'Fiber Glass', 'Vinyl', 'Pebble', 'Tile'];
 const BODY_OF_WATER_SHAPE_OPTIONS = ['Square', 'Rectangle', 'Circle', 'Roman'];
-const EQUIPMENT_CATEGORY_OPTIONS = [
-    'Pump',
-    'Filter',
-    'Heater',
-    'Salt Cell',
-    'Light',
-    'Cleaner',
-    'Control System',
-    'Auto Chlorinator',
-];
 const EQUIPMENT_FREQUENCY_OPTIONS = ['Day', 'Week', 'Month', 'Year'];
 const EQUIPMENT_STATUS_OPTIONS = [
     { value: 'Operational', label: 'Operational' },
@@ -135,6 +126,12 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
         const newEquipment = [...equipment];
         const updatedEquip = { ...newEquipment[bodyIndex][equipIndex], [field]: value };
         newEquipment[bodyIndex][equipIndex] = new EquipmentHO(updatedEquip);
+        setEquipment(newEquipment);
+    };
+
+    const handleEquipmentCatalogChange = (bodyIndex, equipIndex, nextCatalogEquipment) => {
+        const newEquipment = [...equipment];
+        newEquipment[bodyIndex][equipIndex] = new EquipmentHO(nextCatalogEquipment);
         setEquipment(newEquipment);
     };
 
@@ -310,13 +307,25 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                                                 </button>
                                             </div>
 
+                                            <EquipmentCatalogPicker
+                                                value={equip}
+                                                onChange={(nextCatalogEquipment) => handleEquipmentCatalogChange(index, equipIndex, nextCatalogEquipment)}
+                                                onModelSelected={(selectedModel) => {
+                                                    if (!equip.name?.trim()) {
+                                                        handleEquipmentCatalogChange(index, equipIndex, new EquipmentHO({
+                                                            ...equip,
+                                                            model: selectedModel.model || selectedModel.name || '',
+                                                            modelId: selectedModel.id || '',
+                                                            universalEquipmentId: selectedModel.id || '',
+                                                            manualPdfLink: selectedModel.manualPdfLink || '',
+                                                            name: selectedModel.name || selectedModel.model || '',
+                                                        }));
+                                                    }
+                                                }}
+                                                gridClassName="grid grid-cols-1 gap-4 md:grid-cols-3"
+                                            />
+
                                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className={labelClasses}>Category</label>
-                                                    <select value={equip.category || ''} onChange={(e) => handleEquipmentChange(index, equipIndex, 'category', e.target.value)} className={formInputClasses}>
-                                                        {renderOptions(EQUIPMENT_CATEGORY_OPTIONS, 'Select category')}
-                                                    </select>
-                                                </div>
                                                 <div>
                                                     <label className={labelClasses}>Status</label>
                                                     <select value={equip.status || ''} onChange={(e) => handleEquipmentChange(index, equipIndex, 'status', e.target.value)} className={formInputClasses}>
@@ -360,8 +369,6 @@ const HomeownerServiceLocationForm = ({ title = 'Add New Pool Service Location' 
                                             <details className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
                                                 <summary className="cursor-pointer text-sm font-semibold text-gray-700">Optional equipment details</summary>
                                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-                                                    <input type="text" placeholder="Make" value={equip.make || ''} onChange={(e) => handleEquipmentChange(index, equipIndex, 'make', e.target.value)} className={formInputClasses} />
-                                                    <input type="text" placeholder="Model" value={equip.model || ''} onChange={(e) => handleEquipmentChange(index, equipIndex, 'model', e.target.value)} className={formInputClasses} />
                                                     <input type="date" value={getDateInputValue(equip.dateInstalled)} onChange={(e) => handleEquipmentChange(index, equipIndex, 'dateInstalled', e.target.value)} className={formInputClasses} />
                                                 </div>
                                                 <textarea

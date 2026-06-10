@@ -1431,7 +1431,9 @@ const Payroll = ({ mode = "payroll" }) => {
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div>
                     <h3 className="font-bold text-slate-900">{type.name || "Service stop type"}</h3>
-                    <p className="mt-1 text-sm text-slate-500">{serviceStopTypeWorkTypeNames(type)}</p>
+                    <p className="mt-1 text-sm text-slate-500">
+                      {(type.category || "Uncategorized")} - {serviceStopTypeWorkTypeNames(type)}
+                    </p>
                   </div>
                   <button
                     type="button"

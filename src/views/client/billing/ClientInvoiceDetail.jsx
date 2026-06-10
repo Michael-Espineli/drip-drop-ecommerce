@@ -190,9 +190,9 @@ const ClientInvoiceDetail = () => {
   if (error || !invoice) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
-        <Link to="/client/billing" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+        <Link to="/client/finance" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
           <ArrowLeftIcon className="h-4 w-4" />
-          Billing
+          Finance
         </Link>
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-8 text-center shadow-sm">
           <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-rose-500" />
@@ -206,9 +206,9 @@ const ClientInvoiceDetail = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Link to="/client/billing" className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+          <Link to="/client/finance" className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
-            Billing
+            Finance
           </Link>
           <h1 className="text-3xl font-bold text-slate-950">{invoice.invoiceNumber || 'Invoice'}</h1>
           <p className="mt-1 text-sm text-slate-500">

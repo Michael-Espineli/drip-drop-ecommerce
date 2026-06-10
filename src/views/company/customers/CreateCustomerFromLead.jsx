@@ -7,6 +7,7 @@ import { functions } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const firstText = (...values) => {
     for (const value of values) {
@@ -121,6 +122,7 @@ const blankEquipmentData = {
     makeId: '',
     model: '',
     modelId: '',
+    universalEquipmentId: '',
     manualPdfLink: '',
     notes: '',
     needsService: false,
@@ -130,8 +132,13 @@ const mapPublicEquipmentToForm = (equipment = {}) => ({
     ...blankEquipmentData,
     name: equipment.name || equipment.type || '',
     type: equipment.type || equipment.category || '',
+    typeId: equipment.typeId || '',
     make: equipment.make || '',
+    makeId: equipment.makeId || '',
     model: equipment.model || '',
+    modelId: equipment.modelId || equipment.universalEquipmentId || '',
+    universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
+    manualPdfLink: equipment.manualPdfLink || '',
     notes: equipment.notes || equipment.description || '',
     needsService: Boolean(equipment.needsService),
 });
@@ -181,8 +188,6 @@ const createBodyOfWaterEntry = ({ data = {}, equipmentData = [] } = {}) => ({
     equipmentData: equipmentData.length ? equipmentData : [],
 });
 
-const equipmentOptionKey = (bodyIndex, equipmentIndex) => `${bodyIndex}:${equipmentIndex}`;
-
 const CreateCustomerFromLead = () => {
     const { leadId } = useParams();
     const navigate = useNavigate();
@@ -222,10 +227,6 @@ const CreateCustomerFromLead = () => {
     const [bodyOfWaterEntries, setBodyOfWaterEntries] = useState([
         createBodyOfWaterEntry({ equipmentData: defaultEquipmentData })
     ]);
-    const [equipmentTypes, setEquipmentTypes] = useState([]);
-    const [equipmentMakes, setEquipmentMakes] = useState({});
-    const [equipmentModels, setEquipmentModels] = useState({});
-
     useEffect(() => {
         if (!leadId || !recentlySelectedCompany) return;
         const fetchLead = async () => {
@@ -402,80 +403,6 @@ const CreateCustomerFromLead = () => {
         fetchLead();
     }, [leadId, recentlySelectedCompany, db, navigate]);
 
-    useEffect(() => {
-        const fetchEquipmentTypes = async () => {
-            const snap = await getDocs(query(collection(db, 'universal', 'equipment', 'equipmentTypes')));
-            setEquipmentTypes(snap.docs.map(typeDoc => ({ id: typeDoc.id, ...typeDoc.data() })));
-        };
-
-        fetchEquipmentTypes();
-    }, [db]);
-
-    useEffect(() => {
-        if (!equipmentTypes.length) return;
-
-        setBodyOfWaterEntries(currentEntries => {
-            let changed = false;
-            const nextEntries = currentEntries.map((entry) => ({
-                ...entry,
-                equipmentData: entry.equipmentData.map((equipment) => {
-                    if (equipment.typeId) return equipment;
-
-                    const matchedType = equipmentTypes.find(type => type.name === equipment.type);
-                    if (!matchedType) return equipment;
-
-                    changed = true;
-                    return {
-                        ...equipment,
-                        typeId: matchedType.id,
-                    };
-                }),
-            }));
-
-            return changed ? nextEntries : currentEntries;
-        });
-    }, [equipmentTypes]);
-
-    useEffect(() => {
-        const loadEquipmentOptions = async () => {
-            const makesByKey = {};
-            const modelsByKey = {};
-            const selectedLookups = bodyOfWaterEntries.flatMap((entry, bodyIndex) => (
-                entry.equipmentData.map((equipment, equipmentIndex) => ({
-                    key: equipmentOptionKey(bodyIndex, equipmentIndex),
-                    typeId: equipment.typeId || '',
-                    makeId: equipment.makeId || '',
-                }))
-            ));
-
-            await Promise.all(selectedLookups.map(async (equipment) => {
-                if (!equipment.typeId) return;
-
-                const makesSnap = await getDocs(
-                    query(collection(db, 'universal', 'equipment', 'equipmentMakes'), where('types', 'array-contains', equipment.typeId))
-                );
-                const makes = makesSnap.docs.map(makeDoc => ({ id: makeDoc.id, ...makeDoc.data() }));
-                makesByKey[equipment.key] = makes;
-
-                if (!equipment.makeId) return;
-
-                const modelsSnap = await getDocs(
-                    query(
-                        collection(db, 'universal', 'equipment', 'equipment'),
-                        where('typeId', '==', equipment.typeId),
-                        where('makeId', '==', equipment.makeId)
-                    )
-                );
-                modelsByKey[equipment.key] = modelsSnap.docs.map(modelDoc => ({ id: modelDoc.id, ...modelDoc.data() }));
-            }));
-
-            setEquipmentMakes(makesByKey);
-            setEquipmentModels(modelsByKey);
-        };
-
-        loadEquipmentOptions();
-    }, [db, bodyOfWaterEntries]);
-
     const handleInputChange = (e, setter, nestedField) => {
         const { name, value, type, checked } = e.target;
         const val = type === 'checkbox' ? checked : value;
@@ -595,7 +522,6 @@ const CreateCustomerFromLead = () => {
     const handleEquipmentListChange = (bodyIndex, equipmentIndex, e) => {
         const { name, value, type, checked } = e.target;
         const fieldValue = type === 'checkbox' ? checked : value;
-        const optionKey = equipmentOptionKey(bodyIndex, equipmentIndex);
 
         setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => {
             if (index !== bodyIndex) return entry;
@@ -603,41 +529,27 @@ const CreateCustomerFromLead = () => {
             const nextEquipmentData = entry.equipmentData.map((equipment, currentEquipmentIndex) => {
                 if (currentEquipmentIndex !== equipmentIndex) return equipment;
 
-                const nextEquipment = { ...equipment, [name]: fieldValue };
-
-                if (name === 'typeId') {
-                    const selectedType = equipmentTypes.find(type => type.id === fieldValue);
-                    nextEquipment.type = selectedType?.name || '';
-                    nextEquipment.make = '';
-                    nextEquipment.makeId = '';
-                    nextEquipment.model = '';
-                    nextEquipment.modelId = '';
-                    nextEquipment.manualPdfLink = '';
-                }
-
-                if (name === 'makeId') {
-                    const selectedMake = equipmentMakes[optionKey]?.find(make => make.id === fieldValue);
-                    nextEquipment.make = selectedMake?.name || '';
-                    nextEquipment.model = '';
-                    nextEquipment.modelId = '';
-                    nextEquipment.manualPdfLink = '';
-                }
-
-                if (name === 'modelId') {
-                    const selectedModel = equipmentModels[optionKey]?.find(model => model.id === fieldValue);
-                    nextEquipment.model = selectedModel?.model || selectedModel?.name || '';
-                    nextEquipment.manualPdfLink = selectedModel?.manualPdfLink || '';
-                    if (!nextEquipment.name && selectedModel) {
-                        nextEquipment.name = selectedModel.name || selectedModel.model || '';
-                    }
-                }
-
-                return nextEquipment;
+                return { ...equipment, [name]: fieldValue };
             });
 
             return {
                 ...entry,
                 equipmentData: nextEquipmentData,
+            };
+        }));
+    };
+
+    const handleEquipmentCatalogChange = (bodyIndex, equipmentIndex, nextCatalogEquipment) => {
+        setBodyOfWaterEntries((currentEntries) => currentEntries.map((entry, index) => {
+            if (index !== bodyIndex) return entry;
+
+            return {
+                ...entry,
+                equipmentData: entry.equipmentData.map((equipment, currentEquipmentIndex) => (
+                    currentEquipmentIndex === equipmentIndex
+                        ? { ...equipment, ...nextCatalogEquipment }
+                        : equipment
+                )),
             };
         }));
     };
@@ -917,9 +829,7 @@ const CreateCustomerFromLead = () => {
                                                             </button>
                                                         </div>
 
-                                                        {entry.equipmentData.map((equipment, equipmentIndex) => {
-                                                            const optionKey = equipmentOptionKey(bodyIndex, equipmentIndex);
-                                                            return (
+                                                        {entry.equipmentData.map((equipment, equipmentIndex) => (
                                                                 <div key={`equipment-${bodyIndex}-${equipmentIndex}`} className="rounded-md border border-gray-200 p-3">
                                                                     <div className="mb-2 flex items-center justify-between gap-3">
                                                                         <h5 className="font-medium">Equipment #{equipmentIndex + 1}</h5>
@@ -932,26 +842,32 @@ const CreateCustomerFromLead = () => {
                                                                         </button>
                                                                     </div>
                                                                     <input placeholder="Name (e.g., Pump)" name="name" value={equipment.name} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md" />
-                                                                    <select name="typeId" value={equipment.typeId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                                        <option value="">Select Category</option>
-                                                                        {equipmentTypes.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}
-                                                                    </select>
-                                                                    <select name="makeId" value={equipment.makeId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                                        <option value="">Select Make</option>
-                                                                        {equipmentMakes[optionKey]?.map(make => <option key={make.id} value={make.id}>{make.name}</option>)}
-                                                                    </select>
-                                                                    <select name="modelId" value={equipment.modelId} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md">
-                                                                        <option value="">Select Model</option>
-                                                                        {equipmentModels[optionKey]?.map(model => <option key={model.id} value={model.id}>{model.model || model.name}</option>)}
-                                                                    </select>
+                                                                    <EquipmentCatalogPicker
+                                                                        value={equipment}
+                                                                        onChange={(nextCatalogEquipment) => handleEquipmentCatalogChange(bodyIndex, equipmentIndex, nextCatalogEquipment)}
+                                                                        onModelSelected={(selectedModel) => {
+                                                                            if (!equipment.name?.trim()) {
+                                                                                handleEquipmentCatalogChange(bodyIndex, equipmentIndex, {
+                                                                                    ...equipment,
+                                                                                    model: selectedModel.model || selectedModel.name || '',
+                                                                                    modelId: selectedModel.id || '',
+                                                                                    universalEquipmentId: selectedModel.id || '',
+                                                                                    manualPdfLink: selectedModel.manualPdfLink || '',
+                                                                                    name: selectedModel.name || selectedModel.model || '',
+                                                                                });
+                                                                            }
+                                                                        }}
+                                                                        inputClassName="w-full rounded-md border p-2 text-sm"
+                                                                        labelClassName="block text-xs font-semibold uppercase text-gray-500 mb-1"
+                                                                        gridClassName="grid grid-cols-1 gap-2 md:grid-cols-3"
+                                                                    />
                                                                     <textarea placeholder="Notes" name="notes" value={equipment.notes} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="w-full mb-2 p-2 border rounded-md" />
                                                                     <label className="flex items-center">
                                                                         <input type="checkbox" name="needsService" checked={equipment.needsService} onChange={e => handleEquipmentListChange(bodyIndex, equipmentIndex, e)} className="mr-2 h-4 w-4" />
                                                                         Needs Service
                                                                     </label>
                                                                 </div>
-                                                            );
-                                                        })}
+                                                        ))}
                                                     </div>
                                                 )}
                                             </div>

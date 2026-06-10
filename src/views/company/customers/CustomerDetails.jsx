@@ -25,10 +25,10 @@ import {
 } from '../../../utils/customerTags';
 
 const customerSections = [
-    { id: 'profile', label: 'Profile', helper: 'Contact, billing address, notes, and account status' },
+    { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
     { id: 'locations', label: 'Service Locations', helper: 'Properties, bodies of water, equipment, and recent stops' },
-    { id: 'operations', label: 'Operations', helper: 'Jobs, repair requests, sales, recurring service, and leads' },
-    { id: 'history', label: 'History', helper: 'Service, job, chemistry, equipment, and notes timeline' },
+    { id: 'operations', label: 'Operations', helper: 'Jobs, repair requests, recurring service, and part approvals' },
+    { id: 'history', label: 'History', helper: 'Service, job, lead, chemistry, equipment, and notes timeline' },
 ];
 const validCustomerTabs = customerSections.map((section) => section.id);
 
@@ -244,150 +244,153 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer }) => {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-2 space-y-8">
-                <InfoCard
-                    title="Contact Information"
-                    actions={can("14") &&
-                        <button
-                            onClick={() => setIsEditing(!isEditing)}
-                            className="text-sm font-semibold text-blue-600 hover:text-blue-800"
-                            type="button"
-                        >
-                            {isEditing ? 'Cancel' : 'Edit'}
-                        </button>
-                    }
-                >
-                    {isEditing ? (
-                        <div className="space-y-4">
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="First Name" className="w-full px-3 py-2 border rounded-md" />
-                                <input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Last Name" className="w-full px-3 py-2 border rounded-md" />
+        <div className="space-y-8">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="lg:col-span-2 space-y-8">
+                    <InfoCard
+                        title="Contact Information"
+                        actions={can("14") &&
+                            <button
+                                onClick={() => setIsEditing(!isEditing)}
+                                className="text-sm font-semibold text-blue-600 hover:text-blue-800"
+                                type="button"
+                            >
+                                {isEditing ? 'Cancel' : 'Edit'}
+                            </button>
+                        }
+                    >
+                        {isEditing ? (
+                            <div className="space-y-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <input name="firstName" value={formData.firstName} onChange={handleInputChange} placeholder="First Name" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="lastName" value={formData.lastName} onChange={handleInputChange} placeholder="Last Name" className="w-full px-3 py-2 border rounded-md" />
+                                </div>
+                                <input type="email" name="email" value={formData.email} onChange={handleInputChange} placeholder="Email" className="w-full px-3 py-2 border rounded-md" />
+                                <input name="phoneNumber" value={formData.phoneNumber} onChange={handleInputChange} placeholder="Phone Number" className="w-full px-3 py-2 border rounded-md" />
                             </div>
-                            <input type="email" name="email" value={formData.email} onChange={handleInputChange} placeholder="Email" className="w-full px-3 py-2 border rounded-md" />
-                            <input name="phoneNumber" value={formData.phoneNumber} onChange={handleInputChange} placeholder="Phone Number" className="w-full px-3 py-2 border rounded-md" />
-                        </div>
-                    ) : (
-                        <dl className="space-y-2">
-                            <div className="flex justify-between"><dt className="text-gray-500">Name</dt><dd className="text-gray-900 font-medium">{customer.firstName} {customer.lastName}</dd></div>
-                            <div className="flex justify-between"><dt className="text-gray-500">Email</dt><dd className="text-gray-900">{customer.email}</dd></div>
-                            <div className="flex justify-between"><dt className="text-gray-500">Phone</dt><dd className="text-gray-900">{customer.phoneNumber}</dd></div>
-                        </dl>
-                    )}
-                </InfoCard>
-                <InfoCard title="Notes">
-                    <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
-                </InfoCard>
-                <InfoCard title="Tags">
-                    {isEditing ? (
-                        <div className="space-y-3">
-                            <div className="flex gap-2">
-                                <input
-                                    value={newTag}
-                                    onChange={(event) => setNewTag(event.target.value)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter') {
-                                            event.preventDefault();
-                                            handleAddTag();
-                                        }
-                                    }}
-                                    placeholder="Add tag, e.g. R1"
-                                    className="w-full rounded-md border px-3 py-2 text-sm"
-                                />
-                                <button
-                                    type="button"
-                                    onClick={handleAddTag}
-                                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                                >
-                                    Add
-                                </button>
-                            </div>
-                            <div className="flex flex-wrap gap-2">
-                                {normalizeCustomerTags(formData.tags).map((tag) => (
+                        ) : (
+                            <dl className="space-y-2">
+                                <div className="flex justify-between"><dt className="text-gray-500">Name</dt><dd className="text-gray-900 font-medium">{customer.firstName} {customer.lastName}</dd></div>
+                                <div className="flex justify-between"><dt className="text-gray-500">Email</dt><dd className="text-gray-900">{customer.email}</dd></div>
+                                <div className="flex justify-between"><dt className="text-gray-500">Phone</dt><dd className="text-gray-900">{customer.phoneNumber}</dd></div>
+                            </dl>
+                        )}
+                    </InfoCard>
+                    <InfoCard title="Notes">
+                        <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
+                    </InfoCard>
+                    <InfoCard title="Tags">
+                        {isEditing ? (
+                            <div className="space-y-3">
+                                <div className="flex gap-2">
+                                    <input
+                                        value={newTag}
+                                        onChange={(event) => setNewTag(event.target.value)}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter') {
+                                                event.preventDefault();
+                                                handleAddTag();
+                                            }
+                                        }}
+                                        placeholder="Add tag, e.g. R1"
+                                        className="w-full rounded-md border px-3 py-2 text-sm"
+                                    />
                                     <button
-                                        key={tag}
                                         type="button"
-                                        onClick={() => handleRemoveTag(tag)}
-                                        className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                                        onClick={handleAddTag}
+                                        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
                                     >
-                                        {tag} x
+                                        Add
                                     </button>
+                                </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {normalizeCustomerTags(formData.tags).map((tag) => (
+                                        <button
+                                            key={tag}
+                                            type="button"
+                                            onClick={() => handleRemoveTag(tag)}
+                                            className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700 hover:bg-rose-50 hover:text-rose-700"
+                                        >
+                                            {tag} x
+                                        </button>
+                                    ))}
+                                    {normalizeCustomerTags(formData.tags).length === 0 && (
+                                        <span className="text-sm text-slate-500">No tags added.</span>
+                                    )}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap gap-2">
+                                {normalizeCustomerTags(customer.tags).map((tag) => (
+                                    <span key={tag} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
+                                        {tag}
+                                    </span>
                                 ))}
-                                {normalizeCustomerTags(formData.tags).length === 0 && (
+                                {normalizeCustomerTags(customer.tags).length === 0 && (
                                     <span className="text-sm text-slate-500">No tags added.</span>
                                 )}
                             </div>
-                        </div>
-                    ) : (
-                        <div className="flex flex-wrap gap-2">
-                            {normalizeCustomerTags(customer.tags).map((tag) => (
-                                <span key={tag} className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
-                                    {tag}
+                        )}
+                    </InfoCard>
+                </div>
+                <div className="space-y-8">
+                    <InfoCard title="Billing Address">
+                        {isEditing ? (
+                            <div className="space-y-4">
+                                <input name="streetAddress" value={formData.billingAddress?.streetAddress} onChange={handleBillingAddressChange} placeholder="Street" className="w-full px-3 py-2 border rounded-md" />
+                                <input name="city" value={formData.billingAddress?.city} onChange={handleBillingAddressChange} placeholder="City" className="w-full px-3 py-2 border rounded-md" />
+                                <div className="grid grid-cols-2 gap-4">
+                                    <input name="state" value={formData.billingAddress?.state} onChange={handleBillingAddressChange} placeholder="State" className="w-full px-3 py-2 border rounded-md" />
+                                    <input name="zip" value={formData.billingAddress?.zip} onChange={handleBillingAddressChange} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-md" />
+                                </div>
+                            </div>
+                        ) : (
+                            <address className="not-italic text-gray-700">
+                                {customer.billingAddress?.streetAddress}<br />
+                                {customer.billingAddress?.city}, {customer.billingAddress?.state} {customer.billingAddress?.zip}
+                            </address>
+                        )}
+                    </InfoCard>
+                    <InfoCard title="Status">
+                        {isEditing ? (
+                            <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
+                                <input
+                                    type="checkbox"
+                                    name="active"
+                                    checked={formData.active === true}
+                                    onChange={handleCheckboxChange}
+                                    className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                                />
+                                Active customer
+                            </label>
+                        ) : (
+                            <div className="flex items-center">
+                                <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
+                                    {customer.active ? 'Active' : 'Inactive'}
                                 </span>
-                            ))}
-                            {normalizeCustomerTags(customer.tags).length === 0 && (
-                                <span className="text-sm text-slate-500">No tags added.</span>
-                            )}
-                        </div>
-                    )}
-                </InfoCard>
-            </div>
-            <div className="space-y-8">
-                <InfoCard title="Billing Address">
-                    {isEditing ? (
-                        <div className="space-y-4">
-                            <input name="streetAddress" value={formData.billingAddress?.streetAddress} onChange={handleBillingAddressChange} placeholder="Street" className="w-full px-3 py-2 border rounded-md" />
-                            <input name="city" value={formData.billingAddress?.city} onChange={handleBillingAddressChange} placeholder="City" className="w-full px-3 py-2 border rounded-md" />
-                            <div className="grid grid-cols-2 gap-4">
-                                <input name="state" value={formData.billingAddress?.state} onChange={handleBillingAddressChange} placeholder="State" className="w-full px-3 py-2 border rounded-md" />
-                                <input name="zip" value={formData.billingAddress?.zip} onChange={handleBillingAddressChange} placeholder="ZIP Code" className="w-full px-3 py-2 border rounded-md" />
+                            </div>
+                        )}
+                    </InfoCard>
+                    {isEditing && (
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            {can("16") ? (
+                                <button
+                                    onClick={onDeleteCustomer}
+                                    className="px-4 py-2 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-md shadow-sm hover:bg-rose-100"
+                                    type="button"
+                                >
+                                    Delete Customer
+                                </button>
+                            ) : <span />}
+                            <div className="flex justify-end space-x-4">
+                                <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50" type="button">Cancel</button>
+                                <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700" type="button">Save Changes</button>
                             </div>
                         </div>
-                    ) : (
-                        <address className="not-italic text-gray-700">
-                            {customer.billingAddress?.streetAddress}<br />
-                            {customer.billingAddress?.city}, {customer.billingAddress?.state} {customer.billingAddress?.zip}
-                        </address>
                     )}
-                </InfoCard>
-                <InfoCard title="Status">
-                    {isEditing ? (
-                        <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
-                            <input
-                                type="checkbox"
-                                name="active"
-                                checked={formData.active === true}
-                                onChange={handleCheckboxChange}
-                                className="h-4 w-4 rounded border-slate-300 text-blue-600"
-                            />
-                            Active customer
-                        </label>
-                    ) : (
-                        <div className="flex items-center">
-                            <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                {customer.active ? 'Active' : 'Inactive'}
-                            </span>
-                        </div>
-                    )}
-                </InfoCard>
-                {isEditing && (
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                        {can("16") ? (
-                            <button
-                                onClick={onDeleteCustomer}
-                                className="px-4 py-2 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-md shadow-sm hover:bg-rose-100"
-                                type="button"
-                            >
-                                Delete Customer
-                            </button>
-                        ) : <span />}
-                        <div className="flex justify-end space-x-4">
-                            <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50" type="button">Cancel</button>
-                            <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700" type="button">Save Changes</button>
-                        </div>
-                    </div>
-                )}
+                </div>
             </div>
+            <SalesActivitySection customer={customer} />
         </div>
     );
 };
@@ -1702,8 +1705,6 @@ const OperationsTab = ({ customer, onNewPartApproval }) => {
                 <RecurringTab customer={customer} />
                 <WorkOrdersTab customer={customer} />
             </div>
-            <SalesActivitySection customer={customer} />
-            <LeadsTab customer={customer} />
             <RepairRequestsSection customer={customer} />
         </div>
     );
@@ -1713,6 +1714,7 @@ const OperationsTab = ({ customer, onNewPartApproval }) => {
 const HistoryTab = ({ customer }) => {
     const [timeline, setTimeline] = useState([]);
     const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
+    const [showAllTimelineEvents, setShowAllTimelineEvents] = useState(false);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
@@ -1720,6 +1722,8 @@ const HistoryTab = ({ customer }) => {
     const visibleTimeline = selectedFilter.id === 'all'
         ? timeline
         : timeline.filter((event) => selectedFilter.types.includes(event.type));
+    const displayedTimeline = showAllTimelineEvents ? visibleTimeline : visibleTimeline.slice(0, 5);
+    const hiddenTimelineCount = visibleTimeline.length - displayedTimeline.length;
 
     useEffect(() => {
         const fetchTimeline = async () => {
@@ -1743,94 +1747,114 @@ const HistoryTab = ({ customer }) => {
         }
     }, [customer, recentlySelectedCompany, db]);
 
+    useEffect(() => {
+        setShowAllTimelineEvents(false);
+    }, [activeTimelineFilter, timeline.length]);
+
     return (
-        <InfoCard
-            title="Customer Timeline"
-            actions={
-                !loading && timeline.length > 0 ? (
-                    <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
-                        {timelineFilters.map((filter) => (
-                            <button
-                                key={filter.id}
-                                type="button"
-                                onClick={() => setActiveTimelineFilter(filter.id)}
-                                className={[
-                                    "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-                                    activeTimelineFilter === filter.id
-                                        ? "bg-white text-slate-900 shadow-sm"
-                                        : "text-slate-600 hover:text-slate-900",
-                                ].join(" ")}
-                            >
-                                {filter.label}
-                            </button>
-                        ))}
-                    </div>
-                ) : null
-            }
-        >
-            {loading ? (
-                <div className="flex justify-center py-8">
-                    <ClipLoader size={30} />
-                </div>
-            ) : timeline.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                    No service, job, note, chemistry, equipment, or water history found yet.
-                </div>
-            ) : (
-                <div className="space-y-6">
-                    <CustomerTimelineGraph timeline={timeline} />
-                    {visibleTimeline.length === 0 ? (
-                        <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                            No {selectedFilter.label.toLowerCase()} timeline events found yet.
+        <div className="space-y-8">
+            <InfoCard
+                title="Customer Timeline"
+                actions={
+                    !loading && timeline.length > 0 ? (
+                        <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
+                            {timelineFilters.map((filter) => (
+                                <button
+                                    key={filter.id}
+                                    type="button"
+                                    onClick={() => setActiveTimelineFilter(filter.id)}
+                                    className={[
+                                        "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+                                        activeTimelineFilter === filter.id
+                                            ? "bg-white text-slate-900 shadow-sm"
+                                            : "text-slate-600 hover:text-slate-900",
+                                    ].join(" ")}
+                                >
+                                    {filter.label}
+                                </button>
+                            ))}
                         </div>
-                    ) : (
-                        <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
-                            {visibleTimeline.map((event) => {
-                                const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
-                                const content = (
-                                    <div className="relative flex gap-4">
-                                        <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
-                                        <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                                <div className="min-w-0">
-                                                    <p className="text-sm font-semibold text-slate-900">{event.title}</p>
-                                                    <p className="mt-1 text-xs font-medium text-slate-500">
-                                                        {format(event.date, 'PPP p')}
-                                                    </p>
+                    ) : null
+                }
+            >
+                {loading ? (
+                    <div className="flex justify-center py-8">
+                        <ClipLoader size={30} />
+                    </div>
+                ) : timeline.length === 0 ? (
+                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                        No service, job, note, chemistry, equipment, or water history found yet.
+                    </div>
+                ) : (
+                    <div className="space-y-6">
+                        <CustomerTimelineGraph timeline={timeline} />
+                        {visibleTimeline.length === 0 ? (
+                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                                No {selectedFilter.label.toLowerCase()} timeline events found yet.
+                            </div>
+                        ) : (
+                            <div className="space-y-4">
+                                <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
+                                    {displayedTimeline.map((event) => {
+                                        const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
+                                        const content = (
+                                            <div className="relative flex gap-4">
+                                                <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
+                                                <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                                        <div className="min-w-0">
+                                                            <p className="text-sm font-semibold text-slate-900">{event.title}</p>
+                                                            <p className="mt-1 text-xs font-medium text-slate-500">
+                                                                {format(event.date, 'PPP p')}
+                                                            </p>
+                                                        </div>
+                                                        <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                                                            {event.label}
+                                                        </span>
+                                                    </div>
+
+                                                    {event.subtitle && (
+                                                        <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
+                                                    )}
+
+                                                    {event.detail && (
+                                                        <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
+                                                    )}
                                                 </div>
-                                                <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
-                                                    {event.label}
-                                                </span>
                                             </div>
+                                        );
 
-                                            {event.subtitle && (
-                                                <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
-                                            )}
-
-                                            {event.detail && (
-                                                <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
-                                            )}
-                                        </div>
+                                        return (
+                                            <li key={event.id}>
+                                                {event.target ? (
+                                                    <Link to={event.target} className="block hover:opacity-95 transition">
+                                                        {content}
+                                                    </Link>
+                                                ) : (
+                                                    content
+                                                )}
+                                            </li>
+                                        );
+                                    })}
+                                </ol>
+                                {hiddenTimelineCount > 0 && (
+                                    <div className="flex justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowAllTimelineEvents(true)}
+                                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            Show more
+                                        </button>
                                     </div>
-                                );
-
-                                return (
-                                    <li key={event.id}>
-                                        {event.target ? (
-                                            <Link to={event.target} className="block hover:opacity-95 transition">
-                                                {content}
-                                            </Link>
-                                        ) : (
-                                            content
-                                        )}
-                                    </li>
-                                );
-                            })}
-                        </ol>
-                    )}
-                </div>
-            )}
-        </InfoCard>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                )}
+            </InfoCard>
+            <LeadsTab customer={customer} />
+        </div>
     );
 };
 

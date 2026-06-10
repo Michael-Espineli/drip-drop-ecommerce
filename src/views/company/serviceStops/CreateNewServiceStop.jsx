@@ -38,6 +38,15 @@ const CreateNewServiceStop = () => {
     const [description, setDescription] = useState('');
     const [taskList, setTaskList] = useState([]);
     const [selectedTasks, setSelectedTasks] = useState([]);
+    const [taskTypeList, setTaskTypeList] = useState([]);
+    const [taskGroupList, setTaskGroupList] = useState([]);
+    const [selectedTaskType, setSelectedTaskType] = useState(null);
+    const [selectedTaskGroup, setSelectedTaskGroup] = useState(null);
+    const [taskDescription, setTaskDescription] = useState("");
+    const [taskLaborCost, setTaskLaborCost] = useState("");
+    const [taskEstimatedTime, setTaskEstimatedTime] = useState("");
+    const [addingTask, setAddingTask] = useState(false);
+    const [applyingTaskGroup, setApplyingTaskGroup] = useState(false);
     const [estimatedDuration, setEstimatedDuration] = useState(0);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
     const [selectedPlannedStop, setSelectedPlannedStop] = useState(null);
@@ -244,12 +253,18 @@ const CreateNewServiceStop = () => {
                     workTypesSnap,
                     mappingsSnap,
                     ratesSnap,
+                    taskTypesSnap,
+                    legacyTaskGroupsSnap,
+                    taskGroupsSnap,
                 ] = await Promise.all([
                     getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "companyWorkTypes")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "workTypeMappings")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "technicianRates")),
+                    getDocs(collection(db, "universal", "settings", "taskTypes")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
                 ]);
 
                 setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
@@ -257,6 +272,48 @@ const CreateNewServiceStop = () => {
                 setCompanyWorkTypes(workTypesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setWorkTypeMappings(mappingsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
                 setTechnicianRates(ratesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                setTaskTypeList(
+                    taskTypesSnap.docs.map((docSnap) => {
+                        const data = docSnap.data();
+                        const name = data.name || "Task";
+
+                        return {
+                            ...data,
+                            id: data.id || docSnap.id,
+                            name,
+                            value: name,
+                            label: name,
+                        };
+                    })
+                );
+                setTaskGroupList([
+                    ...legacyTaskGroupsSnap.docs.map((docSnap) => {
+                        const data = docSnap.data();
+                        const id = data.id || docSnap.id;
+                        const label = data.name || data.groupName || "Task Group";
+
+                        return {
+                            ...data,
+                            id,
+                            value: id,
+                            label,
+                            sourcePath: "legacy",
+                        };
+                    }),
+                    ...taskGroupsSnap.docs.map((docSnap) => {
+                        const data = docSnap.data();
+                        const id = data.id || docSnap.id;
+                        const label = data.name || data.groupName || "Task Group";
+
+                        return {
+                            ...data,
+                            id,
+                            value: id,
+                            label,
+                            sourcePath: "current",
+                        };
+                    }),
+                ]);
             }
         };
         fetchData();
@@ -289,6 +346,159 @@ const CreateNewServiceStop = () => {
                 ? prev.filter(t => t.id !== task.id)
                 : [...prev, task]
         );
+    };
+
+    const dollarsToCents = (value) => {
+        const parsed = Number.parseFloat(value);
+        if (!Number.isFinite(parsed)) return 0;
+        return Math.round(parsed * 100);
+    };
+
+    const buildJobTaskPayload = (task, overrides = {}) => ({
+        id: task.id,
+        name: task.name || task.description || "New Task",
+        description: task.description || "",
+        typeId: task.typeId || task.taskTypeId || "",
+        type: task.type || task.taskType || selectedTaskType?.value || selectedTaskType?.name || "Task",
+        contractedRate: Number(task.contractedRate || task.rate || task.laborCostCents || 0),
+        estimatedTime: Number(task.estimatedTime || task.estimatedMinutes || 0),
+        status: task.status || "Unassigned",
+        customerApproval: task.customerApproval ?? false,
+        actualTime: Number(task.actualTime || 0),
+        workerId: task.workerId || "",
+        workerType: task.workerType || "Not Assigned",
+        workerName: task.workerName || "",
+        laborContractId: task.laborContractId || "",
+        serviceStopId: task.serviceStopId || {
+            id: "",
+            internalId: "",
+        },
+        equipmentId: task.equipmentId || "",
+        serviceLocationId: task.serviceLocationId || job?.serviceLocationId || serviceLocation?.id || "",
+        bodyOfWaterId: task.bodyOfWaterId || "",
+        dataBaseItemId: task.dataBaseItemId || task.databaseItemId || "",
+        ...overrides,
+    });
+
+    const saveJobTasks = async (tasksToSave, { selectAfterSave = true } = {}) => {
+        const savedTasks = [];
+
+        for (const task of tasksToSave) {
+            const id = task.id || `comp_wo_tas_${uuidv4()}`;
+            const payload = buildJobTaskPayload({ ...task, id });
+
+            await setDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks", id), payload);
+            savedTasks.push(payload);
+        }
+
+        if (!savedTasks.length) return [];
+
+        setTaskList((prev) => [...prev, ...savedTasks]);
+
+        if (selectAfterSave) {
+            setSelectedTasks((prev) => {
+                const existingIds = new Set(prev.map((task) => task.id));
+                return [
+                    ...prev,
+                    ...savedTasks.filter((task) => !existingIds.has(task.id)),
+                ];
+            });
+        }
+
+        return savedTasks;
+    };
+
+    const addInlineTask = async () => {
+        try {
+            if (!recentlySelectedCompany || !jobId) return;
+            if (!taskDescription.trim()) return toast.error("Add a task description.");
+            if (!selectedTaskType?.value && !selectedTaskType?.name) return toast.error("Pick a task type.");
+
+            setAddingTask(true);
+
+            const savedTasks = await saveJobTasks([
+                {
+                    id: `comp_wo_tas_${uuidv4()}`,
+                    name: taskDescription.trim(),
+                    description: taskDescription.trim(),
+                    typeId: selectedTaskType.id || "",
+                    type: selectedTaskType.value || selectedTaskType.name,
+                    contractedRate: dollarsToCents(taskLaborCost),
+                    estimatedTime: Number(taskEstimatedTime || 0),
+                    status: "Unassigned",
+                },
+            ]);
+
+            if (savedTasks.length) {
+                toast.success("Task added and selected.");
+                setTaskDescription("");
+                setSelectedTaskType(null);
+                setTaskLaborCost("");
+                setTaskEstimatedTime("");
+            }
+        } catch (error) {
+            console.error("Error adding task from service stop:", error);
+            toast.error("Failed to add task.");
+        } finally {
+            setAddingTask(false);
+        }
+    };
+
+    const getTaskGroupTasks = async (taskGroup) => {
+        const taskCollections = taskGroup?.sourcePath === "legacy"
+            ? [
+                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
+                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
+            ]
+            : [
+                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups", taskGroup.id, "tasks"),
+                collection(db, "companies", recentlySelectedCompany, "settings", "taskGroup", "taskGroup", taskGroup.id, "taskItems"),
+            ];
+
+        for (const taskCollection of taskCollections) {
+            const snapshot = await getDocs(taskCollection);
+            if (snapshot.docs.length) {
+                return snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+            }
+        }
+
+        return [];
+    };
+
+    const applyTaskGroupToJob = async (taskGroup) => {
+        setSelectedTaskGroup(taskGroup || null);
+        if (!taskGroup || !recentlySelectedCompany || !jobId) return;
+
+        try {
+            setApplyingTaskGroup(true);
+
+            const groupTasks = await getTaskGroupTasks(taskGroup);
+            if (!groupTasks.length) {
+                toast.error("This task group does not have any tasks.");
+                return;
+            }
+
+            const tasksToSave = groupTasks.map((task) => ({
+                ...task,
+                id: `comp_wo_tas_${uuidv4()}`,
+                status: "Unassigned",
+                workerId: "",
+                workerType: "Not Assigned",
+                workerName: "",
+                serviceStopId: {
+                    id: "",
+                    internalId: "",
+                },
+            }));
+
+            const savedTasks = await saveJobTasks(tasksToSave);
+            toast.success(`${savedTasks.length} task${savedTasks.length === 1 ? "" : "s"} added and selected.`);
+        } catch (error) {
+            console.error("Error applying task group from service stop:", error);
+            toast.error("Failed to apply task group.");
+        } finally {
+            setApplyingTaskGroup(false);
+        }
     };
 
     const createServiceStop = async () => {
@@ -393,6 +603,7 @@ const CreateNewServiceStop = () => {
             type: resolvedTypeFields.type,
             typeId: resolvedTypeFields.typeId,
             typeImage: resolvedTypeFields.typeImage,
+            category: resolvedTypeFields.category,
             serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
             duration: estimatedDuration || 15
 
@@ -473,7 +684,29 @@ const CreateNewServiceStop = () => {
         switch (activeTab) {
             case 'site-info': return <SiteInfoTab job={job} location={serviceLocation} description={description} setDescription={setDescription} plannedServiceStops={plannedServiceStops} selectedPlannedStop={selectedPlannedStop} setSelectedPlannedStop={setSelectedPlannedStop} taskList={taskList} setSelectedTasks={setSelectedTasks} selectedPlannedStopPayRange={selectedPlannedStopPayRange} moneyFromCents={moneyFromCents} serviceStopTypeOptions={serviceStopTypeOptions} selectedServiceStopType={selectedServiceStopType} selectedManualServiceStopType={selectedManualServiceStopType} setSelectedManualServiceStopType={setSelectedManualServiceStopType} />;
             case 'assign-tech': return <AssignTechTab users={userList} selectedUser={selectedUser} setSelectedUser={setSelectedUser} date={serviceDate} setDate={setServiceDate} workTypeOptions={workTypeOptions} selectedPayWorkType={selectedPayWorkType} setSelectedPayWorkType={setSelectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
-            case 'select-tasks': return <TasksTab tasks={taskList} selectedTasks={selectedTasks} toggleTask={toggleTaskSelection} estimatedDuration={estimatedDuration} />;
+            case 'select-tasks': return (
+                <TasksTab
+                    tasks={taskList}
+                    selectedTasks={selectedTasks}
+                    toggleTask={toggleTaskSelection}
+                    estimatedDuration={estimatedDuration}
+                    taskTypeList={taskTypeList}
+                    selectedTaskType={selectedTaskType}
+                    setSelectedTaskType={setSelectedTaskType}
+                    taskDescription={taskDescription}
+                    setTaskDescription={setTaskDescription}
+                    taskLaborCost={taskLaborCost}
+                    setTaskLaborCost={setTaskLaborCost}
+                    taskEstimatedTime={taskEstimatedTime}
+                    setTaskEstimatedTime={setTaskEstimatedTime}
+                    addInlineTask={addInlineTask}
+                    addingTask={addingTask}
+                    taskGroupList={taskGroupList}
+                    selectedTaskGroup={selectedTaskGroup}
+                    applyTaskGroupToJob={applyTaskGroupToJob}
+                    applyingTaskGroup={applyingTaskGroup}
+                />
+            );
             case 'review': return <ReviewTab job={job} location={serviceLocation} tech={selectedUser?.userName} date={serviceDate} tasks={selectedTasks} duration={estimatedDuration} selectedServiceStopType={selectedServiceStopType} selectedPayWorkType={selectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
             default: return null;
         }
@@ -716,38 +949,199 @@ const AssignTechTab = ({
     </div>
 );
 
-const TasksTab = ({ tasks, selectedTasks, toggleTask, estimatedDuration }) => (
-    <div>
-        <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xl font-semibold">Select Tasks for this Stop</h3>
-            <p className="text-gray-600">Total Estimated Duration: <strong>{estimatedDuration} mins</strong></p>
+const TasksTab = ({
+    tasks,
+    selectedTasks,
+    toggleTask,
+    estimatedDuration,
+    taskTypeList,
+    selectedTaskType,
+    setSelectedTaskType,
+    taskDescription,
+    setTaskDescription,
+    taskLaborCost,
+    setTaskLaborCost,
+    taskEstimatedTime,
+    setTaskEstimatedTime,
+    addInlineTask,
+    addingTask,
+    taskGroupList,
+    selectedTaskGroup,
+    applyTaskGroupToJob,
+    applyingTaskGroup,
+}) => {
+    const [showAllTasks, setShowAllTasks] = useState(false);
+    const visibleTasks = showAllTasks ? tasks : tasks.slice(0, 5);
+    const hiddenTaskCount = Math.max(tasks.length - 5, 0);
+
+    return (
+        <div className="space-y-4">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h3 className="text-xl font-semibold">Select Tasks for this Stop</h3>
+                    <p className="mt-1 text-sm text-gray-600">
+                        Add tasks here without leaving the service stop workflow.
+                    </p>
+                </div>
+                <div className="flex flex-wrap gap-2 text-xs font-semibold">
+                    <span className="rounded-full bg-blue-50 px-3 py-1 text-blue-700">
+                        {selectedTasks.length} selected
+                    </span>
+                    <span className="rounded-full bg-gray-100 px-3 py-1 text-gray-700">
+                        {estimatedDuration} mins
+                    </span>
+                </div>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                <label className="mb-1 block text-sm font-semibold text-gray-700">
+                    Add Task Group
+                </label>
+                <Select
+                    options={taskGroupList}
+                    value={selectedTaskGroup}
+                    onChange={applyTaskGroupToJob}
+                    placeholder={applyingTaskGroup ? "Adding task group..." : "Select a task group to add and select tasks"}
+                    isClearable
+                    isDisabled={applyingTaskGroup}
+                    styles={{ control: (p) => ({ ...p, padding: '0.25rem' }) }}
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                    Selecting a task group adds those tasks to the job and selects them for this service stop.
+                </p>
+            </div>
+
+            <div className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                        <h4 className="font-semibold text-gray-800">Add New Task</h4>
+                        <p className="text-xs text-gray-500">Saved to the job and selected for this stop.</p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(180px,1fr)_120px_120px_auto]">
+                    <input
+                        value={taskDescription}
+                        onChange={(e) => setTaskDescription(e.target.value)}
+                        placeholder="Task description"
+                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
+                    />
+
+                    <Select
+                        options={taskTypeList}
+                        value={selectedTaskType}
+                        onChange={setSelectedTaskType}
+                        placeholder="Task type"
+                        styles={{ control: (p) => ({ ...p, minHeight: 42 }) }}
+                    />
+
+                    <input
+                        value={taskLaborCost}
+                        onChange={(e) => setTaskLaborCost(e.target.value)}
+                        placeholder="Labor $"
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
+                    />
+
+                    <input
+                        value={taskEstimatedTime}
+                        onChange={(e) => setTaskEstimatedTime(e.target.value)}
+                        placeholder="Mins"
+                        type="number"
+                        min="0"
+                        className="w-full rounded-lg border border-gray-300 p-2.5 text-sm"
+                    />
+
+                    <button
+                        type="button"
+                        onClick={addInlineTask}
+                        disabled={addingTask}
+                        className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        {addingTask ? "Adding..." : "Add & Select"}
+                    </button>
+                </div>
+            </div>
+
+            <div className="overflow-hidden rounded-lg border border-gray-200">
+                <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
+                    <div>
+                        <p className="text-sm font-semibold text-gray-800">Job Tasks</p>
+                        <p className="text-xs text-gray-500">Click a row to include it on this service stop.</p>
+                    </div>
+                    <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-600">
+                        {tasks.length} total
+                    </span>
+                </div>
+
+                <div className="overflow-x-auto">
+                    <table className="min-w-full divide-y divide-gray-200">
+                        <thead className="bg-white">
+                            <tr>
+                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Task</th>
+                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Type</th>
+                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Status</th>
+                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Est. Time</th>
+                                <th className="p-3 text-left text-xs font-medium uppercase text-gray-500">Selected</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {visibleTasks.map((task) => {
+                                const selected = selectedTasks.some((selectedTask) => selectedTask.id === task.id);
+                                const disabled = task.status === "Scheduled" || task.status === "Finished";
+
+                                return (
+                                    <tr
+                                        key={task.id}
+                                        onClick={() => toggleTask(task)}
+                                        className={[
+                                            disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                                            selected ? "bg-blue-50" : "hover:bg-gray-50",
+                                        ].join(" ")}
+                                    >
+                                        <td className="p-3 font-medium text-gray-900">{task.name}</td>
+                                        <td className="p-3 text-sm text-gray-700">{task.type || "—"}</td>
+                                        <td className="p-3 whitespace-nowrap">
+                                            <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-800">
+                                                {task.status || "—"}
+                                            </span>
+                                        </td>
+                                        <td className="p-3 text-sm text-gray-700">{task.estimatedTime || 0} mins</td>
+                                        <td className="p-3 text-sm font-semibold text-gray-700">
+                                            {selected ? "Yes" : "No"}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+
+                            {!tasks.length && (
+                                <tr>
+                                    <td colSpan={5} className="p-6 text-center text-sm text-gray-500">
+                                        No tasks on this job yet. Add one above or select a task group.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+
+                {hiddenTaskCount > 0 && (
+                    <div className="border-t border-gray-200 bg-white px-4 py-3 text-center">
+                        <button
+                            type="button"
+                            onClick={() => setShowAllTasks((prev) => !prev)}
+                            className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                        >
+                            {showAllTasks ? "Show first 5 tasks" : `Show ${hiddenTaskCount} more task${hiddenTaskCount === 1 ? "" : "s"}`}
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
-        <div className="border rounded-lg overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                    <tr>
-                        <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                        <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                        <th className="p-3 text-left text-xs font-medium text-gray-500 uppercase">Est. Time</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {tasks.map(task => (
-                        <tr key={task.id} onClick={() => toggleTask(task)} className={`cursor-pointer ${selectedTasks.find(t => t.id === task.id) ? 'bg-blue-50' : 'hover:bg-gray-50'}`}>
-                            <td className="p-3 font-medium">{task.name}</td>
-                            <td className="p-4 whitespace-nowrap">
-                                <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-800">
-                                    {task.status || "—"}
-                                </span>
-                            </td>
-                            <td className="p-3">{task.estimatedTime} mins</td>
-                        </tr>
-                    ))}
-                </tbody>
-            </table>
-        </div>
-    </div>
-);
+    );
+};
 
 const ReviewTab = ({ job, location, tech, date, tasks, duration, selectedServiceStopType, selectedPayWorkType, selectedPaySummary, moneyFromCents }) => (
     <div className="space-y-4">

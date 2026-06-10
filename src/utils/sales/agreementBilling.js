@@ -1,6 +1,8 @@
 import { doc, runTransaction, serverTimestamp } from 'firebase/firestore';
 import {
+  SalesAutopayStatus,
   SalesBillingMode,
+  SalesBillingCollectionMethod,
   SalesBillingSubscriptionStatus,
   salesCollectionNames,
 } from '../models/Sales';
@@ -70,10 +72,13 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     stripeLatestInvoiceId: '',
     stripeDefaultPaymentMethodId: '',
     billingMode: SalesBillingMode.connectedAccountDirectCharge,
+    billingCollectionMethod: SalesBillingCollectionMethod.manualUntilAutopay,
     status: canStartStripeCheckout
       ? SalesBillingSubscriptionStatus.pendingPaymentMethod
       : SalesBillingSubscriptionStatus.notStarted,
     stripeStatus: '',
+    autopayStatus: canStartStripeCheckout ? SalesAutopayStatus.available : SalesAutopayStatus.unavailable,
+    autopayEnabled: false,
     amountCents: Number(agreement.totalAmountCents || agreement.rateAmountCents || 0),
     currency: agreement.currency || 'usd',
     interval: cadenceToStripeInterval(agreement.serviceCadence, agreement.rateType),
@@ -102,6 +107,12 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     checkoutStatus: 'notStarted',
     nextAction: canStartStripeCheckout ? 'collectPaymentMethod' : 'connectStripeAccount',
     customerCanPayImmediately: canStartStripeCheckout,
+    manualBillingEnabled: true,
+    manualBillingStatus: 'readyToInvoice',
+    manualBillingReason: canStartStripeCheckout ? 'autopayNotSetup' : 'stripeUnavailable',
+    receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod || 'email',
+    receiptsEnabled: agreement.receiptsEnabled !== false,
+    lastBillingSource: '',
     stripeReadiness: {
       canStartStripeCheckout,
       hasConnectedAccount: Boolean(stripeConnectedAccountId),
@@ -136,6 +147,9 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
+    const existingStatusKey = normalizeStatus(existingSubscription?.stripeStatus || existingSubscription?.status);
+    const existingAutopayActive = hasStripeSubscription && ['active', 'trialing'].includes(existingStatusKey);
+    const existingStripeManagedBilling = hasStripeSubscription && ['active', 'trialing', 'pastdue', 'unpaid', 'paused'].includes(existingStatusKey);
     const nextSubscription = {
       ...subscription,
       ...existingSubscription,
@@ -150,8 +164,25 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       agreementId: subscription.agreementId,
       billingProfileId: subscription.billingProfileId,
       stripeConnectedAccountId: subscription.stripeConnectedAccountId,
+      billingCollectionMethod: hasStripeSubscription
+        ? existingSubscription.billingCollectionMethod || (
+          existingStripeManagedBilling ? SalesBillingCollectionMethod.automaticStripe : subscription.billingCollectionMethod
+        )
+        : subscription.billingCollectionMethod,
       status: hasStripeSubscription ? existingSubscription.status : subscription.status,
       stripeStatus: hasStripeSubscription ? existingSubscription.stripeStatus : subscription.stripeStatus,
+      autopayStatus: hasStripeSubscription
+        ? existingSubscription.autopayStatus || (
+          existingAutopayActive
+            ? SalesAutopayStatus.active
+            : existingStatusKey === 'pastdue' || existingStatusKey === 'unpaid'
+              ? SalesAutopayStatus.pastDue
+              : subscription.autopayStatus
+        )
+        : subscription.autopayStatus,
+      autopayEnabled: hasStripeSubscription
+        ? existingAutopayActive || Boolean(existingSubscription.autopayEnabled)
+        : subscription.autopayEnabled,
       amountCents: subscription.amountCents,
       currency: subscription.currency,
       interval: subscription.interval,
@@ -165,6 +196,32 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       checkoutStatus: hasStripeSubscription ? existingSubscription.checkoutStatus : subscription.checkoutStatus,
       nextAction: hasStripeSubscription ? existingSubscription.nextAction : subscription.nextAction,
       customerCanPayImmediately: hasStripeSubscription ? existingSubscription.customerCanPayImmediately : subscription.customerCanPayImmediately,
+      manualBillingEnabled: hasStripeSubscription
+        ? existingSubscription.manualBillingEnabled !== undefined
+          ? existingSubscription.manualBillingEnabled !== false
+          : !existingStripeManagedBilling
+        : subscription.manualBillingEnabled,
+      manualBillingStatus: hasStripeSubscription
+        ? existingSubscription.manualBillingStatus || (
+          existingAutopayActive
+            ? 'disabledAutopayActive'
+            : existingStripeManagedBilling
+              ? 'disabledStripeBillingActive'
+              : subscription.manualBillingStatus
+        )
+        : subscription.manualBillingStatus,
+      manualBillingReason: hasStripeSubscription
+        ? existingSubscription.manualBillingReason || (
+          existingAutopayActive
+            ? 'stripeAutopayActive'
+            : existingStripeManagedBilling
+              ? 'stripeAutopayNeedsAttention'
+              : subscription.manualBillingReason
+        )
+        : subscription.manualBillingReason,
+      receiptDeliveryMethod: existingSubscription?.receiptDeliveryMethod || subscription.receiptDeliveryMethod,
+      receiptsEnabled: existingSubscription?.receiptsEnabled !== false && subscription.receiptsEnabled !== false,
+      lastBillingSource: existingSubscription?.lastBillingSource || subscription.lastBillingSource,
       stripeReadiness: subscription.stripeReadiness,
       createdAt: existingSubscription?.createdAt || serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -185,6 +242,9 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: serverTimestamp(),
+      billingCollectionMethod: nextSubscription.billingCollectionMethod,
+      autopayStatus: nextSubscription.autopayStatus,
+      manualBillingEnabled: nextSubscription.manualBillingEnabled,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       ...operationsSetupUpdates,
       updatedAt: serverTimestamp(),
@@ -195,6 +255,9 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
         billingSubscriptionId: subscription.id,
         billingFlowStatus: nextSubscription.status,
         billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
       },
     });
   });

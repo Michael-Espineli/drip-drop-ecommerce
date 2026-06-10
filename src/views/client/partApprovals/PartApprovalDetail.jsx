@@ -167,9 +167,9 @@ const PartApprovalDetail = () => {
   if (error || !approval) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
-        <Link to="/client/part-approvals" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+        <Link to="/client/finance" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
           <ArrowLeftIcon className="h-4 w-4" />
-          Part Approvals
+          Finance
         </Link>
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-5 text-sm text-rose-700">
           {error || 'Part approval was not found.'}
@@ -182,9 +182,9 @@ const PartApprovalDetail = () => {
     <div className="min-h-screen bg-slate-50 px-3 py-6 text-slate-900 sm:px-4 lg:px-6">
       <div className="mx-auto w-full max-w-5xl space-y-6">
         <section>
-          <Link to="/client/part-approvals" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+          <Link to="/client/finance" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
-            Part Approvals
+            Finance
           </Link>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>

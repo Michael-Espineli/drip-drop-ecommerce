@@ -86,7 +86,7 @@ const Chat = () => {
                         className="flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg shadow-md hover:bg-blue-700 transition-colors"
                     >
                         <PlusIcon className="w-6 h-6" />
-                        <span>New Chat</span>
+                        <span>Start a new chat</span>
                     </button>
                 </div>
 

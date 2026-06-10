@@ -132,6 +132,7 @@ const RouteBuilder = () => {
       type: resolvedTypeFields.type,
       typeId: resolvedTypeFields.typeId,
       typeImage: resolvedTypeFields.typeImage,
+      category: resolvedTypeFields.category,
       serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
     };
   };
@@ -285,6 +286,7 @@ const RouteBuilder = () => {
       type: resolvedTypeFields.type,
       typeId: resolvedTypeFields.typeId,
       typeImage: resolvedTypeFields.typeImage,
+      category: resolvedTypeFields.category,
       serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
       customerName: stop.customerName,
       customerId: stop.customerId,
@@ -326,6 +328,7 @@ const RouteBuilder = () => {
             type: resolvedTypeFields.type,
             typeId: resolvedTypeFields.typeId,
             typeImage: resolvedTypeFields.typeImage,
+            category: resolvedTypeFields.category,
             serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
             day: selectedDay.value,
             tech: selectedTechnician.label,
@@ -350,6 +353,7 @@ const RouteBuilder = () => {
       type: resolvedTypeFields.type,
       typeId: resolvedTypeFields.typeId,
       typeImage: resolvedTypeFields.typeImage,
+      category: resolvedTypeFields.category,
       serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
     };
   };

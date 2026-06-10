@@ -17,12 +17,20 @@ import { v4 as uuidv4 } from 'uuid';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const DEFAULT_EQUIPMENT = [
     {
         name: 'Pump 1',
         type: 'Pump',
+        category: 'Pump',
         typeId: 'qr1d9eefis1VNdIyX6Xq',
+        make: '',
+        makeId: '',
+        model: '',
+        modelId: '',
+        universalEquipmentId: '',
+        manualPdfLink: '',
         needsService: false,
         serviceFrequency: '',
         serviceFrequencyEvery: '',
@@ -30,7 +38,14 @@ const DEFAULT_EQUIPMENT = [
     {
         name: 'Filter 1',
         type: 'Filter',
+        category: 'Filter',
         typeId: 'BYpNgrzHyVjIMQFAiFyO',
+        make: '',
+        makeId: '',
+        model: '',
+        modelId: '',
+        universalEquipmentId: '',
+        manualPdfLink: '',
         needsService: true,
         serviceFrequency: 6,
         serviceFrequencyEvery: 'Month',
@@ -68,6 +83,7 @@ const CreateBodyOfWater = () => {
     const [lastFilled, setLastFilled] = useState(new Date().toISOString().split('T')[0]);
     const [notes, setNotes] = useState('');
     const [createDefaultEquipment, setCreateDefaultEquipment] = useState(true);
+    const [defaultEquipment, setDefaultEquipment] = useState(DEFAULT_EQUIPMENT);
     const [loading, setLoading] = useState(false);
     const [contextLoading, setContextLoading] = useState(true);
 
@@ -194,7 +210,7 @@ const CreateBodyOfWater = () => {
             });
 
             if (createDefaultEquipment) {
-                await Promise.all(DEFAULT_EQUIPMENT.map((equipment) => {
+                await Promise.all(defaultEquipment.map((equipment) => {
                     const equipmentId = `com_equ_${uuidv4()}`;
                     return setDoc(
                         doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId),
@@ -203,12 +219,12 @@ const CreateBodyOfWater = () => {
                             name: equipment.name,
                             type: equipment.type,
                             typeId: equipment.typeId,
-                            make: '',
-                            makeId: '',
-                            model: '',
-                            modelId: '',
-                            universalEquipmentId: '',
-                            manualPdfLink: '',
+                            make: equipment.make || '',
+                            makeId: equipment.makeId || '',
+                            model: equipment.model || '',
+                            modelId: equipment.modelId || equipment.universalEquipmentId || '',
+                            universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
+                            manualPdfLink: equipment.manualPdfLink || '',
                             notes: '',
                             customerId: selectedCustomerId,
                             customerName,
@@ -239,6 +255,12 @@ const CreateBodyOfWater = () => {
         } finally {
             setLoading(false);
         }
+    };
+
+    const updateDefaultEquipmentCatalog = (index, nextEquipment) => {
+        setDefaultEquipment((currentEquipment) => currentEquipment.map((equipment, currentIndex) => (
+            currentIndex === index ? { ...equipment, ...nextEquipment } : equipment
+        )));
     };
 
     return (
@@ -393,8 +415,8 @@ const CreateBodyOfWater = () => {
                             </div>
 
                             <div className="space-y-3">
-                                {DEFAULT_EQUIPMENT.map((equipment) => (
-                                    <div key={equipment.type} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                {defaultEquipment.map((equipment, index) => (
+                                    <div key={`${equipment.type}-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
                                                 <p className="font-semibold text-slate-900">{equipment.name}</p>
@@ -403,6 +425,15 @@ const CreateBodyOfWater = () => {
                                             <span className="rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
                                                 Operational
                                             </span>
+                                        </div>
+                                        <div className="mt-3">
+                                            <EquipmentCatalogPicker
+                                                value={equipment}
+                                                onChange={(nextEquipment) => updateDefaultEquipmentCatalog(index, nextEquipment)}
+                                                inputClassName={inputClass}
+                                                labelClassName="block text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1"
+                                                gridClassName="grid gap-3"
+                                            />
                                         </div>
                                         {equipment.needsService && (
                                             <p className="mt-3 text-sm text-slate-500">

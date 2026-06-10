@@ -1,12 +1,13 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { collection, query, where, getDocs, setDoc, doc, getDoc } from 'firebase/firestore';
+import { collection, query, getDocs, setDoc, doc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import { toast } from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
 const nextServiceDate = (date, amount, unit) => {
     const next = new Date(date);
@@ -92,10 +93,6 @@ const CreateNewServiceLocation = () => {
         { id: uuidv4(), name: 'Filter 1', category: 'Filter', typeId: 'BYpNgrzHyVjIMQFAiFyO', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: true, serviceFrequency: 6, serviceFrequencyEvery: 'Month' }
     ]);
 
-    const [equipmentTypes, setEquipmentTypes] = useState([]);
-    const [equipmentMakes, setEquipmentMakes] = useState([]);
-    const [equipmentModels, setEquipmentModels] = useState([]);
-
     // Fetch customers for the dropdown
     useEffect(() => {
         const fetchCustomers = async () => {
@@ -110,16 +107,6 @@ const CreateNewServiceLocation = () => {
         };
         fetchCustomers();
     }, [recentlySelectedCompany, customerId]);
-
-    // Fetch universal equipment types
-    useEffect(() => {
-        const fetchEquipmentTypes = async () => {
-            const q = query(collection(db, 'universal', 'equipment', 'equipmentTypes'));
-            const snap = await getDocs(q);
-            setEquipmentTypes(snap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-        };
-        fetchEquipmentTypes();
-    }, []);
 
     useEffect(() => {
         const fetchCustomerContacts = async () => {
@@ -243,8 +230,8 @@ const CreateNewServiceLocation = () => {
                          makeId: eq.makeId || '',
                          model: eq.model || '',
                          modelId: eq.modelId || '',
-                         universalEquipmentId: eq.modelId || '',
-                         manualPdfLink: '',
+                         universalEquipmentId: eq.universalEquipmentId || eq.modelId || '',
+                         manualPdfLink: eq.manualPdfLink || '',
                          customerId: selectedCustomer,
                          serviceLocationId,
                          bodyOfWaterId: createdBodyOfWaterIds[0] || '',
@@ -311,6 +298,11 @@ const CreateNewServiceLocation = () => {
 
     const addEquipment = () => {
         setEquipment([...equipment, { id: uuidv4(), name: '', category: '', typeId: '', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, serviceFrequency: '', serviceFrequencyEvery: '' }]);
+    };
+    const updateEquipmentCatalog = (index, nextEquipment) => {
+        const next = [...equipment];
+        next[index] = nextEquipment;
+        setEquipment(next);
     };
     const inputClasses = "w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm";
 
@@ -397,16 +389,22 @@ const CreateNewServiceLocation = () => {
                         {equipment.map((eq, index) => (
                             <div key={eq.id} className="p-4 border rounded-lg mt-4 space-y-3 bg-gray-50">
                                 <FormInput label="Name" value={eq.name} onChange={e => { const next = [...equipment]; next[index].name = e.target.value; setEquipment(next); }} />
-                                <FormSelect label="Category" value={eq.category} onChange={e => {
-                                    const selectedType = equipmentTypes.find(type => type.name === e.target.value);
-                                    const next = [...equipment];
-                                    next[index].category = e.target.value;
-                                    next[index].typeId = selectedType?.id || '';
-                                    setEquipment(next);
-                                }}>
-                                    <option value="">Select a Category</option>
-                                    {equipmentTypes.map(type => <option key={type.id} value={type.name}>{type.name}</option>)}
-                                </FormSelect>
+                                <EquipmentCatalogPicker
+                                    value={eq}
+                                    onChange={(nextEquipment) => updateEquipmentCatalog(index, nextEquipment)}
+                                    onModelSelected={(selectedModel) => {
+                                        if (!eq.name?.trim()) {
+                                            updateEquipmentCatalog(index, {
+                                                ...eq,
+                                                model: selectedModel.model || selectedModel.name || '',
+                                                modelId: selectedModel.id || '',
+                                                universalEquipmentId: selectedModel.id || '',
+                                                manualPdfLink: selectedModel.manualPdfLink || '',
+                                                name: selectedModel.name || selectedModel.model || '',
+                                            });
+                                        }
+                                    }}
+                                />
                                 <FormTextarea label="Notes" value={eq.notes} onChange={e => { const next = [...equipment]; next[index].notes = e.target.value; setEquipment(next); }} />
                                 <label className="flex items-center"><input type="checkbox" name="needsService" checked={eq.needsService} onChange={e => { const next = [...equipment]; next[index].needsService = e.target.checked; setEquipment(next); }} className="mr-2 h-4 w-4" />Needs Service</label>
                                 {eq.needsService && (

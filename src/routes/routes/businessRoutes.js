@@ -79,19 +79,22 @@ export const businessRoutes = [
         path: 'companies-chat',
         element: <CompanyChat />,
         role: 'company',
-        name: 'Company Chat'
+        name: 'Company Chat',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path: '/companies-chat/detail/:chatId',
         element: <CompanyConversation />,
         role: 'company',
-        name: 'Company Conversation'
+        name: 'Company Conversation',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path: '/company/chat/initiate/:participantId',
         element: <ChatInitiation />,
         role: 'company',
-        name: 'Company Conversation'
+        name: 'Company Conversation',
+        featureFlagId: 'feature_flag_001',
     },
     {
         path: '/companies-detail/:id',
