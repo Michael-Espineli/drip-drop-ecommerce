@@ -182,21 +182,21 @@ export default function Subscriptions() {
     };
     
     return (
-        <div className='px-4 md:px-8 py-10 bg-gray-900 text-white min-h-screen'>
+        <div className='min-h-screen bg-page px-4 py-10 text-theme md:px-8'>
             <div className="max-w-4xl mx-auto">
-                <h1 className="text-4xl font-bold mb-8 text-center">Manage Subscription</h1>
+                <h1 className="mb-8 text-center text-4xl font-bold text-slate-950">Manage Subscription</h1>
 
-                {loading && <p className="text-center">Loading subscription...</p>}
+                {loading && <p className="text-center text-slate-600">Loading subscription...</p>}
                 {error && <p className="text-center text-red-500">{error}</p>}
 
                 {!loading && !error && (
                     <>
-                        <div className="bg-gray-800 p-8 rounded-xl shadow-2xl mb-10">
+                        <div className="mb-10 rounded-lg border border-slate-200 bg-white p-8 shadow-sm">
                             {activeSubscription ? (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
                                     <div>
-                                        <h2 className="text-lg font-semibold text-gray-400">Current Plan</h2>
-                                        <p className="text-3xl font-bold text-white mt-1">{activeSubscription.name}</p>
+                                        <h2 className="text-lg font-semibold text-slate-500">Current Plan</h2>
+                                        <p className="mt-1 text-3xl font-bold text-slate-950">{activeSubscription.name}</p>
                                         <p className="text-lg font-semibold capitalize mt-1 text-yellow-400">{activeSubscription.status.replace('_', ' ')}</p>
                                         {activeSubscription.status === 'pending_cancellation' && activeSubscription.cancel_at && (
                                             <p className="text-yellow-400 text-sm mt-1">
@@ -205,16 +205,16 @@ export default function Subscriptions() {
                                         )}
                                     </div>
                                     <div>
-                                        <p className="text-gray-400">Started on: <span className="font-semibold text-white">{activeSubscription.started}</span></p>
-                                        <p className="text-gray-400">Price: <span className="font-semibold text-white">{formatCurrency(activeSubscription.price)}/month</span></p>
+                                        <p className="text-slate-500">Started on: <span className="font-semibold text-slate-950">{activeSubscription.started}</span></p>
+                                        <p className="text-slate-500">Price: <span className="font-semibold text-slate-950">{formatCurrency(activeSubscription.price)}/month</span></p>
                                         {upcomingInvoice && (
                                             <>
-                                                <p className="text-gray-400 mt-2">Next billing date: <span className="font-semibold text-white">{format(new Date(upcomingInvoice.next_payment_attempt * 1000), 'MMMM d, yyyy')}</span></p>
-                                                <p className="text-gray-400">Next charge: <span className="font-semibold text-white">{formatCurrency(upcomingInvoice.amount_due, upcomingInvoice.currency)}</span></p>
+                                                <p className="mt-2 text-slate-500">Next billing date: <span className="font-semibold text-slate-950">{format(new Date(upcomingInvoice.next_payment_attempt * 1000), 'MMMM d, yyyy')}</span></p>
+                                                <p className="text-slate-500">Next charge: <span className="font-semibold text-slate-950">{formatCurrency(upcomingInvoice.amount_due, upcomingInvoice.currency)}</span></p>
                                             </>
                                         )}
                                     </div>
-                                    <div className="md:col-span-2 mt-6 pt-6 border-t border-gray-700 space-y-4">
+                                    <div className="md:col-span-2 mt-6 pt-6 border-t border-slate-200 space-y-4">
                                         {activeSubscription.stripeSubscriptionId && (
                                             <button
                                                 onClick={handleRedirectToPortal}
@@ -229,7 +229,7 @@ export default function Subscriptions() {
                                                 Change Plan
                                             </button>
                                             {activeSubscription.stripeSubscriptionId && activeSubscription.status !== 'pending_cancellation' && (
-                                                <button onClick={handleCancelSubscription} className='w-full bg-gray-600 hover:bg-red-700 text-white font-bold py-2 px-5 rounded-lg transition duration-300'>
+                                                <button onClick={handleCancelSubscription} className='w-full bg-slate-600 hover:bg-red-700 text-white font-bold py-2 px-5 rounded-lg transition duration-300'>
                                                     Cancel
                                                 </button>
                                             )}
@@ -238,8 +238,8 @@ export default function Subscriptions() {
                                 </div>
                             ) : (
                                 <div className="text-center">
-                                    <h2 className="text-2xl font-bold mb-4">No Active Subscription</h2>
-                                    <p className="text-gray-400 mb-6">You are currently on the Free plan.</p>
+                                    <h2 className="mb-4 text-2xl font-bold text-slate-950">No Active Subscription</h2>
+                                    <p className="mb-6 text-slate-500">You are currently on the Free plan.</p>
                                     <Link to="/company/settings/subscriptions/picker" className='bg-green-500 hover:bg-green-600 text-white font-bold py-3 px-8 rounded-lg text-lg'>
                                         View Plans & Upgrade
                                     </Link>
@@ -249,22 +249,22 @@ export default function Subscriptions() {
 
                         {activeSubscription?.stripeSubscriptionId && (
                             <div>
-                                <h3 className="text-3xl font-bold mb-6 text-center">Recent Payments</h3>
+                                <h3 className="mb-6 text-center text-3xl font-bold text-slate-950">Recent Payments</h3>
                                 {loadingHistory ? (
-                                    <p className="text-center">Loading payment history...</p>
+                                    <p className="text-center text-slate-600">Loading payment history...</p>
                                 ) : paymentHistory.length > 0 ? (
-                                    <div className="bg-gray-800 rounded-xl shadow-2xl overflow-hidden">
-                                        <ul className="divide-y divide-gray-700">
+                                    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                                        <ul className="divide-y divide-slate-200">
                                             {paymentHistory.map(invoice => (
-                                                <li key={invoice.id} className="p-5 flex justify-between items-center hover:bg-gray-700/50 transition duration-200">
+                                                <li key={invoice.id} className="flex items-center justify-between p-5 transition duration-200 hover:bg-slate-50">
                                                     <div>
-                                                        <p className="font-bold text-white">{format(new Date(invoice.created * 1000), 'MMMM d, yyyy')}</p>
+                                                        <p className="font-bold text-slate-950">{format(new Date(invoice.created * 1000), 'MMMM d, yyyy')}</p>
                                                         <p className={`text-sm font-semibold ${invoice.paid ? 'text-green-400' : 'text-red-400'}`}>
                                                             {invoice.status.charAt(0).toUpperCase() + invoice.status.slice(1)}
                                                         </p>
                                                     </div>
                                                     <div className='text-right'>
-                                                        <p className="font-bold text-lg text-white">{formatCurrency(invoice.amount_paid, invoice.currency)}</p>
+                                                        <p className="text-lg font-bold text-slate-950">{formatCurrency(invoice.amount_paid, invoice.currency)}</p>
                                                         {invoice.hosted_invoice_url &&
                                                             <a href={invoice.hosted_invoice_url} target="_blank" rel="noopener noreferrer" className="text-sm text-yellow-500 hover:text-yellow-400 transition duration-200">
                                                                 View Invoice
@@ -276,7 +276,7 @@ export default function Subscriptions() {
                                         </ul>
                                     </div>
                                 ) : (
-                                    <div className="text-center bg-gray-800 p-8 rounded-xl shadow-inner">
+                                    <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-600 shadow-sm">
                                         <p>No payment history found.</p>
                                      </div>
                                 )}

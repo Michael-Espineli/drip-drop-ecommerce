@@ -41,6 +41,7 @@ const routePermissionRules = [
   [/^\/company\/associatedbusiness/i, "260"],
 
   [/^\/company\/payroll/i, "400"],
+  [/^\/company\/accounting/i, "400"],
   [/^\/company\/sales/i, "400"],
   [/^\/company\/purchased-items/i, "400"],
   [/^\/company\/purchaseditems/i, "400"],

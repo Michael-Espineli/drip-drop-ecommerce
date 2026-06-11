@@ -237,6 +237,8 @@ const ServiceStopDetails = () => {
     const [savingEdit, setSavingEdit] = useState(false);
     const [showManualStopData, setShowManualStopData] = useState(false);
     const [finishingStop, setFinishingStop] = useState(false);
+    const [showFinishConfirm, setShowFinishConfirm] = useState(false);
+    const [manualFinishTaskIds, setManualFinishTaskIds] = useState([]);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
 
@@ -760,7 +762,12 @@ const ServiceStopDetails = () => {
         }
     };
 
-    const finishServiceStopManually = async () => {
+    const unfinishedManualFinishTasks = taskList.filter((task) => task.status !== "Finished");
+    const selectedManualFinishTaskCount = manualFinishTaskIds.filter((taskId) =>
+        unfinishedManualFinishTasks.some((task) => task.id === taskId)
+    ).length;
+
+    const openManualFinishConfirm = () => {
         if (!requirePermission("244", "update service stops")) return;
         if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
 
@@ -769,15 +776,36 @@ const ServiceStopDetails = () => {
             return;
         }
 
-        const unfinishedTasks = taskList.filter((task) => task.status !== "Finished");
-        const confirmMessage = unfinishedTasks.length
-            ? `Finish this service stop and mark ${unfinishedTasks.length} unfinished task(s) as finished?`
-            : "Finish this service stop manually?";
+        setManualFinishTaskIds(unfinishedManualFinishTasks.map((task) => task.id));
+        setShowFinishConfirm(true);
+    };
 
-        if (!window.confirm(confirmMessage)) return;
+    const closeManualFinishConfirm = () => {
+        if (finishingStop) return;
+        setShowFinishConfirm(false);
+        setManualFinishTaskIds([]);
+    };
 
+    const toggleManualFinishTask = (taskId) => {
+        setManualFinishTaskIds((currentIds) => (
+            currentIds.includes(taskId)
+                ? currentIds.filter((id) => id !== taskId)
+                : [...currentIds, taskId]
+        ));
+    };
+
+    const setAllManualFinishTasks = (checked) => {
+        setManualFinishTaskIds(checked ? unfinishedManualFinishTasks.map((task) => task.id) : []);
+    };
+
+    const finishServiceStopManually = async () => {
+        if (!requirePermission("244", "update service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) return;
+
+        const selectedTaskIdSet = new Set(manualFinishTaskIds);
+        const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
         const taskPlans = [];
-        for (const task of unfinishedTasks) {
+        for (const task of tasksToFinish) {
             const installDetails = promptForReplacementInstallDetails(task);
             if (installDetails === null) {
                 toast.error("Replacement install details are required before finishing this service stop");
@@ -877,6 +905,8 @@ const ServiceStopDetails = () => {
 
             setServiceStop(nextStop);
             setTaskList(nextTasks);
+            setShowFinishConfirm(false);
+            setManualFinishTaskIds([]);
             await syncActiveRouteForServiceStops({
                 date: nextStop.serviceDate,
                 techId: nextStop.techId,
@@ -1680,7 +1710,7 @@ const ServiceStopDetails = () => {
                                             {can("244") && (
                                                 <button
                                                     type="button"
-                                                    onClick={finishServiceStopManually}
+                                                    onClick={openManualFinishConfirm}
                                                     disabled={finishingStop || (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus))}
                                                     className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
@@ -2037,6 +2067,94 @@ const ServiceStopDetails = () => {
                     </div>
                 </div>
             </div>
+            {showFinishConfirm && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                    <div className="w-full max-w-xl rounded-lg bg-white p-5 shadow-2xl">
+                        <h2 className="text-xl font-bold text-slate-950">Finish Service Stop</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            Choose which unfinished tasks should also be marked finished. Any unchecked task will stay unfinished after the stop is finished.
+                        </p>
+
+                        {unfinishedManualFinishTasks.length > 0 ? (
+                            <div className="mt-4 rounded-lg border border-slate-200">
+                                <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
+                                    <label className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedManualFinishTaskCount === unfinishedManualFinishTasks.length}
+                                            onChange={(event) => setAllManualFinishTasks(event.target.checked)}
+                                            disabled={finishingStop}
+                                            className="h-4 w-4 rounded border-slate-300"
+                                        />
+                                        Mark all unfinished tasks finished
+                                    </label>
+                                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                        {selectedManualFinishTaskCount}/{unfinishedManualFinishTasks.length} selected
+                                    </span>
+                                </div>
+
+                                <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+                                    {unfinishedManualFinishTasks.map((task) => {
+                                        const checked = manualFinishTaskIds.includes(task.id);
+
+                                        return (
+                                            <label
+                                                key={task.id}
+                                                className="flex cursor-pointer items-start gap-3 px-4 py-3 transition hover:bg-slate-50"
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={checked}
+                                                    onChange={() => toggleManualFinishTask(task.id)}
+                                                    disabled={finishingStop}
+                                                    className="mt-1 h-4 w-4 rounded border-slate-300"
+                                                />
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="block font-semibold text-slate-900">
+                                                        {task.name || "Unnamed Task"}
+                                                    </span>
+                                                    <span className="mt-1 block text-sm text-slate-500">
+                                                        {[task.type, task.status].filter(Boolean).join(" • ") || "Task"}
+                                                    </span>
+                                                </span>
+                                            </label>
+                                        );
+                                    })}
+                                </div>
+                            </div>
+                        ) : (
+                            <div className="mt-4 rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">
+                                All tasks are already finished. This will only finish the service stop.
+                            </div>
+                        )}
+
+                        {unfinishedManualFinishTasks.length > selectedManualFinishTaskCount && (
+                            <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                                {unfinishedManualFinishTasks.length - selectedManualFinishTaskCount} task(s) will remain unfinished.
+                            </div>
+                        )}
+
+                        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={closeManualFinishConfirm}
+                                disabled={finishingStop}
+                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={finishServiceStopManually}
+                                disabled={finishingStop}
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {finishingStop ? "Finishing..." : "Finish Stop"}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
             {showDeleteConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
                     <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">

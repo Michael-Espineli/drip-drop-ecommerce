@@ -66,6 +66,7 @@ export const allNav = [
     // --- Company Routes ---
     // Main Navigation
     { id: 10, title: 'Dashboard', icon: <BiTachometer />, role: 'Company', path: '/company/dashboard', category: 'NA' },
+    { id: 38, title: 'Todo List', icon: <FaClipboardList />, role: 'Company', path: '/company/todo-list', category: 'NA', featureFlagId: 'feature_flag_010' },
     { id: 80, title: 'Messages', icon: <MdEmail />, role: 'Company', path: '/company/messages', category: 'NA', featureFlagId: 'feature_flag_001' },
     { id: 81, title: 'Setup Guide', icon: <FaClipboardQuestion />, role: 'Company', path: '/company/setup-guide', category: 'NA', permissionId: '800' },
 

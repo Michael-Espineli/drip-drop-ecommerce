@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { collection, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
-import { Link } from "react-router-dom";
+import { collection, doc, getDoc, getDocs, query, runTransaction, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import { Link, useLocation } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
@@ -45,24 +45,6 @@ const serializeForDebug = (value) => {
   return value;
 };
 
-const csvCell = (value) => {
-  const normalized = value === null || value === undefined ? "" : String(value);
-  return `"${normalized.replace(/"/g, '""')}"`;
-};
-
-const downloadCsv = (fileName, rows) => {
-  const csv = rows.map((row) => row.map(csvCell).join(",")).join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
 const statusLabel = (value) =>
   String(value || "unknown")
     .replace(/([a-z])([A-Z])/g, "$1 $2")
@@ -94,10 +76,7 @@ const DetailField = ({ label, value, accent }) => (
 
 const emptyPaymentForm = () => ({
   paidDate: isoDate(new Date()),
-  paymentMode: "manual",
   paymentReference: "",
-  exportBatchId: "",
-  exportProvider: "",
   paidNotes: "",
 });
 
@@ -195,9 +174,19 @@ const rateTypeLabel = (item) => {
   return isMissingRate ? "Missing Rate" : statusLabel(item?.rateType);
 };
 
+const isLineItemPaid = (item) => Boolean(item?.paidAt) || item?.calculationStatus === "paid";
+
+const isLineItemApproved = (item) =>
+  Boolean(item?.approvedAt) || item?.calculationStatus === "approved" || isLineItemPaid(item);
+
+const isLineItemVoided = (item) => Boolean(item?.voidedAt) || item?.calculationStatus === "voided";
+
+const payStatementReference = (statementNumber) => `PS-${String(statementNumber).padStart(6, "0")}`;
+
 const Payroll = ({ mode = "payroll" }) => {
   const isSetupMode = mode === "setup";
   const { recentlySelectedCompany, user } = useContext(Context);
+  const location = useLocation();
   const [startDate, setStartDate] = useState(() => {
     const date = new Date();
     date.setDate(date.getDate() - 30);
@@ -206,7 +195,6 @@ const Payroll = ({ mode = "payroll" }) => {
   const [endDate, setEndDate] = useState(() => isoDate(new Date()));
   const [lineItems, setLineItems] = useState([]);
   const [statements, setStatements] = useState([]);
-  const [payrollBatches, setPayrollBatches] = useState([]);
   const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
   const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
   const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
@@ -214,7 +202,11 @@ const Payroll = ({ mode = "payroll" }) => {
   const [technicianRates, setTechnicianRates] = useState([]);
   const [rateForm, setRateForm] = useState(emptyRateForm);
   const [editingRateId, setEditingRateId] = useState("");
-  const [activeTab, setActiveTab] = useState(isSetupMode ? "overview" : "lineItems");
+  const [activeTab, setActiveTab] = useState(() => {
+    const requestedTab = new URLSearchParams(location.search).get("tab");
+    const payrollTabs = ["lineItems", "statements"];
+    return isSetupMode ? "overview" : payrollTabs.includes(requestedTab) ? requestedTab : "lineItems";
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [actionError, setActionError] = useState("");
@@ -227,17 +219,18 @@ const Payroll = ({ mode = "payroll" }) => {
   useEffect(() => {
     setActiveTab((currentTab) => {
       const setupTabs = ["overview", "stopPay", "rates", "settings"];
-      const payrollTabs = ["lineItems", "statements", "batches"];
+      const payrollTabs = ["lineItems", "statements"];
       const allowedTabs = isSetupMode ? setupTabs : payrollTabs;
+      const requestedTab = new URLSearchParams(location.search).get("tab");
+      if (!isSetupMode && allowedTabs.includes(requestedTab)) return requestedTab;
       return allowedTabs.includes(currentTab) ? currentTab : allowedTabs[0];
     });
-  }, [isSetupMode]);
+  }, [isSetupMode, location.search]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setLineItems([]);
       setStatements([]);
-      setPayrollBatches([]);
       setSettingsForm(defaultPaySettings(""));
       setCompanyServiceStopTypes([]);
       setCompanyWorkTypes([]);
@@ -264,7 +257,6 @@ const Payroll = ({ mode = "payroll" }) => {
         );
 
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
-        const batchesRef = collection(db, "companies", recentlySelectedCompany, "payrollBatches");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
         const serviceStopTypesRef = collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes");
         const workTypesRef = collection(db, "companies", recentlySelectedCompany, "companyWorkTypes");
@@ -274,7 +266,6 @@ const Payroll = ({ mode = "payroll" }) => {
         const [
           lineItemsSnap,
           statementsSnap,
-          batchesSnap,
           settingsSnap,
           serviceStopTypesSnap,
           workTypesSnap,
@@ -283,7 +274,6 @@ const Payroll = ({ mode = "payroll" }) => {
         ] = await Promise.all([
           getDocs(lineItemsQuery),
           getDocs(statementsRef),
-          getDocs(batchesRef),
           getDoc(settingsRef),
           getDocs(serviceStopTypesRef),
           getDocs(workTypesRef),
@@ -305,19 +295,8 @@ const Payroll = ({ mode = "payroll" }) => {
           })
           .sort((a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0));
 
-        const nextBatches = batchesSnap.docs
-          .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-          .filter((batch) => {
-            const batchStart = dateFromValue(batch.startDate);
-            const batchEnd = dateFromValue(batch.endDate);
-            if (!batchStart || !batchEnd) return true;
-            return batchStart <= end && batchEnd >= start;
-          })
-          .sort((a, b) => (dateFromValue(b.createdAt)?.getTime() || 0) - (dateFromValue(a.createdAt)?.getTime() || 0));
-
         setLineItems(nextLineItems);
         setStatements(nextStatements);
-        setPayrollBatches(nextBatches);
         const nextPaySettings = normalizePaySettingsForIos(
           settingsSnap.exists() ? settingsSnap.data() : {},
           recentlySelectedCompany
@@ -355,21 +334,54 @@ const Payroll = ({ mode = "payroll" }) => {
   }, [recentlySelectedCompany, startDate, endDate]);
 
   const summary = useMemo(() => {
-    const activeItems = lineItems.filter((item) => !item.voidedAt);
+    const activeItems = lineItems.filter((item) => !isLineItemVoided(item));
     const totalCents = activeItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
     const needsReview = activeItems.filter((item) => item.calculationStatus === "needsReview").length;
-    const approved = activeItems.filter((item) => item.approvedAt).length;
-    const paid = activeItems.filter((item) => item.paidAt).length;
-    const approvedUnpaidItems = activeItems.filter(
+    const approved = activeItems.filter(isLineItemApproved).length;
+    const paid = activeItems.filter(isLineItemPaid).length;
+    const statementCandidateItems = activeItems.filter(
       (item) =>
-        !item.paidAt &&
-        !item.exportBatchId &&
-        (item.approvedAt || item.calculationStatus === "approved")
+        isLineItemApproved(item) &&
+        !isLineItemPaid(item) &&
+        !item.payStatementId
     );
-    const approvedUnpaidCents = approvedUnpaidItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
+    const statementCandidateCents = statementCandidateItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
 
-    return { activeItems, totalCents, needsReview, approved, paid, approvedUnpaidItems, approvedUnpaidCents };
+    return { activeItems, totalCents, needsReview, approved, paid, statementCandidateItems, statementCandidateCents };
   }, [lineItems]);
+
+  const statementCandidateGroups = useMemo(() => {
+    const groupsByTechnician = new Map();
+
+    summary.statementCandidateItems.forEach((item) => {
+      const technicianId = item.technicianId || "unknown";
+      const existing = groupsByTechnician.get(technicianId) || {
+        technicianId,
+        technicianName: item.technicianName || "Unknown",
+        workerType: item.workerType || "notAssigned",
+        lineItems: [],
+        subtotalCents: 0,
+      };
+
+      existing.lineItems.push(item);
+      existing.subtotalCents += Number(item.totalAmountCents || 0);
+      groupsByTechnician.set(technicianId, existing);
+    });
+
+    return [...groupsByTechnician.values()]
+      .map((group) => ({
+        ...group,
+        lineItems: group.lineItems.sort(
+          (a, b) => (dateFromValue(a.completedDate)?.getTime() || 0) - (dateFromValue(b.completedDate)?.getTime() || 0)
+        ),
+      }))
+      .sort((a, b) => String(a.technicianName || "").localeCompare(String(b.technicianName || "")));
+  }, [summary.statementCandidateItems]);
+
+  const approvableLineItems = useMemo(
+    () => summary.activeItems.filter((item) => !isLineItemApproved(item)),
+    [summary.activeItems]
+  );
 
   const currentUserId = user?.uid || user?.id || "";
 
@@ -402,10 +414,6 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const updateLocalStatement = (id, payload) => {
     setStatements((items) => items.map((item) => (item.id === id ? { ...item, ...payload } : item)));
-  };
-
-  const updateLocalBatch = (payload) => {
-    setPayrollBatches((items) => [payload, ...items.filter((item) => item.id !== payload.id)]);
   };
 
   const workerName = (technicianId) => {
@@ -560,11 +568,6 @@ const Payroll = ({ mode = "payroll" }) => {
     }
   };
 
-  const lineItemsForBatch = (batch) => {
-    const ids = new Set(Array.isArray(batch.lineItemIds) ? batch.lineItemIds : []);
-    return lineItems.filter((item) => ids.has(item.id) || item.exportBatchId === batch.id);
-  };
-
   const buildApprovalPayload = () => ({
     approvedAt: new Date(),
     approvedByUserId: currentUserId,
@@ -572,192 +575,143 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const buildPaymentPayload = () => {
     const paidDate = paymentForm.paidDate || isoDate(new Date());
-    const paymentMode = paymentForm.paymentMode || "manual";
     const paymentReference = paymentForm.paymentReference.trim();
-    const exportBatchId = paymentForm.exportBatchId.trim();
-    const exportProvider = paymentMode === "batch" ? paymentForm.exportProvider.trim() || "batch" : "manual";
-    const externalReferenceId = paymentReference || exportBatchId || null;
     const paidNotes = paymentForm.paidNotes.trim();
 
     return {
       paidAt: new Date(`${paidDate}T12:00:00`),
       paidByUserId: currentUserId,
-      paymentMode,
-      paymentSource: paymentMode,
+      paymentMode: "manual",
+      paymentSource: "manual",
       paymentReference: paymentReference || null,
-      exportBatchId: paymentMode === "batch" ? exportBatchId || null : null,
-      exportProvider,
-      externalReferenceId,
+      externalReferenceId: paymentReference || null,
       paidNotes: paidNotes || null,
     };
   };
 
-  const createPayrollBatch = async () => {
-    if (!recentlySelectedCompany || summary.approvedUnpaidItems.length === 0) return;
-    const actionKey = "create-payroll-batch";
+  const createStatementForGroup = async (group) => {
+    if (!recentlySelectedCompany || !group?.lineItems?.length) return;
+    const actionKey = `create-statement-${group.technicianId}`;
     setSavingAction(actionKey);
     setActionNotice();
 
     try {
-      const now = new Date();
-      const batchId = `payroll_batch_${uuidv4()}`;
-      const batchPayload = {
-        id: batchId,
-        companyId: recentlySelectedCompany,
-        status: "draft",
-        startDate: new Date(`${startDate}T00:00:00`),
-        endDate: new Date(`${endDate}T23:59:59`),
-        lineItemIds: summary.approvedUnpaidItems.map((item) => item.id),
-        lineItemCount: summary.approvedUnpaidItems.length,
-        totalCents: summary.approvedUnpaidCents,
-        paymentMode: "batch",
-        paymentSource: "batch",
-        exportProvider: "pending",
-        externalReferenceId: null,
-        createdAt: now,
-        createdByUserId: currentUserId,
-        updatedAt: now,
-      };
-      const linePayload = {
-        exportBatchId: batchId,
-        paymentMode: "batch",
-        paymentSource: "batch",
-        payrollBatchStatus: "draft",
-        batchedAt: now,
-        batchedByUserId: currentUserId,
-      };
-      const firestoreBatch = writeBatch(db);
-      const batchRef = doc(db, "companies", recentlySelectedCompany, "payrollBatches", batchId);
-      firestoreBatch.set(batchRef, batchPayload);
+      const createdStatement = await runTransaction(db, async (transaction) => {
+        const now = new Date();
+        const settingsRef = doc(db, "companies", recentlySelectedCompany, "settings", "payStatements");
+        const settingsSnap = await transaction.get(settingsRef);
+        const currentIncrement = settingsSnap.exists() ? Number(settingsSnap.data()?.increment || 0) : 0;
+        const statementNumber = currentIncrement + 1;
+        const statementId = `comp_pay_stmt_${uuidv4()}`;
+        const lineItemIds = group.lineItems.map((item) => item.id);
+        const statementPayload = {
+          id: statementId,
+          companyId: recentlySelectedCompany,
+          technicianId: group.technicianId,
+          technicianName: group.technicianName,
+          workerType: group.workerType || "notAssigned",
+          startDate: new Date(`${startDate}T00:00:00`),
+          endDate: new Date(`${endDate}T23:59:59`),
+          lineItemIds,
+          subtotalCents: group.subtotalCents,
+          adjustmentCents: 0,
+          totalCents: group.subtotalCents,
+          status: "draft",
+          createdAt: now,
+          createdByUserId: currentUserId,
+          approvedAt: null,
+          approvedByUserId: null,
+          paidAt: null,
+          paidByUserId: null,
+          exportedAt: null,
+          exportProvider: null,
+          externalReferenceId: null,
+          notes: null,
+          statementNumber,
+          statementReference: payStatementReference(statementNumber),
+          paymentReference: null,
+          paidNotes: null,
+        };
 
-      summary.approvedUnpaidItems.forEach((item) => {
-        const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-        firestoreBatch.update(lineRef, linePayload);
+        transaction.set(settingsRef, { category: "payStatements", increment: statementNumber }, { merge: true });
+        transaction.set(
+          doc(db, "companies", recentlySelectedCompany, "technicianPayStatements", statementId),
+          statementPayload
+        );
+        lineItemIds.forEach((id) => {
+          transaction.update(doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", id), {
+            payStatementId: statementId,
+          });
+        });
+
+        return statementPayload;
       });
 
-      await firestoreBatch.commit();
-      updateLocalBatch(batchPayload);
-      setLineItems((items) =>
-        items.map((item) =>
-          batchPayload.lineItemIds.includes(item.id) ? { ...item, ...linePayload } : item
+      setStatements((items) =>
+        [createdStatement, ...items.filter((statement) => statement.id !== createdStatement.id)].sort(
+          (a, b) => (dateFromValue(b.startDate)?.getTime() || 0) - (dateFromValue(a.startDate)?.getTime() || 0)
         )
       );
-      setActionNotice(`Created payroll batch with ${batchPayload.lineItemCount} line item(s).`);
+      setLineItems((items) =>
+        items.map((item) =>
+          createdStatement.lineItemIds.includes(item.id)
+            ? { ...item, payStatementId: createdStatement.id }
+            : item
+        )
+      );
+      setActionNotice(`Created pay statement ${createdStatement.statementReference} for ${createdStatement.technicianName}.`);
     } catch (err) {
-      console.error("Error creating payroll batch:", err);
-      setActionFailure("Could not create payroll batch.");
+      console.error("Error creating pay statement:", err);
+      setActionFailure("Could not create that pay statement.");
     } finally {
       setSavingAction("");
     }
   };
 
-  const exportPayrollBatchCsv = async (payrollBatch) => {
-    if (!recentlySelectedCompany || !payrollBatch?.id) return;
-    const batchLineItems = lineItemsForBatch(payrollBatch);
-
-    if (batchLineItems.length === 0) {
-      setActionFailure("No loaded line items are linked to this payroll batch.");
+  const createAllCandidateStatements = async () => {
+    if (statementCandidateGroups.length === 0) {
+      setActionFailure("There are no approved line items ready for statements.");
       return;
     }
 
-    const actionKey = `export-payroll-batch-${payrollBatch.id}`;
+    for (const group of statementCandidateGroups) {
+      await createStatementForGroup(group);
+    }
+  };
+
+  const approveAllLineItems = async () => {
+    if (!recentlySelectedCompany) return;
+
+    if (approvableLineItems.length === 0) {
+      setActionFailure("There are no line items ready to approve.");
+      return;
+    }
+
+    const actionKey = "approve-all-lines";
     setSavingAction(actionKey);
     setActionNotice();
 
     try {
-      const now = new Date();
-      const exportReference = `CSV ${now.toLocaleString()}`;
-      const fileName = `payroll_batch_${payrollBatch.id}_${isoDate(now)}.csv`;
-      const rows = [
-        [
-          "batchId",
-          "lineItemId",
-          "companyId",
-          "technicianId",
-          "technicianName",
-          "workerType",
-          "source",
-          "completedDate",
-          "displayTitle",
-          "workTypeName",
-          "rateType",
-          "quantity",
-          "quantityUnit",
-          "rateAmountCents",
-          "totalAmountCents",
-          "calculationStatus",
-          "approvedAt",
-          "paidAt",
-          "customerName",
-          "serviceLocationAddress",
-          "jobId",
-          "jobInternalId",
-        ],
-        ...batchLineItems.map((item) => [
-          payrollBatch.id,
-          item.id,
-          item.companyId || recentlySelectedCompany,
-          item.technicianId || "",
-          item.technicianName || "",
-          item.workerType || "",
-          item.source || "",
-          isoDateTime(item.completedDate),
-          item.displayTitle || "",
-          item.workTypeName || "",
-          item.rateType || "",
-          item.quantity || "",
-          item.quantityUnit || "",
-          item.rateAmountCents || 0,
-          item.totalAmountCents || 0,
-          item.calculationStatus || "",
-          isoDateTime(item.approvedAt),
-          isoDateTime(item.paidAt),
-          item.customerName || "",
-          item.serviceLocationAddress || "",
-          item.jobId || "",
-          item.jobInternalId || "",
-        ]),
-      ];
+      const payload = { ...buildApprovalPayload(), calculationStatus: "approved" };
+      const chunkSize = 450;
 
-      downloadCsv(fileName, rows);
+      for (let index = 0; index < approvableLineItems.length; index += chunkSize) {
+        const batch = writeBatch(db);
+        approvableLineItems.slice(index, index + chunkSize).forEach((item) => {
+          const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
+          batch.update(lineRef, payload);
+        });
+        await batch.commit();
+      }
 
-      const batchPayload = {
-        status: "exported",
-        exportedAt: now,
-        exportedByUserId: currentUserId,
-        exportProvider: "csv",
-        externalReferenceId: exportReference,
-        csvFileName: fileName,
-        updatedAt: now,
-      };
-      const linePayload = {
-        exportBatchId: payrollBatch.id,
-        payrollBatchStatus: "exported",
-        exportedAt: now,
-        exportedByUserId: currentUserId,
-        exportProvider: "csv",
-        externalReferenceId: exportReference,
-      };
-      const firestoreBatch = writeBatch(db);
-      const batchRef = doc(db, "companies", recentlySelectedCompany, "payrollBatches", payrollBatch.id);
-      firestoreBatch.update(batchRef, batchPayload);
-
-      batchLineItems.forEach((item) => {
-        const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-        firestoreBatch.update(lineRef, linePayload);
-      });
-
-      await firestoreBatch.commit();
-      updateLocalBatch({ ...payrollBatch, ...batchPayload });
+      const approvedIds = new Set(approvableLineItems.map((item) => item.id));
       setLineItems((items) =>
-        items.map((item) =>
-          batchLineItems.some((lineItem) => lineItem.id === item.id) ? { ...item, ...linePayload } : item
-        )
+        items.map((item) => (approvedIds.has(item.id) ? { ...item, ...payload } : item))
       );
-      setActionNotice(`Exported ${batchLineItems.length} payroll line item(s) to CSV.`);
+      setActionNotice(`Approved ${approvableLineItems.length} payroll line item(s).`);
     } catch (err) {
-      console.error("Error exporting payroll batch:", err);
-      setActionFailure("Could not export payroll batch.");
+      console.error("Error approving all payroll line items:", err);
+      setActionFailure("Could not approve all payroll line items.");
     } finally {
       setSavingAction("");
     }
@@ -822,13 +776,9 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const openPaymentModal = (targetType, target) => {
-    const isBatch = targetType === "batch";
     setPaymentForm({
       ...emptyPaymentForm(),
-      paymentMode: isBatch ? "batch" : "manual",
       paymentReference: target?.paymentReference || "",
-      exportBatchId: isBatch ? target?.id || "" : target?.exportBatchId || "",
-      exportProvider: isBatch ? target?.exportProvider || "csv" : target?.exportProvider || "",
       paidNotes: target?.paidNotes || "",
     });
     setPaymentModal({ targetType, target });
@@ -925,76 +875,11 @@ const Payroll = ({ mode = "payroll" }) => {
     }
   };
 
-  const markBatchPaid = async (payrollBatch) => {
-    if (!recentlySelectedCompany || !payrollBatch?.id) return;
-    const batchLineItems = lineItemsForBatch(payrollBatch);
-
-    if (batchLineItems.length === 0) {
-      setActionFailure("No loaded line items are linked to this payroll batch.");
-      return;
-    }
-
-    const actionKey = `pay-batch-${payrollBatch.id}`;
-    setSavingAction(actionKey);
-    setActionNotice();
-
-    try {
-      const paymentPayload = buildPaymentPayload();
-      const approvalPayload = buildApprovalPayload();
-      const batchPayload = {
-        ...paymentPayload,
-        status: "paid",
-        paidLineItemCount: batchLineItems.length,
-        updatedAt: new Date(),
-      };
-      const linePaymentPayload = {
-        ...paymentPayload,
-        exportBatchId: payrollBatch.id,
-        payrollBatchStatus: "paid",
-        calculationStatus: "paid",
-      };
-      const firestoreBatch = writeBatch(db);
-      const batchRef = doc(db, "companies", recentlySelectedCompany, "payrollBatches", payrollBatch.id);
-
-      firestoreBatch.update(batchRef, batchPayload);
-      batchLineItems.forEach((item) => {
-        const lineRef = doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", item.id);
-        firestoreBatch.update(lineRef, {
-          ...(item.approvedAt ? {} : approvalPayload),
-          ...linePaymentPayload,
-        });
-      });
-
-      await firestoreBatch.commit();
-      updateLocalBatch({ ...payrollBatch, ...batchPayload });
-      setLineItems((items) =>
-        items.map((item) => {
-          const linkedLine = batchLineItems.find((lineItem) => lineItem.id === item.id);
-          if (!linkedLine) return item;
-          return {
-            ...item,
-            ...(item.approvedAt ? {} : approvalPayload),
-            ...linePaymentPayload,
-          };
-        })
-      );
-      setPaymentModal(null);
-      setActionNotice(`Marked ${batchLineItems.length} payroll line item(s) paid from batch.`);
-    } catch (err) {
-      console.error("Error marking payroll batch paid:", err);
-      setActionFailure("Could not mark that payroll batch paid.");
-    } finally {
-      setSavingAction("");
-    }
-  };
-
   const submitPayment = async (event) => {
     event.preventDefault();
     if (!paymentModal) return;
     if (paymentModal.targetType === "statement") {
       await markStatementPaid(paymentModal.target);
-    } else if (paymentModal.targetType === "batch") {
-      await markBatchPaid(paymentModal.target);
     } else {
       await markLineItemPaid(paymentModal.target);
     }
@@ -1078,127 +963,135 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const renderStatements = () => {
-    if (statements.length === 0) {
-      return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No pay statements found for this date range.</div>;
-    }
-
     return (
-      <div className="grid gap-4 md:grid-cols-2">
-        {statements.map((statement) => {
-          const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
-          const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
-          const linkedLines = lineItemsForStatement(statement);
-
-          return (
-            <div key={statement.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-lg font-bold text-slate-900">{statement.statementReference || statement.technicianName || "Pay Statement"}</p>
-                  <p className="text-sm text-slate-500">{shortDate(statement.startDate)} - {shortDate(statement.endDate)}</p>
-                  <p className="mt-1 text-xs text-slate-500">{linkedLines.length || statement.lineItemIds?.length || 0} linked line item(s)</p>
-                  {statement.paymentReference ? <p className="mt-1 text-xs text-slate-500">Payment ref: {statement.paymentReference}</p> : null}
-                </div>
-                <StatusPill status={isPaid ? "paid" : statement.status} />
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subtotal</p>
-                  <p className="font-bold text-slate-900">{moneyFromCents(statement.subtotalCents)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Adjustments</p>
-                  <p className="font-bold text-slate-900">{moneyFromCents(statement.adjustmentCents)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</p>
-                  <p className="font-bold text-slate-900">{moneyFromCents(statement.totalCents)}</p>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => approveStatement(statement)}
-                  disabled={isApproved || savingAction === `approve-statement-${statement.id}`}
-                  className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {savingAction === `approve-statement-${statement.id}` ? "Saving" : "Approve Statement"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openPaymentModal("statement", statement)}
-                  disabled={isPaid}
-                  className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  Mark Paid
-                </button>
-              </div>
+      <div className="grid gap-6">
+        <section>
+          <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900">Ready to Create</h2>
+              <p className="mt-1 text-sm text-slate-500">Approved, unpaid line items that are not already attached to a statement.</p>
             </div>
-          );
-        })}
-      </div>
-    );
-  };
+            <button
+              type="button"
+              onClick={createAllCandidateStatements}
+              disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
+              className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {savingAction.startsWith("create-statement") ? "Creating" : "Create All Statements"}
+            </button>
+          </div>
 
-  const renderBatches = () => {
-    if (payrollBatches.length === 0) {
-      return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll batches found for this date range.</div>;
-    }
-
-    return (
-      <div className="grid gap-4 md:grid-cols-2">
-        {payrollBatches.map((batch) => {
-          const batchLineItems = lineItemsForBatch(batch);
-          const isExporting = savingAction === `export-payroll-batch-${batch.id}`;
-          const isPaid = Boolean(batch.paidAt) || batch.status === "paid";
-
-          return (
-            <div key={batch.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <p className="text-lg font-bold text-slate-900">{batch.batchReference || "Payroll batch"}</p>
-                  <p className="text-sm text-slate-500">{shortDate(batch.startDate)} - {shortDate(batch.endDate)}</p>
-                  {batch.externalReferenceId ? <p className="mt-1 text-xs text-slate-500">{batch.externalReferenceId}</p> : null}
-                </div>
-                <StatusPill status={isPaid ? "paid" : batch.status || "draft"} />
-              </div>
-              <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Lines</p>
-                  <p className="font-bold text-slate-900">{batch.lineItemCount || batch.lineItemIds?.length || batchLineItems.length || 0}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</p>
-                  <p className="font-bold text-slate-900">{moneyFromCents(batch.totalCents)}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Provider</p>
-                  <p className="font-bold text-slate-900">{statusLabel(batch.exportProvider || "pending")}</p>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                <span>{isPaid ? `Paid ${shortDate(batch.paidAt)}` : batch.exportedAt ? `Exported ${shortDate(batch.exportedAt)}` : `Created ${shortDate(batch.createdAt)}`}</span>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => exportPayrollBatchCsv(batch)}
-                    disabled={isExporting || batchLineItems.length === 0}
-                    className="rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {isExporting ? "Exporting" : batch.status === "exported" || isPaid ? "Export CSV Again" : "Export CSV"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => openPaymentModal("batch", batch)}
-                    disabled={isPaid || batchLineItems.length === 0}
-                    className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Mark Paid
-                  </button>
-                </div>
-              </div>
+          {statementCandidateGroups.length === 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">
+              No approved line items are ready for statements.
             </div>
-          );
-        })}
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {statementCandidateGroups.map((group) => (
+                <div key={group.technicianId} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-lg font-bold text-slate-900">{group.technicianName}</p>
+                      <p className="text-sm text-slate-500">{statusLabel(group.workerType)} · {group.lineItems.length} item(s)</p>
+                    </div>
+                    <p className="text-lg font-bold text-slate-900">{moneyFromCents(group.subtotalCents)}</p>
+                  </div>
+
+                  <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
+                    {group.lineItems.slice(0, 3).map((item) => (
+                      <div key={item.id} className="flex items-start justify-between gap-3 text-sm">
+                        <div>
+                          <p className="font-semibold text-slate-800">{displayWorkTitle(item)}</p>
+                          <p className="text-xs text-slate-500">{shortDate(item.completedDate)} · {item.customerName || item.serviceLocationAddress || "No customer"}</p>
+                        </div>
+                        <p className="font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</p>
+                      </div>
+                    ))}
+                    {group.lineItems.length > 3 ? (
+                      <p className="text-xs font-semibold text-slate-500">+ {group.lineItems.length - 3} more line item(s)</p>
+                    ) : null}
+                  </div>
+
+                  <div className="mt-4 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => createStatementForGroup(group)}
+                      disabled={savingAction === `create-statement-${group.technicianId}` || Boolean(savingAction)}
+                      className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {savingAction === `create-statement-${group.technicianId}` ? "Creating" : "Create Statement"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section>
+          <div className="mb-3">
+            <h2 className="text-lg font-bold text-slate-900">Statements</h2>
+            <p className="mt-1 text-sm text-slate-500">Draft, approved, and paid statements for this pay period.</p>
+          </div>
+
+          {statements.length === 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No pay statements found for this date range.</div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2">
+              {statements.map((statement) => {
+                const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
+                const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
+                const linkedLines = lineItemsForStatement(statement);
+
+                return (
+                  <div key={statement.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <p className="text-lg font-bold text-slate-900">{statement.statementReference || statement.technicianName || "Pay Statement"}</p>
+                        <p className="text-sm text-slate-500">{shortDate(statement.startDate)} - {shortDate(statement.endDate)}</p>
+                        <p className="mt-1 text-xs text-slate-500">{linkedLines.length || statement.lineItemIds?.length || 0} linked line item(s)</p>
+                        {statement.paymentReference ? <p className="mt-1 text-xs text-slate-500">Payment ref: {statement.paymentReference}</p> : null}
+                      </div>
+                      <StatusPill status={isPaid ? "paid" : statement.status} />
+                    </div>
+                    <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subtotal</p>
+                        <p className="font-bold text-slate-900">{moneyFromCents(statement.subtotalCents)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Adjustments</p>
+                        <p className="font-bold text-slate-900">{moneyFromCents(statement.adjustmentCents)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</p>
+                        <p className="font-bold text-slate-900">{moneyFromCents(statement.totalCents)}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 flex flex-wrap justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => approveStatement(statement)}
+                        disabled={isApproved || savingAction === `approve-statement-${statement.id}`}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {savingAction === `approve-statement-${statement.id}` ? "Saving" : "Approve Statement"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openPaymentModal("statement", statement)}
+                        disabled={isPaid}
+                        className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        Mark Paid
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
     );
   };
@@ -1358,7 +1251,7 @@ const Payroll = ({ mode = "payroll" }) => {
       },
       {
         title: "Payroll Line",
-        subtitle: "Review, approve, batch, and mark paid",
+        subtitle: "Review, approve, create statements, and mark paid",
         example: "Example: calculated line item",
       },
     ];
@@ -1577,7 +1470,6 @@ const Payroll = ({ mode = "payroll" }) => {
     : [
       ["lineItems", "Line Items"],
       ["statements", "Statements"],
-      ["batches", "Batches"],
     ];
 
   return (
@@ -1589,7 +1481,7 @@ const Payroll = ({ mode = "payroll" }) => {
             <p className="mt-1 text-slate-600">
               {isSetupMode
                 ? "Configure how scheduled work turns into technician pay."
-                : "Review, approve, batch, export, and mark technician pay as paid."}
+                : "Review payroll line items, create statements from approved pay, and mark technician pay as paid."}
             </p>
           </div>
           {isSetupMode ? (
@@ -1600,7 +1492,7 @@ const Payroll = ({ mode = "payroll" }) => {
               Open Payroll
             </Link>
           ) : (
-            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto_auto]">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
               <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
               <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
               <Link
@@ -1611,11 +1503,19 @@ const Payroll = ({ mode = "payroll" }) => {
               </Link>
               <button
                 type="button"
-                onClick={createPayrollBatch}
-                disabled={summary.approvedUnpaidItems.length === 0 || savingAction === "create-payroll-batch"}
+                onClick={approveAllLineItems}
+                disabled={approvableLineItems.length === 0 || Boolean(savingAction)}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
+              </button>
+              <button
+                type="button"
+                onClick={createAllCandidateStatements}
+                disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
                 className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {savingAction === "create-payroll-batch" ? "Creating" : "Create Batch"}
+                {savingAction.startsWith("create-statement") ? "Generating" : "Generate Statements"}
               </button>
             </div>
           )}
@@ -1626,7 +1526,7 @@ const Payroll = ({ mode = "payroll" }) => {
             <StatCard title="Payroll total" value={moneyFromCents(summary.totalCents)} subtitle={`${summary.activeItems.length} active line item(s)`} />
             <StatCard title="Needs review" value={summary.needsReview} subtitle="Line items requiring attention" />
             <StatCard title="Approved" value={summary.approved} subtitle="Approved line items" />
-            <StatCard title="Ready to batch" value={moneyFromCents(summary.approvedUnpaidCents)} subtitle={`${summary.approvedUnpaidItems.length} approved unpaid line(s)`} />
+            <StatCard title="Ready for statements" value={moneyFromCents(summary.statementCandidateCents)} subtitle={`${summary.statementCandidateItems.length} approved unpaid line(s)`} />
             <StatCard title="Paid" value={summary.paid} subtitle="Marked paid internally" />
           </div>
         ) : null}
@@ -1651,7 +1551,6 @@ const Payroll = ({ mode = "payroll" }) => {
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
         {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
         {!loading && !error && !isSetupMode && activeTab === "statements" ? renderStatements() : null}
-        {!loading && !error && !isSetupMode && activeTab === "batches" ? renderBatches() : null}
         {!loading && !error && isSetupMode && activeTab === "overview" ? renderSetupOverview() : null}
         {!loading && !error && isSetupMode && activeTab === "stopPay" ? renderStopPaySetup() : null}
         {!loading && !error && isSetupMode && activeTab === "rates" ? renderTechnicianRates() : null}
@@ -1666,9 +1565,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <p className="mt-1 text-sm text-slate-500">
                   {paymentModal.targetType === "statement"
                     ? paymentModal.target.statementReference || paymentModal.target.technicianName || "Pay statement"
-                    : paymentModal.targetType === "batch"
-                      ? paymentModal.target.batchReference || paymentModal.target.id || "Payroll batch"
-                      : displayWorkTitle(paymentModal.target)}
+                    : displayWorkTitle(paymentModal.target)}
                 </p>
               </div>
               <button type="button" onClick={closePaymentModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
@@ -1688,51 +1585,15 @@ const Payroll = ({ mode = "payroll" }) => {
               </label>
 
               <label className="text-sm font-semibold text-slate-700">
-                Payment source
-                <select
-                  value={paymentForm.paymentMode}
-                  onChange={(event) => setPaymentForm((form) => ({ ...form, paymentMode: event.target.value }))}
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                >
-                  <option value="manual">Manual entry</option>
-                  <option value="batch">Batch/export reference</option>
-                </select>
-              </label>
-
-              <label className="text-sm font-semibold text-slate-700">
                 Reference
                 <input
                   type="text"
                   value={paymentForm.paymentReference}
                   onChange={(event) => setPaymentForm((form) => ({ ...form, paymentReference: event.target.value }))}
-                  placeholder={paymentForm.paymentMode === "manual" ? "Check number, cash note, ACH ref" : "Provider transaction or export ref"}
+                  placeholder="Check number, cash note, ACH ref"
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 />
               </label>
-
-              {paymentForm.paymentMode === "batch" ? (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="text-sm font-semibold text-slate-700">
-                    Batch ID
-                    <input
-                      type="text"
-                      value={paymentForm.exportBatchId}
-                      onChange={(event) => setPaymentForm((form) => ({ ...form, exportBatchId: event.target.value }))}
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    />
-                  </label>
-                  <label className="text-sm font-semibold text-slate-700">
-                    Export provider
-                    <input
-                      type="text"
-                      value={paymentForm.exportProvider}
-                      onChange={(event) => setPaymentForm((form) => ({ ...form, exportProvider: event.target.value }))}
-                      placeholder="CSV, Gusto, ADP"
-                      className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    />
-                  </label>
-                </div>
-              ) : null}
 
               <label className="text-sm font-semibold text-slate-700">
                 Notes
@@ -1796,8 +1657,7 @@ const Payroll = ({ mode = "payroll" }) => {
                 <DetailField label="Rate Amount" value={moneyFromCents(detailLineItem.rateAmountCents)} />
                 <DetailField label="Quantity" value={`${Number(detailLineItem.quantity || 0)} ${detailLineItem.quantityUnit || ""}`.trim()} />
                 <DetailField label="Rate" value={rateTypeLabel(detailLineItem) || (detailLineItem.rateId || detailLineItem.technicianRateId ? "Rate" : "")} />
-                <DetailField label="Pay Statement" value={detailLineItem.payStatementReference || (detailLineItem.payStatementId ? "Payroll statement" : "")} />
-                <DetailField label="Export Batch" value={detailLineItem.exportBatchReference || (detailLineItem.exportBatchId ? "Export batch" : "")} />
+                <DetailField label="Pay Statement" value={detailLineItem.payStatementReference || detailLineItem.payStatementId} />
                 <DetailField label="Payment Ref" value={detailLineItem.paymentReference || detailLineItem.externalReferenceId} />
               </div>
 

@@ -3,10 +3,12 @@ import { Link } from 'react-router-dom';
 import {
     collection,
     getDocs,
+    onSnapshot,
     query,
     where,
 } from "firebase/firestore";
 import {
+    FaBell,
     FaCreditCard,
     FaFileContract,
     FaFileInvoiceDollar,
@@ -14,6 +16,7 @@ import {
     FaMoneyBillWave,
     FaReceipt,
     FaRoute,
+    FaTasks,
     FaTools,
 } from 'react-icons/fa';
 import { MdConstruction, MdOutlineLocalOffer } from 'react-icons/md';
@@ -22,6 +25,23 @@ import { Context } from "../../context/AuthContext";
 import { SalesAgreementSourceType, salesCollectionNames } from '../../utils/models/Sales';
 import { isOpenRepairRequestStatus } from '../../utils/models/RepairRequest';
 import RecentChatsWidget from '../dashboard/components/RecentChatsWidget';
+import {
+    TODO_LIST_FEATURE_FLAG_ID,
+    compareTodosByUrgency,
+    formatShortDateTime,
+    normalizeTodo,
+    todoIsOpen,
+    todoNeedsAttention,
+} from '../../utils/models/TodoItem';
+import {
+    ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
+    ALERT_STATUS,
+    alertDisplayTime,
+    alertIsUnread,
+    alertNeedsAttention,
+    compareAlertsFresh,
+    normalizeAlertNotification,
+} from '../../utils/models/AlertNotification';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -94,14 +114,14 @@ const StatTile = ({ icon: Icon, label, value, helper, to, tone = 'slate' }) => {
     return to ? <Link to={to}>{content}</Link> : content;
 };
 
-const ListCard = ({ title, helper, to, children }) => (
+const ListCard = ({ title, helper, to, actionLabel = 'View all', children }) => (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
         <div className="flex items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
             <div>
                 <h2 className="text-lg font-bold text-slate-950">{title}</h2>
                 {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
             </div>
-            {to && <Link to={to} className="text-xs font-semibold text-blue-700 hover:text-blue-900">View all</Link>}
+            {to && <Link to={to} className="shrink-0 text-xs font-semibold text-blue-700 hover:text-blue-900">{actionLabel}</Link>}
         </div>
         <div className="divide-y divide-slate-100">{children}</div>
     </section>
@@ -112,7 +132,13 @@ const EmptyRow = ({ children }) => (
 );
 
 const Dashboard = () => {
-    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        recentlySelectedCompanyName,
+        user,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const [loading, setLoading] = useState(true);
     const [customers, setCustomers] = useState([]);
     const [jobs, setJobs] = useState([]);
@@ -123,6 +149,11 @@ const Dashboard = () => {
     const [subscriptions, setSubscriptions] = useState([]);
     const [serviceAgreements, setServiceAgreements] = useState([]);
     const [recurringServiceStops, setRecurringServiceStops] = useState([]);
+    const [todoItems, setTodoItems] = useState([]);
+    const [alertNotifications, setAlertNotifications] = useState([]);
+
+    const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
+    const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
@@ -178,6 +209,50 @@ const Dashboard = () => {
 
         loadDashboard();
     }, [recentlySelectedCompany, user]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany || !featureFlagsLoaded) {
+            setTodoItems([]);
+            setAlertNotifications([]);
+            return undefined;
+        }
+
+        const unsubscribers = [];
+
+        if (todoListEnabled) {
+            unsubscribers.push(onSnapshot(
+                collection(db, "companies", recentlySelectedCompany, "todoItems"),
+                (snapshot) => {
+                    setTodoItems(snapshot.docs.map(normalizeTodo));
+                },
+                (error) => {
+                    console.error("Error loading dashboard todo items:", error);
+                    setTodoItems([]);
+                }
+            ));
+        } else {
+            setTodoItems([]);
+        }
+
+        if (alertsEnabled) {
+            unsubscribers.push(onSnapshot(
+                collection(db, "companies", recentlySelectedCompany, "alerts"),
+                (snapshot) => {
+                    setAlertNotifications(snapshot.docs.map(normalizeAlertNotification));
+                },
+                (error) => {
+                    console.error("Error loading dashboard alerts:", error);
+                    setAlertNotifications([]);
+                }
+            ));
+        } else {
+            setAlertNotifications([]);
+        }
+
+        return () => {
+            unsubscribers.forEach((unsubscribe) => unsubscribe());
+        };
+    }, [alertsEnabled, featureFlagsLoaded, recentlySelectedCompany, todoListEnabled]);
 
     const summary = useMemo(() => {
         const activeRepairs = repairRequests.filter((request) => (
@@ -251,6 +326,24 @@ const Dashboard = () => {
     const recentJobs = useMemo(() => sortFresh(jobs).slice(0, 5), [jobs]);
     const recentLeads = useMemo(() => sortFresh(leads).slice(0, 5), [leads]);
     const recentPayments = useMemo(() => sortFresh(payments.filter((payment) => normalizeStatus(payment.status) === 'posted')).slice(0, 5), [payments]);
+    const openTodos = useMemo(() => todoItems.filter(todoIsOpen).sort(compareTodosByUrgency), [todoItems]);
+    const attentionTodos = useMemo(() => openTodos.filter((todo) => todoNeedsAttention(todo)), [openTodos]);
+    const activeAlerts = useMemo(() => alertNotifications.filter((alert) => alertNeedsAttention(alert)).sort(compareAlertsFresh), [alertNotifications]);
+    const unreadAlerts = useMemo(() => alertNotifications.filter(alertIsUnread), [alertNotifications]);
+    const dashboardAlerts = useMemo(() => alertNotifications
+        .filter((alert) => alert.status !== ALERT_STATUS.archived)
+        .sort((left, right) => {
+            const attentionDifference = Number(alertNeedsAttention(right)) - Number(alertNeedsAttention(left));
+            if (attentionDifference !== 0) return attentionDifference;
+            return compareAlertsFresh(left, right);
+        })
+        .slice(0, 3), [alertNotifications]);
+
+    const alertHref = (alert) => {
+        if (alert.route && alert.route.startsWith('/')) return alert.route;
+        if (alert.source === 'todoList' || alert.todoId) return '/company/todo-list';
+        return '/company/alerts';
+    };
 
     if (loading) {
         return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-500">Loading dashboard...</div>;
@@ -288,6 +381,12 @@ const Dashboard = () => {
                     <StatTile icon={MdOutlineLocalOffer} label="Pending Leads" value={leads.length} helper="New homeowner requests" to="/company/leads" tone="blue" />
                     <StatTile icon={FaFileContract} label="Needs Routing" value={agreementsNeedRouting.length} helper="Accepted service agreements" to="/company/route-dashboard" tone={agreementsNeedRouting.length ? "amber" : "emerald"} />
                     <StatTile icon={FaHouseUser} label="Customers" value={customers.length} helper="Active customer accounts" to="/company/customers" />
+                    {todoListEnabled && (
+                        <StatTile icon={FaTasks} label="Open Todos" value={openTodos.length} helper={`${attentionTodos.length} need attention`} to="/company/todo-list" tone={attentionTodos.length ? "amber" : "blue"} />
+                    )}
+                    {alertsEnabled && (
+                        <StatTile icon={FaBell} label="Notifications" value={activeAlerts.length} helper={`${unreadAlerts.length} unread`} to="/company/alerts" tone={activeAlerts.length ? "amber" : "emerald"} />
+                    )}
                 </section>
 
                 <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
@@ -360,11 +459,60 @@ const Dashboard = () => {
                         </ListCard>
                     </div>
 
-                    <ListCard title="Recent Messages" helper="Unread and recent conversations" to="/company/messages">
-                        <div className="p-4">
-                            <RecentChatsWidget />
-                        </div>
-                    </ListCard>
+                    <div className="space-y-6">
+                        {todoListEnabled && (
+                            <ListCard title="Tasks and Reminders" helper="Open todos by urgency" to="/company/todo-list">
+                                {openTodos.length === 0 ? (
+                                    <EmptyRow>No open todos.</EmptyRow>
+                                ) : openTodos.slice(0, 5).map((todo) => (
+                                    <Link key={todo.id} to="/company/todo-list" className="block px-5 py-4 transition hover:bg-slate-50">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-semibold text-slate-900">{todo.title}</p>
+                                                <p className="mt-1 text-sm text-slate-500">
+                                                    {todo.assignedToName || "Team task"} · {todo.dueAt ? formatShortDateTime(todo.dueAt) : "No due date"}
+                                                </p>
+                                            </div>
+                                            {todoNeedsAttention(todo) && (
+                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                                                    Alert
+                                                </span>
+                                            )}
+                                        </div>
+                                    </Link>
+                                ))}
+                            </ListCard>
+                        )}
+
+                        {alertsEnabled && (
+                            <ListCard title="Alerts and Notifications" helper="Latest notification activity" to="/company/alerts" actionLabel="All notifications">
+                                {dashboardAlerts.length === 0 ? (
+                                    <EmptyRow>No notifications yet.</EmptyRow>
+                                ) : dashboardAlerts.map((alert) => (
+                                    <Link key={alert.id} to={alertHref(alert)} className="block px-5 py-4 transition hover:bg-slate-50">
+                                        <div className="flex items-start justify-between gap-3">
+                                            <div className="min-w-0">
+                                                <div className="flex min-w-0 items-center gap-2">
+                                                    {alertNeedsAttention(alert) && (
+                                                        <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" aria-label="Needs attention" />
+                                                    )}
+                                                    <p className="truncate text-sm font-semibold text-slate-900">{alert.title}</p>
+                                                </div>
+                                                <p className="mt-1 line-clamp-2 text-sm text-slate-500">{alert.message || "Notification"}</p>
+                                            </div>
+                                            <span className="shrink-0 text-xs font-semibold text-slate-500">{formatShortDateTime(alertDisplayTime(alert))}</span>
+                                        </div>
+                                    </Link>
+                                ))}
+                            </ListCard>
+                        )}
+
+                        <ListCard title="Recent Messages" helper="Unread and recent conversations" to="/company/messages">
+                            <div className="p-4">
+                                <RecentChatsWidget />
+                            </div>
+                        </ListCard>
+                    </div>
                 </section>
             </div>
         </div>

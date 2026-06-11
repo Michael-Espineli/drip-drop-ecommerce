@@ -14,6 +14,7 @@ import {
   FaMapMarkerAlt,
   FaPlus,
   FaReceipt,
+  FaRoute,
   FaSave,
   FaTimes,
   FaTrash,
@@ -25,6 +26,7 @@ import { salesCollectionNames, SalesAgreementStatus } from '../../../utils/model
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
+import { AgreementBillingType, getAgreementBillingType } from '../../../utils/sales/agreementRouting';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -341,6 +343,40 @@ const SalesAgreementDetail = () => {
   const billingFlowNextAction = billingSubscription?.nextAction || agreement?.billingFlowNextAction || 'acceptAgreement';
   const missingStripePriceCount = billingSubscription?.stripeReadiness?.missingStripePriceItemIds?.length || 0;
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status));
+  const agreementBillingType = getAgreementBillingType(agreement || {});
+  const isRecurringAgreement = agreementBillingType === AgreementBillingType.recurring;
+  const agreementServiceLocationIds = Array.isArray(agreement?.serviceLocationIds)
+    ? agreement.serviceLocationIds.filter(Boolean)
+    : locations.map((location) => location.serviceLocationId || location.id).filter(Boolean);
+  const firstServiceLocationId = agreementServiceLocationIds[0] || '';
+  const recurringServiceStopId = agreement?.recurringServiceStopId
+    || billingSubscription?.recurringServiceStopId
+    || billingSubscription?.agreementSnapshot?.recurringServiceStopId
+    || '';
+  const recurringSetupStatus = agreement?.operationsSetupStatus
+    || billingSubscription?.operationsSetupStatus
+    || billingSubscription?.agreementSnapshot?.operationsSetupStatus
+    || 'needsRecurringServiceStop';
+  const hasRecurringRouteSetup = Boolean(
+    recurringServiceStopId ||
+    agreement?.recurringRouteId ||
+    billingSubscription?.recurringRouteId
+  );
+  const recurringSetupQuery = new URLSearchParams({
+    agreementId: agreement?.id || agreementId || '',
+    billingSubscriptionId: billingSubscription?.id || agreement?.billingSubscriptionId || '',
+    serviceLocationId: firstServiceLocationId,
+    returnTo: `/company/sales/agreements/${agreement?.id || agreementId || ''}`,
+  });
+  const recurringSetupUrl = `/company/recurring-service-stops/create/${encodeURIComponent(agreement?.customerId || 'NA')}?${recurringSetupQuery.toString()}`;
+  const canScheduleRecurringRoute = Boolean(
+    agreement &&
+    user &&
+    !companyMismatch &&
+    isAccepted &&
+    isRecurringAgreement &&
+    !hasRecurringRouteSetup
+  );
   const canCustomerStartPayment = Boolean(
     billingSubscription?.customerCanPayImmediately ||
     agreement?.customerCanPayImmediately
@@ -762,6 +798,23 @@ const SalesAgreementDetail = () => {
                 <FaUserCheck className="text-xs" />
                 Mark Accepted
               </button>
+              {isRecurringAgreement && !hasRecurringRouteSetup && (
+                <Link
+                  to={recurringSetupUrl}
+                  aria-disabled={!canScheduleRecurringRoute}
+                  onClick={(event) => {
+                    if (!canScheduleRecurringRoute) event.preventDefault();
+                  }}
+                  className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
+                    canScheduleRecurringRoute
+                      ? 'bg-slate-950 text-white hover:bg-slate-800'
+                      : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                  }`}
+                >
+                  <FaRoute className="text-xs" />
+                  Schedule Route
+                </Link>
+              )}
               <button
                 type="button"
                 onClick={sendAgreementEmail}
@@ -1031,6 +1084,62 @@ const SalesAgreementDetail = () => {
                 )}
               </section>
 
+              {isRecurringAgreement && (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <h2 className="text-lg font-bold text-slate-950">Operations Setup</h2>
+                    <FaRoute className="text-slate-400" />
+                  </div>
+                  <dl className="mt-4 space-y-3 text-sm">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Setup Status</dt>
+                      <dd className="font-semibold text-slate-900">{labelize(recurringSetupStatus)}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Recurring Stop</dt>
+                      <dd className="font-semibold text-slate-900">
+                        {recurringServiceStopId ? (
+                          <Link
+                            to={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
+                            className="text-blue-700 hover:text-blue-900"
+                          >
+                            Open Recurring Stop
+                          </Link>
+                        ) : 'Not created'}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Service Location</dt>
+                      <dd className="break-all font-semibold text-slate-900">{firstServiceLocationId || 'Not set'}</dd>
+                    </div>
+                  </dl>
+
+                  {!isAccepted && (
+                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      Accept the recurring service agreement before scheduling its route.
+                    </div>
+                  )}
+
+                  {!hasRecurringRouteSetup && (
+                    <Link
+                      to={recurringSetupUrl}
+                      aria-disabled={!canScheduleRecurringRoute}
+                      onClick={(event) => {
+                        if (!canScheduleRecurringRoute) event.preventDefault();
+                      }}
+                      className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
+                        canScheduleRecurringRoute
+                          ? 'bg-slate-950 text-white hover:bg-slate-800'
+                          : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                      }`}
+                    >
+                      <FaRoute className="text-xs" />
+                      Schedule Route
+                    </Link>
+                  )}
+                </section>
+              )}
+
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
@@ -1119,7 +1228,7 @@ const SalesAgreementDetail = () => {
                   )}
                   {emailTestMode && (
                     <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                      Real customer email is off until feature_flag_005 is enabled.
+                      Real customer email is off until feature_flag_012 is enabled.
                     </div>
                   )}
                   <div>

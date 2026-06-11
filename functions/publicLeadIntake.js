@@ -3,6 +3,7 @@ const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
 const { maskEmail } = require("./customerAccountInvites");
+const { resolveEmailDeliveryRecipient } = require("./emailDelivery");
 
 const PUBLIC_LEAD_VERIFICATION_COLLECTION = "publicLeadVerifications";
 const PUBLIC_LEAD_VERIFICATION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
@@ -306,6 +307,7 @@ const sendPublicLeadVerificationEmail = async ({
   const companyContact = getCompanyContact(company);
   const fromEmail = process.env.SEND_GRID_FROM_EMAIL || "info@dripdrop-poolapp.com";
   const replyToEmail = companyContact.email || fromEmail;
+  const emailDelivery = await resolveEmailDeliveryRecipient(to);
   const subject = `Confirm your service request with ${companyName}`;
   const preHeader = "Your service request was received. Connect it to a Drip Drop homeowner account if you want to track it.";
   const safeHomeownerName = firstText(homeownerName, "there");
@@ -318,13 +320,24 @@ const sendPublicLeadVerificationEmail = async ({
   const safeCompanyEmailHtml = escapeHtml(companyContact.email);
   const safeCompanyWebsiteHtml = escapeHtml(companyContact.website);
   const safePreHeaderHtml = escapeHtml(preHeader);
+  const safeIntendedToHtml = escapeHtml(emailDelivery.intendedTo || "unknown recipient");
+  const testModeText = emailDelivery.testMode
+    ? `TEST MODE: intended recipient was ${emailDelivery.intendedTo || "unknown recipient"}.\n\n`
+    : "";
+  const testModeHtml = emailDelivery.testMode
+    ? `
+        <div style="background-color:#FFF8E6; border-bottom:1px solid #F1D794; color:#6B4A00; font-size:13px; line-height:20px; padding:12px 16px; text-align:center;">
+          Test mode: intended recipient was ${safeIntendedToHtml}.
+        </div>
+      `
+    : "";
 
   const contactTextLines = [
     companyContact.phone ? `Company phone: ${companyContact.phone}` : "",
     companyContact.email ? `Company email: ${companyContact.email}` : "",
   ].filter(Boolean);
   const text = [
-    `Hi ${safeHomeownerName},`,
+    `${testModeText}Hi ${safeHomeownerName},`,
     "",
     `We received your ${safeServiceName} request for ${companyName}.`,
     "Your request has been sent to the company.",
@@ -356,6 +369,7 @@ const sendPublicLeadVerificationEmail = async ({
           <tr>
             <td align="center" style="padding:24px 12px;">
               <table width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px; background-color:#FFFFFF; border-radius:18px; overflow:hidden; box-shadow:0 8px 24px rgba(15,23,42,0.08);">
+                ${testModeHtml}
                 <tr>
                   <td style="background-color:#1D2E76; padding:30px 28px 26px 28px; text-align:left;">
                     <div style="font-size:13px; line-height:18px; color:#E0AE36; font-weight:bold; letter-spacing:0.8px; text-transform:uppercase;">
@@ -520,7 +534,7 @@ const sendPublicLeadVerificationEmail = async ({
   `;
 
   await sgMail.send({
-    to,
+    to: emailDelivery.actualTo,
     from: fromEmail,
     replyTo: replyToEmail,
     subject,
@@ -528,7 +542,17 @@ const sendPublicLeadVerificationEmail = async ({
     html,
   });
 
-  return { sent: true, reason: "" };
+  return {
+    sent: true,
+    reason: "",
+    emailDelivery: {
+      to: emailDelivery.actualTo,
+      intendedTo: emailDelivery.intendedTo,
+      testMode: emailDelivery.testMode,
+      realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+      realEmailsEnabled: emailDelivery.realEmailsEnabled,
+    },
+  };
 };
 
 exports.getPublicLeadIntakeCompany = onCall(publicLeadCallableOptions, async (request) => {
@@ -774,6 +798,7 @@ exports.submitPublicServiceRequestLead = onCall(publicLeadCallableOptions, async
       emailSent: verificationEmail.sent,
       emailSendReason: verificationEmail.reason || "",
       emailSentAt: verificationEmail.sent ? now : null,
+      emailDelivery: verificationEmail.emailDelivery || null,
     }, { merge: true });
 
     return {

@@ -74,6 +74,8 @@ const CreateNewJob = () => {
         repairRequest?.sourcePath ||
         "company";
     const equipmentContext = location.state?.equipmentContext || null;
+    const leadContext = location.state?.leadContext || null;
+    const leadSourcePath = location.state?.leadSourcePath || (leadContext?.id ? "homeownerServiceRequests" : "");
     const jobIntent = location.state?.jobIntent || equipmentContext?.jobIntent || "";
     const startingTemplateFromState =
         location.state?.startingTemplate ||
@@ -508,12 +510,21 @@ const CreateNewJob = () => {
             return;
         }
 
+        if (leadContext?.serviceDescription || leadContext?.serviceName) {
+            const leadDescription = [
+                leadContext.serviceName,
+                leadContext.serviceDescription,
+            ].filter(Boolean).join("\n\n");
+            setDescription((current) => current || leadDescription);
+            return;
+        }
+
         if (equipmentContext?.equipmentId && jobIntent) {
             const label = jobIntent === "maintenance" ? "maintenance" : "repair";
             const equipmentName = equipmentContext.equipmentName || "equipment";
             setDescription((current) => current || `Create ${label} job for ${equipmentName}.`);
         }
-    }, [repairRequest, equipmentContext, jobIntent]);
+    }, [repairRequest, leadContext, equipmentContext, jobIntent]);
 
     useEffect(() => {
         if (!selectedCustomer || !recentlySelectedCompany) {
@@ -977,6 +988,12 @@ const CreateNewJob = () => {
                 equipmentName: selectedEquipment?.label || "",
                 repairRequestId: repairRequest?.id || "",
                 repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
+                leadId: leadContext?.id || "",
+                sourceLeadId: leadContext?.id || "",
+                leadSourcePath: leadContext?.id ? leadSourcePath : "",
+                sourceLeadName: leadContext?.serviceName || "",
+                sourceLeadStatus: leadContext?.status || "",
+                createdFromLead: Boolean(leadContext?.id),
                 sourceTemplateId: selectedTemplate?.id || "",
                 sourceTemplateName: selectedTemplate?.name || "",
             };
@@ -1059,6 +1076,28 @@ const CreateNewJob = () => {
                 );
             }
 
+            if (leadContext?.id) {
+                try {
+                    await updateDoc(
+                        doc(db, "homeownerServiceRequests", leadContext.id),
+                        {
+                            jobIds: arrayUnion(jobId),
+                            latestJobId: jobId,
+                            latestJobInternalId: nextInternalId,
+                            updatedAt: serverTimestamp(),
+                        }
+                    );
+                } catch (leadUpdateError) {
+                    console.warn("Job created, but the source lead could not be updated.", leadUpdateError);
+                }
+            }
+
+            const historyDescription = selectedTemplate?.name
+                ? `Started from template: ${selectedTemplate.name}`
+                : leadContext?.id
+                    ? `Created from lead: ${leadContext.serviceName || leadContext.id}`
+                    : "Created from the web job flow.";
+
             const historyId = "comp_job_hist_" + uuidv4();
             await setDoc(
                 doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history", historyId),
@@ -1069,9 +1108,7 @@ const CreateNewJob = () => {
                     jobInternalId: nextInternalId,
                     eventType: "Created",
                     title: "Job initially created",
-                    description: selectedTemplate?.name
-                        ? `Started from template: ${selectedTemplate.name}`
-                        : "Created from the web job flow.",
+                    description: historyDescription,
                     changes: [
                         { field: "adminName", label: "Admin", before: "—", after: adminName || "—" },
                         { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
@@ -1085,6 +1122,8 @@ const CreateNewJob = () => {
                         sourceTemplateId: selectedTemplate?.id || "",
                         sourceTemplateName: selectedTemplate?.name || "",
                         repairRequestId: repairRequest?.id || "",
+                        leadId: leadContext?.id || "",
+                        leadSourcePath: leadContext?.id ? leadSourcePath : "",
                     },
                     severity: "success",
                     actorUserId: createdByUserId || "",

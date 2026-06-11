@@ -38,6 +38,7 @@ service cloud.firestore {
           || (data.clientId is string && data.clientId == request.auth.uid)
           || (data.customerUserId is string && data.customerUserId == request.auth.uid)
           || (data.companyId is string && hasCompanyAccess(data.companyId))
+          || (data.linkedCompanyId is string && hasCompanyAccess(data.linkedCompanyId))
           || (data.senderId is string && hasCompanyAccess(data.senderId))
           || (data.receiverId is string && hasCompanyAccess(data.receiverId))
         );
@@ -261,6 +262,51 @@ service cloud.firestore {
       allow create: if isPersonalOrCompanyData(request.resource.data);
     }
 
+    match /homeownerRepairRequests/{requestId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /customerCompanyRelationships/{relationshipId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerServiceLocations/{locationId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerBodiesOfWater/{bodyOfWaterId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerEquipment/{equipmentId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerServiceStops/{serviceStopId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /homeownerStopData/{stopDataId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /stopData/{stopDataId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
+    match /linkedInvite/{inviteId} {
+      allow read, update, delete: if isPersonalOrCompanyData(resource.data);
+      allow create: if isPersonalOrCompanyData(request.resource.data);
+    }
+
     match /contracts/{contractId} {
       allow read, update, delete: if isPersonalOrCompanyData(resource.data);
       allow create: if isPersonalOrCompanyData(request.resource.data);
@@ -323,7 +369,8 @@ service cloud.firestore {
 
     match /salesPaymentEvents/{paymentEventId} {
       allow read: if canReadSalesRecord(resource.data);
-      allow create, update, delete: if false;
+      allow create, update: if false;
+      allow delete: if canCompanyWriteSalesRecord(resource.data);
     }
 
     match /customerPartApprovals/{approvalId} {

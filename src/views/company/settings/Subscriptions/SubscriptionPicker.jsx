@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useCallback } from "react";
+import React, { useState, useEffect, useContext } from "react";
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { query, collection, getDocs, where } from "firebase/firestore";
 import { db } from "../../../../utils/config";
@@ -181,42 +181,42 @@ const SubscriptionPicker = () => {
 
         return (
             <div className="fixed inset-0 bg-black bg-opacity-75 flex items-center justify-center z-50 p-4">
-                <div className="bg-gray-800 rounded-lg shadow-xl p-8 max-w-lg w-full text-white">
-                    <h2 className="text-3xl font-bold mb-6 text-center">Confirm Your Plan Change</h2>
+                <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-8 text-slate-950 shadow-xl">
+                    <h2 className="mb-6 text-center text-3xl font-bold">Confirm Your Plan Change</h2>
 
                     <div className="space-y-4 mb-8">
-                        <div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                            <span className="font-semibold text-gray-300">Current Plan:</span>
+                        <div className="flex justify-between items-center bg-slate-50 p-3 rounded-lg">
+                            <span className="font-semibold text-slate-600">Current Plan:</span>
                             <span className="font-bold text-lg">{activeSubscription.name}</span>
                         </div>
-                        <div className="flex justify-between items-center bg-gray-700 p-3 rounded-lg">
-                            <span className="font-semibold text-gray-300">New Plan:</span>
-                            <span className="font-bold text-lg text-yellow-500">{selectedPlanForPreview.name}</span>
+                        <div className="flex justify-between items-center bg-slate-50 p-3 rounded-lg">
+                            <span className="font-semibold text-slate-600">New Plan:</span>
+                            <span className="font-bold text-lg text-yellow-600">{selectedPlanForPreview.name}</span>
                         </div>
                     </div>
 
-                    <div className="bg-gray-900 p-4 rounded-lg mb-8">
+                    <div className="bg-slate-50 p-4 rounded-lg mb-8">
                         <h4 className="font-bold text-lg mb-4 text-center">Billing Summary</h4>
                         <div className="space-y-3">
                             {credit > 0 && (
                                 <div className="flex justify-between">
-                                    <span className="text-gray-400">Credit for unused time:</span>
+                                    <span className="text-slate-600">Credit for unused time:</span>
                                     <span className="text-green-400 font-medium">-{formatCurrency(credit)}</span>
                                 </div>
                             )}
                             {immediateCharge > 0 && (
                                 <div className="flex justify-between">
-                                    <span className="text-gray-400">Prorated charge for new plan:</span>
+                                    <span className="text-slate-600">Prorated charge for new plan:</span>
                                     <span className="font-medium">{formatCurrency(immediateCharge)}</span>
                                 </div>
                             )}
-                            <div className="border-t border-gray-700 my-2"></div>
+                            <div className="border-t border-slate-200 my-2"></div>
                             <div className="flex justify-between text-xl">
                                 <span className="font-bold">Immediate Total:</span>
-                                <span className="font-extrabold text-yellow-500">{formatCurrency(immediateCharge)}</span>
+                                <span className="font-extrabold text-yellow-600">{formatCurrency(immediateCharge)}</span>
                             </div>
                             <div className="flex justify-between mt-2">
-                                <span className="text-gray-400">Next billing date ({new Date(previewInvoice.next_payment_attempt * 1000).toLocaleDateString()}):</span>
+                                <span className="text-slate-600">Next billing date ({new Date(previewInvoice.next_payment_attempt * 1000).toLocaleDateString()}):</span>
                                 <span className="font-medium">{formatCurrency(nextPayment)}</span>
                             </div>
                         </div>
@@ -225,7 +225,7 @@ const SubscriptionPicker = () => {
                     <div className="flex justify-end space-x-4">
                         <button
                             onClick={() => setShowPreviewModal(false)}
-                            className="py-2 px-6 bg-gray-600 hover:bg-gray-500 rounded-lg font-bold transition duration-200"
+                            className="py-2 px-6 bg-slate-200 text-slate-800 hover:bg-slate-300 rounded-lg font-bold transition duration-200"
                         >
                             Cancel
                         </button>
@@ -244,16 +244,16 @@ const SubscriptionPicker = () => {
     return (
         <>
             <PreviewModal />
-            <div className='px-4 md:px-8 py-10 bg-gray-800 text-white min-h-screen'>
+            <div className='min-h-screen bg-page px-4 py-10 text-theme md:px-8'>
                 <div className="max-w-6xl mx-auto">
                     <div className="text-center mb-12">
-                        <h1 className="text-4xl md:text-5xl font-bold mb-4">Choose Your Plan</h1>
-                        <p className="text-lg text-gray-400">Select the perfect plan to fit the needs of your business.</p>
+                        <h1 className="mb-4 text-4xl font-bold text-slate-950 md:text-5xl">Choose Your Plan</h1>
+                        <p className="text-lg text-slate-500">Select the perfect plan to fit the needs of your business.</p>
                         <Link to={`/company/settings/subscriptions`} className='text-yellow-500 hover:text-yellow-400 mt-4 inline-block'>&larr; Back to Subscription Management</Link>
                     </div>
 
-                    {loading && <p className="text-center">Loading plans...</p>}
-                    {isPreviewLoading && <p className="text-center">Generating preview...</p>}
+                    {loading && <p className="text-center text-slate-600">Loading plans...</p>}
+                    {isPreviewLoading && <p className="text-center text-slate-600">Generating preview...</p>}
                     {error && <p className="text-center text-red-500">{error}</p>}
 
                     {!loading && !error && (
@@ -261,19 +261,19 @@ const SubscriptionPicker = () => {
                             {subscriptionList.map(sub => {
                                 const isCurrentPlan = activeSubscription && activeSubscription.stripePriceId === sub.stripePriceId;
                                 return (
-                                    <div key={sub.id} className={`bg-gray-700 rounded-lg shadow-xl p-8 flex flex-col ${isCurrentPlan ? 'border-2 border-yellow-500' : ''}`}>
-                                        <h3 className="text-2xl font-bold mb-3">{sub.name}</h3>
-                                        <p className="text-4xl font-extrabold mb-4">
+                                    <div key={sub.id} className={`flex flex-col rounded-lg bg-white p-8 shadow-sm ${isCurrentPlan ? 'border-2 border-yellow-500' : 'border border-slate-200'}`}>
+                                        <h3 className="text-2xl font-bold mb-3 text-slate-950">{sub.name}</h3>
+                                        <p className="mb-4 text-4xl font-extrabold text-slate-950">
                                             ${sub.price ? (sub.price / 100).toFixed(2) : '0'}
-                                            {sub.price > 0 && <span className="text-lg font-medium text-gray-400">/ month</span>}
+                                            {sub.price > 0 && <span className="text-lg font-medium text-slate-500">/ month</span>}
                                         </p>
-                                        <p className="text-gray-400 mb-6 min-h-[50px]">{sub.description}</p>
+                                        <p className="mb-6 min-h-[50px] text-slate-500">{sub.description}</p>
 
                                         <ul className="space-y-4 mb-8 flex-grow">
                                             {sub.featureSet?.map((feature, index) => (
                                                 <li key={index} className="flex items-start">
                                                     <svg className="w-6 h-6 text-green-400 mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
-                                                    <span>{feature}</span>
+                                                    <span className="text-slate-700">{feature}</span>
                                                 </li>
                                             ))}
                                         </ul>

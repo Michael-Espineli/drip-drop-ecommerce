@@ -53,14 +53,16 @@ const statusToneClasses = {
 
 const importModeStatusSets = {
   missing: ["missing", "imported"],
-  migrationRefresh: ["missing", "imported", "matched"],
+  migrationRefresh: ["missing", "imported"],
 };
 
 const importModeLabels = {
   missing: "Missing + imported refresh",
-  migrationRefresh: "Missing + matched refresh",
+  migrationRefresh: "Missing + prior migration refresh",
   all: "All parsed rows",
 };
+
+const likelyExistingMigrationStatuses = new Set(["imported", "matched", "review"]);
 
 const watchedCustomerSearches = [
   { label: "Alan Silverstein", terms: ["alansilverstein"] },
@@ -119,6 +121,76 @@ const sourceTextForRecord = (record) =>
     record.customer.migrationSource?.sourceCustomerKey,
     record.customer.migrationSource?.sourceLocationKey,
   ].join(" "));
+
+const uniqueCleanStrings = (values = []) => {
+  const seen = new Set();
+
+  return values
+    .flat()
+    .map(cleanString)
+    .filter(Boolean)
+    .filter((value) => {
+      const key = value.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const getRecordImportDecision = (record, importMode, manualSkippedRecordIdSet) => {
+  const selectedByMode = recordIsSelectedForImportMode(record, importMode);
+  const manuallySkipped = manualSkippedRecordIdSet.has(record.id);
+
+  if (selectedByMode && !manuallySkipped) return "willImport";
+  if (manuallySkipped) return "skipped";
+  return "notSelected";
+};
+
+const buildPreviewCustomerGroups = (records = [], importMode, manualSkippedRecordIdSet) => {
+  const groupsByCustomerId = new Map();
+
+  records.forEach((record) => {
+    const customerId = record.customer?.id || record.id;
+    if (!groupsByCustomerId.has(customerId)) {
+      groupsByCustomerId.set(customerId, {
+        customerId,
+        customerName: record.customerName || "Unnamed customer",
+        records: [],
+      });
+    }
+
+    groupsByCustomerId.get(customerId).records.push(record);
+  });
+
+  return Array.from(groupsByCustomerId.values()).map((group) => {
+    const decisionCounts = { willImport: 0, skipped: 0, notSelected: 0 };
+    const statusCounts = { missing: 0, review: 0, matched: 0, imported: 0 };
+
+    group.records.forEach((record) => {
+      const decision = getRecordImportDecision(record, importMode, manualSkippedRecordIdSet);
+      const status = record.migrationCheck?.status || "missing";
+
+      decisionCounts[decision] = (decisionCounts[decision] || 0) + 1;
+      statusCounts[status] = (statusCounts[status] || 0) + 1;
+    });
+
+    return {
+      ...group,
+      rowNumbers: group.records.map((record) => record.rowNumber).filter(Boolean),
+      locationLabels: uniqueCleanStrings(group.records.map((record) => record.serviceLocationLabel)),
+      sourcePhones: uniqueCleanStrings(group.records.map((record) => record.sourcePhones || [])),
+      sourceEmails: uniqueCleanStrings(group.records.map((record) => record.sourceEmails || [])),
+      rowCount: group.records.length,
+      locationCount: group.records.length,
+      equipmentCount: group.records.reduce((count, record) => count + (record.equipment?.length || 0), 0),
+      equipmentPartsCount: group.records.reduce((count, record) => count + (record.equipmentParts?.length || 0), 0),
+      activeLocationCount: group.records.filter((record) => record.active).length,
+      inactiveLocationCount: group.records.filter((record) => !record.active).length,
+      decisionCounts,
+      statusCounts,
+    };
+  });
+};
 
 const buildDiagnosticRecord = ({
   record,
@@ -192,12 +264,14 @@ function CustomerExportImport() {
   const [records, setRecords] = useState([]);
   const [parseIssues, setParseIssues] = useState([]);
   const [skippedRows, setSkippedRows] = useState([]);
+  const [manualSkippedRecordIds, setManualSkippedRecordIds] = useState([]);
   const [fileName, setFileName] = useState("");
   const [sheetName, setSheetName] = useState("");
   const [tagInput, setTagInput] = useState("");
   const [importTags, setImportTags] = useState(["Imported Customer Export"]);
   const [importMode, setImportMode] = useState("migrationRefresh");
   const [previewSearch, setPreviewSearch] = useState("");
+  const [expandedPreviewCustomerIds, setExpandedPreviewCustomerIds] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState({ current: 0, total: 0 });
   const [deletingMigration, setDeletingMigration] = useState(false);
@@ -268,15 +342,36 @@ function CustomerExportImport() {
     [existingData.customers, existingData.serviceLocations, records]
   );
   const comparisonSummary = useMemo(() => summarizeCustomerExportComparison(comparedRecords), [comparedRecords]);
-  const importableRecords = useMemo(
+  const manualSkippedRecordIdSet = useMemo(() => new Set(manualSkippedRecordIds), [manualSkippedRecordIds]);
+  const modeSelectedRecords = useMemo(
     () => comparedRecords.filter((record) => recordIsSelectedForImportMode(record, importMode)),
     [comparedRecords, importMode]
+  );
+  const importableRecords = useMemo(
+    () => modeSelectedRecords.filter((record) => !manualSkippedRecordIdSet.has(record.id)),
+    [manualSkippedRecordIdSet, modeSelectedRecords]
+  );
+  const manuallySkippedRecords = useMemo(
+    () => comparedRecords.filter((record) => manualSkippedRecordIdSet.has(record.id)),
+    [comparedRecords, manualSkippedRecordIdSet]
+  );
+  const manuallySkippedSelectedRecords = useMemo(
+    () => modeSelectedRecords.filter((record) => manualSkippedRecordIdSet.has(record.id)),
+    [manualSkippedRecordIdSet, modeSelectedRecords]
+  );
+  const manuallySkippedCustomerCount = useMemo(
+    () => new Set(manuallySkippedRecords.map((record) => record.customer.id)).size,
+    [manuallySkippedRecords]
   );
   const excludedImportRecords = useMemo(
     () => comparedRecords.filter((record) => !recordIsSelectedForImportMode(record, importMode)),
     [comparedRecords, importMode]
   );
   const importableSummary = useMemo(() => summarizeCustomerExportRecords(importableRecords), [importableRecords]);
+  const importCustomerIdCollisions = useMemo(
+    () => findCustomerExportCustomerIdCollisions(importableRecords),
+    [importableRecords]
+  );
   const filteredPreviewRecords = useMemo(() => {
     const searchKey = normalizeText(previewSearch);
     if (!searchKey) return comparedRecords;
@@ -296,7 +391,18 @@ function CustomerExportImport() {
         .some((value) => value.includes(searchKey))
     );
   }, [comparedRecords, previewSearch]);
-  const previewRecords = useMemo(() => filteredPreviewRecords.slice(0, 80), [filteredPreviewRecords]);
+  const previewCustomerGroups = useMemo(
+    () => buildPreviewCustomerGroups(filteredPreviewRecords, importMode, manualSkippedRecordIdSet),
+    [filteredPreviewRecords, importMode, manualSkippedRecordIdSet]
+  );
+  const displayedPreviewCustomerGroups = useMemo(
+    () => previewCustomerGroups.slice(0, 60),
+    [previewCustomerGroups]
+  );
+  const expandedPreviewCustomerIdSet = useMemo(
+    () => new Set(expandedPreviewCustomerIds),
+    [expandedPreviewCustomerIds]
+  );
   const excludedPreviewRecords = useMemo(() => excludedImportRecords.slice(0, 80), [excludedImportRecords]);
   const expectedColumns = CUSTOMER_EXPORT_EXPECTED_COLUMNS.join(", ");
 
@@ -308,6 +414,8 @@ function CustomerExportImport() {
       setRecords([]);
       setParseIssues([]);
       setSkippedRows([]);
+      setManualSkippedRecordIds([]);
+      setExpandedPreviewCustomerIds([]);
       setDiagnosticText("");
       setFileName("");
       setSheetName("");
@@ -328,6 +436,8 @@ function CustomerExportImport() {
         setRecords(parsed.records);
         setParseIssues(parsed.issues);
         setSkippedRows(parsed.skippedRows || []);
+        setManualSkippedRecordIds([]);
+        setExpandedPreviewCustomerIds([]);
         setDiagnosticText("");
 
         if (parsed.records.length > 0) {
@@ -340,6 +450,8 @@ function CustomerExportImport() {
         setRecords([]);
         setParseIssues(["The selected file could not be parsed as a customer export workbook."]);
         setSkippedRows([]);
+        setManualSkippedRecordIds([]);
+        setExpandedPreviewCustomerIds([]);
         setDiagnosticText("");
         toast.error("Could not parse this workbook.");
       }
@@ -360,6 +472,80 @@ function CustomerExportImport() {
     setImportTags((currentTags) => currentTags.filter((tag) => tag !== tagToRemove));
   };
 
+  const setRecordManualSkip = useCallback((recordId, shouldSkip = true) => {
+    if (!recordId) return;
+
+    setManualSkippedRecordIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (shouldSkip) {
+        nextIds.add(recordId);
+      } else {
+        nextIds.delete(recordId);
+      }
+      return Array.from(nextIds);
+    });
+  }, []);
+
+  const setCustomerManualSkip = useCallback((customerId, shouldSkip = true) => {
+    if (!customerId) return;
+
+    const customerRecordIds = comparedRecords
+      .filter((record) => record.customer.id === customerId)
+      .map((record) => record.id);
+
+    setManualSkippedRecordIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      customerRecordIds.forEach((recordId) => {
+        if (shouldSkip) {
+          nextIds.add(recordId);
+        } else {
+          nextIds.delete(recordId);
+        }
+      });
+      return Array.from(nextIds);
+    });
+  }, [comparedRecords]);
+
+  const skipLikelyExistingRecords = useCallback(() => {
+    const likelyExistingRecordIds = comparedRecords
+      .filter((record) => likelyExistingMigrationStatuses.has(record.migrationCheck?.status || "missing"))
+      .map((record) => record.id);
+
+    if (likelyExistingRecordIds.length === 0) {
+      toast.success("No likely existing customer rows were found in this workbook.");
+      return;
+    }
+
+    setManualSkippedRecordIds((currentIds) =>
+      Array.from(new Set([...currentIds, ...likelyExistingRecordIds]))
+    );
+    toast.success(`Skipped ${likelyExistingRecordIds.length} likely existing row(s).`);
+  }, [comparedRecords]);
+
+  const clearManualSkips = useCallback(() => {
+    setManualSkippedRecordIds([]);
+  }, []);
+
+  const togglePreviewCustomer = useCallback((customerId) => {
+    setExpandedPreviewCustomerIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(customerId)) {
+        nextIds.delete(customerId);
+      } else {
+        nextIds.add(customerId);
+      }
+      return Array.from(nextIds);
+    });
+  }, []);
+
+  const expandDisplayedPreviewCustomers = useCallback(() => {
+    setExpandedPreviewCustomerIds(displayedPreviewCustomerGroups.map((group) => group.customerId));
+  }, [displayedPreviewCustomerGroups]);
+
+  const collapsePreviewCustomers = useCallback(() => {
+    setExpandedPreviewCustomerIds([]);
+  }, []);
+
   const handleUpload = async () => {
     if (!recentlySelectedCompany) {
       toast.error("Select a company before importing.");
@@ -372,17 +558,17 @@ function CustomerExportImport() {
     }
 
     if (importableRecords.length === 0) {
-      toast.error("No customer export rows are selected by the current import mode.");
+      toast.error("No customer export rows are selected after import mode and manual skips.");
       return;
     }
 
-    if (customerIdCollisions.length > 0) {
-      toast.error("Resolve customer ID collisions before importing this export.");
+    if (importCustomerIdCollisions.length > 0) {
+      toast.error("Resolve or skip customer ID collisions in the selected import rows first.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Import ${importableRecords.length} export rows for ${importableSummary.customers} customers, ${importableSummary.serviceLocations} service locations, ${importableSummary.bodiesOfWater} pools, and ${importableSummary.equipment} default equipment records into this company?`
+      `Import ${importableRecords.length} export rows for ${importableSummary.customers} customers, ${importableSummary.serviceLocations} service locations, ${importableSummary.bodiesOfWater} pools, and ${importableSummary.equipment} default equipment records into this company?\n\n${manuallySkippedSelectedRecords.length} selected row(s) will be skipped manually.`
     );
     if (!confirmed) return;
 
@@ -475,6 +661,7 @@ function CustomerExportImport() {
         importMode: importModeLabels[importMode],
         rows: importableRecords.length,
         excludedRows: excludedImportRecords.length,
+        manualSkippedRows: manuallySkippedSelectedRecords.length,
         customers: writtenCustomers,
         serviceLocations: importableRecords.length,
         bodiesOfWater: importableRecords.length,
@@ -589,8 +776,14 @@ function CustomerExportImport() {
       diagnosticExistingData.customers,
       diagnosticExistingData.serviceLocations
     );
-    const diagnosticImportableRecords = diagnosticComparedRecords.filter((record) =>
+    const diagnosticModeSelectedRecords = diagnosticComparedRecords.filter((record) =>
       recordIsSelectedForImportMode(record, importMode)
+    );
+    const diagnosticImportableRecords = diagnosticModeSelectedRecords.filter((record) =>
+      !manualSkippedRecordIdSet.has(record.id)
+    );
+    const diagnosticManualSkippedRecords = diagnosticModeSelectedRecords.filter((record) =>
+      manualSkippedRecordIdSet.has(record.id)
     );
     const diagnosticExcludedRecords = diagnosticComparedRecords.filter((record) =>
       !recordIsSelectedForImportMode(record, importMode)
@@ -642,6 +835,7 @@ function CustomerExportImport() {
         value: importMode,
         label: importModeLabels[importMode],
         selectedRowCount: diagnosticImportableRecords.length,
+        manualSkippedSelectedRowCount: diagnosticManualSkippedRecords.length,
         excludedRowCount: diagnosticExcludedRecords.length,
       },
       summary: {
@@ -728,7 +922,7 @@ function CustomerExportImport() {
             <button
               type="button"
               onClick={handleUpload}
-              disabled={uploading || deletingMigration || records.length === 0}
+              disabled={uploading || deletingMigration || records.length === 0 || importableRecords.length === 0}
               className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {uploading ? `Importing ${uploadProgress.current}/${uploadProgress.total}` : "Import Selected Rows"}
@@ -815,7 +1009,7 @@ function CustomerExportImport() {
               </div>
             </div>
 
-            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-5">
               <div className="border border-emerald-200 bg-emerald-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Already Added</p>
                 <p className="text-2xl font-bold text-emerald-700">
@@ -833,6 +1027,10 @@ function CustomerExportImport() {
               <div className="border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Existing Drip Drop</p>
                 <p className="text-2xl font-bold text-slate-950">{existingData.customers.length}</p>
+              </div>
+              <div className="border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Manual Skips</p>
+                <p className="text-2xl font-bold text-slate-950">{manuallySkippedRecords.length}</p>
               </div>
             </div>
           </section>
@@ -866,9 +1064,9 @@ function CustomerExportImport() {
                       : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  Missing + matched refresh
+                  Missing + prior migration refresh
                   <span className="mt-1 block text-xs font-normal text-slate-500">
-                    Writes missing, prior migration, and already matched export rows.
+                    Writes missing rows and refreshes rows previously created by this migration.
                   </span>
                 </button>
                 <button
@@ -904,6 +1102,33 @@ function CustomerExportImport() {
                 Next import target: {importableRecords.length} rows, {importableSummary.customers} customers,{" "}
                 {importableSummary.serviceLocations} locations, {importableSummary.equipment} equipment records.
               </p>
+              <p className="mt-1 text-xs text-slate-500">
+                Manual skips: {manuallySkippedRecords.length} rows across {manuallySkippedCustomerCount} customers.
+                {manuallySkippedSelectedRecords.length > 0
+                  ? ` ${manuallySkippedSelectedRecords.length} of those rows would otherwise import in this mode.`
+                  : ""}
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  onClick={skipLikelyExistingRecords}
+                  disabled={records.length === 0}
+                  className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-300"
+                >
+                  Skip likely existing rows
+                  <span className="mt-1 block text-xs font-normal text-amber-700">
+                    Marks review, already added, and already imported rows as manual skips.
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={clearManualSkips}
+                  disabled={manualSkippedRecordIds.length === 0}
+                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                >
+                  Clear manual skips
+                </button>
+              </div>
             </div>
           </aside>
         </div>
@@ -929,16 +1154,22 @@ function CustomerExportImport() {
               {lastImportSummary.serviceLocations} service locations, {lastImportSummary.bodiesOfWater} pools,{" "}
               {lastImportSummary.equipment || 0} equipment records, and {lastImportSummary.equipmentParts || 0} equipment parts.
               {lastImportSummary.excludedRows > 0 ? ` ${lastImportSummary.excludedRows} rows were not selected by this mode.` : ""}
+              {lastImportSummary.manualSkippedRows > 0 ? ` ${lastImportSummary.manualSkippedRows} selected rows were manually skipped.` : ""}
             </p>
           </div>
         )}
 
         {customerIdCollisions.length > 0 && (
-          <section className="mx-4 border border-red-200 bg-white shadow-sm">
-            <div className="border-b border-red-200 bg-red-50 px-4 py-3">
-              <h2 className="text-base font-semibold text-red-950">Customer ID Collisions</h2>
-              <p className="mt-1 text-sm text-red-800">
-                {customerIdCollisions.length} generated customer IDs are shared by different customer identities. Delete and re-import after reviewing these rows.
+          <section className={`mx-4 border bg-white shadow-sm ${importCustomerIdCollisions.length > 0 ? "border-red-200" : "border-amber-200"}`}>
+            <div className={`border-b px-4 py-3 ${importCustomerIdCollisions.length > 0 ? "border-red-200 bg-red-50" : "border-amber-200 bg-amber-50"}`}>
+              <h2 className={`text-base font-semibold ${importCustomerIdCollisions.length > 0 ? "text-red-950" : "text-amber-950"}`}>
+                Customer ID Collisions
+              </h2>
+              <p className={`mt-1 text-sm ${importCustomerIdCollisions.length > 0 ? "text-red-800" : "text-amber-800"}`}>
+                {customerIdCollisions.length} generated customer IDs are shared by different customer identities.
+                {importCustomerIdCollisions.length > 0
+                  ? ` ${importCustomerIdCollisions.length} collision group(s) are still selected for import. Skip rows until only one identity remains for each customer ID.`
+                  : " These rows are currently skipped or outside the selected import mode, so they will not block this import."}
               </p>
             </div>
             <div className="overflow-x-auto">
@@ -1057,6 +1288,86 @@ function CustomerExportImport() {
           </div>
         )}
 
+        {manuallySkippedRecords.length > 0 && (
+          <section className="mx-4 border border-amber-200 bg-white shadow-sm">
+            <div className="flex flex-col gap-2 border-b border-amber-200 bg-amber-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-base font-semibold text-amber-950">Manually Skipped Rows</h2>
+                <p className="mt-1 text-sm text-amber-800">
+                  {manuallySkippedRecords.length} rows across {manuallySkippedCustomerCount} customers are marked to stay out of the import.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={clearManualSkips}
+                className="inline-flex items-center justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-800 shadow-sm transition hover:bg-amber-100"
+              >
+                Clear All Skips
+              </button>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Customer</th>
+                    <th className="px-4 py-3">Row</th>
+                    <th className="px-4 py-3">Current Check</th>
+                    <th className="px-4 py-3">Import Mode</th>
+                    <th className="px-4 py-3">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200 bg-white">
+                  {manuallySkippedRecords.slice(0, 80).map((record) => {
+                    const selectedByMode = recordIsSelectedForImportMode(record, importMode);
+
+                    return (
+                      <tr key={record.id} className="align-top">
+                        <td className="min-w-[240px] px-4 py-3 font-semibold text-slate-900">{record.customerName}</td>
+                        <td className="px-4 py-3 text-slate-600">{record.rowNumber}</td>
+                        <td className="min-w-[180px] px-4 py-3">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                              statusToneClasses[record.migrationCheck?.tone] || statusToneClasses.slate
+                            }`}
+                          >
+                            {record.migrationCheck?.label || "Needs import"}
+                          </span>
+                        </td>
+                        <td className="min-w-[180px] px-4 py-3 text-slate-600">
+                          {selectedByMode ? "Would import without skip" : "Already outside this mode"}
+                        </td>
+                        <td className="min-w-[220px] px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setRecordManualSkip(record.id, false)}
+                              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                              Allow Row
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCustomerManualSkip(record.customer.id, false)}
+                              className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                            >
+                              Allow Customer
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {manuallySkippedRecords.length > 80 && (
+              <div className="border-t border-slate-200 px-4 py-3 text-sm text-slate-500">
+                {manuallySkippedRecords.length - 80} more skipped rows not shown.
+              </div>
+            )}
+          </section>
+        )}
+
         {excludedImportRecords.length > 0 && (
           <section className="mx-4 border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-4 py-3">
@@ -1104,14 +1415,32 @@ function CustomerExportImport() {
         )}
 
         <section className="border border-slate-200 bg-white shadow-sm">
-          <div className="grid grid-cols-1 gap-3 border-b border-slate-200 px-4 py-3 md:grid-cols-[minmax(0,1fr)_300px] md:items-center">
+          <div className="grid grid-cols-1 gap-3 border-b border-slate-200 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto_300px] lg:items-center">
             <div>
               <h2 className="text-base font-semibold text-slate-950">Import Preview</h2>
               <span className="text-sm text-slate-500">
                 {records.length > 0
-                  ? `${previewRecords.length} of ${filteredPreviewRecords.length} filtered rows, ${records.length} total`
+                  ? `${displayedPreviewCustomerGroups.length} of ${previewCustomerGroups.length} customer groups, ${filteredPreviewRecords.length} filtered rows, ${records.length} total. ${importableRecords.length} selected to import.`
                   : "No workbook parsed"}
               </span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={expandDisplayedPreviewCustomers}
+                disabled={displayedPreviewCustomerGroups.length === 0}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              >
+                Expand Visible
+              </button>
+              <button
+                type="button"
+                onClick={collapsePreviewCustomers}
+                disabled={expandedPreviewCustomerIds.length === 0}
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+              >
+                Collapse All
+              </button>
             </div>
             <input
               type="search"
@@ -1127,69 +1456,196 @@ function CustomerExportImport() {
               Upload a customer export workbook to preview the migration records.
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3">Service Location</th>
-                    <th className="px-4 py-3">Migration Check</th>
-                    <th className="px-4 py-3">Primary Contact</th>
-                    <th className="px-4 py-3">Tags</th>
-                    <th className="px-4 py-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200 bg-white">
-                  {previewRecords.map((record) => (
-                    <tr key={record.id} className="align-top">
-                      <td className="px-4 py-4">
-                        <div className="font-semibold text-slate-900">{record.customerName}</div>
-                        <div className="mt-1 text-xs text-slate-500">Row {record.rowNumber}</div>
-                      </td>
-                      <td className="min-w-[280px] px-4 py-4 text-slate-700">{record.serviceLocationLabel}</td>
-                      <td className="min-w-[250px] px-4 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            statusToneClasses[record.migrationCheck?.tone] || statusToneClasses.slate
-                          }`}
-                        >
-                          {record.migrationCheck?.label || "Needs import"}
-                        </span>
-                        <div className="mt-2 text-xs leading-5 text-slate-500">
-                          {record.migrationCheck?.reason}
-                          {record.migrationCheck?.matchedCustomerName && (
-                            <div className="mt-1 font-medium text-slate-700">
-                              Match: {record.migrationCheck.matchedCustomerName}
+            <div className="divide-y divide-slate-200">
+              {displayedPreviewCustomerGroups.length === 0 ? (
+                <div className="px-4 py-10 text-center text-sm text-slate-500">
+                  No customer groups match the current search.
+                </div>
+              ) : displayedPreviewCustomerGroups.map((group) => {
+                const expanded = expandedPreviewCustomerIdSet.has(group.customerId);
+                const allSkipped = group.records.every((record) => manualSkippedRecordIdSet.has(record.id));
+                const alreadyCount = (group.statusCounts.imported || 0) + (group.statusCounts.matched || 0);
+                const rowNumbers = group.rowNumbers.slice(0, 6).join(", ");
+                const extraRowCount = Math.max(group.rowNumbers.length - 6, 0);
+                const locationPreview = group.locationLabels.slice(0, 3).join(" | ");
+                const extraLocationCount = Math.max(group.locationLabels.length - 3, 0);
+
+                return (
+                  <div key={group.customerId} className="bg-white">
+                    <div className="grid grid-cols-1 gap-3 px-4 py-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                      <button
+                        type="button"
+                        onClick={() => togglePreviewCustomer(group.customerId)}
+                        className="min-w-0 text-left"
+                        aria-expanded={expanded}
+                      >
+                        <div className="flex items-start gap-3">
+                          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-slate-300 bg-slate-50 text-sm font-bold text-slate-700">
+                            {expanded ? "-" : "+"}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-bold text-slate-950">{group.customerName}</h3>
+                              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                                {group.rowCount} row{group.rowCount === 1 ? "" : "s"}
+                              </span>
+                              <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                                rows {rowNumbers}{extraRowCount > 0 ? ` +${extraRowCount}` : ""}
+                              </span>
                             </div>
-                          )}
+                            <div className="mt-2 grid gap-2 text-xs text-slate-600 sm:grid-cols-2 xl:grid-cols-4">
+                              <span>{group.locationCount} location{group.locationCount === 1 ? "" : "s"}</span>
+                              <span>{group.equipmentCount} equipment / {group.equipmentPartsCount} parts</span>
+                              <span>{group.activeLocationCount} active / {group.inactiveLocationCount} inactive</span>
+                              <span>{group.sourcePhones[0] || group.sourceEmails[0] || "No contact in export"}</span>
+                            </div>
+                            {locationPreview && (
+                              <p className="mt-2 truncate text-xs text-slate-500">
+                                {locationPreview}{extraLocationCount > 0 ? ` +${extraLocationCount} more` : ""}
+                              </p>
+                            )}
+                            <div className="mt-3 flex flex-wrap gap-2">
+                              {group.decisionCounts.willImport > 0 && (
+                                <span className="rounded-full bg-blue-100 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                                  {group.decisionCounts.willImport} will import
+                                </span>
+                              )}
+                              {group.decisionCounts.skipped > 0 && (
+                                <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                                  {group.decisionCounts.skipped} skipped
+                                </span>
+                              )}
+                              {group.decisionCounts.notSelected > 0 && (
+                                <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                  {group.decisionCounts.notSelected} not selected
+                                </span>
+                              )}
+                              {group.statusCounts.missing > 0 && (
+                                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                                  {group.statusCounts.missing} needs import
+                                </span>
+                              )}
+                              {group.statusCounts.review > 0 && (
+                                <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
+                                  {group.statusCounts.review} review
+                                </span>
+                              )}
+                              {alreadyCount > 0 && (
+                                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
+                                  {alreadyCount} already exists
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                      </td>
-                      <td className="min-w-[240px] px-4 py-4 text-slate-700">
-                        <div>{record.sourcePhones[0] || "-"}</div>
-                        <div className="text-xs text-slate-500">{record.sourceEmails[0] || "-"}</div>
-                      </td>
-                      <td className="min-w-[220px] px-4 py-4">
-                        <div className="flex flex-wrap gap-1.5">
-                          {mergeTags(record.sourceTags, importTags).slice(0, 5).map((tag) => (
-                            <span key={tag} className="rounded-full bg-slate-100 px-2 py-1 text-xs font-medium text-slate-700">
-                              {tag}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                            record.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-slate-600"
+                      </button>
+                      <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <button
+                          type="button"
+                          onClick={() => setCustomerManualSkip(group.customerId, !allSkipped)}
+                          className={`rounded-md border px-3 py-2 text-xs font-semibold transition ${
+                            allSkipped
+                              ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                              : "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100"
                           }`}
                         >
-                          {record.active ? "Active" : "Inactive"}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                          {allSkipped ? "Allow Customer" : "Skip Customer"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {expanded && (
+                      <div className="border-t border-slate-100 bg-slate-50 px-4 pb-4 pt-3">
+                        <div className="overflow-x-auto rounded-md border border-slate-200 bg-white">
+                          <table className="min-w-full divide-y divide-slate-200 text-sm">
+                            <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              <tr>
+                                <th className="px-3 py-2">Row</th>
+                                <th className="px-3 py-2">Service Location</th>
+                                <th className="px-3 py-2">Check</th>
+                                <th className="px-3 py-2">Decision</th>
+                                <th className="px-3 py-2">Contact</th>
+                                <th className="px-3 py-2">Equipment</th>
+                                <th className="px-3 py-2">Action</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-200 bg-white">
+                              {group.records.map((record) => {
+                                const decision = getRecordImportDecision(record, importMode, manualSkippedRecordIdSet);
+                                const willImport = decision === "willImport";
+                                const manuallySkipped = decision === "skipped";
+
+                                return (
+                                  <tr key={record.id} className="align-top">
+                                    <td className="px-3 py-3 text-slate-600">{record.rowNumber}</td>
+                                    <td className="min-w-[260px] px-3 py-3 text-slate-700">{record.serviceLocationLabel}</td>
+                                    <td className="min-w-[220px] px-3 py-3">
+                                      <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                          statusToneClasses[record.migrationCheck?.tone] || statusToneClasses.slate
+                                        }`}
+                                      >
+                                        {record.migrationCheck?.label || "Needs import"}
+                                      </span>
+                                      <div className="mt-1 text-xs leading-5 text-slate-500">
+                                        {record.migrationCheck?.reason}
+                                        {record.migrationCheck?.matchedCustomerName && (
+                                          <div className="font-medium text-slate-700">
+                                            Match: {record.migrationCheck.matchedCustomerName}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </td>
+                                    <td className="px-3 py-3">
+                                      <span
+                                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                          willImport
+                                            ? "bg-blue-100 text-blue-700"
+                                            : manuallySkipped
+                                              ? "bg-amber-100 text-amber-700"
+                                              : "bg-slate-100 text-slate-600"
+                                        }`}
+                                      >
+                                        {willImport ? "Will import" : manuallySkipped ? "Skipped" : "Not selected"}
+                                      </span>
+                                    </td>
+                                    <td className="min-w-[220px] px-3 py-3 text-slate-700">
+                                      <div>{record.sourcePhones[0] || "-"}</div>
+                                      <div className="text-xs text-slate-500">{record.sourceEmails[0] || "-"}</div>
+                                    </td>
+                                    <td className="px-3 py-3 text-slate-700">
+                                      {record.equipment?.length || 0} item{record.equipment?.length === 1 ? "" : "s"}
+                                    </td>
+                                    <td className="px-3 py-3">
+                                      <button
+                                        type="button"
+                                        onClick={() => setRecordManualSkip(record.id, !manuallySkipped)}
+                                        className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${
+                                          manuallySkipped
+                                            ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                            : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                                        }`}
+                                      >
+                                        {manuallySkipped ? "Allow Row" : "Skip Row"}
+                                      </button>
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+
+              {previewCustomerGroups.length > displayedPreviewCustomerGroups.length && (
+                <div className="border-t border-slate-200 px-4 py-3 text-sm text-slate-500">
+                  {previewCustomerGroups.length - displayedPreviewCustomerGroups.length} more customer groups not shown. Use search to narrow the list.
+                </div>
+              )}
             </div>
           )}
         </section>

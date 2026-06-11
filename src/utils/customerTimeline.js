@@ -39,6 +39,11 @@ const safeGetDocs = async (queryRef, label) => {
   }
 };
 
+const valueWithUnit = (value, unit) => {
+  if (value === undefined || value === null || value === "") return "";
+  return `${value}${unit ? ` ${unit}` : ""}`;
+};
+
 const buildServiceStopEvent = (stop) => ({
   id: `service-stop-${stop.id}`,
   type: "serviceStop",
@@ -47,13 +52,16 @@ const buildServiceStopEvent = (stop) => ({
   subtitle: compact([stop.tech, stop.operationStatus, stop.billingStatus]).join(" • "),
   detail: stop.description || "",
   date: validDate(stop.serviceDate),
+  bodyOfWaterId: stop.bodyOfWaterId || "",
+  serviceLocationId: stop.serviceLocationId || "",
   target: `/company/serviceStops/detail/${stop.id}`,
 });
 
-const buildStopDataEvent = (stopData) => {
+const buildStopDataEvent = (stopData, bodyOfWaterById = new Map()) => {
   const readings = Array.isArray(stopData.readings) ? stopData.readings : [];
   const dosages = Array.isArray(stopData.dosages) ? stopData.dosages : [];
   const observations = Array.isArray(stopData.observation) ? stopData.observation : [];
+  const bodyOfWater = bodyOfWaterById.get(stopData.bodyOfWaterId) || {};
 
   return {
     id: `stop-data-${stopData.id}`,
@@ -70,10 +78,59 @@ const buildStopDataEvent = (stopData) => {
     dosages,
     observations,
     bodyOfWaterId: stopData.bodyOfWaterId || "",
+    bodyOfWaterName: bodyOfWater.name || "",
     serviceLocationId: stopData.serviceLocationId || "",
     serviceStopId: stopData.serviceStopId || "",
     target: stopData.serviceStopId ? `/company/serviceStops/detail/${stopData.serviceStopId}` : "",
   };
+};
+
+const buildEquipmentReadingEvents = (stopData, equipmentById = new Map(), bodyOfWaterById = new Map()) => {
+  const measurements = Array.isArray(stopData.equipmentMeasurements) ? stopData.equipmentMeasurements : [];
+
+  return measurements.map((measurement, index) => {
+    const equipment = equipmentById.get(measurement.equipmentId) || {};
+    const bodyOfWaterId = measurement.bodyOfWaterId || equipment.bodyOfWaterId || stopData.bodyOfWaterId || "";
+    const bodyOfWater = bodyOfWaterById.get(bodyOfWaterId) || {};
+    const pressure =
+      measurement.poundForcePerSquareInch ??
+      measurement.psi ??
+      measurement.pressure ??
+      measurement.currentPressure;
+    const rpm =
+      measurement.revolutionsPerMinute ??
+      measurement.rpm;
+    const equipmentName = measurement.equipmentName || equipment.name || equipment.type || "Equipment";
+
+    return {
+      id: `equipment-reading-${stopData.id}-${measurement.id || measurement.equipmentId || index}`,
+      type: "equipmentReading",
+      label: "Equipment Reading",
+      title: `${equipmentName} reading`,
+      subtitle: compact([
+        equipment.type || measurement.equipmentType,
+        bodyOfWater.name,
+        measurement.status,
+      ]).join(" • "),
+      detail: compact([
+        valueWithUnit(pressure, "PSI"),
+        valueWithUnit(rpm, "RPM"),
+      ]).join(" • "),
+      date: validDate(measurement.date || stopData.date),
+      equipmentId: measurement.equipmentId || "",
+      equipmentName,
+      equipmentType: equipment.type || measurement.equipmentType || "",
+      bodyOfWaterId,
+      bodyOfWaterName: bodyOfWater.name || "",
+      serviceLocationId: equipment.serviceLocationId || stopData.serviceLocationId || "",
+      serviceStopId: stopData.serviceStopId || "",
+      target: measurement.equipmentId
+        ? `/company/equipment/detail/${measurement.equipmentId}`
+        : stopData.serviceStopId
+          ? `/company/serviceStops/detail/${stopData.serviceStopId}`
+          : "",
+    };
+  });
 };
 
 const buildEquipmentEvent = (equipment, history) => ({
@@ -149,6 +206,8 @@ const buildRepairRequestEvent = (request) => ({
   subtitle: compact([request.status, request.createdByName || request.userName, request.equipmentName]).join(" • "),
   detail: request.description || request.notes || "",
   date: validDate(request.dateCreated || request.createdAt || request.updatedAt),
+  bodyOfWaterId: request.bodyOfWaterId || "",
+  equipmentId: request.equipmentId || "",
   target: `/company/repair-requests/detail/${request.id}`,
 });
 
@@ -261,6 +320,8 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   const stopData = stopDataSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const equipment = equipmentSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const bodiesOfWater = bodiesOfWaterSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const equipmentById = new Map(equipment.map((item) => [item.id, item]));
+  const bodyOfWaterById = new Map(bodiesOfWater.map((item) => [item.id, item]));
   const workOrders = workOrdersSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const toDos = toDosSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const repairRequestsById = new Map();
@@ -337,7 +398,8 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     ...commentEvents,
     ...stopData
       .filter((item) => (item.readings?.length || item.dosages?.length || item.observation?.length))
-      .map(buildStopDataEvent),
+      .map((item) => buildStopDataEvent(item, bodyOfWaterById)),
+    ...stopData.flatMap((item) => buildEquipmentReadingEvents(item, equipmentById, bodyOfWaterById)),
     ...equipmentEvents,
     ...waterEvents,
     ...toDos.map(buildToDoEvent),

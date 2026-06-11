@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { query, collection, getDocs } from "firebase/firestore";
+import { collection, getDocs } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
@@ -8,33 +8,63 @@ import Select from 'react-select';
 import { Link } from 'react-router-dom';
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
-const UserCard = ({ user, onClick }) => {
-    const getStatusClass = (status) => {
-        switch (status) {
-            case 'Active': return 'bg-green-100 text-green-800';
-            case 'Pending': return 'bg-yellow-100 text-yellow-800';
-            case 'Inactive': return 'bg-red-100 text-red-800';
-            default: return 'bg-gray-100 text-gray-800';
-        }
-    };
+const normalizeStatus = (status) => (status || '').toString().trim().toLowerCase();
 
+const formatStatus = (status) => {
+    if (!status) return 'Unknown';
+    return status.toString().charAt(0).toUpperCase() + status.toString().slice(1);
+};
+
+const getStatusClass = (status) => {
+    switch (normalizeStatus(status)) {
+        case 'active': return 'bg-green-100 text-green-800';
+        case 'pending': return 'bg-yellow-100 text-yellow-800';
+        case 'inactive': return 'bg-red-100 text-red-800';
+        case 'past': return 'bg-slate-100 text-slate-700';
+        default: return 'bg-gray-100 text-gray-800';
+    }
+};
+
+const getUserDisplayName = (user = {}) => (
+    user.userName ||
+    user.displayName ||
+    [user.firstName, user.lastName].filter(Boolean).join(' ') ||
+    user.name ||
+    user.email ||
+    user.userId ||
+    'Unknown User'
+);
+
+const formatDate = (value) => {
+    const date = value?.toDate ? value.toDate() : value instanceof Date ? value : value ? new Date(value) : null;
+    return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'N/A';
+};
+
+const UserRow = ({ user, onClick }) => {
     return (
-        <div onClick={onClick} className="bg-white p-5 rounded-xl shadow-lg border border-gray-200 hover:shadow-xl hover:border-blue-500 transition-all cursor-pointer">
-            <div className="flex justify-between items-start">
-                <h3 className="font-bold text-lg text-gray-800">{user.userName}</h3>
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusClass(user.status)}`}>{user.status}</span>
-            </div>
-            <div className="mt-3 text-sm text-gray-600">
-                <p><span className="font-semibold">Role:</span> {user.roleName || 'Not Assigned'}</p>
-                <p><span className="font-semibold">Type:</span> {user.workerType || 'N/A'}</p>
-                {user.linkedCompanyName && <p><span className="font-semibold">Linked To:</span> {user.linkedCompanyName}</p>}
-                {user.allowPersonalVehicle && (
-                    <p className="mt-2 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+        <tr onClick={onClick} className="cursor-pointer border-b border-gray-100 transition hover:bg-blue-50/60">
+            <td className="whitespace-nowrap px-4 py-4">
+                <div className="font-semibold text-gray-900">{getUserDisplayName(user)}</div>
+                <div className="mt-0.5 text-xs text-gray-500">{user.email || user.userId || 'No email on file'}</div>
+            </td>
+            <td className="whitespace-nowrap px-4 py-4">
+                <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(user.status)}`}>
+                    {formatStatus(user.status)}
+                </span>
+            </td>
+            <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{user.roleName || 'Not Assigned'}</td>
+            <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{user.workerType || 'N/A'}</td>
+            <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{user.linkedCompanyName || 'N/A'}</td>
+            <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">
+                {user.allowPersonalVehicle ? (
+                    <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
                         Personal vehicle allowed
-                    </p>
-                )}
-            </div>
-        </div>
+                    </span>
+                ) : 'N/A'}
+            </td>
+            <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{formatDate(user.dateCreated || user.createdAt)}</td>
+            <td className="whitespace-nowrap px-4 py-4 text-right text-sm font-semibold text-blue-600">View</td>
+        </tr>
     );
 };
 
@@ -46,18 +76,20 @@ const CompanyUsers = () => {
     const navigate = useNavigate();
 
     // Filtering state
-    const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState(null);
     const [roleFilter, setRoleFilter] = useState(null);
 
     useEffect(() => {
-        if (!recentlySelectedCompany) return;
+        if (!recentlySelectedCompany) {
+            setAllUsers([]);
+            setIsLoading(false);
+            return;
+        }
 
         const fetchUsers = async () => {
             setIsLoading(true);
             try {
-                const usersQuery = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
-                const querySnapshot = await getDocs(usersQuery);
+                const querySnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
                 const userList = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
                 setAllUsers(userList);
             } catch (error) {
@@ -75,20 +107,18 @@ const CompanyUsers = () => {
         return roles.map(role => ({ value: role, label: role }));
     }, [allUsers]);
 
-    const statusOptions = [
-        { value: 'Active', label: 'Active' },
-        { value: 'Pending', label: 'Pending' },
-        { value: 'Inactive', label: 'Inactive' },
-    ];
+    const statusOptions = useMemo(() => {
+        const statuses = [...new Set(allUsers.map(u => u.status).filter(Boolean))];
+        return statuses.map(status => ({ value: status, label: formatStatus(status) }));
+    }, [allUsers]);
 
     const filteredUsers = useMemo(() => {
         return allUsers.filter(user => {
-            const searchMatch = user.userName.toLowerCase().includes(searchTerm.toLowerCase());
-            const statusMatch = !statusFilter || user.status === statusFilter.value;
+            const statusMatch = !statusFilter || normalizeStatus(user.status) === normalizeStatus(statusFilter.value);
             const roleMatch = !roleFilter || user.roleName === roleFilter.value;
-            return searchMatch && statusMatch && roleMatch;
-        });
-    }, [allUsers, searchTerm, statusFilter, roleFilter]);
+            return statusMatch && roleMatch;
+        }).sort((left, right) => getUserDisplayName(left).localeCompare(getUserDisplayName(right)));
+    }, [allUsers, statusFilter, roleFilter]);
 
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
@@ -114,14 +144,7 @@ const CompanyUsers = () => {
                 </header>
 
                 <div className="bg-white p-4 rounded-xl shadow-lg mb-8">
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <input
-                            type="text"
-                            placeholder="Search by name..."
-                            value={searchTerm}
-                            onChange={e => setSearchTerm(e.target.value)}
-                            className="md:col-span-1 bg-gray-100 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5"
-                        />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <Select options={statusOptions} value={statusFilter} onChange={setStatusFilter} placeholder="Filter by status..." isClearable />
                         <Select options={roleOptions} value={roleFilter} onChange={setRoleFilter} placeholder="Filter by role..." isClearable isLoading={isLoading} />
                     </div>
@@ -130,13 +153,31 @@ const CompanyUsers = () => {
                 {isLoading ? (
                     <div className="text-center py-10"><p className="text-gray-500">Loading users...</p></div>
                 ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg">
                         {filteredUsers.length > 0 ? (
-                            filteredUsers.map(user => (
-                                <UserCard key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/${user.userId}`)} />
-                            ))
+                            <div className="overflow-x-auto">
+                                <table className="min-w-full divide-y divide-gray-200">
+                                    <thead className="bg-gray-50">
+                                        <tr>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">User</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Status</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Role</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Type</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Linked To</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Vehicle</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Created</th>
+                                            <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-100 bg-white">
+                                        {filteredUsers.map(user => (
+                                            <UserRow key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/${user.userId || user.id}`)} />
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
                         ) : (
-                            <div className="col-span-full text-center py-12 bg-white rounded-xl shadow-lg">
+                            <div className="text-center py-12">
                                 <h3 className="text-xl font-semibold text-gray-700">No Users Found</h3>
                                 <p className="text-gray-500 mt-2">Click "Create New User" to add a user or adjust your filters.</p>
                             </div>

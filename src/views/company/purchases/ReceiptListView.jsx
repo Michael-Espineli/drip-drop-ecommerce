@@ -1,9 +1,36 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { collection, getDocs, orderBy, query } from "firebase/firestore";
+import { collection, getDocs, orderBy, query, where } from "firebase/firestore";
 import { format } from "date-fns";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+
+const receiptFilters = [
+  { value: "all", label: "All" },
+  { value: "withFiles", label: "With Files" },
+  { value: "missingFiles", label: "Missing Files" },
+  { value: "linkedItems", label: "Linked Items" },
+  { value: "noLinkedItems", label: "No Linked Items" },
+];
+
+const receiptSorts = [
+  { value: "receiptDateFirst", label: "Recent" },
+  { value: "receiptDateLast", label: "Oldest" },
+  { value: "totalHigh", label: "Total High" },
+  { value: "totalLow", label: "Total Low" },
+];
+
+const startOfDay = (date) => {
+  const nextDate = new Date(date);
+  nextDate.setHours(0, 0, 0, 0);
+  return nextDate;
+};
+
+const endOfDay = (date) => {
+  const nextDate = new Date(date);
+  nextDate.setHours(23, 59, 59, 999);
+  return nextDate;
+};
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -81,13 +108,62 @@ const ReceiptListView = () => {
   const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
   const [receipts, setReceipts] = useState([]);
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [startViewingDate, setStartViewingDate] = useState(() => startOfDay(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)));
+  const [endViewingDate, setEndViewingDate] = useState(() => endOfDay(new Date()));
+  const [receiptFilterOption, setReceiptFilterOption] = useState("all");
+  const [receiptSortOption, setReceiptSortOption] = useState("receiptDateFirst");
+  const [techIds, setTechIds] = useState([]);
+  const [companyUsers, setCompanyUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [tableSort, setTableSort] = useState({ key: "date", direction: "desc" });
 
   useEffect(() => {
-    if (!recentlySelectedCompany) {
+    const fetchCompanyUsers = async () => {
+      if (!recentlySelectedCompany) {
+        setCompanyUsers([]);
+        setTechIds([]);
+        return;
+      }
+
+      try {
+        const usersRef = collection(db, `companies/${recentlySelectedCompany}/companyUsers`);
+        const snapshot = await getDocs(query(usersRef, where("status", "==", "Active")));
+        const users = snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        setCompanyUsers(users);
+        setTechIds(users.map((user) => user.userId).filter(Boolean));
+      } catch (err) {
+        console.error("Error loading company users for receipt filters:", err);
+      }
+    };
+
+    fetchCompanyUsers();
+  }, [recentlySelectedCompany]);
+
+  const buildReceiptQuery = (receiptsRef) => {
+    const constraints = [
+      where("date", ">=", startOfDay(startViewingDate)),
+      where("date", "<=", endOfDay(endViewingDate)),
+    ];
+
+    const eligibleTechIds = techIds.filter(Boolean).slice(0, 30);
+    const allCompanyTechIds = companyUsers.map((user) => user.userId).filter(Boolean);
+    const isTechFiltered = allCompanyTechIds.length > 0 && eligibleTechIds.length !== allCompanyTechIds.length;
+    if (isTechFiltered && eligibleTechIds.length > 0) {
+      constraints.push(where("techId", "in", eligibleTechIds));
+    } else if (isTechFiltered) {
+      constraints.push(where("techId", "==", "__no_selected_technician__"));
+    }
+
+    constraints.push(orderBy("date", receiptSortOption === "receiptDateLast" ? "asc" : "desc"));
+
+    return query(receiptsRef, ...constraints);
+  };
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !startViewingDate || !endViewingDate) {
       setReceipts([]);
       setLoading(false);
       return;
@@ -99,7 +175,7 @@ const ReceiptListView = () => {
 
       try {
         const receiptsRef = collection(db, "companies", recentlySelectedCompany, "receipts");
-        const snapshot = await getDocs(query(receiptsRef, orderBy("date", "desc")));
+        const snapshot = await getDocs(buildReceiptQuery(receiptsRef));
         setReceipts(snapshot.docs.map(normalizeReceipt));
       } catch (err) {
         console.error("Error loading receipts:", err);
@@ -110,13 +186,29 @@ const ReceiptListView = () => {
     };
 
     loadReceipts();
-  }, [recentlySelectedCompany]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recentlySelectedCompany, startViewingDate, endViewingDate, receiptSortOption, techIds, companyUsers]);
 
   const filteredReceipts = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
-    if (!term) return receipts;
-    return receipts.filter((receipt) => receiptSearchText(receipt).includes(term));
-  }, [receipts, searchTerm]);
+    return receipts.filter((receipt) => {
+      const matchesSearch = !term || receiptSearchText(receipt).includes(term);
+      if (!matchesSearch) return false;
+
+      switch (receiptFilterOption) {
+        case "withFiles":
+          return receipt.pdfUrlList.length > 0;
+        case "missingFiles":
+          return receipt.pdfUrlList.length === 0;
+        case "linkedItems":
+          return receipt.purchasedItemIds.length > 0 || receipt.numberOfItems > 0;
+        case "noLinkedItems":
+          return receipt.purchasedItemIds.length === 0 && receipt.numberOfItems === 0;
+        default:
+          return true;
+      }
+    });
+  }, [receipts, receiptFilterOption, searchTerm]);
 
   const sortedReceipts = useMemo(() => {
     const valueForKey = (receipt, key) => {
@@ -154,6 +246,114 @@ const ReceiptListView = () => {
     }));
   };
 
+  const handleReceiptSortChange = (value) => {
+    setReceiptSortOption(value);
+
+    if (value === "receiptDateLast") {
+      setTableSort({ key: "date", direction: "asc" });
+    } else if (value === "totalHigh") {
+      setTableSort({ key: "costAfterTax", direction: "desc" });
+    } else if (value === "totalLow") {
+      setTableSort({ key: "costAfterTax", direction: "asc" });
+    } else {
+      setTableSort({ key: "date", direction: "desc" });
+    }
+  };
+
+  const toggleTech = (userId) => {
+    setTechIds((currentTechIds) =>
+      currentTechIds.includes(userId)
+        ? currentTechIds.filter((id) => id !== userId)
+        : [...currentTechIds, userId]
+    );
+  };
+
+  const FilterModal = () => (
+    <div className="fixed inset-0 z-50 bg-gray-900/40 p-4">
+      <div className="mx-auto mt-16 max-w-2xl rounded-lg border border-gray-200 bg-white p-5 shadow-xl">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900">Filter & Sort</h3>
+            <p className="text-sm text-gray-500">Receipts load from the selected date range.</p>
+          </div>
+          <button className="rounded-md px-3 py-1 text-sm font-semibold text-gray-600 hover:bg-gray-100" onClick={() => setShowFilterModal(false)}>
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <label className="text-sm font-semibold text-gray-700">
+            Start Date
+            <input
+              type="date"
+              value={format(startViewingDate, "yyyy-MM-dd")}
+              onChange={(event) => setStartViewingDate(startOfDay(new Date(`${event.target.value}T00:00:00`)))}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            End Date
+            <input
+              type="date"
+              value={format(endViewingDate, "yyyy-MM-dd")}
+              onChange={(event) => setEndViewingDate(endOfDay(new Date(`${event.target.value}T00:00:00`)))}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            />
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            Filter
+            <select
+              value={receiptFilterOption}
+              onChange={(event) => setReceiptFilterOption(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            >
+              {receiptFilters.map((filter) => (
+                <option key={filter.value} value={filter.value}>{filter.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm font-semibold text-gray-700">
+            Sort
+            <select
+              value={receiptSortOption}
+              onChange={(event) => handleReceiptSortChange(event.target.value)}
+              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+            >
+              {receiptSorts.map((sort) => (
+                <option key={sort.value} value={sort.value}>{sort.label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-5">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold text-gray-700">Technicians</h4>
+            <button
+              type="button"
+              className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+              onClick={() => setTechIds(companyUsers.map((user) => user.userId).filter(Boolean))}
+            >
+              Select all
+            </button>
+          </div>
+          <div className="mt-2 grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
+            {companyUsers.map((user) => (
+              <label key={user.id} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={techIds.includes(user.userId)}
+                  onChange={() => toggleTech(user.userId)}
+                />
+                {user.userName || user.name || user.email || user.userId}
+              </label>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   const SortHeader = ({ label, keyName }) => (
     <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">
       <button
@@ -175,7 +375,9 @@ const ReceiptListView = () => {
         <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-3xl font-bold text-gray-800">Receipts</h2>
-            <p className="mt-1 text-sm text-gray-500">All receipt headers, totals, files, and linked purchased items.</p>
+            <p className="mt-1 text-sm text-gray-500">
+              Receipt headers, totals, files, and linked purchased items from {format(startViewingDate, "MM/dd/yy")} to {format(endViewingDate, "MM/dd/yy")}.
+            </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <Link
@@ -202,6 +404,13 @@ const ReceiptListView = () => {
               type="text"
               placeholder="Search invoice, vendor, technician, notes, or receipt..."
             />
+            <button
+              type="button"
+              onClick={() => setShowFilterModal(true)}
+              className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-100"
+            >
+              Filter & Sort
+            </button>
           </div>
 
           <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -269,13 +478,14 @@ const ReceiptListView = () => {
 
               {sortedReceipts.length === 0 ? (
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center text-gray-500">
-                  No receipts match the current search.
+                  No receipts match the current filters.
                 </div>
               ) : null}
             </div>
           ) : null}
         </div>
       </div>
+      {showFilterModal && <FilterModal />}
     </div>
   );
 };

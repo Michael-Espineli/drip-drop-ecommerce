@@ -8,13 +8,18 @@ import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
 import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
+import {
+    TODO_LIST_FEATURE_FLAG_ID,
+    normalizeTodo,
+    todoIsOpen,
+} from '../utils/models/TodoItem';
 
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0 });
     const categoryLabel = (category) => category === 'Users' ? 'Users, Vendors & Fleet' : category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
 
@@ -57,7 +62,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {} });
+            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0 });
             return;
         }
 
@@ -119,6 +124,29 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             setCounts(prev => ({ ...prev, messages: 0 }));
         }
 
+        const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
+        let unsubscribeTodos = () => {};
+
+        if (todoListEnabled) {
+            unsubscribeTodos = onSnapshot(
+                collection(db, "companies", recentlySelectedCompany, "todoItems"),
+                snapshot => {
+                    const openCount = snapshot.docs
+                        .map(normalizeTodo)
+                        .filter(todoIsOpen)
+                        .length;
+
+                    setCounts(prev => ({ ...prev, todoItems: openCount }));
+                },
+                error => {
+                    console.error("Error loading todo count:", error);
+                    setCounts(prev => ({ ...prev, todoItems: 0 }));
+                }
+            );
+        } else {
+            setCounts(prev => ({ ...prev, todoItems: 0 }));
+        }
+
         const unsubscribeShopping = onSnapshot(shoppingQuery, snapshot => {
             setCounts(prev => ({ ...prev, shopping: snapshot.size }));
         });
@@ -157,6 +185,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         return () => {
             unsubscribeLeads();
             unsubscribeMessages();
+            unsubscribeTodos();
             unsubscribeShopping();
             unsubscribeLegacyShopping();
             unsubscribeInternalRepairRequests();
@@ -241,11 +270,13 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                 ? counts.leads
                                                 : item.title === 'Messages'
                                                     ? counts.messages
-                                                    : item.title === 'Shopping List'
-                                                        ? (counts.shopping || 0) + (counts.legacyShopping || 0)
-                                                        : item.title === 'Repair Requests'
-                                                            ? counts.repairRequests
-                                                            : 0;
+                                                    : item.title === 'Todo List'
+                                                        ? counts.todoItems
+                                                        : item.title === 'Shopping List'
+                                                            ? (counts.shopping || 0) + (counts.legacyShopping || 0)
+                                                            : item.title === 'Repair Requests'
+                                                                ? counts.repairRequests
+                                                                : 0;
 
                                         return (
                                             <li key={`${item.path}-${item.title}`}>

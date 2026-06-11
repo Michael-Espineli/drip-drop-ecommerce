@@ -10,6 +10,11 @@ import "react-datepicker/dist/react-datepicker.css";
 import { v4 as uuidv4 } from "uuid";
 
 const ALL_ROUTES_OPTION = '__all_active_routes__';
+const ALL_ROUTES_MAP_OVERLAYS = Object.freeze({
+    stops: true,
+    techTrail: false,
+    timeAreas: false,
+});
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -1367,7 +1372,7 @@ const RouteDashboard = () => {
                                         stops={selectedRouteStops}
                                         routeLocations={selectedRouteLocations}
                                         areaEstimates={selectedRouteAreaEstimates}
-                                        overlays={isAllRoutesSelected ? { stops: true, techTrail: false, timeAreas: false } : mapOverlays}
+                                        overlays={isAllRoutesSelected ? ALL_ROUTES_MAP_OVERLAYS : mapOverlays}
                                         showTechnicianLabels={isAllRoutesSelected}
                                     />
                                 ) : (

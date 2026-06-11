@@ -508,17 +508,6 @@ const PurchaseListView = () => {
               type="text"
               placeholder="Search customer, SKU, invoice, tech, vendor, job, or receipt..."
             />
-            <button onClick={handleUploadClick}
-              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-
-            >Upload Receipt</button>
-            <input
-              type="file"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              style={{ display: 'none' }}
-              accept="application/pdf"
-            />
             <button onClick={() => setShowFilterModal(true)}
               className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"
             >

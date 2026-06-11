@@ -1,12 +1,20 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import Select from 'react-select';
 import { query, collection, getDocs, where, updateDoc, orderBy, doc, getDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
 import { Equipment } from '../../../utils/models/Equipment';
 import { ClipLoader } from 'react-spinners';
+import toast from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+    describeDuplicateCustomerMatch,
+    findDuplicateCustomerMatches,
+    getCustomerDuplicateDisplayName,
+} from '../../../utils/customerDuplicates';
+import { mergeDuplicateCustomers, previewCustomerMerge } from '../../../utils/customerMerge';
 import {
     customerHasAnyTag,
     filterCustomersByRoleTagAccess,
@@ -26,6 +34,67 @@ const getSearchText = (value) => (value ?? '').toString().toLowerCase();
 const getCustomerDisplayName = (customer) => {
     if (customer.displayAsCompany) return customer.company || customer.companyName || '';
     return `${customer.firstName || ''} ${customer.lastName || ''}`.trim();
+};
+
+const getCustomerEmail = (customer = {}) => (
+    customer.email ||
+    customer.billingEmail ||
+    customer.mainContact?.email ||
+    customer.contact?.email ||
+    ''
+);
+
+const getCustomerPhone = (customer = {}) => (
+    customer.phoneNumber ||
+    customer.phone ||
+    customer.mainContact?.phoneNumber ||
+    customer.contact?.phoneNumber ||
+    ''
+);
+
+const getCustomerAddressLine = (customer = {}) => {
+    const address = customer.billingAddress || customer.address || {};
+    return [
+        address.streetAddress || customer.streetAddress,
+        address.city || customer.city,
+        address.state || customer.state,
+        address.zip || customer.zip,
+    ]
+        .filter(Boolean)
+        .join(' ');
+};
+
+const selectTheme = (theme) => ({
+    ...theme,
+    borderRadius: 6,
+    colors: {
+        ...theme.colors,
+        primary25: '#EFF6FF',
+        primary: '#2563EB',
+        neutral20: '#CBD5E1',
+        neutral30: '#94A3B8',
+    },
+});
+
+const selectStyles = {
+    control: (base, state) => ({
+        ...base,
+        minHeight: 42,
+        borderColor: state.isFocused ? '#2563EB' : '#CBD5E1',
+        boxShadow: state.isFocused ? '0 0 0 2px rgba(37, 99, 235, 0.15)' : 'none',
+        '&:hover': {
+            borderColor: state.isFocused ? '#2563EB' : '#94A3B8',
+        },
+    }),
+    menu: (base) => ({
+        ...base,
+        zIndex: 40,
+    }),
+    option: (base, state) => ({
+        ...base,
+        backgroundColor: state.isFocused ? '#EFF6FF' : '#FFFFFF',
+        color: '#0F172A',
+    }),
 };
 
 const getCustomerLimitFromPlan = (planData) => {
@@ -77,6 +146,11 @@ export default function Customers() {
     const [tagFilterInput, setTagFilterInput] = useState('');
     const [loading, setLoading] = useState(true);
     const [upgradeState, setUpgradeState] = useState({ isUnlimited: false, remaining: Infinity });
+    const [primaryCustomerId, setPrimaryCustomerId] = useState('');
+    const [duplicateCustomerId, setDuplicateCustomerId] = useState('');
+    const [mergePreview, setMergePreview] = useState(null);
+    const [mergeLoading, setMergeLoading] = useState(false);
+    const [merging, setMerging] = useState(false);
 
     const visibleCustomers = useMemo(
         () => filterCustomersByRoleTagAccess(allCustomers, companyRole),
@@ -85,6 +159,77 @@ export default function Customers() {
 
     const availableTags = useMemo(() => getCustomerTagOptions(visibleCustomers), [visibleCustomers]);
     const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
+    const duplicateSuggestions = useMemo(() => {
+        const seenPairs = new Set();
+        const suggestions = [];
+
+        visibleCustomers.forEach((customer) => {
+            findDuplicateCustomerMatches(customer, visibleCustomers).forEach((match) => {
+                const pairKey = [customer.id, match.customer.id].sort().join(':');
+                if (seenPairs.has(pairKey)) return;
+                seenPairs.add(pairKey);
+                suggestions.push({
+                    primary: customer,
+                    duplicate: match.customer,
+                    reason: describeDuplicateCustomerMatch(match),
+                });
+            });
+        });
+
+        return suggestions.slice(0, 6);
+    }, [visibleCustomers]);
+    const mergeCustomerOptions = useMemo(
+        () => visibleCustomers.map((customer) => {
+            const name = getCustomerDuplicateDisplayName(customer);
+            const email = getCustomerEmail(customer);
+            const phone = getCustomerPhone(customer);
+            const address = getCustomerAddressLine(customer);
+            const tags = normalizeCustomerTags(customer.tags);
+            const statusLabel = customer.active === false ? 'Inactive' : 'Active';
+
+            return {
+                value: customer.id,
+                label: [name, email].filter(Boolean).join(' - '),
+                name,
+                email,
+                phone,
+                address,
+                tags,
+                statusLabel,
+                customer,
+                searchText: [
+                    name,
+                    email,
+                    phone,
+                    address,
+                    customer.id,
+                    customer.migrationSource?.sourceCustomerKey,
+                    customer.migrationSource?.sourceLocationKey,
+                    ...tags,
+                ]
+                    .filter(Boolean)
+                    .join(' '),
+            };
+        }),
+        [visibleCustomers]
+    );
+    const selectedPrimaryCustomer = useMemo(
+        () => allCustomers.find((customer) => customer.id === primaryCustomerId) || null,
+        [allCustomers, primaryCustomerId]
+    );
+    const selectedDuplicateCustomer = useMemo(
+        () => allCustomers.find((customer) => customer.id === duplicateCustomerId) || null,
+        [allCustomers, duplicateCustomerId]
+    );
+    const selectedPrimaryCustomerOption = useMemo(
+        () => mergeCustomerOptions.find((option) => option.value === primaryCustomerId) || null,
+        [mergeCustomerOptions, primaryCustomerId]
+    );
+    const selectedDuplicateCustomerOption = useMemo(
+        () => mergeCustomerOptions.find((option) => option.value === duplicateCustomerId) || null,
+        [mergeCustomerOptions, duplicateCustomerId]
+    );
+    const canMergeCustomers = can("14") && can("16");
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -185,6 +330,144 @@ export default function Customers() {
     };
 
     const handleUpgradeClick = () => navigate('/company/settings/subscriptions/picker');
+    const handlePreviewMerge = async () => {
+        if (!recentlySelectedCompany || !primaryCustomerId || !duplicateCustomerId) {
+            toast.error('Select both customers before previewing a merge.');
+            return;
+        }
+
+        if (primaryCustomerId === duplicateCustomerId) {
+            toast.error('Choose two different customers.');
+            return;
+        }
+
+        setMergeLoading(true);
+        try {
+            const preview = await previewCustomerMerge({
+                db,
+                companyId: recentlySelectedCompany,
+                duplicateCustomerId,
+            });
+            setMergePreview(preview);
+        } catch (error) {
+            console.error('Failed to preview customer merge:', error);
+            toast.error('Could not preview this merge.');
+        } finally {
+            setMergeLoading(false);
+        }
+    };
+
+    const handleMergeCustomers = async () => {
+        if (!canMergeCustomers) {
+            toast.error('You need update and delete customer permissions to merge customers.');
+            return;
+        }
+
+        if (!selectedPrimaryCustomer || !selectedDuplicateCustomer) {
+            toast.error('Select both customers before merging.');
+            return;
+        }
+
+        const primaryName = getCustomerDuplicateDisplayName(selectedPrimaryCustomer);
+        const duplicateName = getCustomerDuplicateDisplayName(selectedDuplicateCustomer);
+        const confirmed = window.confirm(
+            `Merge ${duplicateName} into ${primaryName}?\n\nThe duplicate customer record will be removed after its linked records are moved.`
+        );
+        if (!confirmed) return;
+
+        setMerging(true);
+        try {
+            const result = await mergeDuplicateCustomers({
+                db,
+                companyId: recentlySelectedCompany,
+                primaryCustomerId,
+                duplicateCustomerId,
+            });
+            setAllCustomers((currentCustomers) => currentCustomers.filter((customer) => customer.id !== duplicateCustomerId));
+            setPrimaryCustomerId('');
+            setDuplicateCustomerId('');
+            setMergePreview(null);
+            toast.success(
+                `Merged customer. Moved ${result.totalReferences} linked record(s) and ${result.contacts} contact(s).`
+            );
+        } catch (error) {
+            console.error('Failed to merge customers:', error);
+            toast.error(error.message || 'Customer merge failed.');
+        } finally {
+            setMerging(false);
+        }
+    };
+
+    const selectSuggestedMerge = (suggestion) => {
+        setPrimaryCustomerId(suggestion.primary.id);
+        setDuplicateCustomerId(suggestion.duplicate.id);
+        setMergePreview(null);
+    };
+
+    const formatMergeCustomerOption = (option, meta) => {
+        if (meta.context === 'value') {
+            return option.name;
+        }
+
+        return (
+            <div>
+                <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-slate-900">{option.name}</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${option.statusLabel === 'Inactive' ? 'bg-slate-100 text-slate-500' : 'bg-emerald-100 text-emerald-700'}`}>
+                        {option.statusLabel}
+                    </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                    {[option.email, option.phone, option.address].filter(Boolean).join(' | ') || 'No contact details saved'}
+                </p>
+                {option.tags.length > 0 && (
+                    <p className="mt-1 truncate text-xs text-slate-400">
+                        {option.tags.slice(0, 4).join(' | ')}
+                        {option.tags.length > 4 ? ` +${option.tags.length - 4}` : ''}
+                    </p>
+                )}
+            </div>
+        );
+    };
+
+    const renderSelectedMergeCustomerSummary = (option, fallbackText) => {
+        if (!option) {
+            return (
+                <div className="mt-2 rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-3 text-sm text-slate-500">
+                    {fallbackText}
+                </div>
+            );
+        }
+
+        return (
+            <div className="mt-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3">
+                <div className="flex flex-wrap items-center gap-2">
+                    <p className="font-semibold text-slate-950">{option.name}</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${option.statusLabel === 'Inactive' ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'}`}>
+                        {option.statusLabel}
+                    </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                    {[option.email, option.phone, option.address].filter(Boolean).join(' | ') || 'No contact details saved'}
+                </p>
+                {option.tags.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                        {option.tags.slice(0, 5).map((tag) => (
+                            <span key={tag} className="rounded-full bg-white px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                                {tag}
+                            </span>
+                        ))}
+                        {option.tags.length > 5 && (
+                            <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-slate-500 ring-1 ring-slate-200">
+                                +{option.tags.length - 5}
+                            </span>
+                        )}
+                    </div>
+                )}
+            </div>
+        );
+    };
+
     const updateCustomerAndLocations = async () => {
         try {
             const customerQuery = query(collection(db, 'companies', recentlySelectedCompany, 'equipment'));
@@ -244,6 +527,135 @@ export default function Customers() {
                 {/* Upgrade Banner */}
                 {!upgradeState.isUnlimited && upgradeState.remaining < 10 && (
                     <UpgradeBanner remaining={upgradeState.remaining} onUpgrade={handleUpgradeClick} />
+                )}
+
+                {canMergeCustomers && (
+                    <div className="mb-6 border border-slate-200 bg-white p-5 shadow-sm">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                            <div>
+                                <h2 className="text-lg font-bold text-slate-950">Merge Duplicate Customers</h2>
+                                <p className="mt-1 text-sm text-slate-600">
+                                    Choose the customer to keep, then choose the duplicate whose linked records should move over.
+                                </p>
+                            </div>
+                            {duplicateSuggestions.length > 0 && (
+                                <div className="text-sm text-slate-500">
+                                    {duplicateSuggestions.length} possible duplicate pair{duplicateSuggestions.length === 1 ? '' : 's'} found
+                                </div>
+                            )}
+                        </div>
+
+                        {duplicateSuggestions.length > 0 && (
+                            <div className="mt-4 grid gap-2 lg:grid-cols-2">
+                                {duplicateSuggestions.map((suggestion) => (
+                                    <button
+                                        key={`${suggestion.primary.id}:${suggestion.duplicate.id}`}
+                                        type="button"
+                                        onClick={() => selectSuggestedMerge(suggestion)}
+                                        className="border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm transition hover:bg-amber-100"
+                                    >
+                                        <span className="block font-semibold text-amber-950">
+                                            {getCustomerDuplicateDisplayName(suggestion.primary)} + {getCustomerDuplicateDisplayName(suggestion.duplicate)}
+                                        </span>
+                                        <span className="mt-1 block text-xs text-amber-800">Matched by {suggestion.reason}</span>
+                                    </button>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="mt-4 grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] xl:items-start">
+                            <div>
+                                <label htmlFor="mergePrimaryCustomerId" className="block text-sm font-semibold text-slate-700">
+                                    Keep this customer
+                                </label>
+                                <div className="mt-1">
+                                    <Select
+                                        inputId="mergePrimaryCustomerId"
+                                        value={selectedPrimaryCustomerOption}
+                                        onChange={(option) => {
+                                            setPrimaryCustomerId(option?.value || '');
+                                            setMergePreview(null);
+                                        }}
+                                        options={mergeCustomerOptions}
+                                        isClearable
+                                        isLoading={loading}
+                                        placeholder={loading ? 'Loading customers...' : 'Search by name, email, phone, address, or tag'}
+                                        noOptionsMessage={() => 'No customers found'}
+                                        formatOptionLabel={formatMergeCustomerOption}
+                                        filterOption={(option, inputValue) => (
+                                            option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                                        )}
+                                        isOptionDisabled={(option) => option.value === duplicateCustomerId}
+                                        theme={selectTheme}
+                                        styles={selectStyles}
+                                    />
+                                </div>
+                                {renderSelectedMergeCustomerSummary(selectedPrimaryCustomerOption, 'Choose the record that should stay active after the merge.')}
+                            </div>
+
+                            <div>
+                                <label htmlFor="mergeDuplicateCustomerId" className="block text-sm font-semibold text-slate-700">
+                                    Merge and remove this duplicate
+                                </label>
+                                <div className="mt-1">
+                                    <Select
+                                        inputId="mergeDuplicateCustomerId"
+                                        value={selectedDuplicateCustomerOption}
+                                        onChange={(option) => {
+                                            setDuplicateCustomerId(option?.value || '');
+                                            setMergePreview(null);
+                                        }}
+                                        options={mergeCustomerOptions}
+                                        isClearable
+                                        isLoading={loading}
+                                        placeholder={loading ? 'Loading customers...' : 'Search by name, email, phone, address, or tag'}
+                                        noOptionsMessage={() => 'No customers found'}
+                                        formatOptionLabel={formatMergeCustomerOption}
+                                        filterOption={(option, inputValue) => (
+                                            option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                                        )}
+                                        isOptionDisabled={(option) => option.value === primaryCustomerId}
+                                        theme={selectTheme}
+                                        styles={selectStyles}
+                                    />
+                                </div>
+                                {renderSelectedMergeCustomerSummary(selectedDuplicateCustomerOption, 'Choose the duplicate record whose linked info should move over.')}
+                            </div>
+
+                            <div className="flex flex-col gap-2 xl:min-w-[150px] xl:pt-6">
+                                <button
+                                    type="button"
+                                    onClick={handlePreviewMerge}
+                                    disabled={mergeLoading || merging || !primaryCustomerId || !duplicateCustomerId}
+                                    className="inline-flex justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:border-slate-200 disabled:text-slate-300"
+                                >
+                                    {mergeLoading ? 'Previewing...' : 'Preview'}
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={handleMergeCustomers}
+                                    disabled={merging || mergeLoading || !primaryCustomerId || !duplicateCustomerId || primaryCustomerId === duplicateCustomerId}
+                                    className="inline-flex justify-center rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                                >
+                                    {merging ? 'Merging...' : 'Merge'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {mergePreview && (
+                            <div className="mt-4 border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+                                <p className="font-semibold">
+                                    Preview: {mergePreview.totalReferences} linked record(s) and {mergePreview.contacts} contact(s) will move.
+                                </p>
+                                {mergePreview.targets.length > 0 && (
+                                    <p className="mt-1 text-xs text-blue-800">
+                                        {mergePreview.targets.map((target) => `${target.label}: ${target.count}`).join(' | ')}
+                                    </p>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 )}
 
                 {/* Main Content */}

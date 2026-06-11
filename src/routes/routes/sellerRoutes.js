@@ -52,6 +52,7 @@ const CreateNewProduct = lazy(() => import("../../views/company/stripe-subscript
 const Products = lazy(() => import("../../views/company/stripe-subscriptions/products/Products"))
 const EditProduct = lazy(() => import("../../views/company/stripe-subscriptions/products/EditProduct"))
 const Alerts = lazy(() => import("../../views/company/Alerts"))
+const TodoList = lazy(() => import("../../views/company/todo/TodoList"))
 
 const Contracts = lazy(() => import("../../views/company/contract/Contracts"))
 const CreateNew = lazy(() => import("../../views/company/contract/CreateNew"))
@@ -150,6 +151,7 @@ const Estimates = lazy(() => import('../../views/company/marketing/Estimates'));
 const ScheduleEstimate = lazy(() => import('../../views/company/marketing/ScheduleEstimate'));
 
 const Sales = lazy(() => import('../../views/company/sales/Sales'));
+const CompanyAccountingWorkspace = lazy(() => import('../../views/company/accounting/CompanyAccountingWorkspace'));
 const SalesCatalogItems = lazy(() => import('../../views/company/sales/SalesCatalogItems'));
 const SalesAgreements = lazy(() => import('../../views/company/sales/SalesAgreements'));
 const CreateSalesAgreement = lazy(() => import('../../views/company/sales/CreateSalesAgreement'));
@@ -772,7 +774,24 @@ export const sellerRoutes = [
         path: '/company/alerts',
         element: <Alerts />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        featureFlagId: 'feature_flag_011',
+    }
+    ,
+    {
+        path: '/company/todo-list',
+        element: <TodoList />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        featureFlagId: 'feature_flag_010',
+    }
+    ,
+    {
+        path: '/company/todos',
+        element: <Navigate to="/company/todo-list" replace />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        featureFlagId: 'feature_flag_010',
     }
     ,
     {
@@ -1078,6 +1097,12 @@ export const sellerRoutes = [
         path: '/company/sales',
         element: <Sales />,
         role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/accounting',
+        element: <CompanyAccountingWorkspace />,
+        role: 'Company',
+        permissionId: '400',
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/catalog-items',

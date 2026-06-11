@@ -804,6 +804,33 @@ export default function LeadDetail() {
         publicBodiesOfWater.length ||
         publicEquipment.length
     );
+    const linkedServiceLocationId = lead.serviceLocationId || lead.companyServiceLocationId || '';
+    const buildCreateJobPath = () => {
+        const basePath = `/company/jobs/createNew/${lead.customerId}`;
+        return linkedServiceLocationId ? `${basePath}/${linkedServiceLocationId}` : basePath;
+    };
+
+    const handleCreateJobFromLead = () => {
+        if (!lead.customerId) {
+            toast.error('Create a customer before creating a job from this lead.');
+            return;
+        }
+
+        navigate(buildCreateJobPath(), {
+            state: {
+                leadContext: {
+                    id: lead.id,
+                    source: lead.source || '',
+                    status: lead.status || '',
+                    serviceName: lead.serviceName || '',
+                    serviceDescription: lead.serviceDescription || '',
+                    customerId: lead.customerId || '',
+                    customerName: lead.customerName || '',
+                    serviceLocationId: linkedServiceLocationId,
+                },
+            },
+        });
+    };
 
     const renderActions = () => {
         if (!customerId) {
@@ -820,15 +847,27 @@ export default function LeadDetail() {
         }
 
         if (customerId) {
-            if (!can("612")) return null;
+            if (!can("22") && !can("612")) return null;
 
             return (
-                <button
-                    onClick={() => navigate(`/company/recurring-contracts/createNew/${lead.customerId}`)}
-                    className="w-full py-2.5 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 font-medium"
-                >
-                    Send Estimate
-                </button>
+                <>
+                    {can("22") && (
+                        <button
+                            onClick={handleCreateJobFromLead}
+                            className="w-full py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium"
+                        >
+                            Create Job
+                        </button>
+                    )}
+                    {can("612") && (
+                        <button
+                            onClick={() => navigate(`/company/recurring-contracts/createNew/${lead.customerId}`)}
+                            className="w-full py-2.5 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 font-medium"
+                        >
+                            Send Estimate
+                        </button>
+                    )}
+                </>
             );
         }
 
@@ -1231,9 +1270,11 @@ export default function LeadDetail() {
                                     </div>
                                 )}
 
-                                {can("612") && (
+                                {(can("612") || can("22")) && (
                                     <div className="bg-white p-6 rounded-2xl shadow-lg">
-                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">Lead Conversion</h3>
+                                        <h3 className="text-lg font-semibold text-gray-800 mb-4">
+                                            {customerId ? 'Next Steps' : 'Lead Conversion'}
+                                        </h3>
                                         <div className="space-y-3">{renderActions()}</div>
                                     </div>
                                 )}

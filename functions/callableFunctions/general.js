@@ -472,15 +472,25 @@ const getHomeownerRelationshipId = (companyId, customerId, homeownerId) => (
 
 const createCompanyScopedId = (prefix) => `${prefix}_${uuidv4()}`;
 
-const normalizeLeadConversionAddress = (address = {}) => removeUndefinedDeep({
-  streetAddress: address.streetAddress || address.address || "",
-  city: address.city || "",
-  state: address.state || "",
-  zip: address.zip || address.zipCode || "",
-  zipCode: address.zipCode || address.zip || "",
-  latitude: address.latitude ?? null,
-  longitude: address.longitude ?? null,
-});
+const normalizeLeadConversionNumber = (value) => {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : 0;
+};
+
+const normalizeLeadConversionAddress = (address = {}) => {
+  const source = address && typeof address === "object" ? address : {};
+  const zip = String(source.zip || source.zipCode || "").trim();
+
+  return removeUndefinedDeep({
+    streetAddress: String(source.streetAddress || source.address || "").trim(),
+    city: String(source.city || "").trim(),
+    state: String(source.state || "").trim(),
+    zip,
+    zipCode: zip,
+    latitude: normalizeLeadConversionNumber(source.latitude),
+    longitude: normalizeLeadConversionNumber(source.longitude),
+  });
+};
 
 const hasLeadConversionAddress = (address = {}) => Boolean(
   address &&
@@ -4107,6 +4117,9 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
     const now = admin.firestore.FieldValue.serverTimestamp();
     const writes = [];
     const equipmentIds = [];
+    const estimatedServiceTime = Number(
+      serviceLocationData.estimatedTime ?? homeownerServiceLocation?.estimatedTime ?? 15
+    );
 
     writes.push({
       ref: companyRef.collection("customers").doc(customerId),
@@ -4120,6 +4133,7 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
         companyName: displayAsCompany ? companyCustomerName : "",
         displayAsCompany,
         active: true,
+        isActive: true,
         email,
         phoneNumber,
         phoneLabel: "",
@@ -4178,7 +4192,7 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
           dogName: toArrayOfStrings(serviceLocationData.dogName).length
             ? toArrayOfStrings(serviceLocationData.dogName)
             : toArrayOfStrings(homeownerServiceLocation?.dogName),
-          estimatedTime: serviceLocationData.estimatedTime || homeownerServiceLocation?.estimatedTime || 15,
+          estimatedTime: Number.isFinite(estimatedServiceTime) ? Math.trunc(estimatedServiceTime) : 15,
           mainContact: {
             id: createCompanyScopedId("com_cus_con"),
             name: customerName,
@@ -4202,13 +4216,14 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
           sourceHomeownerServiceLocationId: homeownerServiceLocation?.id || homeownerServiceLocationId,
           source: "homeownerServiceRequest",
           sourceHomeownerServiceRequestId: leadId,
-          backYardTree: homeownerServiceLocation?.backYardTree || [],
-          backYardBushes: homeownerServiceLocation?.backYardBushes || [],
-          backYardOther: homeownerServiceLocation?.backYardOther || [],
+          backYardTree: toArrayOfStrings(homeownerServiceLocation?.backYardTree),
+          backYardBushes: toArrayOfStrings(homeownerServiceLocation?.backYardBushes),
+          backYardOther: toArrayOfStrings(homeownerServiceLocation?.backYardOther),
           preText: Boolean(serviceLocationData.preText ?? homeownerServiceLocation?.preText),
           verified: Boolean(homeownerServiceLocation?.verified),
           photoUrls: Array.isArray(homeownerServiceLocation?.photoUrls) ? homeownerServiceLocation.photoUrls : [],
           isActive: true,
+          active: true,
           createdAt: now,
           updatedAt: now,
         }),

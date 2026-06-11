@@ -16,6 +16,10 @@ import { FeatureFlag } from '../../../utils/models/FeatureFlag';
 
 const FLAG_COUNT = 100;
 const ADMIN_YELLOW = '#debf44';
+const REAL_EMAILS_FLAG_ID = 'feature_flag_012';
+const LEGACY_REAL_EMAILS_FLAG_ID = 'feature_flag_005';
+const LEGACY_REAL_EMAILS_NAME = 'Turn on real emails';
+const LEGACY_REAL_EMAILS_DESCRIPTION = 'When off, service agreement and invoice emails are routed to the internal test inbox instead of homeowners.';
 
 function formatDate(value) {
   if (!value) return 'Never';
@@ -75,6 +79,16 @@ function FeatureFlags() {
 
         if (defaultDescription && !(existingData.description || '').trim()) {
           updates.description = defaultDescription;
+        }
+
+        if (flagId === LEGACY_REAL_EMAILS_FLAG_ID) {
+          if ((existingData.name || '').trim() === LEGACY_REAL_EMAILS_NAME) {
+            updates.name = defaultName;
+          }
+
+          if ((existingData.description || '').trim() === LEGACY_REAL_EMAILS_DESCRIPTION) {
+            updates.description = defaultDescription;
+          }
         }
 
         if (Object.keys(updates).length > 0) {
@@ -215,7 +229,7 @@ function FeatureFlags() {
     }
   };
 
-  const realEmailsFlag = flags.find((flag) => flag.id === 'feature_flag_005');
+  const realEmailsFlag = flags.find((flag) => flag.id === REAL_EMAILS_FLAG_ID);
 
   return (
     <div className="min-h-screen bg-slate-900 px-2 py-5 md:px-7">

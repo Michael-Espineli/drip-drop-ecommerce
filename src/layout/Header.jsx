@@ -1,16 +1,28 @@
-import React, { useContext, useState } from "react";
+import React, { useContext, useEffect, useState } from "react";
 import { Link } from 'react-router-dom';
 import { Context } from "../context/AuthContext";
 import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
-import { FaClipboardList } from "react-icons/fa";
+import { FaClipboardList, FaMoon, FaSun } from "react-icons/fa";
+import { MdNotificationsActive } from "react-icons/md";
+import { collection, onSnapshot } from "firebase/firestore";
 import CompanyCommandSearch from "./CompanyCommandSearch";
 import StartChatModal from "../views/components/chat/StartChatModal";
+import { useTheme } from "../context/ThemeContext";
+import { db } from "../utils/config";
+import {
+    ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
+    alertNeedsAttention,
+    normalizeAlertNotification,
+} from "../utils/models/AlertNotification";
  
 const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     const [isStartChatOpen, setIsStartChatOpen] = useState(false);
+    const [alertCount, setAlertCount] = useState(0);
+    const { isDarkMode, toggleTheme } = useTheme();
     const {
         name,
         accountType,
+        user,
         photoUrl,
         recentlySelectedCompany,
         recentlySelectedCompanyName,
@@ -19,6 +31,34 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         featureFlagsLoaded,
         isFeatureEnabled,
     } = useContext(Context);
+
+    const alertsEnabled = accountType === 'Company'
+        && recentlySelectedCompany
+        && featureFlagsLoaded
+        && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+
+    useEffect(() => {
+        if (!alertsEnabled || !user) {
+            setAlertCount(0);
+            return undefined;
+        }
+
+        return onSnapshot(
+            collection(db, "companies", recentlySelectedCompany, "alerts"),
+            (snapshot) => {
+                const activeCount = snapshot.docs
+                    .map(normalizeAlertNotification)
+                    .filter((alert) => alertNeedsAttention(alert))
+                    .length;
+
+                setAlertCount(activeCount);
+            },
+            (error) => {
+                console.error("Error loading header alert count:", error);
+                setAlertCount(0);
+            }
+        );
+    }, [alertsEnabled, recentlySelectedCompany, user]);
 
     // Do not render the header for Admin or if the account type is not set
     if (accountType === 'Admin' || !accountType) {
@@ -67,6 +107,28 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
 
                     {/* Profile Section */}
                     <div className='relative flex shrink-0 items-center justify-center gap-3'>
+                        <button
+                            type="button"
+                            onClick={toggleTheme}
+                            className="flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+                            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                            title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
+                        >
+                            {isDarkMode ? <FaSun className="h-4 w-4" /> : <FaMoon className="h-4 w-4" />}
+                        </button>
+                        {alertsEnabled && (
+                            <Link
+                                to="/company/alerts"
+                                className="relative flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+                                aria-label={`${alertCount} active notifications`}
+                                title="Notifications"
+                            >
+                                <MdNotificationsActive className="h-5 w-5" />
+                                <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
+                                    {alertCount > 99 ? '99+' : alertCount}
+                                </span>
+                            </Link>
+                        )}
                         {canStartChat && (
                             <button
                                 type="button"

@@ -2,10 +2,16 @@ import React, { useState, useEffect, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
 import { db } from '../../../utils/config'; // Assuming you have your Firebase config here
-import { collection, setDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, setDoc, doc } from 'firebase/firestore';
 import {v4 as uuidv4} from 'uuid';
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns'; // Or any other date formatting library
+import {
+  normalizeAddress,
+  normalizeCustomerForFirestore,
+  normalizeServiceLocationForFirestore,
+} from '../../../utils/customerLocationData';
+import { findDuplicateCustomerMatches } from '../../../utils/customerDuplicates';
 
 const BulkCustomerUpload = () => {
   const {name,recentlySelectedCompany} = useContext(Context);
@@ -40,12 +46,12 @@ const BulkCustomerUpload = () => {
         return { latitude: lat, longitude: lng };
       } else {
         console.error('Geocoding failed:', data.status);
-        return { latitude: null, longitude: null };
+        return { latitude: 0, longitude: 0 };
       }
     } catch (error) {
       console.error('Error during geocoding:', error);
       setError('Error during geocoding. Please check your API key and network connection.');
-      return { latitude: null, longitude: null };
+      return { latitude: 0, longitude: 0 };
     }
   };
 
@@ -73,6 +79,9 @@ const BulkCustomerUpload = () => {
         console.log(data)
         // Assuming your customer data has fields like 'firstName', 'lastName', 'email'
         let count = 0 
+        let skippedDuplicates = 0;
+        const existingCustomersSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers'));
+        const knownCustomers = existingCustomersSnapshot.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }));
         setTotal(data.length)
         setIsLoading(true)
         for (const customer of data) {
@@ -83,19 +92,19 @@ const BulkCustomerUpload = () => {
           const fullAddress = `${customer.streetAddress}, ${customer.city}, ${customer.state} ${customer.zipCode}`;
           const { latitude, longitude } = await getGeocode(fullAddress);
 
-          let address = {
+          let address = normalizeAddress({
             streetAddress: customer.streetAddress ?? "",
             city: customer.city ?? "",
             state: customer.state ?? "",
-            zip: customer.zipCode + ""  ?? "",
+            zip: customer.zipCode,
             latitude,
             longitude, 
-          }
+          });
           console.log(address)
           let hireDate = new Date(((customer.hiredate ?? 0) - 25569) * 86400 * 1000);
           // console.log(hireDate)
           let customerName = customer.firstName + " " + customer.lastName
-          let customerModel = {
+          let customerModel = normalizeCustomerForFirestore({
             id:customerId,
             firstName: customer.firstName ?? "",
             lastName: customer.lastName ?? "",
@@ -111,13 +120,24 @@ const BulkCustomerUpload = () => {
             tags: tags,
             linkedCustomerIds: [],
             linkedInviteId: "",
+          });
+          const duplicateMatches = findDuplicateCustomerMatches(customerModel, knownCustomers);
+
+          if (duplicateMatches.length > 0) {
+            skippedDuplicates += 1;
+            console.warn("Skipped duplicate customer row", {
+              row: count,
+              customerName,
+              matchedCustomer: duplicateMatches[0].displayName,
+            });
+            continue;
           }
 
           // console.log('Uploaded ' + customerName)
           let serviceLocationId = 'com_sl_' + uuidv4();
           let contactId = 'com_con_' + uuidv4();
           let bodyOfWaterId = 'com_bow_' + uuidv4();
-          let serviceLocationModel = {
+          let serviceLocationModel = normalizeServiceLocationForFirestore({
             id:serviceLocationId,
             nickName: "House",
             address: address,
@@ -143,8 +163,9 @@ const BulkCustomerUpload = () => {
             preText: false,
             verified: false,
             photoUrls:[],
-            isActive: true
-          }
+            isActive: true,
+            active: true
+          });
           let bodyOfWaterModel = {
             id:bodyOfWaterId,
             name:"pool",
@@ -213,11 +234,16 @@ const BulkCustomerUpload = () => {
           await setDoc(doc(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),bodyOfWaterId), bodyOfWaterModel);
           await setDoc(doc(collection(db, 'companies', recentlySelectedCompany, 'equipment'),filterId), filterModel);
           await setDoc(doc(collection(db, 'companies', recentlySelectedCompany, 'equipment'),pumpId), pumpModel);
+          knownCustomers.push(customerModel);
           // console.log('uploaded location '+ address.streetAddress)
           //Set Up first customer
         }
 
-        setSuccess('Customers uploaded successfully!');
+        setSuccess(
+          skippedDuplicates > 0
+            ? `Customers uploaded successfully. Skipped ${skippedDuplicates} duplicate row(s).`
+            : 'Customers uploaded successfully!'
+        );
 
         setIsLoading(false)
         setError('');
@@ -299,21 +325,21 @@ const BulkCustomerUpload = () => {
         const fullAddress = `${customer.streetAddress}, ${customer.city}, ${customer.state} ${customer.zipCode}`;
         const { latitude, longitude } = await getGeocode(fullAddress);
       
-        const address = {
+        const address = normalizeAddress({
           streetAddress: customer.streetAddress,
           city: customer.city,
           state: customer.state,
-          zip: customer.zipCode.toString(),
+          zip: customer.zipCode,
           latitude,
           longitude
-        };
+        });
       
         const hireDate = new Date(
           ((customer.hiredate ?? 0) - 25569) * 86400 * 1000
         );
 
         // console.log(hireDate)
-        let customerModel = {
+        let customerModel = normalizeCustomerForFirestore({
           id:customerId,
           firstName: customer.firstName ?? "",
           lastName: customer.lastName ?? "",
@@ -329,13 +355,13 @@ const BulkCustomerUpload = () => {
           tags: tags,
           linkedCustomerIds: [],
           linkedInviteId: "",
-        }
+        });
 
         // console.log('Uploaded ' + customerName)
         let serviceLocationId = 'com_sl_' + uuidv4();
         let contactId = 'com_con_' + uuidv4();
         let bodyOfWaterId = 'com_bow_' + uuidv4();
-        let serviceLocationModel = {
+        let serviceLocationModel = normalizeServiceLocationForFirestore({
           id:serviceLocationId,
           nickName: "House",
           address: address,
@@ -361,8 +387,9 @@ const BulkCustomerUpload = () => {
           preText: false,
           verified: false,
           photoUrls:[],
-          isActive: true
-        }
+          isActive: true,
+          active: true
+        });
         let bodyOfWaterModel = {
           id:bodyOfWaterId,
           name:"pool",

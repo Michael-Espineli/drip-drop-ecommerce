@@ -8,6 +8,7 @@ import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
+import { normalizeAddress as normalizeCustomerLocationAddress } from '../../../utils/customerLocationData';
 
 const firstText = (...values) => {
     for (const value of values) {
@@ -554,15 +555,7 @@ const CreateCustomerFromLead = () => {
         }));
     };
 
-    const normalizeAddress = (address = {}) => ({
-        streetAddress: address.streetAddress || '',
-        city: address.city || '',
-        state: address.state || '',
-        zip: address.zip || address.zipCode || '',
-        zipCode: address.zipCode || address.zip || '',
-        latitude: address.latitude ?? null,
-        longitude: address.longitude ?? null,
-    });
+    const normalizeAddress = (address = {}) => normalizeCustomerLocationAddress(address);
 
     const handleSubmit = async (e) => {
         e.preventDefault();

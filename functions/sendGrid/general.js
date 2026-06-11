@@ -12,13 +12,15 @@ const { title } = require("process");
 
 const sgMail = require("@sendgrid/mail");
 const { ensureCustomerAccountInvite } = require("../customerAccountInvites");
+const {
+    resolveEmailDeliveryRecipient,
+    addDeliveryModeTemplateData,
+} = require("../emailDelivery");
 if (process.env.SEND_GRID_API_KEY && process.env.SEND_GRID_API_KEY.startsWith('SG.')) {
     sgMail.setApiKey(process.env.SEND_GRID_API_KEY);
 }
 
 const db = admin.firestore();
-const REAL_EMAILS_FEATURE_FLAG_ID = "feature_flag_005";
-const EMAIL_TEST_RECIPIENT = "michael@dripdrop-poolapp.com";
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
@@ -182,34 +184,6 @@ const getCallableAuth = async (data, context, message) => {
         throw new HttpsError("unauthenticated", message);
     }
 };
-
-const isFeatureFlagEnabled = async (flagId) => {
-    const flagDoc = await db.collection("featureFlags").doc(flagId).get();
-
-    if (!flagDoc.exists) return false;
-
-    return flagDoc.data()?.enabled === true;
-};
-
-const resolveEmailDeliveryRecipient = async (intendedTo) => {
-    const realEmailsEnabled = await isFeatureFlagEnabled(REAL_EMAILS_FEATURE_FLAG_ID);
-    const normalizedIntendedTo = String(intendedTo || "").trim();
-
-    return {
-        realEmailsEnabled,
-        intendedTo: normalizedIntendedTo,
-        actualTo: realEmailsEnabled && normalizedIntendedTo ? normalizedIntendedTo : EMAIL_TEST_RECIPIENT,
-        testMode: !realEmailsEnabled || !normalizedIntendedTo,
-        realEmailsFeatureFlagId: REAL_EMAILS_FEATURE_FLAG_ID,
-    };
-};
-
-const addDeliveryModeTemplateData = (templateData, emailDelivery) => ({
-    ...templateData,
-    deliveryMode: emailDelivery.testMode ? "test" : "real",
-    intendedCustomerEmail: emailDelivery.intendedTo,
-    actualRecipientEmail: emailDelivery.actualTo,
-});
 
 const getCompanyContactEmail = (companyData = {}) => (
     companyData.email ||

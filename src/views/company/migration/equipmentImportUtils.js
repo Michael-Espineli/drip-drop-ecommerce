@@ -608,7 +608,7 @@ export const getEquipmentImportTargetCandidates = (record, mapping = {}, existin
 };
 
 export const findExistingEquipmentForImportRecord = (record, mapping = {}, existingEquipment = []) => {
-  if (mapping.targetAction === "create") return null;
+  if (["create", "skip"].includes(mapping.targetAction)) return null;
 
   const targetCandidates = getEquipmentImportTargetCandidates(record, mapping, existingEquipment);
 
@@ -755,15 +755,26 @@ export const buildEquipmentImportDoc = (
 };
 
 export const summarizeEquipmentImportRecords = (records = [], enrichedRecords = []) => {
+  const skippedImportRows = enrichedRecords.filter((record) => record.mapping?.targetAction === "skip").length;
   const matchedRows = enrichedRecords.filter((record) =>
-    record.mappingReady && !record.needsInspection && !record.needsOverwriteChoice
+    record.mapping?.targetAction !== "skip" &&
+    record.mappingReady &&
+    !record.needsInspection &&
+    !record.needsOverwriteChoice
   ).length;
-  const needsMappedRows = enrichedRecords.filter((record) => !record.mappingReady).length;
+  const needsMappedRows = enrichedRecords.filter((record) =>
+    record.mapping?.targetAction !== "skip" && !record.mappingReady
+  ).length;
   const inspectionRows = enrichedRecords.filter((record) =>
-    record.mappingReady && (record.needsInspection || record.needsOverwriteChoice)
+    record.mapping?.targetAction !== "skip" &&
+    record.mappingReady &&
+    (record.needsInspection || record.needsOverwriteChoice)
   ).length;
   const confirmedRecords = enrichedRecords.filter((record) =>
-    record.mappingReady && !record.needsInspection && !record.needsOverwriteChoice
+    record.mapping?.targetAction !== "skip" &&
+    record.mappingReady &&
+    !record.needsInspection &&
+    !record.needsOverwriteChoice
   );
   const updateRows = confirmedRecords.filter((record) => record.targetEquipment).length;
 
@@ -772,6 +783,7 @@ export const summarizeEquipmentImportRecords = (records = [], enrichedRecords = 
     matchedRows,
     needsMappedRows,
     inspectionRows,
+    skippedImportRows,
     updateRows,
     createRows: Math.max(confirmedRecords.length - updateRows, 0),
     serviceTrackedRows: records.filter((record) => record.hasService).length,

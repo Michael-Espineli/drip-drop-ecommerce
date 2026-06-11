@@ -1,13 +1,23 @@
 import React, { useState, useContext } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { setDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, setDoc, doc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { v4 as uuidv4 } from 'uuid';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import UpgradeModal from '../../components/modals/UpgradeModal';
 import { toast } from 'react-hot-toast';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
+import {
+    normalizeAddress,
+    normalizeContact,
+    normalizeCustomerForFirestore,
+    normalizeServiceLocationForFirestore,
+} from '../../../utils/customerLocationData';
+import {
+    describeDuplicateCustomerMatch,
+    findDuplicateCustomerMatches,
+} from '../../../utils/customerDuplicates';
 
 const InfoSection = ({ title, children }) => (
     <div className="border-b border-gray-200 pb-6 mb-6">
@@ -49,8 +59,8 @@ const CreateNewCustomer = () => {
     const [useDifferentBillingAddress, setUseDifferentBillingAddress] = useState(false);
 
     const [formData, setFormData] = useState({ firstName: '', lastName: '', company: '', email: '', phoneNumber: '', billingNotes: '' });
-    const [serviceAddress, setServiceAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: null, longitude: null });
-    const [billingAddress, setBillingAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: null, longitude: null });
+    const [serviceAddress, setServiceAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: 0, longitude: 0 });
+    const [billingAddress, setBillingAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: 0, longitude: 0 });
     const [serviceLocationDetails, setServiceLocationDetails] = useState({
         gateCode: '', notes: '', preText: false, estimatedTime: 15, nickName: "Main", verified: false, rateType: "", laborType: "", chemicalCost: "", laborCost: "", rate: "",
         photoUrls: []
@@ -85,10 +95,10 @@ const CreateNewCustomer = () => {
 
     const handlePlaceSelected = (place, type) => {
         if (!place) return;
-        const address = {
+        const address = normalizeAddress({
             streetAddress: place.streetAddress, city: place.city, state: place.state, zip: place.zipCode,
             latitude: place.latitude, longitude: place.longitude
-        };
+        });
         if (type === 'billing') setBillingAddress(address);
         else setServiceAddress(address);
     };
@@ -113,40 +123,61 @@ const CreateNewCustomer = () => {
             const serviceLocationId = 'com_sl_' + uuidv4();
             const bodyOfWaterId = 'com_bow_' + uuidv4();
 
-            const finalBillingAddress = useDifferentBillingAddress ? billingAddress : serviceAddress;
+            const normalizedServiceAddress = normalizeAddress(serviceAddress);
+            const finalBillingAddress = normalizeAddress(useDifferentBillingAddress ? billingAddress : normalizedServiceAddress);
             const customerName = displayAsCompany ? formData.company : `${formData.firstName} ${formData.lastName}`;
-            const serviceLocationMainContact = {
+            const serviceLocationMainContact = normalizeContact({
                 id: mainContact.id || "com_cus_con_" + uuidv4(),
                 name: mainContact.name,
                 email: mainContact.email,
                 phoneNumber: mainContact.phoneNumber,
                 notes: mainContact.notes
-            };
-
-            // 1. Create Customer
-            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customerId), {
-                id: customerId, ...formData,
+            });
+            const customerPayload = normalizeCustomerForFirestore({
+                id: customerId,
+                ...formData,
                 displayAsCompany,
                 active: true,
+                isActive: true,
                 billingAddress: finalBillingAddress,
                 linkedCustomerIds: [],
                 linkedInviteId: "",
                 hireDate: new Date(),
                 phoneLabel: ""
             });
+            const existingCustomersSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers'));
+            const duplicateMatches = findDuplicateCustomerMatches(
+                customerPayload,
+                existingCustomersSnapshot.docs.map((snapshot) => ({ id: snapshot.id, ...snapshot.data() }))
+            );
 
-            // 2. Create Service Location
-            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), {
+            if (duplicateMatches.length > 0) {
+                const match = duplicateMatches[0];
+                toast.error(
+                    `Possible duplicate: ${match.displayName} already matches by ${describeDuplicateCustomerMatch(match)}.`,
+                    { id: toastId }
+                );
+                return;
+            }
+
+            const serviceLocationPayload = normalizeServiceLocationForFirestore({
                 id: serviceLocationId,
                 customerId,
                 customerName,
-                address: serviceAddress,
+                address: normalizedServiceAddress,
                 mainContact: serviceLocationMainContact,
                 ...serviceLocationDetails,
                 bodiesOfWaterId: [bodyOfWaterId],
-                dogName: [dogName],
-                isActive: true
+                dogName: dogName ? [dogName] : [],
+                isActive: true,
+                active: true
             });
+
+            // 1. Create Customer
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customerId), customerPayload);
+
+            // 2. Create Service Location
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), serviceLocationPayload);
 
             // 3. Create Body of Water
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', bodyOfWaterId), {

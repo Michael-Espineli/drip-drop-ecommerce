@@ -3,11 +3,7 @@ import { Link } from "react-router-dom";
 import {
   getFirestore,
   collection,
-  query,
-  where,
   getDocs,
-  orderBy,
-  limit,
 } from "firebase/firestore";
 import { Context } from "../../context/AuthContext";
 import { ClipLoader } from "react-spinners";
@@ -51,13 +47,136 @@ const RowLink = ({ to, children }) => (
 function safeDate(value) {
   try {
     // Firestore Timestamp support
-    if (value?.toDate) return value.toDate();
-    if (value instanceof Date) return value;
-    if (typeof value === "number") return new Date(value);
-    if (typeof value === "string") return new Date(value);
+    const date = value?.toDate
+      ? value.toDate()
+      : value instanceof Date
+        ? value
+        : typeof value === "number" || typeof value === "string"
+          ? new Date(value)
+          : null;
+
+    return date && !Number.isNaN(date.getTime()) ? date : null;
   } catch (e) { }
   return null;
 }
+
+function toMillis(value) {
+  return safeDate(value)?.getTime() || 0;
+}
+
+const normalizeText = (value) => (value || "").toString().trim().toLowerCase();
+
+const getCompanyUserName = (user = {}) => (
+  user.userName ||
+  user.displayName ||
+  [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+  user.name ||
+  user.email ||
+  user.userId ||
+  user.id ||
+  "Unknown User"
+);
+
+const getCompanyUserMeta = (user = {}) => [
+  user.roleName || "No role assigned",
+  user.workerType || "No worker type"
+].filter(Boolean).join(" / ");
+
+const getStatusClass = (status) => {
+  switch (normalizeText(status)) {
+    case "active":
+      return "bg-green-100 text-green-800";
+    case "pending":
+      return "bg-yellow-100 text-yellow-800";
+    case "inactive":
+      return "bg-red-100 text-red-800";
+    case "past":
+      return "bg-slate-100 text-slate-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+};
+
+const getStatusLabel = (status) => {
+  if (!status) return "Unknown";
+  return status.toString().charAt(0).toUpperCase() + status.toString().slice(1);
+};
+
+const getWorkLogDate = (workLog = {}) => (
+  safeDate(workLog.dateCreated) ||
+  safeDate(workLog.date) ||
+  safeDate(workLog.createdAt) ||
+  safeDate(workLog.workDate) ||
+  safeDate(workLog.startTime) ||
+  safeDate(workLog.clockInAt) ||
+  safeDate(workLog.startedAt)
+);
+
+const getWorkLogTitle = (workLog = {}) => (
+  workLog.jobName ||
+  workLog.taskName ||
+  workLog.title ||
+  workLog.summary ||
+  workLog.type ||
+  "Work Log"
+);
+
+const getWorkLogPerson = (workLog = {}) => (
+  workLog.userName ||
+  workLog.techName ||
+  workLog.employeeName ||
+  workLog.createdByName ||
+  "Unknown User"
+);
+
+const getWorkLogDuration = (workLog = {}) => {
+  if (workLog.hoursWorked || workLog.hoursWorked === 0) return `${Number(workLog.hoursWorked || 0)} hr`;
+  const start = safeDate(workLog.startTime || workLog.clockInAt || workLog.startedAt);
+  const end = safeDate(workLog.endTime || workLog.clockOutAt || workLog.endedAt || workLog.completedAt);
+
+  if (start && end) {
+    const minutesBetween = Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
+    const hours = Math.floor(minutesBetween / 60);
+    const minutes = minutesBetween % 60;
+
+    if (hours && minutes) return `${hours}h ${minutes}m`;
+    if (hours) return `${hours}h`;
+    return `${minutes}m`;
+  }
+
+  const minutes = typeof workLog.minutes === "number"
+    ? workLog.minutes
+    : typeof workLog.durationMinutes === "number"
+      ? workLog.durationMinutes
+      : null;
+
+  return minutes != null ? `${(minutes / 60).toFixed(2)} hr` : null;
+};
+
+const workLogMatchesUser = (workLog = {}, user = {}) => {
+  if (!user?.id && !user?.userId) return false;
+
+  const userIds = [user.id, user.userId].filter(Boolean).map(normalizeText);
+  const workLogIds = [
+    workLog.userId,
+    workLog.techId,
+    workLog.employeeId,
+    workLog.createdById,
+    workLog.companyUserId,
+    workLog.technicianId,
+  ].filter(Boolean).map(normalizeText);
+
+  if (workLogIds.some((id) => userIds.includes(id))) return true;
+
+  const userNames = [getCompanyUserName(user), user.userName, user.displayName]
+    .filter(Boolean)
+    .map(normalizeText);
+  const workLogNames = [workLog.userName, workLog.techName, workLog.employeeName, workLog.createdByName]
+    .filter(Boolean)
+    .map(normalizeText);
+
+  return workLogNames.some((name) => userNames.includes(name));
+};
 
 const CompanyUserDashboard = () => {
   const { recentlySelectedCompany } = useContext(Context);
@@ -69,41 +188,41 @@ const CompanyUserDashboard = () => {
   const [companyUsers, setCompanyUsers] = useState([]);
   const [workLogs, setWorkLogs] = useState([]);
 
-  // Simple UI helpers
-  const [search, setSearch] = useState("");
   const [selectedUserId, setSelectedUserId] = useState("");
 
   useEffect(() => {
-    if (!recentlySelectedCompany) return;
+    if (!recentlySelectedCompany) {
+      setCompanyUsers([]);
+      setWorkLogs([]);
+      setLoading(false);
+      return;
+    }
 
     const run = async () => {
       setLoading(true);
       setError("");
       try {
-        // --- Company Users ---
-        // NOTE: Adjust collection name if your project uses a different path.
-        // Common patterns: companies/{companyId}/companyUsers OR companies/{companyId}/users
-        const usersQ = query(
-          collection(db, "companies", recentlySelectedCompany, "companyUsers"),
-          orderBy("lastName"),
-          limit(250)
-        );
+        const [usersSnap, logsSnap, activeRouteLogsSnap] = await Promise.all([
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "workLogs")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "activeRouteLogs")),
+        ]);
 
-        const usersSnap = await getDocs(usersQ);
-        const users = usersSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const users = usersSnap.docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .sort((left, right) => getCompanyUserName(left).localeCompare(getCompanyUserName(right)));
+
+        const logs = [
+          ...logsSnap.docs.map((d) => ({ id: d.id, ...d.data() })),
+          ...activeRouteLogsSnap.docs.map((d) => ({ id: d.id, ...d.data(), sourceCollection: "activeRouteLogs" })),
+        ]
+          .sort((left, right) => (
+            toMillis(right.dateCreated || right.date || right.createdAt || right.workDate || right.startTime || right.clockInAt || right.startedAt) -
+            toMillis(left.dateCreated || left.date || left.createdAt || left.workDate || left.startTime || left.clockInAt || left.startedAt)
+          ))
+          .slice(0, 50);
+
         setCompanyUsers(users);
-
-        // --- Work Logs ---
-        // NOTE: Adjust collection name/path if needed.
-        // Common patterns: companies/{companyId}/workLogs OR companies/{companyId}/worklogs
-        const logsQ = query(
-          collection(db, "companies", recentlySelectedCompany, "workLogs"),
-          orderBy("dateCreated", "desc"),
-          limit(50)
-        );
-
-        const logsSnap = await getDocs(logsQ);
-        const logs = logsSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
         setWorkLogs(logs);
       } catch (e) {
         console.error(e);
@@ -116,46 +235,26 @@ const CompanyUserDashboard = () => {
     run();
   }, [recentlySelectedCompany, db]);
 
-  const filteredUsers = useMemo(() => {
-    const s = search.trim().toLowerCase();
-    if (!s) return companyUsers;
-
-    return companyUsers.filter((u) => {
-      const full =
-        `${u.firstName || ""} ${u.lastName || ""} ${u.name || ""} ${u.email || ""}`.toLowerCase();
-      return full.includes(s);
-    });
-  }, [companyUsers, search]);
-
   const selectedUser = useMemo(
-    () => companyUsers.find((u) => u.id === selectedUserId) || null,
+    () => companyUsers.find((u) => u.id === selectedUserId || u.userId === selectedUserId) || null,
     [companyUsers, selectedUserId]
   );
 
   const visibleWorkLogs = useMemo(() => {
-    if (!selectedUserId) return workLogs;
-    return workLogs.filter((wl) => {
-      // Works with different naming conventions you might have:
-      // userId / techId / employeeId / createdById
-      return (
-        wl.userId === selectedUserId ||
-        wl.techId === selectedUserId ||
-        wl.employeeId === selectedUserId ||
-        wl.createdById === selectedUserId
-      );
-    });
-  }, [workLogs, selectedUserId]);
+    if (!selectedUser) return workLogs;
+    return workLogs.filter((wl) => workLogMatchesUser(wl, selectedUser));
+  }, [workLogs, selectedUser]);
 
   const stats = useMemo(() => {
     const totalUsers = companyUsers.length;
     const totalLogs = workLogs.length;
 
     const activeUsers = companyUsers.filter((u) => {
-      // common patterns: active boolean, isActive, disabled
       if (typeof u.active === "boolean") return u.active;
       if (typeof u.isActive === "boolean") return u.isActive;
       if (typeof u.disabled === "boolean") return !u.disabled;
-      return true; // assume active if unknown
+      if (u.status) return normalizeText(u.status) === "active";
+      return true;
     }).length;
 
     const selectedLogsCount = selectedUserId ? visibleWorkLogs.length : totalLogs;
@@ -202,11 +301,7 @@ const CompanyUserDashboard = () => {
               <Chip>Users</Chip>
               {selectedUser ? (
                 <Chip>
-                  Viewing:{" "}
-                  {selectedUser.displayName ||
-                    `${selectedUser.firstName || ""} ${selectedUser.lastName || ""}`.trim() ||
-                    selectedUser.email ||
-                    selectedUser.id}
+                  Viewing: {getCompanyUserName(selectedUser)}
                 </Chip>
               ) : (
                 <Chip>All Users</Chip>
@@ -217,7 +312,7 @@ const CompanyUserDashboard = () => {
               User Dashboard
             </h1>
             <p className="mt-1 text-sm text-slate-500">
-              Overview of Company Users, associated business, and Work Logs.
+              Overview of company users and recent work log activity.
             </p>
           </div>
 
@@ -240,10 +335,10 @@ const CompanyUserDashboard = () => {
         {/* Stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard title="Total Users" value={stats.totalUsers} />
-          <StatCard title="Active Users" value={stats.activeUsers} sub="Based on active/isActive/disabled flags" />
+          <StatCard title="Active Users" value={stats.activeUsers} sub="Based on status and active flags" />
           <StatCard title="Recent Work Logs" value={stats.totalLogs} sub="Last 50 loaded" />
           <StatCard
-            title={selectedUserId ? "Work Logs (Selected)" : "Work Logs (Filter)"}
+            title={selectedUserId ? "Selected User Logs" : "User Log Filter"}
             value={stats.selectedLogsCount}
             sub={selectedUserId ? "Filtered by selected user" : "Select a user to filter"}
           />
@@ -267,28 +362,14 @@ const CompanyUserDashboard = () => {
               }
             >
               <div className="space-y-3">
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  placeholder="Search users (name, email)"
-                />
-
                 <div className="space-y-2">
-                  {filteredUsers.length === 0 ? (
+                  {companyUsers.length === 0 ? (
                     <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
-                      No users match your search.
+                      No company users found.
                     </div>
                   ) : (
-                    filteredUsers.slice(0, 30).map((u) => {
-                      const label =
-                        u.displayName ||
-                        `${u.firstName || ""} ${u.lastName || ""}`.trim() ||
-                        u.name ||
-                        u.email ||
-                        u.id;
-
-                      const isSelected = selectedUserId === u.id;
+                    companyUsers.slice(0, 30).map((u) => {
+                      const isSelected = selectedUserId === u.id || selectedUserId === u.userId;
 
                       return (
                         <button
@@ -304,22 +385,19 @@ const CompanyUserDashboard = () => {
                           <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
                               <div className="text-sm font-semibold text-slate-900 truncate">
-                                {label}
+                                {getCompanyUserName(u)}
                               </div>
                               <div className="mt-0.5 text-xs text-slate-500 truncate">
-                                {u.email || "No email"}
+                                {u.email || u.userId || "No email on file"}
+                              </div>
+                              <div className="mt-1 text-xs text-slate-500 truncate">
+                                {getCompanyUserMeta(u)}
                               </div>
                             </div>
                             <div className="flex flex-wrap gap-1 justify-end">
-                              {typeof u.active === "boolean" ? (
-                                <span
-                                  className={`rounded-full px-2 py-1 text-xs font-semibold
-                                    ${u.active ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}`}
-                                >
-                                  {u.active ? "Active" : "Inactive"}
-                                </span>
-                              ) : null}
-                              {u.roleName ? <Chip>{u.roleName}</Chip> : null}
+                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${getStatusClass(u.status)}`}>
+                                {getStatusLabel(u.status)}
+                              </span>
                             </div>
                           </div>
                         </button>
@@ -328,61 +406,11 @@ const CompanyUserDashboard = () => {
                   )}
                 </div>
 
-                {filteredUsers.length > 30 ? (
+                {companyUsers.length > 30 ? (
                   <div className="text-xs text-slate-500">
-                    Showing 30 of {filteredUsers.length}. Refine search to narrow.
+                    Showing 30 of {companyUsers.length}. Open Company Users to view the full list.
                   </div>
                 ) : null}
-              </div>
-            </SectionCard>
-
-            {/* Businesses */}
-            <SectionCard
-              title="Businesses"
-              actions={
-                <Link
-                  to="/company/associatedBusiness"
-                  className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
-                >
-                  Open Businesses
-                </Link>
-              }
-            >
-              <div className="text-sm text-slate-600">
-                {selectedUser ? (
-                  <div className="space-y-3">
-                    <div className="rounded-xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Selected User
-                      </div>
-                      <div className="mt-2 text-sm font-semibold text-slate-900">
-                        {selectedUser.displayName ||
-                          `${selectedUser.firstName || ""} ${selectedUser.lastName || ""}`.trim() ||
-                          selectedUser.email ||
-                          selectedUser.id}
-                      </div>
-                      <div className="mt-1 text-sm text-slate-600">
-                        {selectedUser.email || "No email on file"}
-                      </div>
-                    </div>
-
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
-                      Hook this section to whatever you consider “businesses” for a user:
-                      <ul className="mt-2 list-disc pl-5 space-y-1">
-                        <li>Customers assigned to the user</li>
-                        <li>Service locations managed by the user</li>
-                        <li>Routes, stops, or territories</li>
-                      </ul>
-                      <div className="mt-3 text-xs text-slate-500">
-                        (This page keeps functions simple—style first. Add your query once you confirm the collection/path.)
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="rounded-xl border border-slate-200 bg-white p-4 text-sm text-slate-600">
-                    Select a user to show their associated business.
-                  </div>
-                )}
               </div>
             </SectionCard>
           </div>
@@ -423,39 +451,17 @@ const CompanyUserDashboard = () => {
               ) : (
                 <div className="space-y-3">
                   {visibleWorkLogs.slice(0, 12).map((wl) => {
-                    const d =
-                      safeDate(wl.dateCreated) ||
-                      safeDate(wl.date) ||
-                      safeDate(wl.createdAt) ||
-                      safeDate(wl.workDate);
-
+                    const d = getWorkLogDate(wl);
                     const dateLabel = d ? format(d, "PPP") : "Unknown date";
-
-                    const title =
-                      wl.title ||
-                      wl.summary ||
-                      wl.taskName ||
-                      wl.type ||
-                      "Work Log";
-
-                    const who =
-                      wl.techName ||
-                      wl.userName ||
-                      wl.createdByName ||
-                      (wl.userId || wl.techId || wl.employeeId ? "Assigned" : "Unknown");
-
-                    const minutes =
-                      typeof wl.minutes === "number"
-                        ? wl.minutes
-                        : typeof wl.durationMinutes === "number"
-                          ? wl.durationMinutes
-                          : null;
-
-                    const durationLabel =
-                      minutes != null ? `${(minutes / 60).toFixed(2)} hr` : null;
+                    const title = getWorkLogTitle(wl);
+                    const who = getWorkLogPerson(wl);
+                    const durationLabel = getWorkLogDuration(wl);
+                    const payLabel = wl.rate && wl.hoursWorked
+                      ? `$${(Number(wl.hoursWorked || 0) * Number(wl.rate || 0)).toFixed(2)}`
+                      : null;
 
                     return (
-                      <RowLink key={wl.id} to={`/company/workLogs/details/${wl.id}`}>
+                      <RowLink key={wl.id} to={`/company/workLogs/${wl.id}`}>
                         <div className="flex items-start justify-between gap-4">
                           <div className="min-w-0">
                             <div className="text-sm font-semibold text-slate-900 truncate">
@@ -469,6 +475,18 @@ const CompanyUserDashboard = () => {
                                 <>
                                   <span className="opacity-50">•</span>
                                   <span>{durationLabel}</span>
+                                </>
+                              ) : null}
+                              {wl.status ? (
+                                <>
+                                  <span className="opacity-50">•</span>
+                                  <span>{wl.status}</span>
+                                </>
+                              ) : null}
+                              {payLabel ? (
+                                <>
+                                  <span className="opacity-50">•</span>
+                                  <span>{payLabel}</span>
                                 </>
                               ) : null}
                             </div>

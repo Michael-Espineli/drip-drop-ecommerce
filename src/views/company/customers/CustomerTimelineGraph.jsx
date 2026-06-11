@@ -28,6 +28,7 @@ const eventGroupStyles = {
     workOrder: { dot: 'bg-violet-500', rail: '#8b5cf6', chip: 'bg-violet-50 text-violet-700 border-violet-100' },
     equipmentMaintenance: { dot: 'bg-amber-500', rail: '#f59e0b', chip: 'bg-amber-50 text-amber-700 border-amber-100' },
     equipmentRepair: { dot: 'bg-red-500', rail: '#ef4444', chip: 'bg-red-50 text-red-700 border-red-100' },
+    equipmentReading: { dot: 'bg-cyan-500', rail: '#06b6d4', chip: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
     waterFill: { dot: 'bg-indigo-500', rail: '#6366f1', chip: 'bg-indigo-50 text-indigo-700 border-indigo-100' },
     waterEmpty: { dot: 'bg-orange-500', rail: '#f97316', chip: 'bg-orange-50 text-orange-700 border-orange-100' },
     repairRequest: { dot: 'bg-red-500', rail: '#ef4444', chip: 'bg-red-50 text-red-700 border-red-100' },
@@ -328,6 +329,7 @@ const CustomerTimelineGraph = ({ timeline }) => {
 
     const maintenanceCount = markerEvents.filter((event) => event.type === 'equipmentMaintenance').length;
     const equipmentCount = markerEvents.filter((event) => event.type === 'equipmentRepair').length;
+    const equipmentReadingCount = markerEvents.filter((event) => event.type === 'equipmentReading').length;
     const waterCount = markerEvents.filter((event) => event.type === 'waterFill' || event.type === 'waterEmpty').length;
     const serviceCount = markerEvents.filter((event) => event.type === 'serviceStop' || event.type === 'workOrder').length;
     const billingCount = markerEvents.filter((event) => ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'].includes(event.type)).length;
@@ -337,6 +339,7 @@ const CustomerTimelineGraph = ({ timeline }) => {
         { label: 'Dosage points', value: dosageSeries.reduce((total, item) => total + item.data.length, 0) },
         { label: 'Maintenance', value: maintenanceCount },
         { label: 'Equipment history', value: equipmentCount },
+        { label: 'Equipment readings', value: equipmentReadingCount },
         { label: 'Body of water', value: waterCount },
         { label: 'Service history', value: serviceCount },
         { label: 'Billing', value: billingCount },
@@ -403,7 +406,7 @@ const CustomerTimelineGraph = ({ timeline }) => {
                 )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
                 {summaryCards.map((card) => (
                     <div key={card.label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                         <p className="text-2xl font-bold text-slate-900">{card.value}</p>

@@ -7,6 +7,11 @@ import { Context } from '../../../context/AuthContext';
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 import MapComponent from '../../components/MapComponent';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+    asStringArray,
+    normalizeAddress,
+    normalizeServiceLocationForFirestore,
+} from '../../../utils/customerLocationData';
 
 const ServiceLocationDetails = () => {
     const { serviceLocationId } = useParams();
@@ -49,9 +54,9 @@ const ServiceLocationDetails = () => {
                     setStreetAddress(slData.address?.streetAddress || '');
                     setCity(slData.address?.city || '');
                     setState(slData.address?.state || '');
-                    setZipCode(slData.address?.zipCode || '');
+                    setZipCode(slData.address?.zip || slData.address?.zipCode || '');
                     setGateCode(slData.gateCode);
-                    setDogName(slData.dogName);
+                    setDogName(asStringArray(slData.dogName).join(', '));
                     setNotes(slData.notes);
                     setRate(slData.rate);
                     setPreText(slData.preText);
@@ -77,9 +82,9 @@ const ServiceLocationDetails = () => {
             setStreetAddress(serviceLocation.address?.streetAddress || '');
             setCity(serviceLocation.address?.city || '');
             setState(serviceLocation.address?.state || '');
-            setZipCode(serviceLocation.address?.zipCode || '');
+            setZipCode(serviceLocation.address?.zip || serviceLocation.address?.zipCode || '');
             setGateCode(serviceLocation.gateCode);
-            setDogName(serviceLocation.dogName);
+            setDogName(asStringArray(serviceLocation.dogName).join(', '));
             setNotes(serviceLocation.notes);
             setRate(serviceLocation.rate);
             setPreText(serviceLocation.preText);
@@ -90,21 +95,22 @@ const ServiceLocationDetails = () => {
         e.preventDefault();
         if (!requirePermission("44", "update service locations")) return;
 
-        const updatedData = {
+        const updatedData = normalizeServiceLocationForFirestore({
+            ...serviceLocation,
             nickName,
             gateCode,
-            dogName,
+            dogName: dogName.split(',').map((name) => name.trim()).filter(Boolean),
             notes,
-            rate: Number(rate),
+            rate,
             preText,
-            address: {
+            address: normalizeAddress({
                 ...serviceLocation.address,
                 streetAddress,
                 city,
                 state,
-                zipCode,
-            },
-        };
+                zip: zipCode,
+            }),
+        });
 
         try {
             const docRef = doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId);
@@ -164,9 +170,9 @@ const ServiceLocationDetails = () => {
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <div><strong>Nickname:</strong> <p>{serviceLocation.nickName}</p></div>
                             <div><strong>Customer:</strong> <p>{serviceLocation.customerName}</p></div>
-                            <div className="md:col-span-2"><strong>Address:</strong> <p>{`${serviceLocation.address?.streetAddress}, ${serviceLocation.address?.city}, ${serviceLocation.address?.state} ${serviceLocation.address?.zipCode}`}</p></div>
+                            <div className="md:col-span-2"><strong>Address:</strong> <p>{`${serviceLocation.address?.streetAddress}, ${serviceLocation.address?.city}, ${serviceLocation.address?.state} ${serviceLocation.address?.zip || serviceLocation.address?.zipCode}`}</p></div>
                             <div><strong>Gate Code:</strong> <p>{serviceLocation.gateCode}</p></div>
-                            <div><strong>Dog Name:</strong> <p>{serviceLocation.dogName}</p></div>
+                            <div><strong>Dog Name:</strong> <p>{asStringArray(serviceLocation.dogName).join(', ')}</p></div>
                             <div><strong>Rate:</strong> <p>${serviceLocation.rate}</p></div>
                             <div className="md:col-span-2"><strong>Notes:</strong> <p>{serviceLocation.notes}</p></div>
                             <div><strong>Pre-Service Text:</strong> <p>{serviceLocation.preText ? 'Yes' : 'No'}</p></div>

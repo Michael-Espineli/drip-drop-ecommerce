@@ -11,6 +11,15 @@ import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import Select from "react-select";
+import {
+  CATEGORY_OPTIONS,
+  databaseItemSelectStyles,
+  databaseItemSelectTheme,
+  findOptionByLabel,
+  SUBCATEGORY_OPTIONS,
+  UOM_OPTIONS,
+} from "./databaseItemOptions";
 
 const DataBaseItemDetailView = () => {
   const { name, recentlySelectedCompany } = useContext(Context);
@@ -99,6 +108,7 @@ const DataBaseItemDetailView = () => {
       setSize(purchase.size);
       setSellPrice(purchase.sellPriceRaw ?? purchase.billingRateRaw ?? 0);
       setSku(purchase.sku);
+      setSubcategory(purchase.subCategory);
       setTracking(purchase.tracking || "");
     } catch (error) {
       console.log(error);
@@ -171,6 +181,22 @@ const DataBaseItemDetailView = () => {
       currency: currency,
     }).format(number);
   }
+
+  const selectedUom = findOptionByLabel(
+    UOM_OPTIONS,
+    uom,
+    uom ? { id: "current-uom", label: uom } : null
+  );
+  const selectedCategory = findOptionByLabel(
+    CATEGORY_OPTIONS,
+    category,
+    category ? { id: "current-category", label: category } : null
+  );
+  const selectedSubcategory = findOptionByLabel(
+    SUBCATEGORY_OPTIONS,
+    subcategory,
+    subcategory ? { id: "current-subcategory", label: subcategory } : null
+  );
 
   return (
     <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
@@ -297,42 +323,48 @@ const DataBaseItemDetailView = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-semibold text-slate-700">UOM</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setUom(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="uom"
-                    value={uom}
-                  />
+                  <div className="mt-2">
+                    <Select
+                      value={selectedUom}
+                      options={UOM_OPTIONS}
+                      onChange={(selectedOption) => setUom(selectedOption?.label || "")}
+                      isSearchable
+                      placeholder="Select a UOM"
+                      styles={databaseItemSelectStyles}
+                      theme={databaseItemSelectTheme}
+                    />
+                  </div>
                 </div>
 
                 <div>
                   <label className="block text-sm font-semibold text-slate-700">Category</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setCategory(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="category"
-                    value={category}
-                  />
+                  <div className="mt-2">
+                    <Select
+                      value={selectedCategory}
+                      options={CATEGORY_OPTIONS}
+                      onChange={(selectedOption) => setCategory(selectedOption?.label || "")}
+                      isSearchable
+                      placeholder="Select a Category"
+                      styles={databaseItemSelectStyles}
+                      theme={databaseItemSelectTheme}
+                    />
+                  </div>
                 </div>
               </div>
 
               <div>
                 <label className="block text-sm font-semibold text-slate-700">Subcategory</label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  onChange={(e) => {
-                    setSubcategory(e.target.value);
-                  }}
-                  type="text"
-                  placeholder="Subcategory PICKER"
-                  value={subcategory}
-                />
+                <div className="mt-2">
+                  <Select
+                    value={selectedSubcategory}
+                    options={SUBCATEGORY_OPTIONS}
+                    onChange={(selectedOption) => setSubcategory(selectedOption?.label || "")}
+                    isSearchable
+                    placeholder="Select a Subcategory"
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -429,6 +461,11 @@ const DataBaseItemDetailView = () => {
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">
                   <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</div>
                   <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.category || "--"}</div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subcategory</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.subCategory || "--"}</div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 bg-white p-4">

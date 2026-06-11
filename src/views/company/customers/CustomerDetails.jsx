@@ -13,6 +13,7 @@ import { functions } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { RepairRequest, displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { loadCustomerTimeline } from '../../../utils/customerTimeline';
+import { deleteCustomerCascade } from '../../../utils/customerCascadeDelete';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import CustomerTimelineGraph from './CustomerTimelineGraph';
 import { salesCollectionNames } from '../../../utils/models/Sales';
@@ -23,6 +24,12 @@ import {
     normalizeCustomerTag,
     normalizeCustomerTags,
 } from '../../../utils/customerTags';
+import {
+    normalizeAddress,
+    normalizeContact,
+    normalizeCustomerForFirestore,
+    normalizeServiceLocationForFirestore,
+} from '../../../utils/customerLocationData';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -135,6 +142,10 @@ const timelineTypeStyles = {
         dot: 'bg-red-500',
         chip: 'bg-red-50 text-red-700 border-red-100',
     },
+    equipmentReading: {
+        dot: 'bg-cyan-500',
+        chip: 'bg-cyan-50 text-cyan-700 border-cyan-100',
+    },
     waterFill: {
         dot: 'bg-indigo-500',
         chip: 'bg-indigo-50 text-indigo-700 border-indigo-100',
@@ -188,7 +199,7 @@ const timelineFilters = [
     { id: 'billing', label: 'Billing', types: ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'] },
     { id: 'notes', label: 'Notes', types: ['note', 'toDo'] },
     { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
-    { id: 'equipment', label: 'Equipment', types: ['equipmentMaintenance', 'equipmentRepair'] },
+    { id: 'equipment', label: 'Equipment', types: ['equipmentMaintenance', 'equipmentRepair', 'equipmentReading'] },
     { id: 'water', label: 'Water', types: ['waterFill', 'waterEmpty'] },
 ];
 
@@ -229,9 +240,15 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer }) => {
         if (!requirePermission("14", "update customer details")) return;
 
         const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id);
+        const normalizedTags = normalizeCustomerTags(formData.tags);
+        const normalizedCustomer = normalizeCustomerForFirestore({
+            ...formData,
+            tags: normalizedTags,
+        });
         const payload = {
             ...formData,
-            tags: normalizeCustomerTags(formData.tags),
+            ...normalizedCustomer,
+            tags: normalizedTags,
         };
         try {
             await updateDoc(customerRef, payload);
@@ -451,7 +468,7 @@ const ServiceLocationsTab = ({ customer }) => {
             streetAddress: selectedLocation.address?.streetAddress || '',
             city: selectedLocation.address?.city || '',
             state: selectedLocation.address?.state || '',
-            zip: selectedLocation.address?.zip || '',
+            zip: selectedLocation.address?.zip || selectedLocation.address?.zipCode || '',
             gateCode: selectedLocation.gateCode || '',
             estimatedTime: selectedLocation.estimatedTime ?? '',
             notes: selectedLocation.notes || '',
@@ -532,28 +549,35 @@ const ServiceLocationsTab = ({ customer }) => {
 
         setSavingLocation(true);
         try {
-            const updatedLocation = {
+            const normalizedAddress = normalizeAddress({
+                ...(selectedLocation.address || {}),
+                streetAddress: locationForm.streetAddress,
+                city: locationForm.city,
+                state: locationForm.state,
+                zip: locationForm.zip,
+            });
+            const normalizedMainContact = normalizeContact({
+                ...(selectedLocation.mainContact || {}),
+                name: locationForm.mainContactName,
+                email: locationForm.mainContactEmail,
+                phoneNumber: locationForm.mainContactPhoneNumber,
+                notes: locationForm.mainContactNotes,
+            });
+            const normalizedLocation = normalizeServiceLocationForFirestore({
                 ...selectedLocation,
                 nickName: locationForm.nickName,
-                address: {
-                    ...(selectedLocation.address || {}),
-                    streetAddress: locationForm.streetAddress,
-                    city: locationForm.city,
-                    state: locationForm.state,
-                    zip: locationForm.zip,
-                },
+                address: normalizedAddress,
                 gateCode: locationForm.gateCode,
-                estimatedTime: locationForm.estimatedTime === '' ? '' : Number(locationForm.estimatedTime),
+                estimatedTime: locationForm.estimatedTime === '' ? 0 : Number(locationForm.estimatedTime),
                 notes: locationForm.notes,
                 preText: locationForm.preText,
                 isActive: locationForm.isActive,
-                mainContact: {
-                    ...(selectedLocation.mainContact || {}),
-                    name: locationForm.mainContactName,
-                    email: locationForm.mainContactEmail,
-                    phoneNumber: locationForm.mainContactPhoneNumber,
-                    notes: locationForm.mainContactNotes,
-                },
+                active: locationForm.isActive,
+                mainContact: normalizedMainContact,
+            });
+            const updatedLocation = {
+                ...selectedLocation,
+                ...normalizedLocation,
             };
 
             await updateDoc(
@@ -566,6 +590,7 @@ const ServiceLocationsTab = ({ customer }) => {
                     notes: updatedLocation.notes,
                     preText: updatedLocation.preText,
                     isActive: updatedLocation.isActive,
+                    active: updatedLocation.isActive,
                     mainContact: updatedLocation.mainContact,
                 }
             );
@@ -609,8 +634,8 @@ const ServiceLocationsTab = ({ customer }) => {
     };
 
     return (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+            <div className="space-y-6">
                 <InfoCard
                     title="Service Locations"
                     actions={
@@ -647,6 +672,8 @@ const ServiceLocationsTab = ({ customer }) => {
                         </ul>
                     )}
                 </InfoCard>
+            </div>
+            <div className="space-y-6">
                 {selectedLocation !== null &&
                     <InfoCard
                         title="Service Location"
@@ -846,9 +873,10 @@ const ServiceLocationsTab = ({ customer }) => {
 
                     </InfoCard>
                 }
+                {selectedLocation && <RecentServiceHistoryCard location={selectedLocation} />}
 
             </div>
-            <div className="lg:col-span-2 space-y-8">
+            <div className="space-y-6">
                 {selectedLocation && <LocationDetails location={selectedLocation} customerId={customer.id} />}
             </div>
 
@@ -857,10 +885,81 @@ const ServiceLocationsTab = ({ customer }) => {
     );
 };
 
+const RecentServiceHistoryCard = ({ location }) => {
+    const [serviceHistory, setServiceHistory] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const { recentlySelectedCompany } = useContext(Context);
+    const db = getFirestore();
+
+    useEffect(() => {
+        const fetchHistory = async () => {
+            setLoading(true);
+            try {
+                const throughToday = new Date();
+                throughToday.setHours(23, 59, 59, 999);
+
+                const historyQ = query(
+                    collection(db, 'companies', recentlySelectedCompany, 'serviceStops'),
+                    where("serviceLocationId", "==", location.id),
+                    where("serviceDate", "<=", throughToday),
+                    orderBy("serviceDate", "desc"),
+                    limit(5)
+                );
+                const historySnap = await getDocs(historyQ);
+                setServiceHistory(historySnap.docs.map(d => ({ id: d.id, ...d.data() })));
+            } catch (err) {
+                toast.error("Failed to load recent service history.");
+                console.log(err);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (location?.id && recentlySelectedCompany) {
+            fetchHistory();
+        } else {
+            setServiceHistory([]);
+            setLoading(false);
+        }
+    }, [location?.id, recentlySelectedCompany, db]);
+
+    return (
+        <InfoCard title="Recent Service History">
+            {loading ? (
+                <ClipLoader size={20} />
+            ) : (
+                <ul className="divide-y divide-slate-200">
+                    {serviceHistory.map((stop) => (
+                        <li key={stop.id} className="py-3">
+                            <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-slate-900">
+                                        {formatDateValue(stop.serviceDate)}
+                                    </p>
+                                    <p className="mt-1 truncate text-xs text-slate-500">
+                                        {[stop.type || stop.jobName, stop.tech].filter(Boolean).join(" • ") || "Service stop"}
+                                    </p>
+                                </div>
+                                {stop.operationStatus && (
+                                    <StatusBadge tone={statusToneFor(stop.operationStatus)}>
+                                        {stop.operationStatus}
+                                    </StatusBadge>
+                                )}
+                            </div>
+                        </li>
+                    ))}
+                    {serviceHistory.length === 0 && (
+                        <p className="text-sm text-slate-500">No recent stops through today.</p>
+                    )}
+                </ul>
+            )}
+        </InfoCard>
+    );
+};
+
 const LocationDetails = ({ location, customerId }) => {
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipment, setEquipment] = useState([]);
-    const [serviceHistory, setServiceHistory] = useState([]);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
@@ -877,9 +976,6 @@ const LocationDetails = ({ location, customerId }) => {
                 const equipSnap = await getDocs(equipQ);
                 setEquipment(equipSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
-                const historyQ = query(collection(db, 'companies', recentlySelectedCompany, 'serviceStops'), where("serviceLocationId", "==", location.id), orderBy("serviceDate", "desc"), limit(5));
-                const historySnap = await getDocs(historyQ);
-                setServiceHistory(historySnap.docs.map(d => ({ id: d.id, ...d.data() })));
             } catch (err) {
                 toast.error("Failed to load location details.");
                 console.log(err)
@@ -999,28 +1095,26 @@ const LocationDetails = ({ location, customerId }) => {
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
-                <ul className="space-y-3">
+                <ul className="grid gap-3">
                     {equipment.map((eq) => (
                         <li key={eq.id}>
                             <Link
                                 to={`/company/equipment/detail/${eq.id}`}
-                                className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
+                                className="block rounded-xl border border-slate-200 bg-white p-3 hover:border-blue-200 hover:bg-slate-50 transition"
                             >
-                                <div className="flex items-start justify-between gap-4">
-                                    <div>
-                                        <h3 className="text-sm font-semibold text-slate-900">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <h3 className="truncate text-sm font-semibold text-slate-900">
                                             {eq.name || "Unnamed Equipment"}
                                         </h3>
-                                        <p className="mt-1 text-sm text-slate-500">
-                                            {eq.type || "Unknown Type"}
-                                            {eq.model ? ` • ${eq.model}` : ""}
-                                            {eq.make ? ` • ${eq.make}` : ""}
+                                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                                            {[eq.type, eq.make, eq.model].filter(Boolean).join(" • ") || "Unknown type"}
                                         </p>
                                     </div>
 
-                                    <div className="flex flex-col items-end gap-2">
+                                    <div className="flex shrink-0 flex-col items-end gap-1.5">
                                         <span
-                                            className={`rounded-full px-3 py-1 text-xs font-semibold border ${eq.status === "Operational"
+                                            className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${eq.status === "Operational"
                                                 ? "bg-emerald-50 text-emerald-700 border-emerald-100"
                                                 : "bg-amber-50 text-amber-700 border-amber-100"
                                                 }`}
@@ -1029,110 +1123,35 @@ const LocationDetails = ({ location, customerId }) => {
                                         </span>
 
                                         {eq.needsService && (
-                                            <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-red-700 border border-red-100">
+                                            <span className="rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">
                                                 Needs Service
                                             </span>
                                         )}
                                     </div>
                                 </div>
 
-                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Type
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">{eq.type || "Not specified"}</p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Make / Model
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {[eq.make, eq.model].filter(Boolean).join(" / ") || "Not specified"}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Body of Water
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked body of water" : "Unassigned")}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Pressure
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            Current: {eq.currentPressure ?? "—"} PSI
-                                            <br />
-                                            Clean: {eq.cleanFilterPressure ?? "—"} PSI
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Last Service
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {eq.lastServiceDate
-                                                ? format(eq.lastServiceDate.toDate(), "PPP")
-                                                : "Not recorded"}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Next Service
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {eq.nextServiceDate
-                                                ? format(eq.nextServiceDate.toDate(), "PPP")
-                                                : "Not scheduled"}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Service Frequency
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            Every {eq.serviceFrequency || "—"} {eq.serviceFrequencyEvery || ""}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Installed
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {eq.dateInstalled
-                                                ? format(eq.dateInstalled.toDate(), "PPP")
-                                                : "Not recorded"}
-                                        </p>
-                                    </div>
-
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
-                                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                            Active
-                                        </p>
-                                        <p className="mt-1 text-sm text-slate-800">
-                                            {eq.isActive ? "Yes" : "No"}
-                                        </p>
-                                    </div>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                        {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
+                                    </span>
+                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                        {eq.currentPressure ?? "—"} PSI
+                                    </span>
+                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                        Last {formatDateValue(eq.lastServiceDate)}
+                                    </span>
+                                    {eq.nextServiceDate && (
+                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                            Next {formatDateValue(eq.nextServiceDate)}
+                                        </span>
+                                    )}
                                 </div>
 
-                                <div className="mt-4">
-                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                        Notes
+                                {eq.notes && (
+                                    <p className="mt-2 line-clamp-2 text-xs text-slate-500">
+                                        {eq.notes}
                                     </p>
-                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                        {eq.notes || "No notes added."}
-                                    </p>
-                                </div>
+                                )}
                             </Link>
                         </li>
                     ))}
@@ -1144,25 +1163,6 @@ const LocationDetails = ({ location, customerId }) => {
             )}
         </InfoCard>
 
-        <InfoCard title="Recent Service History">
-            {loading ? (
-                <ClipLoader size={20} />
-            ) : (
-                <ul className="divide-y divide-slate-200">
-                    {serviceHistory.map((stop) => (
-                        <li key={stop.id} className="py-3 flex items-center justify-between gap-4">
-                            <span className="text-sm font-medium text-slate-800">
-                                {format(stop.serviceDate.toDate(), "PPP")}
-                            </span>
-                            <span className="text-sm text-slate-500">{stop.tech}</span>
-                        </li>
-                    ))}
-                    {serviceHistory.length === 0 && (
-                        <p className="text-sm text-slate-500">No recent stops.</p>
-                    )}
-                </ul>
-            )}
-        </InfoCard>
     </div>
     );
 };
@@ -1713,15 +1713,22 @@ const OperationsTab = ({ customer, onNewPartApproval }) => {
 // History Tab
 const HistoryTab = ({ customer }) => {
     const [timeline, setTimeline] = useState([]);
+    const [bodyOfWaterOptions, setBodyOfWaterOptions] = useState([]);
+    const [activeBodyOfWaterId, setActiveBodyOfWaterId] = useState('all');
     const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
     const [showAllTimelineEvents, setShowAllTimelineEvents] = useState(false);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
     const selectedFilter = timelineFilters.find((filter) => filter.id === activeTimelineFilter) || timelineFilters[0];
-    const visibleTimeline = selectedFilter.id === 'all'
+    const selectedBodyOfWater = bodyOfWaterOptions.find((body) => body.id === activeBodyOfWaterId);
+    const bodyOfWaterScopedTimeline = activeBodyOfWaterId === 'all'
         ? timeline
-        : timeline.filter((event) => selectedFilter.types.includes(event.type));
+        : timeline.filter((event) => event.bodyOfWaterId === activeBodyOfWaterId);
+    const visibleTimeline = selectedFilter.id === 'all'
+        ? bodyOfWaterScopedTimeline
+        : bodyOfWaterScopedTimeline.filter((event) => selectedFilter.types.includes(event.type));
+    const equipmentReadingTimeline = bodyOfWaterScopedTimeline.filter((event) => event.type === 'equipmentReading');
     const displayedTimeline = showAllTimelineEvents ? visibleTimeline : visibleTimeline.slice(0, 5);
     const hiddenTimelineCount = visibleTimeline.length - displayedTimeline.length;
 
@@ -1729,12 +1736,19 @@ const HistoryTab = ({ customer }) => {
         const fetchTimeline = async () => {
             setLoading(true);
             try {
-                const events = await loadCustomerTimeline({
-                    db,
-                    companyId: recentlySelectedCompany,
-                    customerId: customer.id,
-                });
+                const [events, bodyOfWaterSnapshot] = await Promise.all([
+                    loadCustomerTimeline({
+                        db,
+                        companyId: recentlySelectedCompany,
+                        customerId: customer.id,
+                    }),
+                    getDocs(query(
+                        collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                        where("customerId", "==", customer.id)
+                    )),
+                ]);
                 setTimeline(events);
+                setBodyOfWaterOptions(bodyOfWaterSnapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
             } catch (error) {
                 console.error(error);
                 toast.error("Failed to fetch customer timeline.");
@@ -1749,10 +1763,59 @@ const HistoryTab = ({ customer }) => {
 
     useEffect(() => {
         setShowAllTimelineEvents(false);
-    }, [activeTimelineFilter, timeline.length]);
+    }, [activeTimelineFilter, activeBodyOfWaterId, timeline.length]);
+
+    useEffect(() => {
+        if (activeBodyOfWaterId !== 'all' && !bodyOfWaterOptions.some((body) => body.id === activeBodyOfWaterId)) {
+            setActiveBodyOfWaterId('all');
+        }
+    }, [activeBodyOfWaterId, bodyOfWaterOptions]);
 
     return (
         <div className="space-y-8">
+            {!loading && bodyOfWaterOptions.length > 0 && (
+                <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
+                    <label htmlFor="customer-history-body-water" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        History Scope
+                    </label>
+                    <select
+                        id="customer-history-body-water"
+                        value={activeBodyOfWaterId}
+                        onChange={(event) => setActiveBodyOfWaterId(event.target.value)}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 sm:w-64"
+                    >
+                        <option value="all">All customer information</option>
+                        {bodyOfWaterOptions.map((body) => (
+                            <option key={body.id} value={body.id}>
+                                {body.name || body.type || "Unnamed Body of Water"}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
+            {!loading && equipmentReadingTimeline.length > 0 && (
+                <InfoCard title="Equipment Readings">
+                    <ul className="divide-y divide-slate-200">
+                        {equipmentReadingTimeline.slice(0, 8).map((event) => (
+                            <li key={event.id} className="py-3">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <p className="text-sm font-semibold text-slate-900">{event.equipmentName || event.title}</p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            {[event.detail || "Reading captured", event.subtitle].filter(Boolean).join(" • ")}
+                                        </p>
+                                    </div>
+                                    <span className="shrink-0 text-xs font-semibold text-slate-500">
+                                        {format(event.date, 'MMM d, yyyy')}
+                                    </span>
+                                </div>
+                            </li>
+                        ))}
+                    </ul>
+                </InfoCard>
+            )}
+
             <InfoCard
                 title="Customer Timeline"
                 actions={
@@ -1787,10 +1850,10 @@ const HistoryTab = ({ customer }) => {
                     </div>
                 ) : (
                     <div className="space-y-6">
-                        <CustomerTimelineGraph timeline={timeline} />
+                        <CustomerTimelineGraph timeline={bodyOfWaterScopedTimeline} />
                         {visibleTimeline.length === 0 ? (
                             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                                No {selectedFilter.label.toLowerCase()} timeline events found yet.
+                                No {selectedFilter.label.toLowerCase()} timeline events found{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
                             </div>
                         ) : (
                             <div className="space-y-4">
@@ -1894,7 +1957,11 @@ export default function CustomerDetails() {
                 const docSnap = await getDoc(customerRef);
                 if (docSnap.exists()) {
                     const customerData = docSnap.data();
-                    const nextCustomer = { id: docSnap.id, ...customerData };
+                    const nextCustomer = {
+                        ...customerData,
+                        ...normalizeCustomerForFirestore({ id: docSnap.id, ...customerData }),
+                        id: docSnap.id,
+                    };
 
                     if (!customerMatchesRoleTagAccess(nextCustomer, companyRole)) {
                         setCustomer(null);
@@ -1938,30 +2005,13 @@ export default function CustomerDetails() {
         if (!requirePermission("16", "delete customers")) return;
 
         try {
-            // Delete subcollections first
-            const slQ = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where("customerId", "==", customerId));
-            const slSnap = await getDocs(slQ);
-            for (const slDoc of slSnap.docs) {
-                await deleteDoc(slDoc.ref);
-            }
+            const result = await deleteCustomerCascade({
+                db,
+                companyId: recentlySelectedCompany,
+                customerId,
+            });
 
-            const bowQ = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where("customerId", "==", customerId));
-            const bowSnap = await getDocs(bowQ);
-            for (const bowDoc of bowSnap.docs) {
-                await deleteDoc(bowDoc.ref);
-            }
-
-            const equipQ = query(collection(db, 'companies', recentlySelectedCompany, 'equipment'), where("customerId", "==", customerId));
-            const equipSnap = await getDocs(equipQ);
-            for (const equipDoc of equipSnap.docs) {
-                await deleteDoc(equipDoc.ref);
-            }
-
-            // Finally delete the customer
-            const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
-            await deleteDoc(customerRef);
-
-            toast.success('Customer and all associated data deleted.');
+            toast.success(`Customer and ${Math.max(result.totalDeleted - 1, 0)} associated record(s) deleted.`);
             navigate('/company/customers');
         } catch (error) {
             toast.error('Failed to delete customer.');

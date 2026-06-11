@@ -8,6 +8,11 @@ import AddressAutocomplete from '../../components/AddressAutocomplete';
 import { toast } from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
+import {
+    normalizeAddress,
+    normalizeContact,
+    normalizeServiceLocationForFirestore,
+} from '../../../utils/customerLocationData';
 
 const nextServiceDate = (date, amount, unit) => {
     const next = new Date(date);
@@ -72,7 +77,7 @@ const CreateNewServiceLocation = () => {
     const [selectedContactId, setSelectedContactId] = useState('');
 
     // Form state based on the new model
-    const [address, setAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: null, longitude: null });
+    const [address, setAddress] = useState({ streetAddress: '', city: '', state: '', zip: '', latitude: 0, longitude: 0 });
     const [details, setDetails] = useState({
         nickName: 'Main',
         gateCode: '',
@@ -145,10 +150,10 @@ const CreateNewServiceLocation = () => {
 
     const handlePlaceSelected = (place) => {
         if (!place) return;
-        setAddress({ 
+        setAddress(normalizeAddress({
             streetAddress: place.streetAddress, city: place.city, state: place.state, zip: place.zipCode, 
             latitude: place.latitude, longitude: place.longitude 
-        });
+        }));
     };
 
     const handleCreate = async (e) => {
@@ -180,6 +185,7 @@ const CreateNewServiceLocation = () => {
                     id: mainContact.id || "com_cus_con_" + uuidv4(),
                 };
             }
+            finalMainContact = normalizeContact(finalMainContact);
             await setDoc(
                 doc(db, 'companies', recentlySelectedCompany, 'customers', selectedCustomer, 'contacts', finalMainContact.id),
                 finalMainContact,
@@ -256,10 +262,10 @@ const CreateNewServiceLocation = () => {
             }
 
             // Create Service Location
-            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), {
+            const serviceLocationPayload = normalizeServiceLocationForFirestore({
                 id: serviceLocationId,
                 nickName: details.nickName,
-                address,
+                address: normalizeAddress(address),
                 gateCode: details.gateCode,
                 dogName: dogNames.split(',').map(s => s.trim()).filter(Boolean),
                 estimatedTime: Number(details.estimatedTime || 0),
@@ -280,7 +286,9 @@ const CreateNewServiceLocation = () => {
                 verified: details.verified,
                 photoUrls: details.photoUrls,
                 isActive: true,
+                active: true,
             });
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', serviceLocationId), serviceLocationPayload);
 
             toast.success('Service location created successfully!', { id: toastId });
             navigate(`/company/customers/details/${selectedCustomer}/operations`);

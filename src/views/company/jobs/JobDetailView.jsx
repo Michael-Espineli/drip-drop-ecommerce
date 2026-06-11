@@ -1004,24 +1004,84 @@ const JobDetailView = () => {
     borderRadius: 12,
     colors: {
       ...theme.colors,
-      primary25: "#EFF6FF",
+      primary25: "#DBEAFE",
+      primary50: "#BFDBFE",
       primary: "#2563EB",
-      neutral0: "#FFFFFF",
-      neutral20: "#D1D5DB",
-      neutral30: "#9CA3AF",
+      neutral0: "#F8FAFC",
+      neutral5: "#F1F5F9",
+      neutral10: "#E2E8F0",
+      neutral20: "#CBD5E1",
+      neutral30: "#94A3B8",
+      neutral40: "#64748B",
+      neutral50: "#475569",
+      neutral80: "#0F172A",
+      neutral90: "#020617",
     },
   });
 
   const selectStyles = {
     control: (base, state) => ({
       ...base,
+      backgroundColor: "#F8FAFC",
       minHeight: 44,
       borderRadius: 12,
-      borderColor: state.isFocused ? "#2563EB" : "#D1D5DB",
+      borderColor: state.isFocused ? "#2563EB" : "#CBD5E1",
       boxShadow: state.isFocused ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
-      "&:hover": { borderColor: state.isFocused ? "#2563EB" : "#9CA3AF" },
+      cursor: "pointer",
+      "&:hover": { borderColor: state.isFocused ? "#2563EB" : "#94A3B8" },
     }),
-    menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
+    dropdownIndicator: (base) => ({
+      ...base,
+      color: "#475569",
+      "&:hover": { color: "#0F172A" },
+    }),
+    clearIndicator: (base) => ({
+      ...base,
+      color: "#64748B",
+      "&:hover": { color: "#0F172A" },
+    }),
+    indicatorSeparator: (base) => ({
+      ...base,
+      backgroundColor: "#CBD5E1",
+    }),
+    input: (base) => ({
+      ...base,
+      color: "#0F172A",
+    }),
+    menu: (base) => ({
+      ...base,
+      backgroundColor: "#FFFFFF",
+      border: "1px solid #CBD5E1",
+      borderRadius: 12,
+      boxShadow: "0 18px 40px rgba(15,23,42,0.18)",
+      overflow: "hidden",
+      zIndex: 40,
+    }),
+    menuList: (base) => ({
+      ...base,
+      backgroundColor: "#FFFFFF",
+      padding: 4,
+    }),
+    option: (base, state) => ({
+      ...base,
+      backgroundColor: state.isSelected ? "#2563EB" : state.isFocused ? "#DBEAFE" : "#FFFFFF",
+      borderRadius: 8,
+      color: state.isSelected ? "#FFFFFF" : "#0F172A",
+      cursor: "pointer",
+      fontWeight: state.isSelected ? 700 : 500,
+      "&:active": {
+        backgroundColor: state.isSelected ? "#2563EB" : "#BFDBFE",
+      },
+    }),
+    placeholder: (base) => ({
+      ...base,
+      color: "#64748B",
+    }),
+    singleValue: (base) => ({
+      ...base,
+      color: "#0F172A",
+      fontWeight: 600,
+    }),
   };
 
   const bodyOfWaterTaskTypes = new Set(["Empty Water", "Fill Water", "Install", "Replace"]);
@@ -6097,7 +6157,7 @@ const JobDetailView = () => {
   const hiddenActualServiceStopCount = Math.max(serviceStops.length - 5, 0);
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+    <div className="job-detail-view min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">

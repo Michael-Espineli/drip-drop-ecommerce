@@ -1,3 +1,5 @@
+import { buildCustomerDuplicateKeys } from "../../../utils/customerDuplicates";
+
 export const CUSTOMER_EXPORT_EXPECTED_COLUMNS = [
   "FullName",
   "DisplayAsCompany",
@@ -445,6 +447,21 @@ export const parseCustomerExportRows = (rows = []) => {
         linkedCustomerIds: [],
         linkedInviteId: "",
         migrationSource,
+        duplicateKeys: buildCustomerDuplicateKeys({
+          id: customerId,
+          firstName,
+          lastName,
+          email: sourceEmails[0] || "",
+          billingAddress,
+          phoneNumber: sourcePhones[0] || "",
+          company: customerCompanyName,
+          displayAsCompany,
+          migrationSource,
+          sourceContactFields: {
+            emails: sourceEmails,
+            phones: sourcePhones,
+          },
+        }),
         sourceContactFields: {
           emails: sourceEmails,
           phones: sourcePhones,
@@ -609,6 +626,8 @@ const customerPhoneKeys = (customer = {}) =>
     ...(customer.sourceContactFields?.phones || []),
   ]).map(normalizeText);
 
+const customerDuplicateKeys = (customer = {}) => buildCustomerDuplicateKeys(customer).map(normalizeText);
+
 const sameCustomerIdentity = (record, customer = {}) => {
   const recordName = normalizeText(record.customerName);
   const customerName = normalizeText(displayCustomerName(customer));
@@ -616,14 +635,18 @@ const sameCustomerIdentity = (record, customer = {}) => {
   const recordPhones = record.sourcePhones.map(normalizeText).filter(Boolean);
   const existingEmails = customerEmailKeys(customer);
   const existingPhones = customerPhoneKeys(customer);
+  const recordDuplicateKeys = customerDuplicateKeys(record.customer);
+  const existingDuplicateKeys = customerDuplicateKeys(customer);
   const emailMatch = recordEmails.some((email) => existingEmails.includes(email));
   const phoneMatch = recordPhones.some((phone) => existingPhones.includes(phone));
+  const duplicateKeyMatch = recordDuplicateKeys.some((key) => existingDuplicateKeys.includes(key));
   const nameMatch = recordName && customerName && recordName === customerName;
   const billingMatch = normalizeAddress(record.customer.billingAddress) === normalizeAddress(customer.billingAddress);
 
   return Boolean(
     customer.id === record.customer.id ||
       customer.migrationSource?.sourceCustomerKey === record.customer.migrationSource?.sourceCustomerKey ||
+      duplicateKeyMatch ||
       (nameMatch && (emailMatch || phoneMatch || billingMatch)) ||
       (billingMatch && (emailMatch || phoneMatch))
   );

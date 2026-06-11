@@ -2,7 +2,7 @@
 
 Feature flag: `feature_flag_004` (`Sales`)
 
-Email delivery flag: `feature_flag_005` (`Turn on real emails`)
+Email delivery flag: `feature_flag_012` (`Turn on real emails`)
 
 ## Purpose
 
@@ -49,7 +49,7 @@ Required before send:
 - A secure review URL for the customer portal. For homeowners without accounts, support a signed email link or a company-side manual acceptance flow.
 - Company email settings, including from address, reply-to address, display name, phone number, and support/contact URLs.
 - SendGrid dynamic template id for service agreements. The starter template lives at `docs/sendgrid-service-agreement-template.html`. The callable prefers `SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID` and falls back to `d-866f4368544048aeabf108413f8b8c52` while the Sales slice is being tested.
-- `feature_flag_005` controls real customer email delivery. When disabled, service agreement email sends to `michaelespineli@murdockpoolservice.com` for testing while recording the intended customer recipient on the agreement.
+- `feature_flag_012` controls real customer email delivery. When disabled, service agreement email sends to the internal test inbox while recording the intended customer recipient on the agreement.
 - A callable send workflow that validates the company, customer, service location, and agreement ownership before emailing.
 - Delivery tracking on the agreement, including `sentAt`, `sentBy`, destination email, SendGrid message id when available, and status transition from `draft` to `sent`.
 

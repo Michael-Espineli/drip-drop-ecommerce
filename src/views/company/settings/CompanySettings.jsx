@@ -13,7 +13,8 @@ import {
     BuildingStorefrontIcon,
     TruckIcon,
     ArrowDownIcon,
-    ArrowUpIcon
+    ArrowUpIcon,
+    XMarkIcon
 } from '@heroicons/react/24/outline';
 import { BiPurchaseTagAlt } from 'react-icons/bi';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -25,17 +26,30 @@ import { DEFAULT_COMPANY_CATEGORY_ORDER } from '../../../navigation';
 
 const functions = getFunctions();
 
-const SettingsLink = ({ to, icon, title, description }) => (
-    <Link to={to} className="flex items-start p-4 bg-white rounded-lg shadow-sm hover:bg-gray-50 transition-colors">
-        <div className="shrink-0 w-12 h-12 flex items-center justify-center bg-gray-100 rounded-lg text-gray-600">
+const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
+    const isAccounting = accent === "accounting";
+
+    return (
+    <Link
+        to={to}
+        className={`flex items-start rounded-lg p-4 shadow-sm transition-colors ${
+            isAccounting
+                ? "border border-emerald-300 bg-emerald-600 text-white hover:bg-emerald-700"
+                : "bg-white hover:bg-gray-50"
+        }`}
+    >
+        <div className={`shrink-0 flex h-12 w-12 items-center justify-center rounded-lg ${
+            isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-gray-100 text-gray-600"
+        }`}>
             {icon}
         </div>
         <div className="ml-4">
-            <p className="font-semibold text-gray-800">{title}</p>
-            <p className="text-sm text-gray-500">{description}</p>
+            <p className={`font-semibold ${isAccounting ? "text-white" : "text-gray-800"}`}>{title}</p>
+            <p className={`text-sm ${isAccounting ? "text-emerald-50" : "text-gray-500"}`}>{description}</p>
         </div>
     </Link>
-);
+    );
+};
 
 const categoryLabels = {
     NA: 'Dashboard & Messages',
@@ -54,6 +68,7 @@ const normalizeNavigationOrder = (savedOrder) => {
 const NavigationOrderSettings = () => {
     const { user, dataBaseUser, setDataBaseUser } = useContext(Context);
     const [categoryOrder, setCategoryOrder] = useState(DEFAULT_COMPANY_CATEGORY_ORDER);
+    const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
@@ -103,7 +118,7 @@ const NavigationOrderSettings = () => {
 
     return (
         <section className="mb-10 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                     <h2 className="text-xl font-semibold text-gray-800">Navigation Order</h2>
                     <p className="mt-1 text-sm text-gray-500">
@@ -112,44 +127,93 @@ const NavigationOrderSettings = () => {
                 </div>
                 <button
                     type="button"
-                    onClick={resetOrder}
-                    disabled={isSaving}
-                    className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    onClick={() => setIsEditorOpen(true)}
+                    className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                 >
-                    Reset Default
+                    Edit Order
                 </button>
             </div>
 
-            <div className="mt-5 divide-y divide-slate-100 rounded-md border border-slate-200">
-                {categoryOrder.map((category, index) => (
-                    <div key={category} className="flex items-center justify-between gap-3 p-3">
-                        <div>
-                            <p className="text-sm font-semibold text-slate-900">{categoryLabels[category] || category}</p>
-                            <p className="text-xs text-slate-500">Position {index + 1}</p>
-                        </div>
-                        <div className="flex gap-2">
+            {isEditorOpen ? (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                    <div
+                        className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="navigation-order-title"
+                    >
+                        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                            <div>
+                                <h3 id="navigation-order-title" className="text-lg font-semibold text-slate-900">
+                                    Edit Navigation Order
+                                </h3>
+                                <p className="mt-1 text-sm text-slate-500">
+                                    Move each sidebar category into the order you want.
+                                </p>
+                            </div>
                             <button
                                 type="button"
-                                onClick={() => moveCategory(index, -1)}
-                                disabled={index === 0 || isSaving}
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                aria-label={`Move ${categoryLabels[category] || category} up`}
+                                onClick={() => setIsEditorOpen(false)}
+                                className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                                aria-label="Close navigation order editor"
                             >
-                                <ArrowUpIcon className="h-4 w-4" />
+                                <XMarkIcon className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        <div className="max-h-[60vh] overflow-y-auto p-5">
+                            <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
+                                {categoryOrder.map((category, index) => (
+                                    <div key={category} className="flex items-center justify-between gap-3 p-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">{categoryLabels[category] || category}</p>
+                                            <p className="text-xs text-slate-500">Position {index + 1}</p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => moveCategory(index, -1)}
+                                                disabled={index === 0 || isSaving}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${categoryLabels[category] || category} up`}
+                                            >
+                                                <ArrowUpIcon className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => moveCategory(index, 1)}
+                                                disabled={index === categoryOrder.length - 1 || isSaving}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${categoryLabels[category] || category} down`}
+                                            >
+                                                <ArrowDownIcon className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="flex flex-col-reverse gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={resetOrder}
+                                disabled={isSaving}
+                                className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                Reset Default
                             </button>
                             <button
                                 type="button"
-                                onClick={() => moveCategory(index, 1)}
-                                disabled={index === categoryOrder.length - 1 || isSaving}
-                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                aria-label={`Move ${categoryLabels[category] || category} down`}
+                                onClick={() => setIsEditorOpen(false)}
+                                className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800"
                             >
-                                <ArrowDownIcon className="h-4 w-4" />
+                                Done
                             </button>
                         </div>
                     </div>
-                ))}
-            </div>
+                </div>
+            ) : null}
         </section>
     );
 };
@@ -235,6 +299,13 @@ const CompanySettings = () => {
             }
         ],
         billing: [
+            {
+                to: '/company/accounting',
+                icon: <CurrencyDollarIcon className="w-6 h-6" />,
+                title: 'Switch to Accounting Mode',
+                description: 'Open the accountant workspace for AR, reconciliation, payouts, tax, and accounting notes.',
+                accent: 'accounting'
+            },
             {
                 to: '/Company/Items',
                 icon: <ArchiveBoxIcon className="w-6 h-6" />,

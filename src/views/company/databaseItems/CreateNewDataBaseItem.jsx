@@ -11,65 +11,14 @@ import { useNavigate } from "react-router-dom";
 import Select from "react-select";
 import { fetchCompanyVendors } from "../../../utils/vendors";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-
-const UOM_OPTIONS = [
-  { id: 1, label: "Gallon" },
-  { id: 2, label: "Pounds" },
-  { id: 3, label: "Ounce" },
-  { id: 4, label: "Feet" },
-  { id: 5, label: "Square Feet" },
-  { id: 6, label: "Liter" },
-  { id: 7, label: "Inch" },
-  { id: 8, label: "Quart" },
-  { id: 9, label: "Tab" },
-  { id: 10, label: "Unit" },
-];
-
-const CATEGORY_OPTIONS = [
-  { id: 1, label: "PVC" },
-  { id: 2, label: "Galvanized" },
-  { id: 3, label: "Chemicals" },
-  { id: 4, label: "Useables" },
-  { id: 5, label: "Equipment" },
-  { id: 6, label: "Parts" },
-  { id: 7, label: "Electrical" },
-  { id: 8, label: "Tools" },
-  { id: 9, label: "Misc" },
-];
-
-const SUBCATEGORY_OPTIONS = [
-  "Pipe",
-  "Glue",
-  "Primer",
-  "Pipe Extender",
-  "Fitting Extender",
-  "Inside Coupler",
-  "Sweep",
-  "Street",
-  "Valve",
-  "Bushing",
-  "Tee",
-  "Elbow",
-  "45",
-  "Coupler",
-  "Union",
-  "Male Adaptor",
-  "Nipple",
-  "Pump",
-  "Heater",
-  "Filter",
-  "Salt Cell",
-  "Light",
-  "Cleaner",
-  "Control System",
-  "Auto Chlorinator",
-  "Wire",
-  "Misc",
-].map((label, index) => ({ id: index + 1, label }));
-
-const DEFAULT_UOM = UOM_OPTIONS.find((option) => option.label === "Unit");
-const DEFAULT_CATEGORY = CATEGORY_OPTIONS.find((option) => option.label === "Misc");
-const DEFAULT_SUBCATEGORY = SUBCATEGORY_OPTIONS.find((option) => option.label === "Misc");
+import {
+  CATEGORY_OPTIONS,
+  DEFAULT_CATEGORY,
+  DEFAULT_SUBCATEGORY,
+  DEFAULT_UOM,
+  SUBCATEGORY_OPTIONS,
+  UOM_OPTIONS,
+} from "./databaseItemOptions";
 
 const centsFromDollarInput = (value) => {
   const parsed = Number(String(value || "").replace(/[^0-9.-]/g, ""));

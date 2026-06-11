@@ -46,12 +46,21 @@ const MainLayout = () => {
     const isConversationPage =
     location.pathname.startsWith('/companies-chat/detail/') ||
     location.pathname.startsWith('/client/chat/details/');
+    const isAccountingWorkspace = accountType === 'Company' && location.pathname.startsWith('/company/accounting');
     const shellMarginClass = accountType === 'Company' && recentlySelectedCompany && isCompanySidebarCollapsed
         ? "lg:ml-[76px]"
         : "lg:ml-[260px]";
+
+    if (isAccountingWorkspace) {
+        return (
+            <div className="theme-shell min-h-screen w-full">
+                <Outlet />
+            </div>
+        );
+    }
     
     return (
-        <div className='bg-[#ededed] w-full'>
+        <div className='theme-shell w-full'>
             <Header
                 showSidebar={showSidebar}
                 setShowSidebar={setShowSidebar}

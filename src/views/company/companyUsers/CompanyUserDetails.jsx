@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import { useParams, useNavigate } from 'react-router-dom';
-import { doc, query, where, collection, getDocs, limit, updateDoc } from "firebase/firestore";
+import { doc, query, where, collection, getDocs, getDoc, limit, updateDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
@@ -74,8 +74,16 @@ const CompanyUserDetails = () => {
                     setAllowPersonalVehicle(Boolean(fetchedUser.allowPersonalVehicle));
                     setPersonalVehicle(buildPersonalVehicleForm(fetchedUser));
                 } else {
-                    toast.error("User not found in this company.");
-                    navigate('/company/companyUsers');
+                    const userDoc = await getDoc(doc(db, "companies", recentlySelectedCompany, "companyUsers", companyUserId));
+                    if (userDoc.exists()) {
+                        const fetchedUser = { id: userDoc.id, ...userDoc.data() };
+                        setUser(fetchedUser);
+                        setAllowPersonalVehicle(Boolean(fetchedUser.allowPersonalVehicle));
+                        setPersonalVehicle(buildPersonalVehicleForm(fetchedUser));
+                    } else {
+                        toast.error("User not found in this company.");
+                        navigate('/company/companyUsers');
+                    }
                 }
             } catch (error) {
                 console.error("Error fetching user details: ", error);

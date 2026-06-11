@@ -22,6 +22,7 @@ import {
 
 const MAX_WRITES_PER_BATCH = 450;
 const CREATE_NEW_TARGET_VALUE = "__create_new__";
+const SKIP_IMPORT_TARGET_VALUE = "__skip_import__";
 
 const createImportBatchId = () => `equipment_import_${Date.now().toString(36)}`;
 
@@ -112,6 +113,16 @@ const equipmentTargetMatchLabel = (matchKind = "") => {
   if (matchKind === "placeholder") return "default placeholder";
   if (matchKind === "type") return "same type";
   return "existing equipment";
+};
+
+const getTargetSelectValue = (record = {}) => {
+  if (!record.mappingReady) return "";
+  if (record.mapping?.targetAction === "create") return CREATE_NEW_TARGET_VALUE;
+  if (record.mapping?.targetAction === "skip") return SKIP_IMPORT_TARGET_VALUE;
+  if (record.targetEquipment?.id) return record.targetEquipment.id;
+  if (record.mapping?.targetEquipmentId) return record.mapping.targetEquipmentId;
+  if (!record.needsOverwriteChoice) return CREATE_NEW_TARGET_VALUE;
+  return "";
 };
 
 function EquipmentImport() {
@@ -233,12 +244,14 @@ function EquipmentImport() {
         const targetCandidates = mappingReady
           ? getEquipmentImportTargetCandidates(record, mapping, companyData.equipment)
           : [];
-        const needsInspection = Boolean(mapping.needsInspection);
+        const skipsImport = mapping.targetAction === "skip";
+        const needsInspection = !skipsImport && Boolean(mapping.needsInspection);
         const targetEquipment = mappingReady
           ? findExistingEquipmentForImportRecord(record, mapping, companyData.equipment)
           : null;
         const needsOverwriteChoice = Boolean(
           mappingReady &&
+          !skipsImport &&
           !targetEquipment &&
           !mapping.targetAction &&
           targetCandidates.length > 0
@@ -249,6 +262,7 @@ function EquipmentImport() {
           mapping,
           mappingReady,
           needsInspection,
+          skipsImport,
           needsOverwriteChoice,
           inspectionReason: mapping.inspectionReason || "",
           matchMethod: mapping.matchMethod || "",
@@ -266,17 +280,34 @@ function EquipmentImport() {
 
   const importableRecords = useMemo(
     () => enrichedRecords.filter((record) =>
-      record.mappingReady && !record.needsInspection && !record.needsOverwriteChoice
+      record.mapping.targetAction !== "skip" &&
+      record.mappingReady &&
+      !record.needsInspection &&
+      !record.needsOverwriteChoice
     ),
     [enrichedRecords]
+  );
+
+  const skippedImportRecords = useMemo(
+    () => enrichedRecords.filter((record) => record.mapping.targetAction === "skip"),
+    [enrichedRecords]
+  );
+
+  const handledRecords = useMemo(
+    () => [...importableRecords, ...skippedImportRecords],
+    [importableRecords, skippedImportRecords]
   );
 
   const filteredRecords = useMemo(
     () =>
       enrichedRecords.filter((record) => {
-        if (sourceFilter === "matched") return record.mappingReady && !record.needsInspection && !record.needsOverwriteChoice;
-        if (sourceFilter === "needsMapped") return !record.mappingReady;
-        if (sourceFilter === "inspect") return record.mappingReady && (record.needsInspection || record.needsOverwriteChoice);
+        if (sourceFilter === "matched") {
+          return record.mapping.targetAction !== "skip" && record.mappingReady && !record.needsInspection && !record.needsOverwriteChoice;
+        }
+        if (sourceFilter === "needsMapped") return record.mapping.targetAction !== "skip" && !record.mappingReady;
+        if (sourceFilter === "inspect") {
+          return record.mapping.targetAction !== "skip" && record.mappingReady && (record.needsInspection || record.needsOverwriteChoice);
+        }
         return true;
       }),
     [enrichedRecords, sourceFilter]
@@ -470,8 +501,18 @@ function EquipmentImport() {
       ...current,
       [recordId]: {
         ...(current[recordId] || {}),
-        targetAction: value === CREATE_NEW_TARGET_VALUE ? "create" : value ? "update" : "",
-        targetEquipmentId: value === CREATE_NEW_TARGET_VALUE ? "" : value,
+        targetAction:
+          value === CREATE_NEW_TARGET_VALUE
+            ? "create"
+            : value === SKIP_IMPORT_TARGET_VALUE
+              ? "skip"
+              : value
+                ? "update"
+                : "",
+        targetEquipmentId:
+          value === CREATE_NEW_TARGET_VALUE || value === SKIP_IMPORT_TARGET_VALUE
+            ? ""
+            : value,
       },
     }));
   }, []);
@@ -498,13 +539,13 @@ function EquipmentImport() {
       return;
     }
 
-    if (!importableRecords.length) {
-      toast.error("Confirm or map at least one equipment row before importing.");
+    if (!handledRecords.length) {
+      toast.error("Confirm, map, or skip at least one equipment row before importing.");
       return;
     }
 
     const confirmed = window.confirm(
-      `Import ${importableRecords.length} confirmed equipment rows into this company? ${summary.updateRows} will update existing equipment and ${summary.createRows} will create new equipment.`
+      `Import ${importableRecords.length} confirmed equipment rows into this company? ${summary.updateRows} will update existing equipment and ${summary.createRows} will create new equipment. ${summary.skippedImportRows || 0} will be skipped.`
     );
     if (!confirmed) return;
 
@@ -560,14 +601,15 @@ function EquipmentImport() {
         rows: importableRecords.length,
         updateRows,
         createRows,
+        skippedRows: skippedImportRecords.length,
       });
       await loadCompanyData();
-      const importedRecordIds = new Set(importableRecords.map((record) => record.id));
-      const remainingRecords = records.filter((record) => !importedRecordIds.has(record.id));
+      const handledRecordIds = new Set(handledRecords.map((record) => record.id));
+      const remainingRecords = records.filter((record) => !handledRecordIds.has(record.id));
 
       setRecords(remainingRecords);
       setMappings((current) =>
-        Object.fromEntries(Object.entries(current).filter(([recordId]) => !importedRecordIds.has(recordId)))
+        Object.fromEntries(Object.entries(current).filter(([recordId]) => !handledRecordIds.has(recordId)))
       );
       setUploadProgress({ current: 0, total: 0 });
       setSourceFilter("all");
@@ -580,7 +622,7 @@ function EquipmentImport() {
         setFileInputKey((current) => current + 1);
       }
 
-      toast.success(`Imported ${importableRecords.length} equipment rows.`);
+      toast.success(`Imported ${importableRecords.length} equipment rows. Skipped ${skippedImportRecords.length}.`);
     } catch (error) {
       console.error("Failed to import equipment workbook:", error);
       toast.error("Equipment import failed before all rows were saved.");
@@ -611,7 +653,7 @@ function EquipmentImport() {
             <button
               type="button"
               onClick={handleUpload}
-              disabled={uploading || companyData.loading || importableRecords.length === 0}
+              disabled={uploading || companyData.loading || handledRecords.length === 0}
               className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
             >
               {uploading ? `Importing ${uploadProgress.current}/${uploadProgress.total}` : "Import Confirmed Equipment"}
@@ -687,7 +729,7 @@ function EquipmentImport() {
 
             {lastImportSummary && (
               <div className="mt-4 border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-900">
-                Imported {lastImportSummary.rows} rows in batch {lastImportSummary.importBatchId}. Updated {lastImportSummary.updateRows} and created {lastImportSummary.createRows}.
+                Imported {lastImportSummary.rows} rows in batch {lastImportSummary.importBatchId}. Updated {lastImportSummary.updateRows}, created {lastImportSummary.createRows}, and skipped {lastImportSummary.skippedRows || 0}.
               </div>
             )}
 
@@ -724,9 +766,7 @@ function EquipmentImport() {
                   {previewRecords.map((record) => {
                     const serviceLocationOptions = getServiceLocationOptions(record.mapping.customerId);
                     const bodyOfWaterOptions = getBodyOfWaterOptions(record.mapping.serviceLocationId);
-                    const targetSelectValue = record.mapping.targetAction === "create"
-                      ? CREATE_NEW_TARGET_VALUE
-                      : record.targetEquipment?.id || record.mapping.targetEquipmentId || "";
+                    const targetSelectValue = getTargetSelectValue(record);
 
                     return (
                       <tr key={record.id} className="align-top">
@@ -804,13 +844,17 @@ function EquipmentImport() {
                           {record.mappingReady ? (
                             <div className="space-y-2">
                               <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                                record.needsInspection || record.needsOverwriteChoice
+                                record.skipsImport
+                                  ? "bg-slate-100 text-slate-700"
+                                  : record.needsInspection || record.needsOverwriteChoice
                                   ? "bg-amber-100 text-amber-700"
                                   : record.targetEquipment
                                     ? "bg-blue-100 text-blue-700"
                                     : "bg-emerald-100 text-emerald-700"
                               }`}>
-                                {record.needsInspection
+                                {record.skipsImport
+                                  ? "Skip import"
+                                  : record.needsInspection
                                   ? "Inspect match"
                                   : record.needsOverwriteChoice
                                     ? "Choose overwrite"
@@ -818,30 +862,34 @@ function EquipmentImport() {
                                       ? "Update existing"
                                       : "Create new"}
                               </span>
-                              {record.targetCandidates.length > 0 && (
-                                <div className="space-y-1">
-                                  <select
-                                    value={targetSelectValue}
-                                    onChange={(event) => handleTargetEquipmentChange(record.id, event.target.value)}
-                                    className={selectClassName}
-                                  >
-                                    {!targetSelectValue && (
-                                      <option value="">Choose create or overwrite...</option>
-                                    )}
-                                    <option value={CREATE_NEW_TARGET_VALUE}>Create new equipment</option>
-                                    {record.targetCandidates.map((equipment) => (
-                                      <option key={equipment.id} value={equipment.id}>
-                                        Overwrite {equipmentTargetLabel(equipment)} ({equipmentTargetMatchLabel(equipment.matchKind)})
-                                      </option>
-                                    ))}
-                                  </select>
-                                  {record.needsOverwriteChoice && (
-                                    <p className="text-xs leading-5 text-amber-700">
-                                      Existing {record.type} equipment was found for this pool. Pick one to overwrite, or choose create new.
-                                    </p>
+                              <div className="space-y-1">
+                                <select
+                                  value={targetSelectValue}
+                                  onChange={(event) => handleTargetEquipmentChange(record.id, event.target.value)}
+                                  className={selectClassName}
+                                >
+                                  {!targetSelectValue && (
+                                    <option value="">Choose create, overwrite, or skip...</option>
                                   )}
-                                </div>
-                              )}
+                                  <option value={CREATE_NEW_TARGET_VALUE}>Create new equipment</option>
+                                  <option value={SKIP_IMPORT_TARGET_VALUE}>Skip import</option>
+                                  {record.targetCandidates.map((equipment) => (
+                                    <option key={equipment.id} value={equipment.id}>
+                                      Overwrite {equipmentTargetLabel(equipment)} ({equipmentTargetMatchLabel(equipment.matchKind)})
+                                    </option>
+                                  ))}
+                                </select>
+                                {record.skipsImport && (
+                                  <p className="text-xs leading-5 text-slate-500">
+                                    This source row will be cleared without creating or updating equipment.
+                                  </p>
+                                )}
+                                {record.needsOverwriteChoice && (
+                                  <p className="text-xs leading-5 text-amber-700">
+                                    Existing {record.type} equipment was found for this pool. Pick one to overwrite, choose create new, or skip this row.
+                                  </p>
+                                )}
+                              </div>
                               {record.needsInspection && (
                                 <div className="space-y-2">
                                   <p className="text-xs leading-5 text-amber-700">
