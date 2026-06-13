@@ -3,8 +3,35 @@ import { Link } from 'react-router-dom';
 import PublicHeader from '../layout/PublicHeader';
 import Footer from '../layout/Footer';
 import { BuildingOffice2Icon, CheckCircleIcon, MagnifyingGlassIcon, SparklesIcon } from '@heroicons/react/24/solid';
+import useFeatureFlagDocument from '../hooks/useFeatureFlagDocument';
+import { APP_LIVE_FEATURE_FLAG_ID } from '../utils/models/FeatureFlag';
+import AppLaunchCountdown from './components/AppLaunchCountdown';
 
 export default function Home() {
+    const {
+        loaded: appLaunchLoaded,
+        enabled: appIsLive,
+        releaseDate: appReleaseDate,
+    } = useFeatureFlagDocument(APP_LIVE_FEATURE_FLAG_ID);
+    const companyCreationOpen = appLaunchLoaded && appIsLive;
+
+    const companySignupCta = companyCreationOpen ? (
+        <Link
+            to="/signUp"
+            className="bg-white text-cyan-700 px-8 py-3 rounded-md font-semibold text-lg hover:bg-cyan-50 transition shadow-lg"
+        >
+            Start Your Free Account
+        </Link>
+    ) : (
+        <button
+            type="button"
+            disabled
+            className="cursor-not-allowed rounded-md bg-white/70 px-8 py-3 text-lg font-semibold text-cyan-900 shadow-lg"
+        >
+            Launching Soon
+        </button>
+    );
+
     return (
         <div className="bg-slate-50 text-slate-900">
             {/* Header is now fixed to the top with a solid background */}
@@ -25,13 +52,19 @@ export default function Home() {
                         <p className="text-lg md:text-xl text-cyan-50 max-w-3xl mx-auto mb-8">
                             Drip Drop is the all-in-one platform to manage your routes, billing, and customer communication, designed by pool professionals for pool professionals.
                         </p>
+                        {!companyCreationOpen && (
+                            <div className="mx-auto mb-8 max-w-3xl">
+                                <AppLaunchCountdown
+                                    loading={!appLaunchLoaded}
+                                    releaseDate={appReleaseDate}
+                                    variant="dark"
+                                    title="Drip Drop opens for companies soon"
+                                    body="New company creation is paused until launch. The directory stays open for browsing while the countdown runs."
+                                />
+                            </div>
+                        )}
                         <div className="flex flex-col justify-center gap-3 sm:flex-row">
-                            <Link
-                                to="/signUp"
-                                className="bg-white text-cyan-700 px-8 py-3 rounded-md font-semibold text-lg hover:bg-cyan-50 transition shadow-lg"
-                            >
-                                Start Your Free Account
-                            </Link>
+                            {companySignupCta}
                             <Link
                                 to="/companies"
                                 className="border-2 border-white text-white px-8 py-3 rounded-md font-semibold text-lg hover:bg-white hover:text-cyan-700 transition"
@@ -60,13 +93,23 @@ export default function Home() {
                                     </span>
                                     <span>View directory</span>
                                 </Link>
-                                <Link to="/company" className="inline-flex items-center justify-between gap-3 rounded-md border border-cyan-200 bg-cyan-50 px-5 py-4 text-sm font-semibold text-cyan-900 hover:bg-cyan-100">
+                                {companyCreationOpen ? (
+                                    <Link to="/company" className="inline-flex items-center justify-between gap-3 rounded-md border border-cyan-200 bg-cyan-50 px-5 py-4 text-sm font-semibold text-cyan-900 hover:bg-cyan-100">
+                                        <span className="inline-flex items-center gap-2">
+                                            <BuildingOffice2Icon className="h-5 w-5" />
+                                            Add Your Company
+                                        </span>
+                                        <span>Company signup</span>
+                                    </Link>
+                                ) : (
+                                    <button type="button" disabled className="inline-flex cursor-not-allowed items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-100 px-5 py-4 text-sm font-semibold text-slate-500">
                                     <span className="inline-flex items-center gap-2">
                                         <BuildingOffice2Icon className="h-5 w-5" />
                                         Add Your Company
                                     </span>
-                                    <span>Company signup</span>
-                                </Link>
+                                        <span>Launching soon</span>
+                                    </button>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -131,12 +174,22 @@ export default function Home() {
                         <p className="text-cyan-50 max-w-2xl mx-auto mb-8">
                             Join hundreds of other pool professionals who have transformed their business with Drip Drop. Get started today with our free plan.
                         </p>
-                        <Link
-                            to="/signUp"
-                            className="bg-white text-cyan-700 px-10 py-4 rounded-md font-bold text-lg hover:bg-cyan-50 transition shadow-lg"
-                        >
-                            Sign Up for Free
-                        </Link>
+                        {companyCreationOpen ? (
+                            <Link
+                                to="/signUp"
+                                className="bg-white text-cyan-700 px-10 py-4 rounded-md font-bold text-lg hover:bg-cyan-50 transition shadow-lg"
+                            >
+                                Sign Up for Free
+                            </Link>
+                        ) : (
+                            <button
+                                type="button"
+                                disabled
+                                className="cursor-not-allowed rounded-md bg-white/70 px-10 py-4 text-lg font-bold text-cyan-900 shadow-lg"
+                            >
+                                Launching Soon
+                            </button>
+                        )}
                     </div>
                 </section>
             </div>

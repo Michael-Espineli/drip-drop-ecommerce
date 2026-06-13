@@ -1,7 +1,7 @@
 
-import React, { useState, useEffect, useContext, useCallback } from 'react';
+import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { ClipboardDocumentIcon, EnvelopeIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
@@ -66,6 +66,31 @@ const toMillis = (value) => {
     return Number.isNaN(parsed) ? 0 : parsed;
 };
 
+const startOfLocalDayMillis = (date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0).getTime();
+
+const endOfLocalDayMillis = (date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999).getTime();
+
+const getDefaultHistoryDateRange = () => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setMonth(start.getMonth() - 2);
+
+    return {
+        start: startOfLocalDayMillis(start),
+        end: endOfLocalDayMillis(today),
+        invalid: false,
+    };
+};
+
+const isWithinDateRange = (value, range) => {
+    if (range?.invalid) return false;
+    const millis = toMillis(value);
+    if (!millis) return false;
+    return millis >= range.start && millis <= range.end;
+};
+
 const formatDateValue = (value) => {
     const millis = toMillis(value);
     return millis ? format(new Date(millis), 'MMM d, yyyy') : 'Not set';
@@ -79,6 +104,26 @@ const labelize = (value) => {
         .trim()
         .replace(/\b\w/g, (char) => char.toUpperCase());
 };
+
+const getLocationLabel = (location = {}) => {
+    const address = location.address || {};
+    return [
+        location.nickName || location.name || 'Service location',
+        address.streetAddress,
+        address.city,
+        address.state,
+        address.zip || address.zipCode,
+    ]
+        .filter(Boolean)
+        .join(' - ');
+};
+
+const getBodyOfWaterLabel = (bodyOfWater = {}) => (
+    bodyOfWater.name ||
+    bodyOfWater.label ||
+    [bodyOfWater.shape, bodyOfWater.material].filter(Boolean).join(' ') ||
+    'Unnamed Body of Water'
+);
 
 const StatusBadge = ({ children, tone = 'slate' }) => {
     const tones = {
@@ -101,7 +146,7 @@ const statusToneFor = (status) => {
     if (['accepted', 'active', 'paid', 'posted'].includes(normalized)) return 'emerald';
     if (['sent', 'open', 'invoiced', 'viewed', 'estimate'].includes(normalized)) return 'blue';
     if (['draft', 'pending', 'pastdue', 'past due', 'overdue'].includes(normalized)) return 'amber';
-    if (['rejected', 'canceled', 'cancelled', 'failed', 'void'].includes(normalized)) return 'rose';
+    if (['rejected', 'canceled', 'cancelled', 'failed', 'void', 'expired'].includes(normalized)) return 'rose';
     return 'slate';
 };
 
@@ -158,6 +203,10 @@ const timelineTypeStyles = {
         dot: 'bg-violet-500',
         chip: 'bg-violet-50 text-violet-700 border-violet-100',
     },
+    expiredJob: {
+        dot: 'bg-rose-500',
+        chip: 'bg-rose-50 text-rose-700 border-rose-100',
+    },
     repairRequest: {
         dot: 'bg-red-500',
         chip: 'bg-red-50 text-red-700 border-red-100',
@@ -195,7 +244,7 @@ const timelineTypeStyles = {
 const timelineFilters = [
     { id: 'all', label: 'All', types: [] },
     { id: 'service', label: 'Service', types: ['serviceStop'] },
-    { id: 'jobs', label: 'Jobs', types: ['workOrder', 'repairRequest'] },
+    { id: 'jobs', label: 'Jobs', types: ['workOrder', 'expiredJob', 'repairRequest'] },
     { id: 'billing', label: 'Billing', types: ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'] },
     { id: 'notes', label: 'Notes', types: ['note', 'toDo'] },
     { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
@@ -204,7 +253,7 @@ const timelineFilters = [
 ];
 
 // Profile Tab
-const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer }) => {
+const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerInactiveCascade }) => {
     const { recentlySelectedCompany } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
@@ -250,9 +299,21 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer }) => {
             ...normalizedCustomer,
             tags: normalizedTags,
         };
+        const wasActive = (customer.active ?? customer.isActive ?? true) !== false;
+        const nextActive = (payload.active ?? payload.isActive ?? true) !== false;
+        const shouldCascadeInactive = wasActive && !nextActive;
+
         try {
             await updateDoc(customerRef, payload);
-            toast.success('Customer details updated!');
+            const inactiveCascadeCounts = shouldCascadeInactive
+                ? await onCustomerInactiveCascade?.()
+                : null;
+
+            toast.success(
+                inactiveCascadeCounts
+                    ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, and ${inactiveCascadeCounts.equipment} equipment records were also marked inactive.`
+                    : 'Customer details updated!'
+            );
             onCustomerUpdate?.(payload);
             setIsEditing(false);
         } catch (error) {
@@ -672,8 +733,6 @@ const ServiceLocationsTab = ({ customer }) => {
                         </ul>
                     )}
                 </InfoCard>
-            </div>
-            <div className="space-y-6">
                 {selectedLocation !== null &&
                     <InfoCard
                         title="Service Location"
@@ -876,7 +935,7 @@ const ServiceLocationsTab = ({ customer }) => {
                 {selectedLocation && <RecentServiceHistoryCard location={selectedLocation} />}
 
             </div>
-            <div className="space-y-6">
+            <div className="space-y-6 lg:col-span-2">
                 {selectedLocation && <LocationDetails location={selectedLocation} customerId={customer.id} />}
             </div>
 
@@ -959,8 +1018,13 @@ const RecentServiceHistoryCard = ({ location }) => {
 
 const LocationDetails = ({ location, customerId }) => {
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
+    const [customerServiceLocations, setCustomerServiceLocations] = useState([]);
+    const [customerBodiesOfWater, setCustomerBodiesOfWater] = useState([]);
     const [equipment, setEquipment] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [movingEquipmentId, setMovingEquipmentId] = useState('');
+    const [equipmentMoveForm, setEquipmentMoveForm] = useState({ serviceLocationId: '', bodyOfWaterId: '' });
+    const [movingEquipment, setMovingEquipment] = useState(false);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
 
@@ -968,12 +1032,30 @@ const LocationDetails = ({ location, customerId }) => {
         const fetchDetails = async () => {
             setLoading(true);
             try {
-                const bowQ = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where("serviceLocationId", "==", location.id));
-                const bowSnap = await getDocs(bowQ);
-                setBodiesOfWater(bowSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+                const serviceLocationQ = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where("customerId", "==", customerId));
+                const customerBowQ = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where("customerId", "==", customerId));
+                const locationBowQ = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where("serviceLocationId", "==", location.id));
+                const equipmentQ = query(collection(db, 'companies', recentlySelectedCompany, 'equipment'), where("serviceLocationId", "==", location.id));
+                const [serviceLocationSnap, customerBowSnap, locationBowSnap, equipSnap] = await Promise.all([
+                    getDocs(serviceLocationQ),
+                    getDocs(customerBowQ),
+                    getDocs(locationBowQ),
+                    getDocs(equipmentQ),
+                ]);
+                const locationsById = new Map(serviceLocationSnap.docs.map(d => [d.id, { id: d.id, ...d.data() }]));
+                locationsById.set(location.id, { ...location, id: location.id });
+                const nextCustomerLocations = Array.from(locationsById.values())
+                    .sort((left, right) => getLocationLabel(left).localeCompare(getLocationLabel(right)));
+                const bodiesById = new Map([
+                    ...customerBowSnap.docs,
+                    ...locationBowSnap.docs,
+                ].map(d => [d.id, { id: d.id, ...d.data() }]));
+                const nextCustomerBodiesOfWater = Array.from(bodiesById.values())
+                    .sort((left, right) => getBodyOfWaterLabel(left).localeCompare(getBodyOfWaterLabel(right)));
 
-                const equipQ = query(collection(db, 'companies', recentlySelectedCompany, 'equipment'), where("serviceLocationId", "==", location.id));
-                const equipSnap = await getDocs(equipQ);
+                setCustomerServiceLocations(nextCustomerLocations);
+                setCustomerBodiesOfWater(nextCustomerBodiesOfWater);
+                setBodiesOfWater(nextCustomerBodiesOfWater.filter((bow) => bow.serviceLocationId === location.id));
                 setEquipment(equipSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
             } catch (err) {
@@ -986,14 +1068,147 @@ const LocationDetails = ({ location, customerId }) => {
         if (location.id && recentlySelectedCompany) {
             fetchDetails();
         }
-    }, [location.id, recentlySelectedCompany, db]);
+    }, [location, location.id, customerId, recentlySelectedCompany, db]);
 
-    const bodyOfWaterNameById = new Map(
-        bodiesOfWater.map((bow) => [bow.id, bow.name || "Unnamed Body of Water"])
+    useEffect(() => {
+        setMovingEquipmentId('');
+        setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
+        setMovingEquipment(false);
+    }, [location.id]);
+
+    const bodyOfWaterNameById = useMemo(
+        () => new Map(customerBodiesOfWater.map((bow) => [bow.id, getBodyOfWaterLabel(bow)])),
+        [customerBodiesOfWater]
     );
+    const selectedMovingEquipment = useMemo(
+        () => equipment.find((item) => item.id === movingEquipmentId) || null,
+        [equipment, movingEquipmentId]
+    );
+    const targetBodiesOfWater = useMemo(
+        () => customerBodiesOfWater.filter((bow) => bow.serviceLocationId === equipmentMoveForm.serviceLocationId),
+        [customerBodiesOfWater, equipmentMoveForm.serviceLocationId]
+    );
+    const standaloneServiceStopLinks = [
+        {
+            category: 'serviceAgreementEstimate',
+            label: 'Service Agreement Estimate',
+            helper: 'Gather location, pool, and equipment details before recurring service.',
+        },
+        {
+            category: 'jobEstimate',
+            label: 'Job Estimate',
+            helper: 'Visit the property to scope requested work before creating a quote.',
+        },
+        {
+            category: 'customerRelationship',
+            label: 'Customer Relationship',
+            helper: 'Schedule an open-ended customer visit, follow-up, or correction.',
+        },
+    ];
+    const buildStandaloneServiceStopPath = (category) => {
+        const params = new URLSearchParams({
+            customerId,
+            serviceLocationId: location.id,
+            category,
+        });
 
-    return (<div className="space-y-8">
+        return `/company/serviceStops/createNew?${params.toString()}`;
+    };
 
+    const startEquipmentMove = (eq) => {
+        setMovingEquipmentId(eq.id);
+        setEquipmentMoveForm({
+            serviceLocationId: eq.serviceLocationId || location.id,
+            bodyOfWaterId: eq.bodyOfWaterId || '',
+        });
+    };
+
+    const handleMoveServiceLocationChange = (event) => {
+        const nextServiceLocationId = event.target.value;
+        const bodyStillFits = customerBodiesOfWater.some((bow) => (
+            bow.id === equipmentMoveForm.bodyOfWaterId && bow.serviceLocationId === nextServiceLocationId
+        ));
+
+        setEquipmentMoveForm((current) => ({
+            ...current,
+            serviceLocationId: nextServiceLocationId,
+            bodyOfWaterId: bodyStillFits ? current.bodyOfWaterId : '',
+        }));
+    };
+
+    const handleSaveEquipmentMove = async (event) => {
+        event.preventDefault();
+
+        if (!selectedMovingEquipment?.id || !recentlySelectedCompany) return;
+        if (!equipmentMoveForm.serviceLocationId) {
+            toast.error('Choose a destination service location.');
+            return;
+        }
+
+        const targetLocation = customerServiceLocations.find((item) => item.id === equipmentMoveForm.serviceLocationId);
+        const targetBodyOfWater = equipmentMoveForm.bodyOfWaterId
+            ? customerBodiesOfWater.find((item) => item.id === equipmentMoveForm.bodyOfWaterId)
+            : null;
+
+        if (!targetLocation) {
+            toast.error('Choose a valid destination service location.');
+            return;
+        }
+
+        if (targetBodyOfWater && targetBodyOfWater.serviceLocationId !== targetLocation.id) {
+            toast.error('Choose a body of water at the selected service location.');
+            return;
+        }
+
+        setMovingEquipment(true);
+        try {
+            const updates = {
+                customerId,
+                customerName: selectedMovingEquipment.customerName || targetLocation.customerName || '',
+                serviceLocationId: targetLocation.id,
+                bodyOfWaterId: targetBodyOfWater?.id || '',
+                updatedAt: serverTimestamp(),
+            };
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'equipment', selectedMovingEquipment.id),
+                updates
+            );
+
+            setEquipment((currentEquipment) => (
+                targetLocation.id === location.id
+                    ? currentEquipment.map((item) => (
+                        item.id === selectedMovingEquipment.id ? { ...item, ...updates } : item
+                    ))
+                    : currentEquipment.filter((item) => item.id !== selectedMovingEquipment.id)
+            ));
+            setMovingEquipmentId('');
+            setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
+            toast.success('Equipment reassigned.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to reassign equipment.');
+        } finally {
+            setMovingEquipment(false);
+        }
+    };
+
+    return (<div className="grid gap-6 lg:grid-cols-2">
+        <div className="lg:col-span-2">
+        <InfoCard title="Schedule Service Stop">
+            <div className="grid gap-3 md:grid-cols-3">
+                {standaloneServiceStopLinks.map((item) => (
+                    <Link
+                        key={item.category}
+                        to={buildStandaloneServiceStopPath(item.category)}
+                        className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-200 hover:bg-blue-50"
+                    >
+                        <span className="block text-sm font-bold text-slate-900">{item.label}</span>
+                        <span className="mt-1 block text-xs text-slate-600">{item.helper}</span>
+                    </Link>
+                ))}
+            </div>
+        </InfoCard>
+        </div>
 
         <InfoCard
             title="Bodies of Water"
@@ -1098,61 +1313,136 @@ const LocationDetails = ({ location, customerId }) => {
                 <ul className="grid gap-3">
                     {equipment.map((eq) => (
                         <li key={eq.id}>
-                            <Link
-                                to={`/company/equipment/detail/${eq.id}`}
-                                className="block rounded-xl border border-slate-200 bg-white p-3 hover:border-blue-200 hover:bg-slate-50 transition"
-                            >
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <h3 className="truncate text-sm font-semibold text-slate-900">
-                                            {eq.name || "Unnamed Equipment"}
-                                        </h3>
-                                        <p className="mt-0.5 truncate text-xs text-slate-500">
-                                            {[eq.type, eq.make, eq.model].filter(Boolean).join(" • ") || "Unknown type"}
-                                        </p>
+                            <div className="rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-slate-50">
+                                <Link
+                                    to={`/company/equipment/detail/${eq.id}`}
+                                    className="block"
+                                >
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="min-w-0">
+                                            <h3 className="truncate text-sm font-semibold text-slate-900">
+                                                {eq.name || "Unnamed Equipment"}
+                                            </h3>
+                                            <p className="mt-0.5 truncate text-xs text-slate-500">
+                                                {[eq.type, eq.make, eq.model].filter(Boolean).join(" • ") || "Unknown type"}
+                                            </p>
+                                        </div>
+
+                                        <div className="flex shrink-0 flex-col items-end gap-1.5">
+                                            <span
+                                                className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${eq.status === "Operational"
+                                                    ? "bg-emerald-50 text-emerald-700 border-emerald-100"
+                                                    : "bg-amber-50 text-amber-700 border-amber-100"
+                                                    }`}
+                                            >
+                                                {eq.status || "Unknown"}
+                                            </span>
+
+                                            {eq.needsService && (
+                                                <span className="rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">
+                                                    Needs Service
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
 
-                                    <div className="flex shrink-0 flex-col items-end gap-1.5">
-                                        <span
-                                            className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${eq.status === "Operational"
-                                                ? "bg-emerald-50 text-emerald-700 border-emerald-100"
-                                                : "bg-amber-50 text-amber-700 border-amber-100"
-                                                }`}
-                                        >
-                                            {eq.status || "Unknown"}
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
                                         </span>
-
-                                        {eq.needsService && (
-                                            <span className="rounded-full border border-red-100 bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-700">
-                                                Needs Service
+                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                            {eq.currentPressure ?? "—"} PSI
+                                        </span>
+                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                            Last {formatDateValue(eq.lastServiceDate)}
+                                        </span>
+                                        {eq.nextServiceDate && (
+                                            <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                                Next {formatDateValue(eq.nextServiceDate)}
                                             </span>
                                         )}
                                     </div>
-                                </div>
 
-                                <div className="mt-3 flex flex-wrap gap-2">
-                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                        {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
-                                    </span>
-                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                        {eq.currentPressure ?? "—"} PSI
-                                    </span>
-                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                        Last {formatDateValue(eq.lastServiceDate)}
-                                    </span>
-                                    {eq.nextServiceDate && (
-                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                            Next {formatDateValue(eq.nextServiceDate)}
-                                        </span>
+                                    {eq.notes && (
+                                        <p className="mt-2 line-clamp-2 text-xs text-slate-500">
+                                            {eq.notes}
+                                        </p>
+                                    )}
+                                </Link>
+
+                                <div className="mt-3 border-t border-slate-100 pt-3">
+                                    {movingEquipmentId === eq.id ? (
+                                        <form onSubmit={handleSaveEquipmentMove} className="space-y-3">
+                                            <div className="grid gap-3 sm:grid-cols-2">
+                                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                                    Service Location
+                                                    <select
+                                                        value={equipmentMoveForm.serviceLocationId}
+                                                        onChange={handleMoveServiceLocationChange}
+                                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                                    >
+                                                        <option value="">Choose location</option>
+                                                        {customerServiceLocations.map((serviceLocation) => (
+                                                            <option key={serviceLocation.id} value={serviceLocation.id}>
+                                                                {getLocationLabel(serviceLocation)}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+
+                                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                                    Body of Water
+                                                    <select
+                                                        value={equipmentMoveForm.bodyOfWaterId}
+                                                        onChange={(event) => setEquipmentMoveForm((current) => ({ ...current, bodyOfWaterId: event.target.value }))}
+                                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                                    >
+                                                        <option value="">Unassigned</option>
+                                                        {targetBodiesOfWater.map((bow) => (
+                                                            <option key={bow.id} value={bow.id}>
+                                                                {getBodyOfWaterLabel(bow)}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+                                            </div>
+                                            {equipmentMoveForm.serviceLocationId && targetBodiesOfWater.length === 0 && (
+                                                <p className="text-xs text-amber-700">
+                                                    No bodies of water are saved at this service location yet. Equipment can still move there unassigned.
+                                                </p>
+                                            )}
+                                            <div className="flex flex-wrap gap-2">
+                                                <button
+                                                    type="submit"
+                                                    disabled={movingEquipment}
+                                                    className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+                                                >
+                                                    {movingEquipment ? 'Moving...' : 'Save Move'}
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    disabled={movingEquipment}
+                                                    onClick={() => {
+                                                        setMovingEquipmentId('');
+                                                        setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
+                                                    }}
+                                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        </form>
+                                    ) : (
+                                        <button
+                                            type="button"
+                                            onClick={() => startEquipmentMove(eq)}
+                                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            Move Equipment
+                                        </button>
                                     )}
                                 </div>
-
-                                {eq.notes && (
-                                    <p className="mt-2 line-clamp-2 text-xs text-slate-500">
-                                        {eq.notes}
-                                    </p>
-                                )}
-                            </Link>
+                            </div>
                         </li>
                     ))}
 
@@ -1712,11 +2002,14 @@ const OperationsTab = ({ customer, onNewPartApproval }) => {
 
 // History Tab
 const HistoryTab = ({ customer }) => {
+    const defaultHistoryDateRange = useMemo(() => getDefaultHistoryDateRange(), []);
     const [timeline, setTimeline] = useState([]);
+    const [expiredJobs, setExpiredJobs] = useState([]);
     const [bodyOfWaterOptions, setBodyOfWaterOptions] = useState([]);
     const [activeBodyOfWaterId, setActiveBodyOfWaterId] = useState('all');
     const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
     const [showAllTimelineEvents, setShowAllTimelineEvents] = useState(false);
+    const [timelineRange, setTimelineRange] = useState(defaultHistoryDateRange);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
@@ -1725,10 +2018,14 @@ const HistoryTab = ({ customer }) => {
     const bodyOfWaterScopedTimeline = activeBodyOfWaterId === 'all'
         ? timeline
         : timeline.filter((event) => event.bodyOfWaterId === activeBodyOfWaterId);
+    const dateScopedTimeline = bodyOfWaterScopedTimeline.filter((event) => isWithinDateRange(event.date, timelineRange));
     const visibleTimeline = selectedFilter.id === 'all'
-        ? bodyOfWaterScopedTimeline
-        : bodyOfWaterScopedTimeline.filter((event) => selectedFilter.types.includes(event.type));
-    const equipmentReadingTimeline = bodyOfWaterScopedTimeline.filter((event) => event.type === 'equipmentReading');
+        ? dateScopedTimeline
+        : dateScopedTimeline.filter((event) => selectedFilter.types.includes(event.type));
+    const equipmentReadingTimeline = dateScopedTimeline.filter((event) => event.type === 'equipmentReading');
+    const dateScopedExpiredJobs = expiredJobs.filter((expiredJob) => (
+        isWithinDateRange(expiredJob.expiredAt || expiredJob.updatedAt || expiredJob.expiredAtMillis, timelineRange)
+    ));
     const displayedTimeline = showAllTimelineEvents ? visibleTimeline : visibleTimeline.slice(0, 5);
     const hiddenTimelineCount = visibleTimeline.length - displayedTimeline.length;
 
@@ -1736,7 +2033,7 @@ const HistoryTab = ({ customer }) => {
         const fetchTimeline = async () => {
             setLoading(true);
             try {
-                const [events, bodyOfWaterSnapshot] = await Promise.all([
+                const [events, bodyOfWaterSnapshot, expiredJobsSnapshot] = await Promise.all([
                     loadCustomerTimeline({
                         db,
                         companyId: recentlySelectedCompany,
@@ -1746,9 +2043,15 @@ const HistoryTab = ({ customer }) => {
                         collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
                         where("customerId", "==", customer.id)
                     )),
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'expiredJobs')),
                 ]);
                 setTimeline(events);
                 setBodyOfWaterOptions(bodyOfWaterSnapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
+                setExpiredJobs(
+                    expiredJobsSnapshot.docs
+                        .map((item) => ({ id: item.id, ...item.data() }))
+                        .sort((a, b) => toMillis(b.expiredAt || b.updatedAt || b.expiredAtMillis) - toMillis(a.expiredAt || a.updatedAt || a.expiredAtMillis))
+                );
             } catch (error) {
                 console.error(error);
                 toast.error("Failed to fetch customer timeline.");
@@ -1850,10 +2153,14 @@ const HistoryTab = ({ customer }) => {
                     </div>
                 ) : (
                     <div className="space-y-6">
-                        <CustomerTimelineGraph timeline={bodyOfWaterScopedTimeline} />
+                        <CustomerTimelineGraph
+                            timeline={bodyOfWaterScopedTimeline}
+                            defaultRange={defaultHistoryDateRange}
+                            onRangeChange={setTimelineRange}
+                        />
                         {visibleTimeline.length === 0 ? (
                             <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                                No {selectedFilter.label.toLowerCase()} timeline events found{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
+                                No {selectedFilter.label.toLowerCase()} timeline events found in this date range{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
                             </div>
                         ) : (
                             <div className="space-y-4">
@@ -1914,6 +2221,61 @@ const HistoryTab = ({ customer }) => {
                             </div>
                         )}
                     </div>
+                )}
+            </InfoCard>
+            <InfoCard title="Expired Jobs">
+                {loading ? (
+                    <div className="flex justify-center py-6">
+                        <ClipLoader size={24} />
+                    </div>
+                ) : dateScopedExpiredJobs.length === 0 ? (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                        No expired jobs recorded in this date range.
+                    </div>
+                ) : (
+                    <ul className="divide-y divide-slate-200">
+                        {dateScopedExpiredJobs.map((expiredJob) => {
+                            const title = expiredJob.title || `Expired job: ${expiredJob.jobInternalId || expiredJob.jobType || expiredJob.jobId || 'Work order'}`;
+                            const details = [
+                                expiredJob.jobInternalId,
+                                expiredJob.serviceLocationName || expiredJob.serviceLocationAddress,
+                                expiredJob.previousBillingStatus ? `${expiredJob.previousBillingStatus} -> Expired` : 'Expired',
+                                expiredJob.jobRateCents ? formatCents(expiredJob.jobRateCents) : '',
+                            ].filter(Boolean);
+
+                            return (
+                                <li key={expiredJob.id || expiredJob.jobId} className="py-4">
+                                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <p className="text-sm font-semibold text-slate-900">{title}</p>
+                                                <StatusBadge tone="rose">Expired</StatusBadge>
+                                            </div>
+                                            {details.length > 0 && (
+                                                <p className="mt-1 text-xs font-medium text-slate-500">{details.join(' • ')}</p>
+                                            )}
+                                            {expiredJob.note && (
+                                                <p className="mt-2 whitespace-pre-line text-sm text-slate-600 line-clamp-4">{expiredJob.note}</p>
+                                            )}
+                                        </div>
+                                        <div className="flex shrink-0 flex-col gap-2 text-left lg:items-end lg:text-right">
+                                            <span className="text-xs font-semibold text-slate-500">
+                                                {formatDateValue(expiredJob.expiredAt || expiredJob.updatedAt || expiredJob.expiredAtMillis)}
+                                            </span>
+                                            {expiredJob.jobId && (
+                                                <Link
+                                                    to={`/company/jobs/detail/${expiredJob.jobId}`}
+                                                    className="inline-flex justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                                >
+                                                    View Job
+                                                </Link>
+                                            )}
+                                        </div>
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
                 )}
             </InfoCard>
             <LeadsTab customer={customer} />
@@ -2001,6 +2363,66 @@ export default function CustomerDetails() {
         navigate(`/company/customers/details/${customerId}/${nextTab}`);
     };
 
+    const uniqueDocsByPath = (docs) => Array.from(
+        new Map(docs.map((documentSnapshot) => [documentSnapshot.ref.path, documentSnapshot])).values()
+    );
+
+    const deactivateCustomerRelations = async () => {
+        if (!recentlySelectedCompany || !customerId) {
+            return { serviceLocations: 0, bodiesOfWater: 0, equipment: 0 };
+        }
+
+        const serviceLocationsSnapshot = await getDocs(query(
+            collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'),
+            where('customerId', '==', customerId)
+        ));
+        const serviceLocationDocs = serviceLocationsSnapshot.docs;
+        const serviceLocationIds = serviceLocationDocs.map((locationDoc) => locationDoc.id);
+
+        const [bodiesByCustomerSnapshot, equipmentByCustomerSnapshot] = await Promise.all([
+            getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                where('customerId', '==', customerId)
+            )),
+            getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+                where('customerId', '==', customerId)
+            )),
+        ]);
+
+        const [bodiesByLocationSnapshots, equipmentByLocationSnapshots] = await Promise.all([
+            Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                where('serviceLocationId', '==', locationId)
+            )))),
+            Promise.all(serviceLocationIds.map((locationId) => getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'equipment'),
+                where('serviceLocationId', '==', locationId)
+            )))),
+        ]);
+
+        const bodyOfWaterDocs = uniqueDocsByPath([
+            ...bodiesByCustomerSnapshot.docs,
+            ...bodiesByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+        ]);
+        const equipmentDocs = uniqueDocsByPath([
+            ...equipmentByCustomerSnapshot.docs,
+            ...equipmentByLocationSnapshots.flatMap((snapshot) => snapshot.docs),
+        ]);
+
+        await Promise.all([
+            ...serviceLocationDocs.map((locationDoc) => updateDoc(locationDoc.ref, { isActive: false, active: false })),
+            ...bodyOfWaterDocs.map((bodyDoc) => updateDoc(bodyDoc.ref, { isActive: false })),
+            ...equipmentDocs.map((equipmentDoc) => updateDoc(equipmentDoc.ref, { isActive: false, active: false })),
+        ]);
+
+        return {
+            serviceLocations: serviceLocationDocs.length,
+            bodiesOfWater: bodyOfWaterDocs.length,
+            equipment: equipmentDocs.length,
+        };
+    };
+
     const handleDeleteCustomer = async () => {
         if (!requirePermission("16", "delete customers")) return;
 
@@ -2023,14 +2445,19 @@ export default function CustomerDetails() {
 
     const handleUpdateCustomerStatus = async (nextActive) => {
         if (!requirePermission("14", "update customers")) return;
+        if (!recentlySelectedCompany || !customerId) return;
 
         try {
             const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
             await updateDoc(customerRef, { active: nextActive, isActive: nextActive });
 
-            // Optionally, deactivate related items if needed
+            const inactiveCascadeCounts = !nextActive ? await deactivateCustomerRelations() : null;
 
-            toast.success(`Customer has been marked as ${nextActive ? 'active' : 'inactive'}.`);
+            toast.success(
+                inactiveCascadeCounts
+                    ? `Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, and ${inactiveCascadeCounts.equipment} equipment records were also marked inactive.`
+                    : `Customer has been marked as ${nextActive ? 'active' : 'inactive'}.`
+            );
             setCustomer(prev => ({ ...prev, active: nextActive, isActive: nextActive })); // Update local state
         } catch (error) {
             toast.error('Failed to update customer status.');
@@ -2303,6 +2730,7 @@ export default function CustomerDetails() {
                                 customer={customer}
                                 onCustomerUpdate={(updates) => setCustomer((prev) => ({ ...prev, ...updates }))}
                                 onDeleteCustomer={() => setShowDeleteModal(true)}
+                                onCustomerInactiveCascade={deactivateCustomerRelations}
                             />
                         )}
                         {activeTab === 'locations' && <ServiceLocationsTab customer={customer} />}
@@ -2367,7 +2795,7 @@ export default function CustomerDetails() {
                 >
                     <p>
                         Are you sure you want to mark this customer as {customer.active ? 'inactive' : 'active'}?
-                        {customer.active ? ' This will not delete their data, but may restrict their access and scheduled services.' : ' They will appear in active customer views again.'}
+                        {customer.active ? ' This will not delete their data. Linked service locations, bodies of water, and equipment will also be marked inactive.' : ' They will appear in active customer views again.'}
                     </p>
                 </ModalShell>
             )}

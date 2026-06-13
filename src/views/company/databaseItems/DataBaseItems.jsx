@@ -8,18 +8,53 @@ import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
+const ALL_FILTER_VALUE = "all";
+
+const SORT_OPTIONS = [
+  { value: "nameAsc", label: "Name A-Z" },
+  { value: "nameDesc", label: "Name Z-A" },
+  { value: "categoryAsc", label: "Category A-Z" },
+  { value: "rateHigh", label: "Cost high-low" },
+  { value: "rateLow", label: "Cost low-high" },
+  { value: "sellPriceHigh", label: "Sell price high-low" },
+  { value: "sellPriceLow", label: "Sell price low-high" },
+  { value: "updatedNewest", label: "Recently updated" },
+  { value: "updatedOldest", label: "Oldest updated" },
+  { value: "timesPurchasedHigh", label: "Most purchased" },
+];
+
+const normalizeFilterValue = (value) => String(value || "").trim();
+
+const getUniqueOptions = (items, key) =>
+  Array.from(new Set(items.map((item) => normalizeFilterValue(item[key])).filter(Boolean))).sort((left, right) =>
+    left.localeCompare(right)
+  );
+
+const compareText = (left, right) => String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base" });
+
+const compareNumber = (left, right) => (Number(left || 0) > Number(right || 0) ? 1 : Number(left || 0) < Number(right || 0) ? -1 : 0);
 
 const DatabaseItems = () => {
-  const { name, recentlySelectedCompany } = useContext(Context);
+  const { recentlySelectedCompany } = useContext(Context);
   const { can } = useCompanyPermissions();
 
   const [genericItemList, setGenericItemList] = useState([]);
   const [searchTerm, setSearchTerm] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState(ALL_FILTER_VALUE);
+  const [subCategoryFilter, setSubCategoryFilter] = useState(ALL_FILTER_VALUE);
+  const [uomFilter, setUomFilter] = useState(ALL_FILTER_VALUE);
+  const [billableFilter, setBillableFilter] = useState(ALL_FILTER_VALUE);
+  const [sortOption, setSortOption] = useState("nameAsc");
   const [pageSize, setPageSize] = useState(25);
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     (async () => {
+      if (!recentlySelectedCompany) {
+        setGenericItemList([]);
+        return;
+      }
+
       try {
         //Get Generic Data Base Items
         let genericItemQuery = query(
@@ -27,41 +62,46 @@ const DatabaseItems = () => {
           orderBy("name")
         );
         const genericItemQuerySnapshot = await getDocs(genericItemQuery);
-        setGenericItemList([]);
-        genericItemQuerySnapshot.forEach((doc) => {
-          const itemData = doc.data();
+        const items = genericItemQuerySnapshot.docs.map((itemDoc) => {
+          const itemData = itemDoc.data();
           const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
           const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
 
-          let rateDouble = Number(itemData.rate || 0) / 100;
-          let formattedRateUSD = formatCurrency(rateDouble);
+          const rateCents = Number(itemData.rate || 0);
+          const rateDouble = rateCents / 100;
+          const formattedRateUSD = formatCurrency(rateDouble);
 
-          let sellPriceDouble = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
-          let formattedSellPriceUSD = formatCurrency(sellPriceDouble);
+          const sellPriceCents = Number(itemData.sellPrice ?? itemData.billingRate ?? 0);
+          const sellPriceDouble = sellPriceCents / 100;
+          const formattedSellPriceUSD = formatCurrency(sellPriceDouble);
 
-          const genericItem = {
+          return {
             UOM: itemData.UOM || "",
-            billable: itemData.billable,
-            category: itemData.category,
+            billable: Boolean(itemData.billable),
+            category: itemData.category || "",
             color: itemData.color,
             dateUpdated: formattedDate1,
+            dateUpdatedMillis: dateUpdated.getTime(),
             description: itemData.description,
-            id: itemData.id,
+            id: itemData.id || itemDoc.id,
             name: itemData.name,
+            rateCents,
             rate: formattedRateUSD,
             size: itemData.size,
             sku: itemData.sku,
             storeName: itemData.storeName,
             subCategory: itemData.subCategory,
-            timesPurchased: itemData.timesPurchased,
+            timesPurchased: Number(itemData.timesPurchased || 0),
             venderId: itemData.venderId,
             label: itemData.name + " " + itemData.rate + " " + itemData.sku,
+            sellPriceCents,
             sellPrice: formattedSellPriceUSD,
             billingRate: formattedSellPriceUSD,
             tracking: itemData.tracking || "",
           };
-          setGenericItemList((genericItemList) => [...genericItemList, genericItem]);
         });
+
+        setGenericItemList(items);
       } catch (error) {
         console.log("Error");
         console.log(error);
@@ -69,7 +109,7 @@ const DatabaseItems = () => {
     })();
   }, [recentlySelectedCompany]);
 
-  const filteredItems = useMemo(() => {
+  const searchMatchedItems = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
     if (!normalizedSearch) return genericItemList;
 
@@ -89,11 +129,61 @@ const DatabaseItems = () => {
     );
   }, [genericItemList, searchTerm]);
 
-  const pageCount = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const categoryOptions = useMemo(() => getUniqueOptions(searchMatchedItems, "category"), [searchMatchedItems]);
+  const subCategoryOptions = useMemo(() => getUniqueOptions(searchMatchedItems, "subCategory"), [searchMatchedItems]);
+  const uomOptions = useMemo(() => getUniqueOptions(searchMatchedItems, "UOM"), [searchMatchedItems]);
+
+  const filteredItems = useMemo(() => {
+    return searchMatchedItems.filter((item) => {
+      if (categoryFilter !== ALL_FILTER_VALUE && item.category !== categoryFilter) return false;
+      if (subCategoryFilter !== ALL_FILTER_VALUE && item.subCategory !== subCategoryFilter) return false;
+      if (uomFilter !== ALL_FILTER_VALUE && item.UOM !== uomFilter) return false;
+      if (billableFilter === "billable" && !item.billable) return false;
+      if (billableFilter === "nonBillable" && item.billable) return false;
+      return true;
+    });
+  }, [billableFilter, categoryFilter, searchMatchedItems, subCategoryFilter, uomFilter]);
+
+  const sortedItems = useMemo(() => {
+    return [...filteredItems].sort((left, right) => {
+      switch (sortOption) {
+        case "nameDesc":
+          return compareText(right.name, left.name);
+        case "categoryAsc":
+          return compareText(left.category, right.category) || compareText(left.subCategory, right.subCategory) || compareText(left.name, right.name);
+        case "rateHigh":
+          return compareNumber(right.rateCents, left.rateCents) || compareText(left.name, right.name);
+        case "rateLow":
+          return compareNumber(left.rateCents, right.rateCents) || compareText(left.name, right.name);
+        case "sellPriceHigh":
+          return compareNumber(right.sellPriceCents, left.sellPriceCents) || compareText(left.name, right.name);
+        case "sellPriceLow":
+          return compareNumber(left.sellPriceCents, right.sellPriceCents) || compareText(left.name, right.name);
+        case "updatedNewest":
+          return compareNumber(right.dateUpdatedMillis, left.dateUpdatedMillis) || compareText(left.name, right.name);
+        case "updatedOldest":
+          return compareNumber(left.dateUpdatedMillis, right.dateUpdatedMillis) || compareText(left.name, right.name);
+        case "timesPurchasedHigh":
+          return compareNumber(right.timesPurchased, left.timesPurchased) || compareText(left.name, right.name);
+        case "nameAsc":
+        default:
+          return compareText(left.name, right.name);
+      }
+    });
+  }, [filteredItems, sortOption]);
+
+  const activeFilterCount = [
+    categoryFilter,
+    subCategoryFilter,
+    uomFilter,
+    billableFilter,
+  ].filter((value) => value !== ALL_FILTER_VALUE).length;
+
+  const pageCount = Math.max(1, Math.ceil(sortedItems.length / pageSize));
   const startIndex = (currentPage - 1) * pageSize;
-  const paginatedItems = filteredItems.slice(startIndex, startIndex + pageSize);
-  const displayStart = filteredItems.length === 0 ? 0 : startIndex + 1;
-  const displayEnd = Math.min(startIndex + pageSize, filteredItems.length);
+  const paginatedItems = sortedItems.slice(startIndex, startIndex + pageSize);
+  const displayStart = sortedItems.length === 0 ? 0 : startIndex + 1;
+  const displayEnd = Math.min(startIndex + pageSize, sortedItems.length);
 
   useEffect(() => {
     if (currentPage > pageCount) {
@@ -103,7 +193,20 @@ const DatabaseItems = () => {
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [pageSize, searchTerm]);
+  }, [billableFilter, categoryFilter, pageSize, searchTerm, sortOption, subCategoryFilter, uomFilter]);
+
+  const clearFilters = () => {
+    setSearchTerm("");
+    setCategoryFilter(ALL_FILTER_VALUE);
+    setSubCategoryFilter(ALL_FILTER_VALUE);
+    setUomFilter(ALL_FILTER_VALUE);
+    setBillableFilter(ALL_FILTER_VALUE);
+    setSortOption("nameAsc");
+  };
+
+  const resultSummaryText = `Showing ${displayStart}-${displayEnd} of ${sortedItems.length}${
+    sortedItems.length !== genericItemList.length ? ` filtered (${genericItemList.length} total)` : ""
+  }`;
 
   function formatCurrency(number, locale = "en-US", currency = "USD") {
     return new Intl.NumberFormat(locale, {
@@ -113,35 +216,38 @@ const DatabaseItems = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 sm:px-5 lg:px-8 py-8 text-slate-900">
-      <div className="mx-auto max-w-[1600px] space-y-6">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
         {/* Header */}
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-2xl sm:text-3xl font-semibold tracking-tight">Database Items</h2>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company catalog</p>
+              <h2 className="mt-1 text-3xl font-bold text-slate-950">Database Items</h2>
             <p className="text-sm text-slate-500 mt-1">Browse and manage your company catalog.</p>
           </div>
-          <div className="flex space-x-4">
+            <div className="flex flex-wrap gap-2">
             {can("852") && (
-            <Link to="/company/items/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
+                <Link to="/company/items/bulk-upload" className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50">
                 Upload Bulk
             </Link>
             )}
             {can("852") && (
               <Link
-                className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-lg shadow-sm hover:bg-blue-700"
+                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-blue-700"
                 to={`/company/items/createNew`}
               >
                 Create New
               </Link>
             )}
+            </div>
           </div>
-        </div>
+        </section>
 
         {/* Controls */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="p-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="w-full sm:max-w-xl">
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="grid gap-3 border-b border-slate-200 p-5 xl:grid-cols-[minmax(280px,1fr)_repeat(5,minmax(150px,190px))_auto]">
+            <div className="w-full">
               <div className="relative">
                 <span className="pointer-events-none absolute inset-y-0 left-3 flex items-center text-slate-400">
                   <svg
@@ -158,7 +264,7 @@ const DatabaseItems = () => {
 
                 {/* Search Bar */}
                 <input
-                  className="w-full rounded-xl border border-slate-200 bg-white pl-10 pr-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  className="w-full rounded-md border border-slate-300 bg-white py-2 pl-10 pr-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   type="text"
                   name="search"
                   placeholder="Search items"
@@ -168,13 +274,70 @@ const DatabaseItems = () => {
               </div>
             </div>
 
-            <div className="flex flex-col gap-2 text-xs text-slate-500 sm:items-end">
-              <label className="flex items-center gap-2">
-                <span className="font-semibold text-slate-600">Rows</span>
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              aria-label="Filter by category"
+            >
+              <option value={ALL_FILTER_VALUE}>All Categories</option>
+              {categoryOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={subCategoryFilter}
+              onChange={(e) => setSubCategoryFilter(e.target.value)}
+              aria-label="Filter by subcategory"
+            >
+              <option value={ALL_FILTER_VALUE}>All Subcategories</option>
+              {subCategoryOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={uomFilter}
+              onChange={(e) => setUomFilter(e.target.value)}
+              aria-label="Filter by UOM"
+            >
+              <option value={ALL_FILTER_VALUE}>All UOM</option>
+              {uomOptions.map((option) => (
+                <option key={option} value={option}>{option}</option>
+              ))}
+            </select>
+
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={billableFilter}
+              onChange={(e) => setBillableFilter(e.target.value)}
+              aria-label="Filter by billable status"
+            >
+              <option value={ALL_FILTER_VALUE}>All Billing</option>
+              <option value="billable">Billable</option>
+              <option value="nonBillable">Not Billable</option>
+            </select>
+
+            <select
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              value={sortOption}
+              onChange={(e) => setSortOption(e.target.value)}
+              aria-label="Sort database items"
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+
+            <div className="flex items-center gap-2">
                 <select
-                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   value={pageSize}
                   onChange={(e) => setPageSize(Number(e.target.value))}
+                aria-label="Rows per page"
                 >
                   {PAGE_SIZE_OPTIONS.map((option) => (
                     <option key={option} value={option}>
@@ -182,12 +345,21 @@ const DatabaseItems = () => {
                     </option>
                   ))}
                 </select>
-              </label>
-              <div>
-                Showing {displayStart}-{displayEnd} of {filteredItems.length}
-                {filteredItems.length !== genericItemList.length ? ` filtered (${genericItemList.length} total)` : ""}
-              </div>
+              {(searchTerm || activeFilterCount > 0 || sortOption !== "nameAsc") && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="whitespace-nowrap rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm hover:bg-slate-50"
+                >
+                  Clear
+                </button>
+              )}
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div>{resultSummaryText}</div>
+            <div>{activeFilterCount ? `${activeFilterCount} filter${activeFilterCount === 1 ? "" : "s"} active` : "No field filters active"}</div>
           </div>
 
           {/* Table */}
@@ -199,6 +371,7 @@ const DatabaseItems = () => {
                   <th className="px-5 py-3 border-b border-slate-200">Category</th>
                   <th className="px-5 py-3 border-b border-slate-200">Subcategory</th>
                   <th className="px-5 py-3 border-b border-slate-200">UOM</th>
+                  <th className="px-5 py-3 border-b border-slate-200">Billable</th>
                   <th className="px-5 py-3 border-b border-slate-200">Description</th>
                   <th className="px-5 py-3 border-b border-slate-200">Rate</th>
                   <th className="px-5 py-3 border-b border-slate-200">Sell Price</th>
@@ -248,6 +421,18 @@ const DatabaseItems = () => {
                         style={{ display: "block", width: "100%", height: "100%" }}
                       >
                         {item.UOM || "--"}
+                      </Link>
+                    </td>
+
+                    <td className="px-5 py-3 text-sm text-slate-700 whitespace-nowrap">
+                      <Link
+                        to={`/company/items/detail/${item.id}`}
+                        className="block w-full h-full"
+                        style={{ display: "block", width: "100%", height: "100%" }}
+                      >
+                        <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${item.billable ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600"}`}>
+                          {item.billable ? "Billable" : "Not Billable"}
+                        </span>
                       </Link>
                     </td>
 
@@ -315,7 +500,7 @@ const DatabaseItems = () => {
 
                 {filteredItems.length === 0 && (
                   <tr>
-                    <td colSpan={10} className="px-6 py-12 text-center">
+                    <td colSpan={11} className="px-6 py-12 text-center">
                       <div className="mx-auto max-w-sm">
                         <div className="text-sm font-semibold text-slate-800">No database items found</div>
                         <div className="text-sm text-slate-500 mt-1">
@@ -333,12 +518,11 @@ const DatabaseItems = () => {
 
           <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              Showing {displayStart}-{displayEnd} of {filteredItems.length}
-              {filteredItems.length !== genericItemList.length ? ` filtered (${genericItemList.length} total)` : ""}
+              {resultSummaryText}
             </div>
             <div className="flex items-center gap-2">
               <button
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={currentPage === 1}
                 onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
               >
@@ -348,7 +532,7 @@ const DatabaseItems = () => {
                 Page {currentPage} of {pageCount}
               </span>
               <button
-                className="rounded-lg border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={currentPage === pageCount}
                 onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
               >
@@ -356,7 +540,7 @@ const DatabaseItems = () => {
               </button>
             </div>
           </div>
-        </div>
+        </section>
       </div>
     </div>
   );

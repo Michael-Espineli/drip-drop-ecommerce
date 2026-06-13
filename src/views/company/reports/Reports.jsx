@@ -1,10 +1,11 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { collection, getDocs, query, where } from "firebase/firestore";
-import { endOfMonth, format, startOfMonth } from "date-fns";
+import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import {
   DocumentTextIcon,
   MagnifyingGlassIcon,
+  PlusIcon,
   PrinterIcon,
   TableCellsIcon,
   XMarkIcon,
@@ -22,14 +23,16 @@ import {
 
 const reportCategories = [
   { value: "operations", label: "Operations" },
+  { value: "performance", label: "Performance" },
   { value: "finance", label: "Finance / Accounting" },
 ];
 
 const reportCatalog = [
   { value: "readings", label: "Readings Summary", status: "Ready", source: "stopData readings", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
+  { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by technician", category: "performance" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
-  { value: "waste", label: "Waste", status: "Ready", source: "dosages and chemical purchases", category: "operations" },
+  { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
   { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll", category: "operations" },
   { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll", category: "operations" },
   { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes", category: "operations" },
@@ -38,11 +41,56 @@ const reportCatalog = [
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
+const fixedGroupingReportTypes = new Set(["readingHealth", "readingPerformance"]);
+
 const groupOptions = [
   { value: "company", label: "Company" },
   { value: "user", label: "User" },
   { value: "customer", label: "Customer" },
 ];
+
+const dateInputValue = (date) => format(date, "yyyy-MM-dd");
+
+const dateRangeFromDates = (start, end) => ({
+  start: dateInputValue(start),
+  end: dateInputValue(end),
+});
+
+const displayDateInputValue = (value) => {
+  if (!value) return "-";
+  const parsed = new Date(`${value}T00:00:00`);
+  return Number.isNaN(parsed.getTime()) ? String(value) : format(parsed, "MM/dd/yyyy");
+};
+
+const displayDateRange = ({ start, end } = {}) =>
+  `${displayDateInputValue(start)} - ${displayDateInputValue(end)}`;
+
+const dateRangePresets = [
+  { value: "custom", label: "Custom", getRange: null },
+  { value: "thisMonth", label: "This Month", getRange: () => dateRangeFromDates(startOfMonth(new Date()), endOfMonth(new Date())) },
+  {
+    value: "lastMonth",
+    label: "Last Month",
+    getRange: () => {
+      const previousMonth = subMonths(new Date(), 1);
+      return dateRangeFromDates(startOfMonth(previousMonth), endOfMonth(previousMonth));
+    },
+  },
+  { value: "last7Days", label: "Last 7 Days", getRange: () => dateRangeFromDates(subDays(new Date(), 6), new Date()) },
+  { value: "last30Days", label: "Last 30 Days", getRange: () => dateRangeFromDates(subDays(new Date(), 29), new Date()) },
+  { value: "thisWeek", label: "This Week", getRange: () => dateRangeFromDates(startOfWeek(new Date()), endOfWeek(new Date())) },
+  {
+    value: "lastWeek",
+    label: "Last Week",
+    getRange: () => {
+      const previousWeek = subDays(new Date(), 7);
+      return dateRangeFromDates(startOfWeek(previousWeek), endOfWeek(previousWeek));
+    },
+  },
+];
+
+const defaultDateRange = () =>
+  dateRangePresets.find((preset) => preset.value === "thisMonth").getRange();
 
 const readingOperatorOptions = [
   { value: "gt", label: "Over" },
@@ -134,6 +182,24 @@ const defaultReadingHealthFilterFor = (template = {}) => {
   return { templateId, operator: "gt", threshold: "" };
 };
 
+const readingPerformanceStandardKey = (standard = {}, index = 0) =>
+  [
+    standard.templateId || "reading",
+    standard.operator || "gt",
+    String(standard.threshold ?? "value").replace(/[^a-zA-Z0-9.-]+/g, "-"),
+    index,
+  ].join("-");
+
+const withReadingPerformanceStandardId = (standard, index = 0) => ({
+  ...standard,
+  id: standard.id || readingPerformanceStandardKey(standard, index),
+});
+
+const defaultReadingPerformanceStandardsFor = (templates = []) => {
+  const template = templates.find((item) => readingTemplateKey(item));
+  return template ? [withReadingPerformanceStandardId(defaultReadingHealthFilterFor(template))] : [];
+};
+
 const parseReadingNumber = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
   const raw = String(value ?? "").replaceAll(",", "").trim();
@@ -166,6 +232,17 @@ const compareReadingValue = (value, operator, threshold) => {
 const readingOperatorLabel = (operator) =>
   readingOperatorOptions.find((option) => option.value === operator)?.label || readingOperatorOptions[0].label;
 
+const percentString = (numerator, denominator) => {
+  if (!denominator) return "0.0%";
+  return `${((Number(numerator || 0) / denominator) * 100).toFixed(1)}%`;
+};
+
+const percentageMetric = (label, numerator, denominator, subtitle) => ({
+  label,
+  value: percentString(numerator, denominator),
+  subtitle: subtitle || `${Number(numerator || 0).toLocaleString()} of ${Number(denominator || 0).toLocaleString()}`,
+});
+
 const readingMatchesTemplate = (reading = {}, template = {}) => {
   const templateIds = [
     template.id,
@@ -192,6 +269,37 @@ const readingMatchesTemplate = (reading = {}, template = {}) => {
   return templateNames.some((name) => readingNames.includes(name));
 };
 
+const activeReadingPerformanceStandards = (standards = [], readingTemplates = []) => {
+  const templatesByKey = new Map(readingTemplates.map((template) => [readingTemplateKey(template), template]));
+
+  return standards
+    .map((standard, index) => {
+      const templateId = String(standard.templateId || "");
+      const template = templatesByKey.get(templateId);
+      const threshold = parseReadingNumber(standard.threshold);
+      if (!template || !Number.isFinite(threshold)) return null;
+
+      const readingName = template.name || template.chemType || "Reading";
+      const unit = template.UOM || template.uom || "";
+      const thresholdText = String(standard.threshold ?? "").trim();
+      const thresholdLabel = [thresholdText, unit].filter(Boolean).join(" ");
+      const operator = standard.operator || "gt";
+
+      return {
+        id: standard.id || readingPerformanceStandardKey(standard, index),
+        template,
+        templateId,
+        readingName,
+        unit,
+        operator,
+        threshold,
+        thresholdLabel,
+        rule: `${readingName} ${readingOperatorLabel(operator)} ${thresholdLabel}`.trim(),
+      };
+    })
+    .filter(Boolean);
+};
+
 const itemDate = (item, fields) => {
   for (const field of fields) {
     const date = dateFromValue(item[field]);
@@ -209,8 +317,8 @@ const inRange = (item, startDate, endDate, fields) => {
 const groupKey = (item, groupBy, fallbackName = "Company") => {
   if (groupBy === "user") {
     return {
-      id: item.userId || item.techId || item.adminId || item.workerId || "unassigned",
-      name: item.userName || item.techName || item.tech || item.adminName || item.workerName || "Unassigned",
+      id: item.userId || item.techId || item.technicianId || item.adminId || item.workerId || "unassigned",
+      name: item.userName || item.techName || item.technicianName || item.tech || item.adminName || item.workerName || "Unassigned",
     };
   }
 
@@ -277,6 +385,158 @@ const purchaseCategory = (item, databaseItemById) => {
   );
 };
 
+const normalizeIdList = (...values) =>
+  Array.from(new Set(
+    values.flatMap((value) => {
+      if (Array.isArray(value)) return value;
+      return String(value || "")
+        .split(",")
+        .map((item) => item.trim())
+        .filter(Boolean);
+    })
+  ));
+
+const purchaseDatabaseItem = (item, databaseItemById) =>
+  databaseItemById.get(item.itemId) ||
+  databaseItemById.get(item.dataBaseItemId) ||
+  databaseItemById.get(item.databaseItemId) ||
+  databaseItemById.get(item.templateId) ||
+  null;
+
+const purchaseDatabaseItemId = (item) =>
+  item.itemId || item.dataBaseItemId || item.databaseItemId || item.templateId || "";
+
+const dosageTemplateFor = (dosage, dosageTemplatesById) =>
+  dosageTemplatesById.get(dosage.templateId) ||
+  dosageTemplatesById.get(dosage.universalTemplateId) ||
+  dosageTemplatesById.get(dosage.dosageTemplateId) ||
+  null;
+
+const dosageLinkedItemIds = (dosage = {}, template = {}) =>
+  normalizeIdList(
+    template?.linkedItemIds,
+    template?.linkedItemId,
+    template?.linkedItem,
+    template?.itemId,
+    dosage.linkedItemIds,
+    dosage.linkedItemId,
+    dosage.linkedItem,
+    dosage.itemId
+  );
+
+const normalizeUnit = (value) => {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw || /^\d+(\.\d+)?$/.test(raw)) return "";
+  if (/fl\s*oz|fluid\s*ounce/.test(raw)) return "floz";
+  if (/gal|gallon/.test(raw)) return "gal";
+  if (/\blbs?\b|pound/.test(raw)) return "lb";
+  if (/quart|\bqt\b/.test(raw)) return "qt";
+  if (/liter|litre|\bl\b/.test(raw)) return "l";
+  if (/ounce|\boz\b/.test(raw)) return "oz";
+  if (/tab|tablet/.test(raw)) return "tab";
+  if (/each|\bea\b|unit/.test(raw)) return "unit";
+  return raw.replace(/[^a-z0-9]+/g, "");
+};
+
+const unitLabels = {
+  floz: "fl oz",
+  gal: "gal",
+  lb: "lb",
+  l: "L",
+  oz: "oz",
+  qt: "qt",
+  tab: "tab",
+  unit: "unit",
+};
+
+const unitLabel = (unit) => unitLabels[normalizeUnit(unit)] || unit || "";
+
+const parseFirstNumber = (value) => {
+  const match = String(value || "").replaceAll(",", "").match(/-?\d+(\.\d+)?/);
+  if (!match) return null;
+  const parsed = Number(match[0]);
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
+const volumeToGallons = {
+  floz: 1 / 128,
+  gal: 1,
+  l: 0.264172,
+  oz: 1 / 128,
+  qt: 0.25,
+};
+
+const weightToPounds = {
+  lb: 1,
+  oz: 1 / 16,
+};
+
+const resolveUnitFamily = (fromUnit, toUnit) => {
+  const from = normalizeUnit(fromUnit);
+  const to = normalizeUnit(toUnit);
+  if (!from || !to || from === to) return null;
+
+  const volumeUnits = new Set(Object.keys(volumeToGallons));
+  const weightUnits = new Set(Object.keys(weightToPounds));
+  const nonOunceVolumeUnits = new Set(["floz", "gal", "l", "qt"]);
+  const nonOunceWeightUnits = new Set(["lb"]);
+
+  if (from === "oz" && nonOunceVolumeUnits.has(to)) return "volume";
+  if (to === "oz" && nonOunceVolumeUnits.has(from)) return "volume";
+  if (from === "oz" && nonOunceWeightUnits.has(to)) return "weight";
+  if (to === "oz" && nonOunceWeightUnits.has(from)) return "weight";
+  if (volumeUnits.has(from) && volumeUnits.has(to)) return "volume";
+  if (weightUnits.has(from) && weightUnits.has(to)) return "weight";
+  return null;
+};
+
+const convertAmount = (amount, fromUnit, toUnit) => {
+  const numericAmount = Number(amount);
+  const from = normalizeUnit(fromUnit);
+  const to = normalizeUnit(toUnit);
+  if (!Number.isFinite(numericAmount)) return null;
+  if (!from || !to || from === to) return numericAmount;
+
+  const family = resolveUnitFamily(from, to);
+  if (family === "volume") return (numericAmount * volumeToGallons[from]) / volumeToGallons[to];
+  if (family === "weight") return (numericAmount * weightToPounds[from]) / weightToPounds[to];
+  return null;
+};
+
+const formatQuantity = (amount, unit) => {
+  if (!Number.isFinite(Number(amount))) return "-";
+  const value = Number(amount).toLocaleString(undefined, { maximumFractionDigits: 2 });
+  return [value, unitLabel(unit)].filter(Boolean).join(" ");
+};
+
+const databaseItemDisplayName = (item = {}) =>
+  [
+    item.name || item.id || "Database Item",
+    item.size ? `Size ${item.size}` : "",
+    item.UOM || item.uom || "",
+    item.sku ? `SKU ${item.sku}` : "",
+  ].filter(Boolean).join(" | ");
+
+const purchaseQuantity = (purchase, databaseItemById) => {
+  const databaseItem = purchaseDatabaseItem(purchase, databaseItemById) || {};
+  const lineQuantity = toNumber(purchase.quantity ?? purchase.quantityString ?? 1) || 1;
+  const sizeValue = databaseItem.size ?? purchase.size ?? purchase.packageSize ?? "";
+  const parsedPackageSize = parseFirstNumber(sizeValue);
+  const packageSize = parsedPackageSize && parsedPackageSize > 0 ? parsedPackageSize : 1;
+  const unit =
+    normalizeUnit(sizeValue) ||
+    normalizeUnit(databaseItem.UOM || databaseItem.uom) ||
+    normalizeUnit(purchase.UOM || purchase.uom) ||
+    "unit";
+
+  return {
+    amount: lineQuantity * packageSize,
+    lineQuantity,
+    packageSize,
+    unit,
+  };
+};
+
 const jobRevenueCents = (job) => cents(job.revenueCents ?? job.invoiceTotalCents ?? job.totalCents ?? job.rate ?? job.amount ?? 0);
 const jobLaborCostCents = (job) => cents(job.laborCostCents ?? job.laborCost ?? 0);
 const payrollLineCents = (line) => cents(line.totalAmountCents ?? line.amountCents ?? line.payCents ?? 0);
@@ -340,6 +600,37 @@ const reportStatsForExport = (reportData) =>
     Subtitle: stat.subtitle || "",
   }));
 
+const reportSummarySections = (reportData) =>
+  Array.isArray(reportData?.summarySections) ? reportData.summarySections : [];
+
+const reportSummaryRowsForExport = (section) =>
+  (section.rows || []).map((row) => {
+    const exportRow = {};
+    (section.columns || []).forEach((column) => {
+      exportRow[column.label] = displayColumnValue(column, row);
+    });
+    return exportRow;
+  });
+
+const reportSummarySheetRows = (reportData) => {
+  const rows = [
+    [reportData?.title || "Report"],
+    [],
+    ["Metric", "Value", "Subtitle"],
+    ...reportStatsForExport(reportData).map((stat) => [stat.Metric, stat.Value, stat.Subtitle]),
+  ];
+
+  reportSummarySections(reportData).forEach((section) => {
+    rows.push([], [section.title || "Summary"]);
+    rows.push((section.columns || []).map((column) => column.label));
+    reportSummaryRowsForExport(section).forEach((row) => {
+      rows.push((section.columns || []).map((column) => row[column.label] || ""));
+    });
+  });
+
+  return rows;
+};
+
 const csvCell = (value) => {
   const text = String(value ?? "");
   return /[",\n\r]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
@@ -364,10 +655,7 @@ const exportReportCsv = (reportData) => {
 
   const columnLabels = ["Group", ...reportData.columns.map((column) => column.label)];
   const csvRows = [
-    [reportData.title || "Report"],
-    [],
-    ["Metric", "Value", "Subtitle"],
-    ...reportStatsForExport(reportData).map((stat) => [stat.Metric, stat.Value, stat.Subtitle]),
+    ...reportSummarySheetRows(reportData),
     [],
     columnLabels,
     ...reportRowsForExport(reportData).map((row) => columnLabels.map((label) => row[label] || "")),
@@ -384,7 +672,7 @@ const exportReportExcel = (reportData) => {
   }
 
   const workbook = XLSX.utils.book_new();
-  const summarySheet = XLSX.utils.json_to_sheet(reportStatsForExport(reportData));
+  const summarySheet = XLSX.utils.aoa_to_sheet(reportSummarySheetRows(reportData));
   const rows = reportRowsForExport(reportData);
   const dataSheet = XLSX.utils.json_to_sheet(rows.length ? rows : [{ Message: "No rows in this report." }]);
 
@@ -410,6 +698,26 @@ const printableReportHtml = (reportData) => {
         <strong>${escapeHtml(stat.Value)}</strong>
         ${stat.Subtitle ? `<small>${escapeHtml(stat.Subtitle)}</small>` : ""}
       </div>
+    `)
+    .join("");
+
+  const summarySectionsHtml = reportSummarySections(reportData)
+    .map((section) => `
+      <section class="summary-section">
+        <h2>${escapeHtml(section.title || "Summary")}</h2>
+        <table>
+          <thead>
+            <tr>${(section.columns || []).map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
+          </thead>
+          <tbody>
+            ${(section.rows || []).map((row) => `
+              <tr>
+                ${(section.columns || []).map((column) => `<td>${escapeHtml(displayColumnValue(column, row))}</td>`).join("")}
+              </tr>
+            `).join("") || `<tr><td colspan="${section.columns?.length || 1}">No summary rows.</td></tr>`}
+          </tbody>
+        </table>
+      </section>
     `)
     .join("");
 
@@ -457,6 +765,7 @@ const printableReportHtml = (reportData) => {
           .stat span { color: #64748b; display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; }
           .stat strong { display: block; font-size: 18px; margin-top: 4px; }
           .stat small { color: #64748b; display: block; margin-top: 2px; }
+          .summary-section { margin-bottom: 20px; }
           section { break-inside: avoid; margin-top: 18px; }
           h2 { font-size: 16px; margin-bottom: 8px; }
           table { border-collapse: collapse; font-size: 11px; width: 100%; }
@@ -470,6 +779,7 @@ const printableReportHtml = (reportData) => {
         <h1>${escapeHtml(reportData.title || "Report")}</h1>
         <div class="generated">Generated ${escapeHtml(format(new Date(), "MM/dd/yyyy h:mm a"))}</div>
         <div class="stats">${statsHtml}</div>
+        ${summarySectionsHtml}
         ${groupsHtml}
       </body>
     </html>
@@ -717,6 +1027,307 @@ const buildReadingHealthReport = ({
   };
 };
 
+const buildReadingPerformanceReport = ({
+  stopData,
+  readingTemplates,
+  bodiesOfWater,
+  customersById = new Map(),
+  readingPerformanceStandards,
+  mode,
+}) => {
+  const standards = activeReadingPerformanceStandards(readingPerformanceStandards, readingTemplates);
+  const bodiesById = new Map((bodiesOfWater || []).map((body) => [body.id, body]));
+  const groups = new Map();
+  const overallFailingStopIds = new Set();
+  const overallStandardSummaries = new Map(
+    standards.map((standard) => [
+      standard.id,
+      {
+        id: standard.id,
+        standard: standard.rule,
+        failingStops: 0,
+        failingReadings: 0,
+        latestSortTime: -1,
+        latestFail: "-",
+        lastCustomer: "-",
+        lastValue: "-",
+      },
+    ])
+  );
+  let totalFailingReadings = 0;
+
+  const makeStandardSummaries = () =>
+    new Map(
+      standards.map((standard) => [
+        standard.id,
+        {
+          id: standard.id,
+          standard: standard.rule,
+          failingStops: 0,
+          failingReadings: 0,
+          latestSortTime: -1,
+          latestFail: "-",
+          lastCustomer: "-",
+          lastValue: "-",
+        },
+      ])
+    );
+
+  const updateLatest = (summary, row) => {
+    if (!summary || row.sortTime < summary.latestSortTime) return;
+    summary.latestSortTime = row.sortTime;
+    summary.latestFail = row.date;
+    summary.lastCustomer = row.customer;
+    summary.lastValue = row.value;
+  };
+
+  const buildFailureRow = (stop, reading, standard, readingValue, stopIndex, failureIndex) => {
+    const bodyOfWaterId = reading.bodyOfWaterId || stop.bodyOfWaterId || "unknown";
+    const bodyOfWater = bodiesById.get(bodyOfWaterId) || {};
+    const customerId = stop.customerId || reading.customerId || bodyOfWater.customerId || stop.internalCustomerId || "";
+    const customer = customerId ? customersById.get(customerId) : null;
+    const readingDate = dateFromValue(stop.date);
+    const poolName =
+      bodyOfWater.name ||
+      bodyOfWater.nickName ||
+      stop.bodyOfWaterName ||
+      stop.poolName ||
+      "Unknown Pool";
+    const customerName =
+      customerDisplayName(customer) ||
+      bodyOfWater.customerName ||
+      stop.customerName ||
+      customerId ||
+      "-";
+    const workerName =
+      stop.userName ||
+      stop.techName ||
+      stop.technicianName ||
+      stop.tech ||
+      stop.workerName ||
+      stop.companyUserName ||
+      "-";
+    const value = [
+      readingValue.toLocaleString(undefined, { maximumFractionDigits: 2 }),
+      reading.UOM || reading.uom || standard.unit,
+    ].filter(Boolean).join(" ");
+
+    return {
+      id: `${stop.id || stop.serviceStopId || `stop-${stopIndex}`}-${standard.id}-${reading.id || failureIndex}`,
+      sortTime: readingDate ? readingDate.getTime() : 0,
+      date: shortDate(stop.date),
+      customer: customerName,
+      pool: poolName,
+      worker: workerName,
+      standard: standard.rule,
+      reading: reading.name || standard.readingName,
+      value,
+      rule: `${readingOperatorLabel(standard.operator)} ${standard.thresholdLabel}`,
+      serviceStop: stop.serviceStopId || stop.id || "-",
+      status: "Failing to meet standards",
+    };
+  };
+
+  stopData.forEach((stop, stopIndex) => {
+    const stopKey = String(stop.id || stop.serviceStopId || `stop-${stopIndex}`);
+    const group = ensureGroup(groups, groupKey(stop, "user"));
+    if (!group.performance) {
+      group.performance = {
+        totalStops: 0,
+        failingStopIds: new Set(),
+        totalFailingReadings: 0,
+        standards: makeStandardSummaries(),
+        detailRows: [],
+      };
+    }
+
+    group.performance.totalStops += 1;
+    const readings = Array.isArray(stop.readings) ? stop.readings : [];
+    const failedStandardsForStop = new Set();
+
+    standards.forEach((standard) => {
+      const failures = readings
+        .filter((reading) => readingMatchesTemplate(reading, standard.template))
+        .map((reading) => ({ reading, value: parseReadingNumber(reading.amount) }))
+        .filter(({ value }) => compareReadingValue(value, standard.operator, standard.threshold));
+
+      if (!failures.length) return;
+
+      failedStandardsForStop.add(standard.id);
+      const groupSummary = group.performance.standards.get(standard.id);
+      const overallSummary = overallStandardSummaries.get(standard.id);
+
+      groupSummary.failingStops += 1;
+      groupSummary.failingReadings += failures.length;
+      overallSummary.failingStops += 1;
+      overallSummary.failingReadings += failures.length;
+      group.performance.totalFailingReadings += failures.length;
+      totalFailingReadings += failures.length;
+
+      failures.forEach(({ reading, value }, failureIndex) => {
+        const row = buildFailureRow(stop, reading, standard, value, stopIndex, failureIndex);
+        group.performance.detailRows.push(row);
+        updateLatest(groupSummary, row);
+        updateLatest(overallSummary, row);
+      });
+    });
+
+    if (failedStandardsForStop.size) {
+      group.performance.failingStopIds.add(stopKey);
+      overallFailingStopIds.add(stopKey);
+    }
+  });
+
+  const totalCompanyFailingStops = overallFailingStopIds.size;
+
+  const resultGroups = [...groups.values()]
+    .map((group) => {
+      const performance = group.performance || {
+        totalStops: 0,
+        failingStopIds: new Set(),
+        totalFailingReadings: 0,
+        standards: makeStandardSummaries(),
+        detailRows: [],
+      };
+      const failingStops = performance.failingStopIds.size;
+      const latestDetail = [...performance.detailRows].sort((a, b) => b.sortTime - a.sortTime)[0];
+      const anyStandardRow = {
+        id: `${group.id}-any-standard`,
+        standard: "Any standard",
+        failingStops,
+        failingRate: percentString(failingStops, performance.totalStops),
+        failingReadings: performance.totalFailingReadings,
+        latestFail: latestDetail?.date || "-",
+        lastCustomer: latestDetail?.customer || "-",
+        lastValue: "-",
+      };
+      const standardRows = standards.map((standard) => {
+        const summary = performance.standards.get(standard.id);
+        return {
+          id: `${group.id}-${standard.id}`,
+          standard: standard.rule,
+          failingStops: summary?.failingStops || 0,
+          failingRate: percentString(summary?.failingStops || 0, performance.totalStops),
+          failingReadings: summary?.failingReadings || 0,
+          latestFail: summary?.latestFail || "-",
+          lastCustomer: summary?.lastCustomer || "-",
+          lastValue: summary?.lastValue || "-",
+        };
+      });
+      const detailRows = [...performance.detailRows]
+        .sort((a, b) => b.sortTime - a.sortTime)
+        .map(({ sortTime, ...row }) => row);
+
+      return {
+        id: group.id,
+        name: group.name,
+        sortFailRate: performance.totalStops ? failingStops / performance.totalStops : 0,
+        sortFailingStops: failingStops,
+        summary: {
+          id: group.id,
+          user: group.name,
+          serviceStops: performance.totalStops,
+          failingStops,
+          userFailingRate: percentString(failingStops, performance.totalStops),
+          companyFailingShare: percentString(failingStops, totalCompanyFailingStops),
+          failingReadings: performance.totalFailingReadings,
+          latestFail: latestDetail?.date || "-",
+        },
+        metrics: {
+          "Service Stops": performance.totalStops,
+          "Not Good Standing": `${failingStops.toLocaleString()} (${percentString(failingStops, performance.totalStops)})`,
+          "Company Failing Share": percentString(failingStops, totalCompanyFailingStops),
+          "Failing Readings": performance.totalFailingReadings,
+        },
+        rows: mode === "summary" ? [anyStandardRow, ...standardRows] : detailRows,
+      };
+    })
+    .sort((a, b) => b.sortFailRate - a.sortFailRate || b.sortFailingStops - a.sortFailingStops || a.name.localeCompare(b.name))
+    .map(({ sortFailRate, sortFailingStops, ...group }) => group);
+
+  const worstStandard = [...overallStandardSummaries.values()]
+    .sort((a, b) => b.failingStops - a.failingStops || a.standard.localeCompare(b.standard))[0];
+  const userSummaryRows = resultGroups.map((group) => group.summary);
+  const standardSummaryRows = [...overallStandardSummaries.values()]
+    .sort((a, b) => b.failingStops - a.failingStops || a.standard.localeCompare(b.standard))
+    .map((summary) => ({
+      id: summary.id,
+      standard: summary.standard,
+      failingStops: summary.failingStops,
+      companyFailingRate: percentString(summary.failingStops, stopData.length),
+      failingReadings: summary.failingReadings,
+      latestFail: summary.latestFail || "-",
+      lastCustomer: summary.lastCustomer || "-",
+      lastValue: summary.lastValue || "-",
+    }));
+
+  return {
+    title: "Reading Performance Report",
+    stats: [
+      numberMetric("Service Stops", stopData.length),
+      numberMetric("Not Good Standing", overallFailingStopIds.size),
+      percentageMetric("Not Good Standing %", overallFailingStopIds.size, stopData.length),
+      numberMetric("Failing Readings", totalFailingReadings),
+      {
+        label: "Standards",
+        value: standards.length.toLocaleString(),
+        subtitle: worstStandard && worstStandard.failingStops > 0
+          ? `Highest: ${worstStandard.standard} (${percentString(worstStandard.failingStops, stopData.length)})`
+          : "No failing standards found",
+      },
+    ],
+    columns: mode === "summary"
+      ? [
+          { key: "standard", label: "Standard" },
+          { key: "failingStops", label: "Failing Stops", align: "right" },
+          { key: "failingRate", label: "% of Stops", align: "right" },
+          { key: "failingReadings", label: "Failing Readings", align: "right" },
+          { key: "latestFail", label: "Latest Fail" },
+          { key: "lastCustomer", label: "Last Customer" },
+          { key: "lastValue", label: "Last Value", align: "right" },
+        ]
+      : [
+          { key: "date", label: "Date" },
+          { key: "customer", label: "Customer" },
+          { key: "pool", label: "Pool" },
+          { key: "standard", label: "Standard" },
+          { key: "value", label: "Value", align: "right" },
+          { key: "rule", label: "Rule" },
+          { key: "serviceStop", label: "Service Stop" },
+          { key: "status", label: "Status" },
+        ],
+    summarySections: [
+      {
+        title: "User Summary",
+        columns: [
+          { key: "user", label: "User" },
+          { key: "serviceStops", label: "Service Stops", align: "right" },
+          { key: "failingStops", label: "Failing Stops", align: "right" },
+          { key: "userFailingRate", label: "% of User Stops", align: "right" },
+          { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
+          { key: "failingReadings", label: "Failing Readings", align: "right" },
+          { key: "latestFail", label: "Latest Fail" },
+        ],
+        rows: userSummaryRows,
+      },
+      {
+        title: "Standard Summary",
+        columns: [
+          { key: "standard", label: "Standard" },
+          { key: "failingStops", label: "Failing Stops", align: "right" },
+          { key: "companyFailingRate", label: "% of Company Stops", align: "right" },
+          { key: "failingReadings", label: "Failing Readings", align: "right" },
+          { key: "latestFail", label: "Latest Fail" },
+          { key: "lastCustomer", label: "Last Customer" },
+          { key: "lastValue", label: "Last Value", align: "right" },
+        ],
+        rows: standardSummaryRows,
+      },
+    ],
+    groups: resultGroups.map(({ summary, ...group }) => group),
+  };
+};
+
 const buildChemicalReport = ({ stopData, dosageTemplates, mode, groupBy }) => {
   const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
   const groups = new Map();
@@ -857,61 +1468,284 @@ const buildPurchaseReport = ({ purchases, databaseItemById, mode, groupBy }) => 
   };
 };
 
-const buildWasteReport = ({ stopData, purchases, databaseItemById, groupBy }) => {
+const buildWasteReport = ({ stopData, purchases, dosageTemplates, databaseItemById, mode, groupBy }) => {
+  const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
   const groups = new Map();
-  const chemicalPurchases = purchases.filter((item) => {
-    const category = purchaseCategory(item, databaseItemById).toLowerCase();
-    return category.includes("chemical") || String(item.name || "").toLowerCase().includes("chlorine") || String(item.name || "").toLowerCase().includes("acid");
-  });
-  let usedAmount = 0;
-  let chemicalSpend = 0;
+  const comparisonEntriesByItemId = new Map();
+  const snapshotEntriesByItemId = new Map();
+  let dosageLineCount = 0;
+  let linkedPurchaseLineCount = 0;
+  let linkedPurchaseSpendCents = 0;
+  let unmappedDosageCount = 0;
+  let unitWarningCount = 0;
 
-  stopData.forEach((stop) => {
-    const dosages = Array.isArray(stop.dosages) ? stop.dosages : [];
-    const group = ensureGroup(groups, groupKey(stop, groupBy));
-    dosages.forEach((dosage) => {
-      const amount = toNumber(dosage.amount);
-      usedAmount += amount;
-      addMetric(group, "usedAmount", amount);
-      const name = dosage.name || "Chemical";
-      const row = group.rows.find((item) => item.name === name);
-      if (row) {
-        row.usedAmount += amount;
-        row.uses += 1;
-      } else {
-        group.rows.push({ name, usedAmount: amount, uses: 1, chemicalSpendCents: 0 });
+  const addComparisonEntry = (entriesByItemId, itemIds, entry) => {
+    itemIds.forEach((itemId) => {
+      if (!entriesByItemId.has(itemId)) entriesByItemId.set(itemId, []);
+      const entries = entriesByItemId.get(itemId);
+      if (!entries.some((current) => current.rowKey === entry.rowKey)) {
+        entries.push(entry);
       }
+    });
+  };
+
+  dosageTemplates.forEach((template) => {
+    const linkedItemIds = dosageLinkedItemIds({}, template);
+    if (!linkedItemIds.length) return;
+
+    addComparisonEntry(comparisonEntriesByItemId, linkedItemIds, {
+      rowKey: template.id,
+      name: template.name || template.chemType || "Dosage",
+      unit: normalizeUnit(template.UOM || template.uom),
+      linkedItemIds,
     });
   });
 
-  chemicalPurchases.forEach((purchase) => {
-    const group = ensureGroup(groups, groupKey(purchase, groupBy));
-    const amount = purchaseTotalCents(purchase);
-    chemicalSpend += amount;
-    addMetric(group, "chemicalSpendCents", amount);
-    const name = purchase.name || "Chemical Purchase";
-    const row = group.rows.find((item) => item.name === name);
-    if (row) {
-      row.chemicalSpendCents += amount;
-    } else {
-      group.rows.push({ name, usedAmount: 0, uses: 0, chemicalSpendCents: amount });
+  const ensureWasteData = (group) => {
+    if (!group.wasteRows) group.wasteRows = new Map();
+    if (!group.wasteDetailRows) group.wasteDetailRows = [];
+    if (!group.wasteMetrics) {
+      group.wasteMetrics = {
+        dosageLines: 0,
+        purchaseLines: 0,
+        purchaseSpendCents: 0,
+        unmappedDosages: 0,
+        unitWarnings: 0,
+      };
     }
+    return group;
+  };
+
+  const ensureWasteRow = (group, entry, status = "") => {
+    ensureWasteData(group);
+    if (!group.wasteRows.has(entry.rowKey)) {
+      group.wasteRows.set(entry.rowKey, {
+        id: entry.rowKey,
+        name: entry.name,
+        unit: normalizeUnit(entry.unit),
+        linkedItemIds: new Set(),
+        linkedItemNames: new Set(),
+        uses: 0,
+        usedAmount: 0,
+        purchaseLines: 0,
+        purchasedAmount: 0,
+        purchaseSpendCents: 0,
+        unitWarnings: new Set(),
+        forcedStatus: status,
+      });
+    }
+
+    const row = group.wasteRows.get(entry.rowKey);
+    row.name = row.name || entry.name;
+    if (!row.unit && entry.unit) row.unit = normalizeUnit(entry.unit);
+    if (status && !row.forcedStatus) row.forcedStatus = status;
+    (entry.linkedItemIds || []).forEach((itemId) => {
+      row.linkedItemIds.add(itemId);
+      const databaseItem = databaseItemById.get(itemId);
+      row.linkedItemNames.add(databaseItem ? databaseItemDisplayName(databaseItem) : itemId);
+    });
+    return row;
+  };
+
+  const addAmountToRow = (row, field, amount, fromUnit) => {
+    const numericAmount = Number(amount);
+    if (!Number.isFinite(numericAmount)) return false;
+
+    const normalizedFromUnit = normalizeUnit(fromUnit);
+    if (!row.unit && normalizedFromUnit) row.unit = normalizedFromUnit;
+    const convertedAmount = convertAmount(numericAmount, normalizedFromUnit, row.unit);
+
+    if (convertedAmount === null) {
+      const warning = `${unitLabel(normalizedFromUnit) || "no unit"} to ${unitLabel(row.unit) || "no unit"}`;
+      row.unitWarnings.add(warning);
+      unitWarningCount += 1;
+      return false;
+    }
+
+    row[field] += convertedAmount;
+    return true;
+  };
+
+  const serializeWasteRow = (row) => {
+    const difference = row.purchasedAmount - row.usedAmount;
+    const purchasedVsUsedPercent = row.usedAmount > 0 ? percentString(row.purchasedAmount, row.usedAmount) : "N/A";
+    const statusParts = [];
+    if (row.forcedStatus) statusParts.push(row.forcedStatus);
+    if (!row.linkedItemIds.size) statusParts.push("No purchase item link");
+    if (row.usedAmount > 0 && row.purchasedAmount === 0) statusParts.push("No purchases");
+    if (row.purchasedAmount > 0 && row.usedAmount === 0) statusParts.push("No usage");
+    if (row.unitWarnings.size) statusParts.push("Unit review");
+    if (!statusParts.length) statusParts.push(difference >= 0 ? "Matched" : "Over used");
+
+    return {
+      id: row.id,
+      name: row.name,
+      linkedItems: row.linkedItemNames.size ? [...row.linkedItemNames].join(", ") : "Not linked",
+      usedAmount: row.usedAmount,
+      usedDisplay: formatQuantity(row.usedAmount, row.unit),
+      purchasedAmount: row.purchasedAmount,
+      purchasedDisplay: formatQuantity(row.purchasedAmount, row.unit),
+      purchasedVsUsedPercent,
+      difference,
+      differenceDisplay: formatQuantity(difference, row.unit),
+      purchaseSpendCents: row.purchaseSpendCents,
+      status: statusParts.join(" | "),
+    };
+  };
+
+  stopData.forEach((stop, stopIndex) => {
+    const dosages = Array.isArray(stop.dosages) ? stop.dosages : [];
+    const group = ensureWasteData(ensureGroup(groups, groupKey(stop, groupBy)));
+
+    dosages.forEach((dosage, dosageIndex) => {
+      const template = dosageTemplateFor(dosage, dosageTemplatesById);
+      const linkedItemIds = dosageLinkedItemIds(dosage, template);
+      const rowKey = template?.id || dosage.templateId || dosage.universalTemplateId || dosage.name || `dosage-${stopIndex}-${dosageIndex}`;
+      const entry = {
+        rowKey,
+        name: templateName(dosage, dosageTemplatesById, "Dosage"),
+        unit: normalizeUnit(dosage.UOM || dosage.uom || template?.UOM || template?.uom),
+        linkedItemIds,
+      };
+      const row = ensureWasteRow(group, entry);
+      const dosageAmount = toNumber(dosage.amount);
+
+      dosageLineCount += 1;
+      group.wasteMetrics.dosageLines += 1;
+      row.uses += 1;
+      addAmountToRow(row, "usedAmount", dosageAmount, entry.unit);
+
+      if (!linkedItemIds.length) {
+        unmappedDosageCount += 1;
+        group.wasteMetrics.unmappedDosages += 1;
+      } else {
+        addComparisonEntry(snapshotEntriesByItemId, linkedItemIds, entry);
+      }
+
+      group.wasteDetailRows.push({
+        id: `${stop.id || stop.serviceStopId || stopIndex}-${rowKey}-${dosageIndex}`,
+        sortTime: dateFromValue(stop.date)?.getTime() || 0,
+        date: shortDate(stop.date),
+        type: "Dosage",
+        name: entry.name,
+        quantity: formatQuantity(dosageAmount, entry.unit),
+        worker: stop.userName || stop.techName || stop.tech || stop.userId || "-",
+        customer: stop.customerName || stop.customerId || "-",
+        linkedItems: linkedItemIds.length
+          ? linkedItemIds.map((itemId) => databaseItemDisplayName(databaseItemById.get(itemId) || { id: itemId })).join(", ")
+          : "Not linked",
+        purchaseSpendCents: 0,
+        status: linkedItemIds.length ? "Usage" : "Needs purchase item link",
+      });
+    });
   });
+
+  purchases.forEach((purchase, purchaseIndex) => {
+    const databaseItem = purchaseDatabaseItem(purchase, databaseItemById);
+    const purchaseItemId = purchaseDatabaseItemId(purchase);
+    const templateEntries = [
+      ...(comparisonEntriesByItemId.get(purchaseItemId) || []),
+      ...(snapshotEntriesByItemId.get(purchaseItemId) || []),
+    ];
+    const uniqueEntries = [...new Map(templateEntries.map((entry) => [entry.rowKey, entry])).values()];
+    const purchaseQuantityInfo = purchaseQuantity(purchase, databaseItemById);
+    const spendCents = purchaseTotalCents(purchase);
+    const purchaseDate = itemDate(purchase, ["date", "createdAt", "dateCreated"]);
+
+    if (!uniqueEntries.length) {
+      return;
+    }
+
+    linkedPurchaseLineCount += 1;
+    linkedPurchaseSpendCents += spendCents;
+
+    uniqueEntries.forEach((entry) => {
+      const group = ensureWasteData(ensureGroup(groups, groupKey(purchase, groupBy)));
+      const row = ensureWasteRow(group, entry);
+      row.purchaseLines += 1;
+      row.purchaseSpendCents += spendCents;
+      addAmountToRow(row, "purchasedAmount", purchaseQuantityInfo.amount, purchaseQuantityInfo.unit);
+      group.wasteMetrics.purchaseLines += 1;
+      group.wasteMetrics.purchaseSpendCents += spendCents;
+
+      group.wasteDetailRows.push({
+        id: `${purchase.id || "purchase"}-${entry.rowKey}-${purchaseIndex}`,
+        sortTime: purchaseDate?.getTime() || 0,
+        date: shortDate(purchaseDate),
+        type: "Purchase",
+        name: entry.name,
+        quantity: formatQuantity(purchaseQuantityInfo.amount, purchaseQuantityInfo.unit),
+        worker: purchase.techName || purchase.userName || purchase.techId || "-",
+        customer: purchase.customerName || purchase.customerId || "-",
+        linkedItems: databaseItemDisplayName(databaseItem || { id: purchaseItemId }),
+        purchaseSpendCents: spendCents,
+        status: "Purchase",
+      });
+    });
+  });
+
+  const resultGroups = [...groups.values()]
+    .map((group) => {
+      const summaryRows = [...(group.wasteRows || new Map()).values()]
+        .map(serializeWasteRow)
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const detailRows = [...(group.wasteDetailRows || [])]
+        .sort((a, b) => b.sortTime - a.sortTime)
+        .map(({ sortTime, ...row }) => row);
+      const groupUnitWarnings = [...(group.wasteRows || new Map()).values()]
+        .reduce((total, row) => total + row.unitWarnings.size, 0);
+
+      return {
+        id: group.id,
+        name: group.name,
+        metrics: {
+          "Dosage Lines": group.wasteMetrics?.dosageLines || 0,
+          "Purchase Spend": moneyFromCents(group.wasteMetrics?.purchaseSpendCents || 0),
+          "Unmapped Dosages": group.wasteMetrics?.unmappedDosages || 0,
+          "Unit Warnings": groupUnitWarnings,
+        },
+        rows: mode === "detail" ? detailRows : summaryRows,
+      };
+    })
+    .filter((group) => group.rows.length);
 
   return {
     title: "Waste Report",
     stats: [
-      numberMetric("Used Amount", usedAmount.toFixed(2)),
-      moneyMetric("Chemical Spend", chemicalSpend),
-      numberMetric("Chemical Purchase Lines", chemicalPurchases.length),
+      numberMetric("Dosage Lines", dosageLineCount),
+      numberMetric("Linked Purchases", linkedPurchaseLineCount),
+      moneyMetric("Linked Purchase Spend", linkedPurchaseSpendCents),
+      numberMetric("Unmapped Dosages", unmappedDosageCount),
+      numberMetric("Unit Warnings", unitWarningCount),
     ],
-    columns: [
-      { key: "name", label: "Chemical" },
-      { key: "uses", label: "Uses", align: "right" },
-      { key: "usedAmount", label: "Used Amount", align: "right", render: (row) => row.usedAmount.toLocaleString() },
-      { key: "chemicalSpendCents", label: "Purchase Spend", align: "right", render: (row) => moneyFromCents(row.chemicalSpendCents) },
-    ],
-    groups: [...groups.values()],
+    columns: mode === "detail"
+      ? [
+          { key: "date", label: "Date" },
+          { key: "type", label: "Type" },
+          { key: "name", label: "Dosage" },
+          { key: "quantity", label: "Quantity", align: "right" },
+          { key: "worker", label: "User" },
+          { key: "customer", label: "Customer" },
+          { key: "linkedItems", label: "Linked Items" },
+          { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => row.purchaseSpendCents ? moneyFromCents(row.purchaseSpendCents) : "-" },
+          { key: "status", label: "Status" },
+        ]
+      : [
+          { key: "name", label: "Dosage" },
+          { key: "linkedItems", label: "Linked Purchase Items" },
+          { key: "usedDisplay", label: "Quantity Used", align: "right" },
+          { key: "purchasedDisplay", label: "Purchased", align: "right" },
+          { key: "purchasedVsUsedPercent", label: "Purchased / Used %", align: "right" },
+          { key: "differenceDisplay", label: "Remaining / Waste", align: "right" },
+          { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => moneyFromCents(row.purchaseSpendCents) },
+          { key: "status", label: "Status" },
+        ],
+    total: {
+      label: "Linked Chemical Spend",
+      value: moneyFromCents(linkedPurchaseSpendCents),
+      subtitle: `${linkedPurchaseLineCount.toLocaleString()} linked purchase(s)`,
+    },
+    groups: resultGroups,
   };
 };
 
@@ -1152,13 +1986,29 @@ const buildTaxReport = ({ purchases, jobs, groupBy }) => {
   };
 };
 
-const StatCard = ({ title, value, subtitle }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
-    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
-    <p className="mt-2 break-words text-xl font-bold text-slate-900 sm:text-2xl">{value}</p>
-    {subtitle ? <p className="mt-1 text-sm text-slate-500">{subtitle}</p> : null}
-  </div>
-);
+const ReportSummaryBar = ({ stats = [], total }) => {
+  const items = total ? [...stats, { ...total, emphasized: true }] : stats;
+  if (!items.length) return null;
+
+  return (
+    <div className="mt-3 flex gap-2 overflow-x-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className={`min-w-[150px] shrink-0 px-3 py-1.5 ${
+            item.emphasized
+              ? "rounded-md bg-slate-900 text-white"
+              : "border-r border-slate-200 last:border-r-0"
+          }`}
+        >
+          <p className={`text-[11px] font-semibold uppercase ${item.emphasized ? "text-slate-300" : "text-slate-500"}`}>{item.label}</p>
+          <p className={`mt-0.5 break-words text-sm font-bold leading-snug ${item.emphasized ? "text-white" : "text-slate-900"}`}>{item.value}</p>
+          {item.subtitle ? <p className={`mt-0.5 text-xs leading-snug ${item.emphasized ? "text-slate-300" : "text-slate-500"}`}>{item.subtitle}</p> : null}
+        </div>
+      ))}
+    </div>
+  );
+};
 
 const ReportCatalogCard = ({ report, selected, onSelect }) => (
   <button
@@ -1220,7 +2070,28 @@ const ReportTable = ({ columns, rows, footerRow }) => (
   </div>
 );
 
+const SummarySectionsView = ({ sections = [] }) => {
+  if (!sections.length) return null;
+
+  return (
+    <div className="grid gap-3">
+      {sections.map((section) => (
+        <div key={section.title} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">{section.title}</h3>
+          <ReportTable columns={section.columns || []} rows={section.rows || []} />
+        </div>
+      ))}
+    </div>
+  );
+};
+
 const GeneratedReportView = ({ data }) => {
+  const [collapsedGroupIds, setCollapsedGroupIds] = useState(new Set());
+
+  useEffect(() => {
+    setCollapsedGroupIds(new Set());
+  }, [data]);
+
   if (!data) {
     return (
       <div className="flex min-h-[420px] items-center justify-center rounded-lg border border-slate-200 bg-white p-6 text-center text-slate-500 shadow-sm xl:h-full xl:min-h-0">
@@ -1229,44 +2100,71 @@ const GeneratedReportView = ({ data }) => {
     );
   }
 
+  const groupIds = (data.groups || []).map((group) => group.id);
+  const allGroupsCollapsed = groupIds.length > 0 && groupIds.every((id) => collapsedGroupIds.has(id));
+  const toggleAllGroups = () => {
+    setCollapsedGroupIds(allGroupsCollapsed ? new Set() : new Set(groupIds));
+  };
+  const toggleGroup = (groupId) => {
+    setCollapsedGroupIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (nextIds.has(groupId)) {
+        nextIds.delete(groupId);
+      } else {
+        nextIds.add(groupId);
+      }
+      return nextIds;
+    });
+  };
+
   return (
-    <section className="flex min-h-[520px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm xl:h-full xl:min-h-0">
-      <div className="shrink-0 border-b border-slate-200 p-4">
+    <section className="flex min-h-[560px] flex-col rounded-lg border border-slate-200 bg-white shadow-sm xl:h-full xl:min-h-0">
+      <div className="shrink-0 border-b border-slate-200 p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-bold text-slate-900">{data.title || "Generated Report"}</h2>
           </div>
+          {groupIds.length ? (
+            <button
+              type="button"
+              onClick={toggleAllGroups}
+              className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400"
+            >
+              {allGroupsCollapsed ? "Expand All" : "Collapse All"}
+            </button>
+          ) : null}
         </div>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
-          {data.stats.map((stat) => (
-            <StatCard key={stat.label} title={stat.label} value={stat.value} subtitle={stat.subtitle} />
-          ))}
-        </div>
-
-        {data.total ? (
-          <div className="mt-4 rounded-lg border border-slate-300 bg-slate-900 p-4 text-white shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">{data.total.label}</p>
-            <p className="mt-1 text-2xl font-bold">{data.total.value}</p>
-            {data.total.subtitle ? <p className="mt-1 text-sm text-slate-300">{data.total.subtitle}</p> : null}
-          </div>
-        ) : null}
+        <ReportSummaryBar stats={data.stats || []} total={data.total} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <SummarySectionsView sections={data.summarySections || []} />
+
         {data.groups.length ? (
-          <div className="grid gap-4">
+          <div className={`${data.summarySections?.length ? "mt-4 " : ""}grid gap-3`}>
             {data.groups.map((group) => (
-              <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div>
-                  <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
-                  {Object.keys(group.metrics || {}).length ? (
-                    <p className="mt-1 text-sm text-slate-500">
-                      {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
-                    </p>
-                  ) : null}
+              <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-900">{group.name}</h3>
+                    {Object.keys(group.metrics || {}).length ? (
+                      <p className="mt-1 text-sm text-slate-500">
+                        {Object.entries(group.metrics).map(([key, value]) => `${key}: ${typeof value === "number" ? value.toLocaleString() : value}`).join(" | ")}
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.id)}
+                    className="rounded-md border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 transition hover:border-slate-400 hover:text-slate-900"
+                  >
+                    {collapsedGroupIds.has(group.id) ? "Expand" : "Collapse"}
+                  </button>
                 </div>
-                <ReportTable columns={data.columns} rows={group.rows} footerRow={group.footerRow} />
+                {!collapsedGroupIds.has(group.id) ? (
+                  <ReportTable columns={data.columns} rows={group.rows} footerRow={group.footerRow} />
+                ) : null}
               </div>
             ))}
           </div>
@@ -1346,10 +2244,9 @@ const Reports = () => {
     operator: "gt",
     threshold: "",
   });
-  const [dateRange, setDateRange] = useState({
-    start: format(startOfMonth(new Date()), "yyyy-MM-dd"),
-    end: format(endOfMonth(new Date()), "yyyy-MM-dd"),
-  });
+  const [readingPerformanceStandards, setReadingPerformanceStandards] = useState([]);
+  const [quickDateRange, setQuickDateRange] = useState("thisMonth");
+  const [dateRange, setDateRange] = useState(defaultDateRange);
   const [reportData, setReportData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [reportSearchDraft, setReportSearchDraft] = useState("");
@@ -1401,6 +2298,7 @@ const Reports = () => {
     if (!recentlySelectedCompany) {
       setAvailableReadingTemplates([]);
       setReadingHealthFilters({ templateId: "", operator: "gt", threshold: "" });
+      setReadingPerformanceStandards([]);
       return;
     }
 
@@ -1416,6 +2314,12 @@ const Reports = () => {
           const currentTemplateExists = templates.some((template) => readingTemplateKey(template) === currentFilters.templateId);
           return currentTemplateExists ? currentFilters : defaultReadingHealthFilterFor(templates[0]);
         });
+        setReadingPerformanceStandards((currentStandards) => {
+          if (!templates.length) return [];
+          const templateKeys = new Set(templates.map(readingTemplateKey));
+          const validCurrentStandards = currentStandards.filter((standard) => templateKeys.has(String(standard.templateId || "")));
+          return validCurrentStandards.length ? validCurrentStandards : defaultReadingPerformanceStandardsFor(templates);
+        });
       } catch (error) {
         console.error("Failed to load reading templates for reports:", error);
       }
@@ -1430,7 +2334,6 @@ const Reports = () => {
 
   const handleReportSelect = (value) => {
     setReportType(value);
-    setReportData(null);
   };
 
   const handleReportSearch = (event) => {
@@ -1443,10 +2346,17 @@ const Reports = () => {
     setReportSearchTerm("");
   };
 
+  const handleQuickDateRangeChange = (value) => {
+    setQuickDateRange(value);
+    const preset = dateRangePresets.find((item) => item.value === value);
+    if (preset?.getRange) {
+      setDateRange(preset.getRange());
+    }
+  };
+
   const handleReadingTemplateChange = (templateId) => {
     const nextTemplate = availableReadingTemplates.find((template) => readingTemplateKey(template) === templateId);
     setReadingHealthFilters(nextTemplate ? defaultReadingHealthFilterFor(nextTemplate) : { templateId, operator: "gt", threshold: "" });
-    setReportData(null);
   };
 
   const handleReadingHealthFilterChange = (field, value) => {
@@ -1454,11 +2364,47 @@ const Reports = () => {
       ...currentFilters,
       [field]: value,
     }));
-    setReportData(null);
+  };
+
+  const handleReadingPerformanceStandardChange = (standardId, field, value) => {
+    setReadingPerformanceStandards((currentStandards) =>
+      currentStandards.map((standard, index) => {
+        if (standard.id !== standardId) return standard;
+
+        if (field === "templateId") {
+          const nextTemplate = availableReadingTemplates.find((template) => readingTemplateKey(template) === value);
+          return withReadingPerformanceStandardId(
+            nextTemplate ? defaultReadingHealthFilterFor(nextTemplate) : { templateId: value, operator: "gt", threshold: "" },
+            index
+          );
+        }
+
+        return {
+          ...standard,
+          [field]: value,
+        };
+      })
+    );
+  };
+
+  const addReadingPerformanceStandard = () => {
+    setReadingPerformanceStandards((currentStandards) => {
+      const template = availableReadingTemplates[0] || {};
+      const nextStandard = withReadingPerformanceStandardId({
+        ...defaultReadingHealthFilterFor(template),
+        id: `manual-${Date.now()}-${currentStandards.length}`,
+      });
+      return [...currentStandards, nextStandard];
+    });
+  };
+
+  const removeReadingPerformanceStandard = (standardId) => {
+    setReadingPerformanceStandards((currentStandards) =>
+      currentStandards.filter((standard) => standard.id !== standardId)
+    );
   };
 
   const toggleCustomerTagFilter = (tag) => {
-    setReportData(null);
     setSelectedCustomerTags((currentTags) =>
       currentTags.includes(tag)
         ? currentTags.filter((currentTag) => currentTag !== tag)
@@ -1483,6 +2429,17 @@ const Reports = () => {
       }
       if (!Number.isFinite(parseReadingNumber(readingHealthFilters.threshold))) {
         toast.error("Enter a numeric reading threshold.");
+        return;
+      }
+    }
+
+    if (reportType === "readingPerformance") {
+      if (!availableReadingTemplates.length) {
+        toast.error("No reading templates found for this company.");
+        return;
+      }
+      if (!activeReadingPerformanceStandards(readingPerformanceStandards, availableReadingTemplates).length) {
+        toast.error("Add at least one good standing standard.");
         return;
       }
     }
@@ -1518,7 +2475,7 @@ const Reports = () => {
       const needsPayroll = ["pnl", "job", "users"].includes(reportType);
       const needsUsers = reportType === "users";
       const needsFleet = reportType === "vehicle";
-      const needsBodiesOfWater = reportType === "readingHealth";
+      const needsBodiesOfWater = ["readingHealth", "readingPerformance"].includes(reportType);
 
       const [
         purchasesRaw,
@@ -1570,6 +2527,7 @@ const Reports = () => {
         readingTemplates,
         dosageTemplates,
         readingHealthFilters,
+        readingPerformanceStandards,
         bodiesOfWater,
         customersById,
         purchases,
@@ -1587,6 +2545,7 @@ const Reports = () => {
       const builders = {
         readings: buildReadingReport,
         readingHealth: buildReadingHealthReport,
+        readingPerformance: buildReadingPerformanceReport,
         chemicals: buildChemicalReport,
         purchases: buildPurchaseReport,
         waste: buildWasteReport,
@@ -1602,7 +2561,7 @@ const Reports = () => {
         ...nextReport,
         stats: [
           ...(nextReport.stats || []),
-          { label: "Date Range", value: `${dateRange.start} - ${dateRange.end}` },
+          { label: "Date Range", value: displayDateRange(dateRange) },
           { label: "Customer Tags", value: selectedCustomerTags.length ? selectedCustomerTags.join(", ") : roleTagAccess.length ? roleTagAccess.join(", ") : "All" },
         ],
       });
@@ -1616,14 +2575,14 @@ const Reports = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-3 sm:p-4 lg:p-5">
-      <div className="mx-auto w-full max-w-[1800px]">
-        <header className="mb-4">
-          <h1 className="text-3xl font-bold text-slate-900">Reports</h1>
-          <p className="mt-1 text-slate-600">Operations and finance reporting.</p>
+    <div className="min-h-screen bg-slate-50 px-2 py-4 sm:px-3 lg:px-4">
+      <div className="w-full">
+        <header className="mb-3">
+          <h1 className="text-2xl font-bold text-slate-900">Reports</h1>
+          <p className="mt-1 text-sm text-slate-600">Operations and finance reporting.</p>
         </header>
 
-        <div className="grid gap-4 xl:h-[calc(100vh-112px)] xl:grid-cols-[minmax(0,1fr)_340px] xl:overflow-hidden">
+        <div className="grid gap-4 xl:h-[calc(100vh-100px)] xl:grid-cols-[minmax(0,1fr)_340px] xl:overflow-hidden">
           <div className="grid min-h-0 gap-4 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm xl:h-full xl:overflow-y-auto">
               <div>
@@ -1637,7 +2596,6 @@ const Reports = () => {
                     value={mode}
                     onChange={(event) => {
                       setMode(event.target.value);
-                      setReportData(null);
                     }}
                     className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
                   >
@@ -1646,14 +2604,13 @@ const Reports = () => {
                   </select>
                 </div>
 
-                {reportType !== "readingHealth" ? (
+                {!fixedGroupingReportTypes.has(reportType) ? (
                   <div>
                     <label className="block text-sm font-semibold text-slate-700">Group By</label>
                     <select
                       value={groupBy}
                       onChange={(event) => {
                         setGroupBy(event.target.value);
-                        setReportData(null);
                       }}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
                     >
@@ -1710,6 +2667,89 @@ const Reports = () => {
                   </div>
                 ) : null}
 
+                {reportType === "readingPerformance" ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="block text-sm font-semibold text-slate-700">Good Standing Standards</label>
+                      <button
+                        type="button"
+                        onClick={addReadingPerformanceStandard}
+                        disabled={!availableReadingTemplates.length}
+                        className="inline-flex items-center justify-center gap-1 rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                        title="Add standard"
+                      >
+                        <PlusIcon className="h-4 w-4" />
+                        Add
+                      </button>
+                    </div>
+
+                    <div className="mt-3 space-y-3">
+                      {readingPerformanceStandards.length ? (
+                        readingPerformanceStandards.map((standard, index) => (
+                          <div key={standard.id} className="rounded-md border border-slate-200 bg-white p-3">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Standard {index + 1}</p>
+                              <button
+                                type="button"
+                                onClick={() => removeReadingPerformanceStandard(standard.id)}
+                                disabled={readingPerformanceStandards.length <= 1}
+                                className="rounded-md border border-slate-200 p-1 text-slate-500 transition hover:border-red-200 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                title="Remove standard"
+                              >
+                                <XMarkIcon className="h-4 w-4" />
+                              </button>
+                            </div>
+
+                            <label className="mt-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Reading</label>
+                            <select
+                              value={standard.templateId || ""}
+                              onChange={(event) => handleReadingPerformanceStandardChange(standard.id, "templateId", event.target.value)}
+                              className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                            >
+                              {availableReadingTemplates.length ? (
+                                availableReadingTemplates.map((template) => (
+                                  <option key={readingTemplateKey(template)} value={readingTemplateKey(template)}>
+                                    {readingTemplateLabel(template)}
+                                  </option>
+                                ))
+                              ) : (
+                                <option value="">No readings found</option>
+                              )}
+                            </select>
+
+                            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_96px] gap-2">
+                              <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Rule</label>
+                                <select
+                                  value={standard.operator || "gt"}
+                                  onChange={(event) => handleReadingPerformanceStandardChange(standard.id, "operator", event.target.value)}
+                                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                                >
+                                  {readingOperatorOptions.map((option) => (
+                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div>
+                                <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Value</label>
+                                <input
+                                  type="number"
+                                  step="any"
+                                  value={standard.threshold ?? ""}
+                                  onChange={(event) => handleReadingPerformanceStandardChange(standard.id, "threshold", event.target.value)}
+                                  className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <p className="text-sm text-slate-500">No reading templates found.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div>
                   <div className="flex items-center justify-between gap-3">
                     <label className="block text-sm font-semibold text-slate-700">Customer Tags</label>
@@ -1718,7 +2758,6 @@ const Reports = () => {
                         type="button"
                         onClick={() => {
                           setSelectedCustomerTags([]);
-                          setReportData(null);
                         }}
                         className="text-xs font-semibold text-slate-500 hover:text-slate-800"
                       >
@@ -1758,13 +2797,22 @@ const Reports = () => {
 
                 <div>
                   <label className="block text-sm font-semibold text-slate-700">Date Range</label>
-                  <div className="mt-1 grid grid-cols-2 gap-2">
+                  <select
+                    value={quickDateRange}
+                    onChange={(event) => handleQuickDateRangeChange(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                  >
+                    {dateRangePresets.map((preset) => (
+                      <option key={preset.value} value={preset.value}>{preset.label}</option>
+                    ))}
+                  </select>
+                  <div className="mt-2 grid grid-cols-2 gap-2">
                     <input
                       type="date"
                       value={dateRange.start}
                       onChange={(event) => {
+                        setQuickDateRange("custom");
                         setDateRange((prev) => ({ ...prev, start: event.target.value }));
-                        setReportData(null);
                       }}
                       className="rounded-md border border-slate-300 p-2 text-sm"
                     />
@@ -1772,8 +2820,8 @@ const Reports = () => {
                       type="date"
                       value={dateRange.end}
                       onChange={(event) => {
+                        setQuickDateRange("custom");
                         setDateRange((prev) => ({ ...prev, end: event.target.value }));
-                        setReportData(null);
                       }}
                       className="rounded-md border border-slate-300 p-2 text-sm"
                     />

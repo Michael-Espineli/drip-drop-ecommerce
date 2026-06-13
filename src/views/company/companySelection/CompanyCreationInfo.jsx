@@ -1,8 +1,18 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircleIcon } from '@heroicons/react/24/solid';
+import useFeatureFlagDocument from '../../../hooks/useFeatureFlagDocument';
+import { APP_LIVE_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
+import AppLaunchCountdown from '../../components/AppLaunchCountdown';
 
 const CompanyCreationInfo = () => {
+    const {
+        loaded: appLaunchLoaded,
+        enabled: appIsLive,
+        releaseDate: appReleaseDate,
+    } = useFeatureFlagDocument(APP_LIVE_FEATURE_FLAG_ID);
+    const companyCreationOpen = appLaunchLoaded && appIsLive;
+
     return (
         <div className='w-full min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="max-w-4xl mx-auto bg-white rounded-lg shadow-lg p-8">
@@ -31,12 +41,23 @@ const CompanyCreationInfo = () => {
                 </div>
 
                 <div className="text-center mt-12">
-                    <Link to='/company/create-new' 
-                        className="inline-block bg-blue-600 text-white px-10 py-4 rounded-lg font-semibold text-lg hover:bg-blue-700 transition-transform transform hover:scale-105 shadow-lg"
-                    >
-                        Get Started
-                    </Link>
-                    <p className="mt-4 text-sm text-gray-600">All new companies start on the Free plan. You can upgrade at any time.</p>
+                    {companyCreationOpen ? (
+                        <>
+                            <Link to='/company/create-new' 
+                                className="inline-block bg-blue-600 text-white px-10 py-4 rounded-lg font-semibold text-lg hover:bg-blue-700 transition-transform transform hover:scale-105 shadow-lg"
+                            >
+                                Get Started
+                            </Link>
+                            <p className="mt-4 text-sm text-gray-600">All new companies start on the Free plan. You can upgrade at any time.</p>
+                        </>
+                    ) : (
+                        <AppLaunchCountdown
+                            loading={!appLaunchLoaded}
+                            releaseDate={appReleaseDate}
+                            title="Company creation opens soon"
+                            body="New company setup is paused until Drip Drop goes live."
+                        />
+                    )}
                 </div>
             </div>
         </div>

@@ -11,6 +11,10 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountType == "Admin";
     }
 
+    function appLaunchEnabled() {
+      return get(/databases/$(database)/documents/featureFlags/feature_flag_000).data.enabled == true;
+    }
+
     function isSelf(userId) {
       return signedIn() && request.auth.uid == userId;
     }
@@ -200,6 +204,7 @@ service cloud.firestore {
     match /companies/{companyId} {
       allow read: if signedIn();
       allow create: if signedIn()
+        && appLaunchEnabled()
         && request.resource.data.ownerId == request.auth.uid;
       allow update: if isCompanyAdmin(companyId);
       allow delete: if false;
@@ -387,6 +392,12 @@ service cloud.firestore {
     match /universal/{document=**} {
       allow read: if signedIn();
       allow write: if false;
+    }
+
+    match /featureFlags/{flagId} {
+      allow get: if flagId == "feature_flag_000" || signedIn();
+      allow list: if signedIn();
+      allow create, update, delete: if isDripDropAdmin();
     }
 
     match /productFeedback/{feedbackId} {

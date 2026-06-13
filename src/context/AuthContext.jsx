@@ -4,12 +4,33 @@ import { db } from "../utils/config";
 import { getDoc, doc, getDocs, where, query, collection, onSnapshot } from "firebase/firestore";
 import { roleHasCompanyPermission } from "../utils/companyPermissionAccess";
 import { normalizeEmail } from "../utils/email";
+import { isCompanyAccessInactive } from "../utils/invites";
 
 export const Context = createContext();
 
 const getStripeCustomerId = (companyData = {}) => (
     companyData.stripeCustomerId || companyData.stripeId || null
 );
+
+const getCompanyDisplayName = (companyData = {}) => (
+    String(companyData.name || companyData.companyName || companyData.displayName || companyData.businessName || "").trim() || null
+);
+
+const hydrateInviteCompanyName = async (invite) => {
+    const companyId = String(invite?.companyId || invite?.linkedCompanyId || "").trim();
+    if (!companyId) return invite;
+
+    try {
+        const companyDoc = await getDoc(doc(db, "companies", companyId));
+        if (!companyDoc.exists()) return invite;
+
+        const companyName = getCompanyDisplayName(companyDoc.data());
+        return companyName ? { ...invite, companyName } : invite;
+    } catch (error) {
+        console.error("Error loading invite company context:", error);
+        return invite;
+    }
+};
 
 export function AuthContext({ children }) {
     // User Information
@@ -61,7 +82,9 @@ export function AuthContext({ children }) {
                     const inviteSnapshot = await getDocs(q);
                     if (!inviteSnapshot.empty) {
                         const invite = { id: inviteSnapshot.docs[0].id, ...inviteSnapshot.docs[0].data() };
-                        setPendingInvite(invite);
+                        setPendingInvite(await hydrateInviteCompanyName(invite));
+                    } else {
+                        setPendingInvite(null);
                     }
                 } catch (error) {
                     console.error("Error checking for pending invites:", error);
@@ -88,7 +111,7 @@ export function AuthContext({ children }) {
                                 const companyDoc = await getDoc(companyDocRef);
                                 if (companyDoc.exists()) {
                                     const companyData = companyDoc.data();
-                                    setRecentlySelectedCompanyName(companyData.name);
+                                    setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
                                     setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
                                     setStripeId(getStripeCustomerId(companyData));
                                 }
@@ -177,6 +200,15 @@ export function AuthContext({ children }) {
             setCompanyRoleLoaded(false);
         };
 
+        const clearSelectedCompanyAccess = () => {
+            setRecentlySelectedCompany(null);
+            setRecentlySelectedCompanyName(null);
+            setStripeConnectedAccountId(null);
+            setStripeId(null);
+            setCompanyUserAccess(null);
+            setCompanyRole(null);
+        };
+
         const loadSelectedCompanyContext = async () => {
             if (!user || accountType !== "Company" || !recentlySelectedCompany) {
                 resetCompanyContext();
@@ -199,7 +231,7 @@ export function AuthContext({ children }) {
 
                 if (companyDoc.exists()) {
                     const companyData = companyDoc.data();
-                    setRecentlySelectedCompanyName(companyData.name || null);
+                    setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
                     setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
                     setStripeId(getStripeCustomerId(companyData));
                 } else {
@@ -209,12 +241,16 @@ export function AuthContext({ children }) {
                 }
 
                 if (!userAccessDoc.exists()) {
-                    setCompanyUserAccess(null);
-                    setCompanyRole(null);
+                    clearSelectedCompanyAccess();
                     return;
                 }
 
                 const access = { id: userAccessDoc.id, ...userAccessDoc.data() };
+                if (isCompanyAccessInactive(access)) {
+                    clearSelectedCompanyAccess();
+                    return;
+                }
+
                 setCompanyUserAccess(access);
 
                 if (!access.roleId) {

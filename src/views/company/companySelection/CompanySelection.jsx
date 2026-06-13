@@ -1,26 +1,44 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Context } from "../../../context/AuthContext";
 import { useNavigate } from 'react-router-dom';
+import { getAuth, sendEmailVerification } from "firebase/auth";
 import { query, collection, getDocs, updateDoc, doc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { BuildingOffice2Icon, ArrowRightIcon, ArrowLeftOnRectangleIcon, PlusIcon } from '@heroicons/react/24/outline';
+import { isCompanyAccessInactive } from '../../../utils/invites';
+import { CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
+import toast from 'react-hot-toast';
 
 export default function CompanySelection() {
     const navigate = useNavigate();
-    const { user, setRecentlySelectedCompany, setRecentlySelectedCompanyName } = useContext(Context);
+    const {
+        user,
+        setRecentlySelectedCompany,
+        setRecentlySelectedCompanyName,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const [companyList, setCompanyList] = useState([]);
+    const [emailVerified, setEmailVerified] = useState(Boolean(user?.emailVerified));
+    const [verificationLoading, setVerificationLoading] = useState(false);
+    const [blockedCompany, setBlockedCompany] = useState(null);
+
+    const confirmEmailOnInviteEnabled = featureFlagsLoaded && isFeatureEnabled(CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID);
 
     useEffect(() => {
         if (!user) return;
+        setEmailVerified(Boolean(user.emailVerified));
 
         const fetchCompanies = async () => {
             try {
                 const q = query(collection(db, 'users', user.uid, "userAccess"));
                 const querySnapshot = await getDocs(q);
-                const companies = querySnapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data()
-                }));
+                const companies = querySnapshot.docs
+                    .map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }))
+                    .filter((companyAccess) => !isCompanyAccessInactive(companyAccess));
                 setCompanyList(companies);
             } catch (error) {
                 console.error("Error fetching companies: ", error);
@@ -30,8 +48,79 @@ export default function CompanySelection() {
         fetchCompanies();
     }, [user]);
 
+    const reloadCurrentUser = async () => {
+        const authUser = getAuth().currentUser || user;
+        if (!authUser) return null;
+
+        await authUser.reload();
+        const refreshedUser = getAuth().currentUser || authUser;
+        setEmailVerified(Boolean(refreshedUser.emailVerified));
+        return refreshedUser;
+    };
+
+    const sendVerificationEmail = async () => {
+        const authUser = getAuth().currentUser || user;
+
+        if (!authUser) {
+            toast.error("Please sign in again to verify your email.");
+            return;
+        }
+
+        setVerificationLoading(true);
+        try {
+            await sendEmailVerification(authUser);
+            toast.success("Verification email sent. Check your inbox.");
+        } catch (error) {
+            console.error("Error sending verification email:", error);
+            toast.error("Could not send verification email.");
+        } finally {
+            setVerificationLoading(false);
+        }
+    };
+
+    const checkEmailVerification = async () => {
+        setVerificationLoading(true);
+        try {
+            const refreshedUser = await reloadCurrentUser();
+
+            if (refreshedUser?.emailVerified) {
+                toast.success("Email verified.");
+                if (blockedCompany) {
+                    const nextCompany = blockedCompany;
+                    setBlockedCompany(null);
+                    await selectCompany(nextCompany);
+                }
+            } else {
+                toast.error("Email is not verified yet.");
+            }
+        } catch (error) {
+            console.error("Error checking email verification:", error);
+            toast.error("Could not check email verification.");
+        } finally {
+            setVerificationLoading(false);
+        }
+    };
+
+    const requireVerifiedEmail = async (company) => {
+        if (!featureFlagsLoaded) {
+            toast.error("Access settings are still loading. Try again in a moment.");
+            return true;
+        }
+
+        if (!confirmEmailOnInviteEnabled) return false;
+
+        const refreshedUser = await reloadCurrentUser();
+        if (refreshedUser?.emailVerified) return false;
+
+        setBlockedCompany(company);
+        toast.error("Verify your email before accessing this company.");
+        return true;
+    };
+
     const selectCompany = async (company) => {
         try {
+            if (await requireVerifiedEmail(company)) return;
+
             setRecentlySelectedCompanyName(company.companyName);
             setRecentlySelectedCompany(company.companyId);
 
@@ -71,6 +160,33 @@ export default function CompanySelection() {
                 </div>
 
                 <div className="bg-white shadow-lg rounded-lg p-8">
+                    {confirmEmailOnInviteEnabled && !emailVerified ? (
+                        <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-amber-900">
+                            <p className="font-semibold">Verify your email to access a company</p>
+                            <p className="mt-1 text-sm">
+                                We need to confirm {user?.email || "your signup email"} before opening a company dashboard.
+                            </p>
+                            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                                <button
+                                    type="button"
+                                    onClick={sendVerificationEmail}
+                                    disabled={verificationLoading}
+                                    className="rounded-md bg-amber-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-amber-700 disabled:opacity-60"
+                                >
+                                    Send Verification Email
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={checkEmailVerification}
+                                    disabled={verificationLoading}
+                                    className="rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-900 transition hover:bg-amber-100 disabled:opacity-60"
+                                >
+                                    I Verified, Check Again
+                                </button>
+                            </div>
+                        </div>
+                    ) : null}
+
                     <div className="space-y-4">
                         {companyList.length > 0 ? (
                             companyList.map(company => (

@@ -995,12 +995,18 @@ const PurchaseDetailView = () => {
                                         )}
                                     </div>
 
-                                    <Link
-                                        to={`/company/items/detail/${purchase.itemId}`}
-                                        className="inline-flex items-center py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
-                                    >
-                                        View Item
-                                    </Link>
+                                    {purchase.itemId ? (
+                                        <Link
+                                            to={`/company/items/detail/${purchase.itemId}`}
+                                            className="inline-flex items-center py-2 px-4 bg-gray-100 text-gray-800 font-semibold rounded-lg hover:bg-gray-200 transition"
+                                        >
+                                            View Database Item
+                                        </Link>
+                                    ) : (
+                                        <span className="inline-flex items-center rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-semibold text-gray-500">
+                                            No Database Item
+                                        </span>
+                                    )}
                                 </div>
 
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
@@ -1457,6 +1463,16 @@ const PurchaseDetailView = () => {
                                     <span className="text-right">
                                         {purchase.name || "—"}
                                     </span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span>Database Item:</span>
+                                    {purchase.itemId ? (
+                                        <Link to={`/company/items/detail/${purchase.itemId}`} className="text-right font-semibold text-blue-600 hover:underline">
+                                            Open
+                                        </Link>
+                                    ) : (
+                                        <span>—</span>
+                                    )}
                                 </div>
                                 <div className="flex justify-between">
                                     <span>Vendor:</span>

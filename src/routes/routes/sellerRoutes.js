@@ -338,6 +338,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/serviceStops/createNew',
+        element: <CreateNewServiceStop />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/serviceStops/createNew/:jobId',
         element: <CreateNewServiceStop />,
         ability: ['Admin', 'Seller'],

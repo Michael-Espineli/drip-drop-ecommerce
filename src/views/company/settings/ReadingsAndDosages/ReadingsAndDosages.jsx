@@ -1,11 +1,13 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { v4 as uuidv4 } from 'uuid';
-import { FaArrowLeft, FaPencilAlt, FaPlus, FaRegListAlt, FaSave, FaSearch, FaTimes, FaTrashAlt } from 'react-icons/fa';
+import { Link, useSearchParams } from 'react-router-dom';
+import { FaArrowLeft, FaExternalLinkAlt, FaPencilAlt, FaPlus, FaRegListAlt, FaSave, FaSearch, FaTimes, FaTrashAlt } from 'react-icons/fa';
 import { db } from '../../../../utils/config';
 import {
     collection,
     deleteDoc,
     doc,
+    getDocs,
     onSnapshot,
     orderBy,
     query,
@@ -33,6 +35,7 @@ const emptyDosageForm = {
     UOM: '',
     rate: '',
     linkedItemId: '',
+    linkedItemIds: [],
     strength: '',
     editable: true,
     chemType: '',
@@ -73,6 +76,41 @@ const sortAmountList = (amounts = []) => {
     });
 };
 
+const normalizeLinkedItemIds = (...values) =>
+    Array.from(new Set(
+        values.flatMap((value) => {
+            if (Array.isArray(value)) return value;
+            return String(value || '')
+                .split(',')
+                .map((item) => item.trim())
+                .filter(Boolean);
+        })
+    ));
+
+const isChemicalDatabaseItem = (item = {}) =>
+    [item.category, item.subCategory, item.subcategory, item.type]
+        .some((value) => String(value || '').trim().toLowerCase().includes('chemical'));
+
+const formatCurrency = (amount) =>
+    new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+    }).format(normalizeNumber(amount));
+
+const getDatabaseItemUnitCostCents = (item = {}) => {
+    const centsValue = [item.rate, item.rateCents, item.unitCostCents, item.costCents]
+        .map((value) => normalizeNumber(value, null))
+        .find((value) => Number.isFinite(value) && value > 0);
+
+    if (Number.isFinite(centsValue)) return centsValue;
+
+    const dollarValue = [item.unitCost, item.cost]
+        .map((value) => normalizeNumber(value, null))
+        .find((value) => Number.isFinite(value) && value > 0);
+
+    return Number.isFinite(dollarValue) ? Math.round(dollarValue * 100) : 0;
+};
+
 const sortTemplates = (templates = []) =>
     [...templates].sort((first, second) => {
         const firstOrder = normalizeNumber(first.order, 9999);
@@ -102,6 +140,7 @@ const formFromTemplate = (type, template = {}) => {
         UOM: template.UOM || '',
         rate: template.rate || '',
         linkedItemId: template.linkedItemId || '',
+        linkedItemIds: normalizeLinkedItemIds(template.linkedItemIds, template.linkedItemId, template.linkedItem),
         strength: template.strength ?? '',
         editable: template.editable !== false,
         chemType: template.chemType || '',
@@ -130,10 +169,14 @@ const payloadFromForm = (type, id, form) => {
         };
     }
 
+    const linkedItemIds = normalizeLinkedItemIds(form.linkedItemIds, form.linkedItemId);
+
     return {
         ...basePayload,
         rate: String(form.rate || '').trim(),
-        linkedItemId: String(form.linkedItemId || '').trim(),
+        linkedItem: '',
+        linkedItemId: linkedItemIds[0] || '',
+        linkedItemIds,
         strength: normalizeNumber(form.strength),
     };
 };
@@ -164,10 +207,14 @@ const payloadFromUniversalTemplate = (type, id, template, companyDosages = []) =
         };
     }
 
+    const linkedItemIds = normalizeLinkedItemIds(template.linkedItemIds, template.linkedItemId, template.linkedItem);
+
     return {
         ...basePayload,
         rate: String(template.rate || ''),
-        linkedItemId: template.linkedItemId || '',
+        linkedItem: '',
+        linkedItemId: linkedItemIds[0] || '',
+        linkedItemIds,
         strength: normalizeNumber(template.strength),
     };
 };
@@ -205,14 +252,24 @@ const SelectInput = (props) => (
 
 const ReadingsAndDosages = () => {
     const { recentlySelectedCompany } = useContext(Context);
-    const [activeTab, setActiveTab] = useState('Readings');
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tabParam = searchParams.get('tab');
+    const queryTab = tabParam === 'Dosages' || tabParam === 'Readings' ? tabParam : null;
+    const queryTemplateId = searchParams.get('template') || '';
+
+    const [activeTab, setActiveTab] = useState(queryTab || 'Readings');
     const [readings, setReadings] = useState([]);
     const [dosages, setDosages] = useState([]);
+    const [databaseItems, setDatabaseItems] = useState([]);
     const [universalReadings, setUniversalReadings] = useState([]);
     const [universalDosages, setUniversalDosages] = useState([]);
     const [selectedTemplateId, setSelectedTemplateId] = useState(null);
     const [mode, setMode] = useState('list');
     const [searchTerm, setSearchTerm] = useState('');
+    const [databaseItemSearchTerm, setDatabaseItemSearchTerm] = useState('');
+    const [databaseItemsLoaded, setDatabaseItemsLoaded] = useState(false);
+    const [databaseItemsLoading, setDatabaseItemsLoading] = useState(false);
+    const [databaseItemPickerOpen, setDatabaseItemPickerOpen] = useState(false);
     const [universalSearchTerm, setUniversalSearchTerm] = useState('');
     const [form, setForm] = useState(emptyReadingForm);
     const [amountInput, setAmountInput] = useState('');
@@ -222,6 +279,8 @@ const ReadingsAndDosages = () => {
         if (!recentlySelectedCompany) {
             setReadings([]);
             setDosages([]);
+            setDatabaseItems([]);
+            setDatabaseItemsLoaded(false);
             setLoading(false);
             return undefined;
         }
@@ -229,6 +288,8 @@ const ReadingsAndDosages = () => {
         setLoading(true);
         const readingsRef = collection(db, 'companies', recentlySelectedCompany, 'settings', 'readings', 'readings');
         const dosagesRef = collection(db, 'companies', recentlySelectedCompany, 'settings', 'dosages', 'dosages');
+        setDatabaseItems([]);
+        setDatabaseItemsLoaded(false);
 
         const unsubscribeReadings = onSnapshot(
             readingsRef,
@@ -302,6 +363,8 @@ const ReadingsAndDosages = () => {
         setMode('list');
         setSelectedTemplateId(null);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setUniversalSearchTerm('');
         setForm(formForType(activeTab));
     }, [activeTab]);
@@ -345,8 +408,171 @@ const ReadingsAndDosages = () => {
         });
     }, [activeTab, activeTemplateUniversalIds, activeUniversalTemplates, universalSearchTerm]);
 
+    useEffect(() => {
+        if (queryTab && queryTab !== activeTab) {
+            setActiveTab(queryTab);
+        }
+    }, [activeTab, queryTab]);
+
+    useEffect(() => {
+        if (!queryTemplateId) return;
+
+        const targetTemplate = activeTemplates.find((template) =>
+            template.id === queryTemplateId || template[templateIdKeyFor(activeTab)] === queryTemplateId
+        );
+
+        if (!targetTemplate) return;
+        if (selectedTemplateId === targetTemplate.id && mode === 'detail') return;
+
+        setSelectedTemplateId(targetTemplate.id);
+        setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
+        setForm(formFromTemplate(activeTab, targetTemplate));
+        setMode('detail');
+    }, [activeTab, activeTemplates, mode, queryTemplateId, selectedTemplateId]);
+
+    const databaseItemById = useMemo(
+        () => new Map(databaseItems.map((item) => [item.id, item])),
+        [databaseItems]
+    );
+
+    const selectedLinkedItemIds = normalizeLinkedItemIds(form.linkedItemIds, form.linkedItemId);
+    const selectedTemplateLinkedItemIds = useMemo(
+        () => activeTab === 'Dosages' && selectedTemplate
+            ? normalizeLinkedItemIds(selectedTemplate.linkedItemIds, selectedTemplate.linkedItemId, selectedTemplate.linkedItem)
+            : [],
+        [activeTab, selectedTemplate]
+    );
+
+    const chemicalDatabaseItems = useMemo(
+        () => databaseItems.filter(isChemicalDatabaseItem),
+        [databaseItems]
+    );
+
+    const filteredDatabaseItems = useMemo(() => {
+        const term = databaseItemSearchTerm.trim().toLowerCase();
+        if (!term) return chemicalDatabaseItems.slice(0, 80);
+
+        return chemicalDatabaseItems.filter((item) =>
+            [item.name, item.sku, item.category, item.subCategory, item.UOM, item.uom, item.size, item.id]
+                .join(' ')
+                .toLowerCase()
+                .includes(term)
+        ).slice(0, 80);
+    }, [chemicalDatabaseItems, databaseItemSearchTerm]);
+
+    const databaseItemLabel = (item = {}) =>
+        [
+            item.name || item.id || 'Database item',
+            item.size ? `${item.size}` : '',
+            item.UOM || item.uom || '',
+            item.sku ? `SKU ${item.sku}` : '',
+        ].filter(Boolean).join(' | ');
+
     const updateForm = (field, value) => {
         setForm((current) => ({ ...current, [field]: value }));
+    };
+
+    const updateLinkedItemIds = (nextIds) => {
+        const normalizedIds = normalizeLinkedItemIds(nextIds);
+        setForm((current) => ({
+            ...current,
+            linkedItemId: normalizedIds[0] || '',
+            linkedItemIds: normalizedIds,
+        }));
+    };
+
+    const toggleLinkedItemId = (itemId) => {
+        const normalizedIds = normalizeLinkedItemIds(selectedLinkedItemIds);
+        updateLinkedItemIds(
+            normalizedIds.includes(itemId)
+                ? normalizedIds.filter((id) => id !== itemId)
+                : [...normalizedIds, itemId]
+        );
+    };
+
+    const updateRouteForTab = (tab, templateId = '') => {
+        const nextParams = { tab };
+        if (templateId) nextParams.template = templateId;
+        setSearchParams(nextParams);
+    };
+
+    const changeActiveTab = (tab) => {
+        updateRouteForTab(tab);
+        setActiveTab(tab);
+    };
+
+    const loadDatabaseItems = useCallback(async () => {
+        if (!recentlySelectedCompany || databaseItemsLoaded || databaseItemsLoading) return;
+
+        setDatabaseItemsLoading(true);
+        try {
+            const snapshot = await getDocs(query(
+                collection(db, 'companies', recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'),
+                orderBy('name')
+            ));
+            setDatabaseItems(
+                snapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+            );
+            setDatabaseItemsLoaded(true);
+        } catch (error) {
+            console.error('Could not fetch database items:', error);
+            toast.error('Could not load database items.');
+        } finally {
+            setDatabaseItemsLoading(false);
+        }
+    }, [databaseItemsLoaded, databaseItemsLoading, recentlySelectedCompany]);
+
+    useEffect(() => {
+        if (activeTab === 'Dosages' && mode === 'detail' && selectedTemplateLinkedItemIds.length) {
+            loadDatabaseItems();
+        }
+    }, [activeTab, loadDatabaseItems, mode, selectedTemplateLinkedItemIds.length]);
+
+    const openDatabaseItemPicker = () => {
+        setDatabaseItemSearchTerm('');
+        if (mode === 'detail' && selectedTemplate) {
+            setForm(formFromTemplate(activeTab, selectedTemplate));
+        }
+        setDatabaseItemPickerOpen(true);
+        loadDatabaseItems();
+    };
+
+    const closeDatabaseItemPicker = () => {
+        setDatabaseItemPickerOpen(false);
+        setDatabaseItemSearchTerm('');
+        if (mode === 'detail' && selectedTemplate) {
+            setForm(formFromTemplate(activeTab, selectedTemplate));
+        }
+    };
+
+    const saveLinkedDatabaseItems = async () => {
+        if (mode !== 'detail' || activeTab !== 'Dosages' || !selectedTemplate || !recentlySelectedCompany) {
+            setDatabaseItemPickerOpen(false);
+            setDatabaseItemSearchTerm('');
+            return;
+        }
+
+        const linkedItemIds = normalizeLinkedItemIds(form.linkedItemIds, form.linkedItemId);
+        const toastId = toast.loading('Updating linked database items...');
+
+        try {
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, collectionPathFor(activeTab), selectedTemplate.id),
+                {
+                    linkedItem: '',
+                    linkedItemId: linkedItemIds[0] || '',
+                    linkedItemIds,
+                }
+            );
+            toast.success('Linked database items updated.', { id: toastId });
+            setDatabaseItemPickerOpen(false);
+            setDatabaseItemSearchTerm('');
+        } catch (error) {
+            console.error('Failed to update linked database items:', error);
+            toast.error('Could not update linked database items.', { id: toastId });
+        }
     };
 
     const openCreate = () => {
@@ -354,8 +580,11 @@ const ReadingsAndDosages = () => {
             return Math.max(highestOrder, normalizeNumber(template.order, 0));
         }, 0) + 1;
 
+        updateRouteForTab(activeTab);
         setSelectedTemplateId(null);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setForm({
             ...formForType(activeTab),
             order: nextOrder,
@@ -364,31 +593,43 @@ const ReadingsAndDosages = () => {
     };
 
     const openUniversalPicker = () => {
+        updateRouteForTab(activeTab);
         setSelectedTemplateId(null);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setUniversalSearchTerm('');
         setForm(formForType(activeTab));
         setMode('universal');
     };
 
     const openEdit = (template) => {
+        updateRouteForTab(activeTab, template.id);
         setSelectedTemplateId(template.id);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setForm(formFromTemplate(activeTab, template));
         setMode('form');
     };
 
     const openDetail = (template) => {
+        updateRouteForTab(activeTab, template.id);
         setSelectedTemplateId(template.id);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setForm(formFromTemplate(activeTab, template));
         setMode('detail');
     };
 
     const backToList = () => {
+        updateRouteForTab(activeTab);
         setMode('list');
         setSelectedTemplateId(null);
         setAmountInput('');
+        setDatabaseItemSearchTerm('');
+        setDatabaseItemPickerOpen(false);
         setForm(formForType(activeTab));
     };
 
@@ -584,15 +825,131 @@ const ReadingsAndDosages = () => {
                 />
             </Field>
 
-            <Field label="Linked Item Id">
-                <TextInput
-                    type="text"
-                    value={form.linkedItemId}
-                    onChange={(event) => updateForm('linkedItemId', event.target.value)}
-                    placeholder="Optional inventory item id"
-                />
-            </Field>
+            <div className="md:col-span-2 xl:col-span-3">
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Linked Purchased Items</p>
+                            <p className="mt-1 text-sm text-slate-500">Only chemical database items can be linked to dosages.</p>
+                        </div>
+                        <Button type="button" onClick={openDatabaseItemPicker} className="bg-blue-600 text-white hover:bg-blue-700">
+                            <FaPlus /> Add Linked Database Item
+                        </Button>
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap gap-2">
+                        {selectedLinkedItemIds.length ? selectedLinkedItemIds.map((itemId) => {
+                            const item = databaseItemById.get(itemId);
+                            return (
+                                <span key={itemId} className="inline-flex items-center gap-2 rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                                    {item ? databaseItemLabel(item) : itemId}
+                                    <button
+                                        type="button"
+                                        onClick={() => toggleLinkedItemId(itemId)}
+                                        className="text-blue-500 hover:text-red-600"
+                                        aria-label={`Remove ${itemId}`}
+                                    >
+                                        <FaTimes />
+                                    </button>
+                                </span>
+                            );
+                        }) : (
+                            <p className="text-sm text-slate-500">No linked chemical database items yet.</p>
+                        )}
+                    </div>
+                </div>
+            </div>
         </>
+    );
+
+    const renderDatabaseItemPickerModal = () => (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 px-3 py-6">
+            <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-lg bg-white shadow-xl">
+                <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                        <p className="text-sm font-semibold text-blue-600">Chemical database items</p>
+                        <h2 className="text-xl font-bold text-slate-950">Linked Purchased Items</h2>
+                        <p className="mt-1 text-sm text-slate-500">Only database items categorized as chemicals can be selected for dosage waste reporting.</p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={closeDatabaseItemPicker}
+                        className="rounded-md border border-slate-200 p-2 text-slate-500 transition hover:border-slate-400 hover:text-slate-900"
+                        aria-label="Close database item picker"
+                    >
+                        <FaTimes />
+                    </button>
+                </div>
+
+                <div className="border-b border-slate-200 p-5">
+                    <div className="relative">
+                        <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                        <TextInput
+                            type="search"
+                            value={databaseItemSearchTerm}
+                            onChange={(event) => setDatabaseItemSearchTerm(event.target.value)}
+                            placeholder="Search chemical item name, SKU, size, or unit"
+                            className="pl-9"
+                        />
+                    </div>
+                </div>
+
+                <div className="min-h-0 flex-1 overflow-y-auto p-5">
+                    {databaseItemsLoading ? (
+                        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+                            Loading chemical database items...
+                        </div>
+                    ) : filteredDatabaseItems.length ? (
+                        <div className="grid gap-2 md:grid-cols-2">
+                            {filteredDatabaseItems.map((item) => {
+                                const checked = selectedLinkedItemIds.includes(item.id);
+                                return (
+                                    <label
+                                        key={item.id}
+                                        className={`flex items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                                            checked ? 'border-blue-300 bg-blue-50 text-blue-900' : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200'
+                                        }`}
+                                    >
+                                        <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={() => toggleLinkedItemId(item.id)}
+                                            className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span>
+                                            <span className="block font-semibold">{item.name || item.id}</span>
+                                            <span className="block text-xs text-slate-500">
+                                                {[item.size ? `Size ${item.size}` : '', item.UOM || item.uom || '', item.sku ? `SKU ${item.sku}` : '', item.category]
+                                                    .filter(Boolean)
+                                                    .join(' | ') || item.id}
+                                            </span>
+                                        </span>
+                                    </label>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        <div className="rounded-lg border border-dashed border-slate-300 p-8 text-center text-sm text-slate-500">
+                            {databaseItemsLoaded ? 'No chemical database items match that search.' : 'Open the picker to load chemical database items.'}
+                        </div>
+                    )}
+                </div>
+
+                <div className="flex flex-col gap-3 border-t border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="text-sm text-slate-500">
+                        <span className="font-semibold text-slate-900">{selectedLinkedItemIds.length}</span> linked item(s) selected
+                    </div>
+                    <div className="flex flex-wrap justify-end gap-2">
+                        <Button type="button" onClick={closeDatabaseItemPicker} className="border border-slate-300 bg-white text-slate-700 hover:bg-slate-50">
+                            Cancel
+                        </Button>
+                        <Button type="button" onClick={saveLinkedDatabaseItems} className="bg-blue-600 text-white hover:bg-blue-700">
+                            {mode === 'detail' ? 'Save Linked Items' : 'Done'}
+                        </Button>
+                    </div>
+                </div>
+            </div>
+        </div>
     );
 
     const renderForm = () => (
@@ -609,6 +966,11 @@ const ReadingsAndDosages = () => {
                     <Button onClick={backToList} className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">
                         <FaArrowLeft /> Back
                     </Button>
+                    {selectedTemplate && (
+                        <Button onClick={() => deleteTemplate(selectedTemplate)} className="border border-red-200 bg-red-50 text-red-700 hover:bg-red-100">
+                            <FaTrashAlt /> Delete
+                        </Button>
+                    )}
                     <Button type="submit" className="bg-blue-600 text-white hover:bg-blue-700">
                         <FaSave /> Save Template
                     </Button>
@@ -686,26 +1048,46 @@ const ReadingsAndDosages = () => {
             );
         }
 
+        const detailLinkedItemIds = selectedTemplateLinkedItemIds;
+        const detailLinkedItems = detailLinkedItemIds.map((itemId) => {
+            const item = databaseItemById.get(itemId);
+            return {
+                itemId,
+                item,
+                unitCostCents: getDatabaseItemUnitCostCents(item),
+            };
+        });
+        const linkedItemsWithUnitCosts = detailLinkedItems.filter(({ unitCostCents }) => unitCostCents > 0);
+        const suggestedRateCents = linkedItemsWithUnitCosts.length
+            ? Math.round(linkedItemsWithUnitCosts.reduce((total, { unitCostCents }) => total + unitCostCents, 0) / linkedItemsWithUnitCosts.length)
+            : 0;
+        const suggestedRateRange = linkedItemsWithUnitCosts.length > 1
+            ? `${formatCurrency(Math.min(...linkedItemsWithUnitCosts.map(({ unitCostCents }) => unitCostCents)) / 100)} - ${formatCurrency(Math.max(...linkedItemsWithUnitCosts.map(({ unitCostCents }) => unitCostCents)) / 100)}`
+            : '';
+        const missingLinkedItemsCount = detailLinkedItems.filter(({ item }) => !item).length;
+
         return (
             <div className="space-y-4">
                 <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-                    <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 md:flex-row md:items-start md:justify-between">
-                        <div>
-                            <p className="text-sm font-semibold text-blue-600">{activeTab === 'Readings' ? 'Reading template' : 'Dosage template'}</p>
-                            <h2 className="text-2xl font-bold text-gray-900">{selectedTemplate.name || 'Unnamed template'}</h2>
-                            <p className="mt-1 text-sm text-gray-500">{selectedTemplate.id}</p>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
+                    <div className="border-b border-gray-200 px-5 py-4">
+                        <div className="mb-4 flex justify-start">
                             <Button onClick={backToList} className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">
                                 <FaArrowLeft /> Back
                             </Button>
-                            <Button onClick={() => openEdit(selectedTemplate)} className="bg-blue-600 text-white hover:bg-blue-700">
-                                <FaPencilAlt /> Edit
-                            </Button>
-                            <Button onClick={() => deleteTemplate(selectedTemplate)} className="bg-red-600 text-white hover:bg-red-700">
-                                <FaTrashAlt /> Delete
-                            </Button>
+                        </div>
+
+                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-blue-600">{activeTab === 'Readings' ? 'Reading template' : 'Dosage template'}</p>
+                                <h2 className="text-2xl font-bold text-gray-900">{selectedTemplate.name || 'Unnamed template'}</h2>
+                                <p className="mt-1 text-sm text-gray-500">{selectedTemplate.id}</p>
+                            </div>
+
+                            <div className="flex flex-wrap gap-2">
+                                <Button onClick={() => openEdit(selectedTemplate)} className="bg-blue-600 text-white hover:bg-blue-700">
+                                    <FaPencilAlt /> Edit
+                                </Button>
+                            </div>
                         </div>
                     </div>
 
@@ -752,14 +1134,82 @@ const ReadingsAndDosages = () => {
                                     <p className="font-bold text-gray-500">Strength</p>
                                     <p className="mt-1 text-gray-900">{selectedTemplate.strength ?? '-'}</p>
                                 </div>
-                                <div>
-                                    <p className="font-bold text-gray-500">Linked Item</p>
-                                    <p className="mt-1 text-gray-900">{selectedTemplate.linkedItemId || 'None'}</p>
-                                </div>
                             </>
                         )}
                     </div>
                 </div>
+
+                {activeTab === 'Dosages' ? (
+                    <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-start sm:justify-between">
+                            <div>
+                                <h3 className="text-lg font-bold text-slate-950">Linked Database Items</h3>
+                                <p className="mt-1 text-sm text-slate-500">Chemical purchases linked here are compared against dosage usage in waste reports.</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                <Link
+                                    to="/company/items"
+                                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                >
+                                    <FaExternalLinkAlt /> See All Database Items
+                                </Link>
+                                <Button type="button" onClick={openDatabaseItemPicker} className="bg-blue-600 text-white hover:bg-blue-700">
+                                    <FaPlus /> Add Linked Database Item
+                                </Button>
+                            </div>
+                        </div>
+
+                        <div className="p-5">
+                            <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+                                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Suggested Rate</p>
+                                <p className="mt-1 text-2xl font-bold text-emerald-950">
+                                    {suggestedRateCents ? formatCurrency(suggestedRateCents / 100) : 'No cost data'}
+                                </p>
+                                <p className="mt-1 text-sm text-emerald-800">
+                                    {suggestedRateCents
+                                        ? `Average unit cost from ${linkedItemsWithUnitCosts.length} linked database item${linkedItemsWithUnitCosts.length === 1 ? '' : 's'}${suggestedRateRange ? `, range ${suggestedRateRange}` : ''}.`
+                                        : databaseItemsLoading
+                                            ? 'Loading linked item costs...'
+                                            : 'Link database items with unit costs to produce a suggested rate.'}
+                                </p>
+                            </div>
+
+                            {detailLinkedItemIds.length ? (
+                                <div className="grid gap-2 md:grid-cols-2">
+                                    {detailLinkedItems.map(({ itemId, item, unitCostCents }) => {
+                                        return (
+                                            <Link
+                                                key={itemId}
+                                                to={`/company/items/detail/${itemId}`}
+                                                className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-900 transition hover:border-blue-300 hover:bg-blue-100"
+                                            >
+                                                <span className="block font-bold">{item ? item.name || itemId : itemId}</span>
+                                                <span className="mt-1 block text-xs text-blue-700">
+                                                    {item
+                                                        ? [
+                                                            item.size ? `Size ${item.size}` : '',
+                                                            item.UOM || item.uom || '',
+                                                            item.sku ? `SKU ${item.sku}` : '',
+                                                            unitCostCents ? `Unit cost ${formatCurrency(unitCostCents / 100)}` : '',
+                                                        ].filter(Boolean).join(' | ') || itemId
+                                                        : databaseItemsLoading ? 'Loading item details...' : 'Open database item detail'}
+                                                </span>
+                                            </Link>
+                                        );
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-500">No chemical database items linked yet.</p>
+                            )}
+
+                            {missingLinkedItemsCount > 0 && !databaseItemsLoading ? (
+                                <p className="mt-3 text-xs text-amber-700">
+                                    {missingLinkedItemsCount} linked item{missingLinkedItemsCount === 1 ? '' : 's'} could not be found in the database item list.
+                                </p>
+                            ) : null}
+                        </div>
+                    </div>
+                ) : null}
 
                 <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
                     <div className="border-b border-gray-200 px-5 py-4">
@@ -891,7 +1341,11 @@ const ReadingsAndDosages = () => {
         </div>
     );
 
-    const renderList = () => (
+    const renderList = () => {
+        const showLinkedItemsColumn = activeTab === 'Dosages';
+        const tableColumnCount = showLinkedItemsColumn ? 6 : 5;
+
+        return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
             <div className="flex flex-col gap-3 border-b border-gray-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
                 <div className="relative w-full lg:max-w-md">
@@ -923,43 +1377,55 @@ const ReadingsAndDosages = () => {
                             <th className="px-5 py-3 text-left font-bold text-gray-600">Unit</th>
                             <th className="px-5 py-3 text-left font-bold text-gray-600">Type</th>
                             <th className="px-5 py-3 text-left font-bold text-gray-600">Presets</th>
+                            {showLinkedItemsColumn && (
+                                <th className="px-5 py-3 text-left font-bold text-gray-600">Linked Items</th>
+                            )}
                             <th className="px-5 py-3 text-left font-bold text-gray-600">Order</th>
-                            <th className="px-5 py-3 text-right font-bold text-gray-600">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 bg-white">
-                        {filteredTemplates.map((template) => (
-                            <tr key={template.id} className="hover:bg-blue-50/50">
-                                <td className="px-5 py-3">
-                                    <button
-                                        type="button"
-                                        onClick={() => openDetail(template)}
-                                        className="text-left font-bold text-gray-900 hover:text-blue-700"
-                                    >
-                                        {template.name || 'Unnamed template'}
-                                    </button>
-                                    <p className="mt-1 text-xs text-gray-500">{template.id}</p>
-                                </td>
-                                <td className="px-5 py-3 text-gray-700">{template.UOM || '-'}</td>
-                                <td className="px-5 py-3 text-gray-700">{template.chemType || '-'}</td>
-                                <td className="px-5 py-3 text-gray-700">{template.amount?.length || 0}</td>
-                                <td className="px-5 py-3 text-gray-700">{template.order ?? 0}</td>
-                                <td className="px-5 py-3">
-                                    <div className="flex justify-end gap-2">
-                                        <Button onClick={() => openEdit(template)} className="border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">
-                                            <FaPencilAlt /> Edit
-                                        </Button>
-                                        <Button onClick={() => deleteTemplate(template)} className="border border-red-200 bg-red-50 text-red-700 hover:bg-red-100">
-                                            <FaTrashAlt /> Delete
-                                        </Button>
-                                    </div>
-                                </td>
-                            </tr>
-                        ))}
+                        {filteredTemplates.map((template) => {
+                            const linkedItemCount = normalizeLinkedItemIds(template.linkedItemIds, template.linkedItemId, template.linkedItem).length;
+
+                            return (
+                                <tr
+                                    key={template.id}
+                                    role="button"
+                                    tabIndex={0}
+                                    onClick={() => openDetail(template)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter' || event.key === ' ') {
+                                            event.preventDefault();
+                                            openDetail(template);
+                                        }
+                                    }}
+                                    className="cursor-pointer hover:bg-blue-50/50 focus:bg-blue-50 focus:outline-none"
+                                    aria-label={`Open ${template.name || 'template'} detail`}
+                                >
+                                    <td className="px-5 py-3">
+                                        <p className="text-left font-bold text-gray-900">
+                                            {template.name || 'Unnamed template'}
+                                        </p>
+                                        <p className="mt-1 text-xs text-gray-500">{template.id}</p>
+                                    </td>
+                                    <td className="px-5 py-3 text-gray-700">{template.UOM || '-'}</td>
+                                    <td className="px-5 py-3 text-gray-700">{template.chemType || '-'}</td>
+                                    <td className="px-5 py-3 text-gray-700">{template.amount?.length || 0}</td>
+                                    {showLinkedItemsColumn && (
+                                        <td className="px-5 py-3 text-gray-700">
+                                            <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                                                {linkedItemCount} linked
+                                            </span>
+                                        </td>
+                                    )}
+                                    <td className="px-5 py-3 text-gray-700">{template.order ?? 0}</td>
+                                </tr>
+                            );
+                        })}
 
                         {!loading && filteredTemplates.length === 0 && (
                             <tr>
-                                <td colSpan={6} className="px-5 py-12 text-center text-gray-500">
+                                <td colSpan={tableColumnCount} className="px-5 py-12 text-center text-gray-500">
                                     No {activeTab.toLowerCase()} found.
                                 </td>
                             </tr>
@@ -967,7 +1433,7 @@ const ReadingsAndDosages = () => {
 
                         {loading && (
                             <tr>
-                                <td colSpan={6} className="px-5 py-12 text-center text-gray-500">
+                                <td colSpan={tableColumnCount} className="px-5 py-12 text-center text-gray-500">
                                     Loading templates...
                                 </td>
                             </tr>
@@ -976,41 +1442,48 @@ const ReadingsAndDosages = () => {
                 </table>
             </div>
         </div>
-    );
+        );
+    };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="mx-auto max-w-7xl">
-                <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-                    <div>
-                        <div className="mb-2 inline-flex items-center gap-2 rounded-md bg-blue-50 px-3 py-1 text-sm font-bold text-blue-700">
-                            <FaRegListAlt /> Company Settings
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="flex flex-col gap-2">
+                            <p className="inline-flex w-fit items-center gap-2 rounded-md bg-blue-50 px-3 py-1 text-sm font-bold text-blue-700">
+                                <FaRegListAlt /> Company Settings
+                            </p>
+                            <h1 className="text-3xl font-bold text-slate-950">Readings & Dosages</h1>
+                            <p className="max-w-3xl text-sm text-slate-600">
+                                Manage reading thresholds, dosage presets, and chemical purchase links for reporting.
+                            </p>
                         </div>
-                        <h1 className="text-3xl font-bold text-gray-900">Readings & Dosages</h1>
-                    </div>
 
-                    <div className="inline-flex rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
-                        {['Readings', 'Dosages'].map((tab) => (
-                            <button
-                                key={tab}
-                                type="button"
-                                onClick={() => setActiveTab(tab)}
-                                className={`rounded-md px-4 py-2 text-sm font-bold transition ${
-                                    activeTab === tab
-                                        ? 'bg-blue-600 text-white shadow-sm'
-                                        : 'text-gray-600 hover:bg-gray-100'
-                                }`}
-                            >
-                                {tab}
-                            </button>
-                        ))}
+                        <div className="inline-flex w-fit rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+                            {['Readings', 'Dosages'].map((tab) => (
+                                <button
+                                    key={tab}
+                                    type="button"
+                                    onClick={() => changeActiveTab(tab)}
+                                    className={`rounded-md px-4 py-2 text-sm font-bold transition ${
+                                        activeTab === tab
+                                            ? 'bg-blue-600 text-white shadow-sm'
+                                            : 'text-slate-600 hover:bg-slate-100'
+                                    }`}
+                                >
+                                    {tab}
+                                </button>
+                            ))}
+                        </div>
                     </div>
-                </div>
+                </section>
 
                 {mode === 'form' && renderForm()}
                 {mode === 'detail' && renderDetail()}
                 {mode === 'universal' && renderUniversalPicker()}
                 {mode === 'list' && renderList()}
+                {databaseItemPickerOpen && renderDatabaseItemPickerModal()}
             </div>
         </div>
     );

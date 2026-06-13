@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import Select from "react-select";
 import { collection, doc, getDocs, orderBy, query, setDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
@@ -70,6 +71,39 @@ const normalizedDatabaseUom = (value) => {
   };
 
   return uomMap[normalized] || value || "Unit";
+};
+
+const selectTheme = (theme) => ({
+  ...theme,
+  borderRadius: 6,
+  colors: {
+    ...theme.colors,
+    primary25: "#EFF6FF",
+    primary: "#2563EB",
+    neutral20: "#CBD5E1",
+    neutral30: "#94A3B8",
+  },
+});
+
+const selectStyles = {
+  control: (base, state) => ({
+    ...base,
+    minHeight: 36,
+    borderColor: state.isFocused ? "#2563EB" : "#CBD5E1",
+    boxShadow: state.isFocused ? "0 0 0 2px rgba(37, 99, 235, 0.15)" : "none",
+    fontSize: "0.875rem",
+    "&:hover": {
+      borderColor: state.isFocused ? "#2563EB" : "#94A3B8",
+    },
+  }),
+  menu: (base) => ({
+    ...base,
+    zIndex: 60,
+  }),
+  menuPortal: (base) => ({
+    ...base,
+    zIndex: 60,
+  }),
 };
 
 const dollarsFromText = (value) => {
@@ -513,9 +547,6 @@ const extractTextFromPdfFile = async (file) => {
 const isPdfSourceFile = (file) =>
   Boolean(file) && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
 
-const isImageSourceFile = (file) =>
-  Boolean(file) && (file.type.startsWith("image/") || /\.(png|jpe?g|gif|webp)$/i.test(file.name));
-
 const getSourceLabelForFile = (file) => {
   if (isPdfSourceFile(file)) return "PDF";
   return file.name.toLowerCase().endsWith(".eml") ? "email" : "text file";
@@ -541,6 +572,7 @@ const AlphaWaterReceiptImport = () => {
   const [bulkQueue, setBulkQueue] = useState([]);
   const [bulkIndex, setBulkIndex] = useState(0);
   const [bulkSavedCount, setBulkSavedCount] = useState(0);
+  const [bulkQueueExpanded, setBulkQueueExpanded] = useState(false);
   const [sourcePreviewUrl, setSourcePreviewUrl] = useState("");
   const [parsing, setParsing] = useState(false);
   const [receiptLoading, setReceiptLoading] = useState(null);
@@ -558,13 +590,33 @@ const AlphaWaterReceiptImport = () => {
   const [pendingSaveOptions, setPendingSaveOptions] = useState(null);
 
   const selectedVendor = vendors.find((vendor) => vendor.id === selectedVendorId) || null;
-  const selectedTech = companyUsers.find((user) => user.userId === selectedTechId || user.id === selectedTechId) || null;
+  const technicianOptions = useMemo(
+    () =>
+      companyUsers
+        .map((user) => {
+          const userId = getCompanyUserId(user);
+          const userName = getCompanyUserDisplayName(user) || user.email || "Technician";
+
+          return {
+            ...user,
+            id: user.id || userId,
+            userId,
+            userName,
+            value: userId,
+            label: userName,
+            searchText: [userName, user.email, user.phoneNumber, user.phone, userId].filter(Boolean).join(" "),
+          };
+        })
+        .sort((firstUser, secondUser) => firstUser.label.localeCompare(secondUser.label)),
+    [companyUsers]
+  );
+  const selectedTech =
+    technicianOptions.find((user) => user.value === selectedTechId || user.userId === selectedTechId || user.id === selectedTechId) ||
+    null;
   const sourceFileName = sourceFile?.name || "";
-  const sourceIsPdf = isPdfSourceFile(sourceFile);
-  const sourceIsImage = isImageSourceFile(sourceFile);
-  const sourceIsText = Boolean(sourceFile) && !sourceIsPdf && !sourceIsImage;
   const isBulkImport = bulkQueue.length > 1;
   const isFinalBulkReceipt = isBulkImport && bulkIndex >= bulkQueue.length - 1;
+  const selectedSourceCount = isBulkImport ? bulkQueue.length : sourceFile ? 1 : 0;
   const feedbackClass =
     parseFeedback.type === "success"
       ? "border-emerald-200 bg-emerald-50 text-emerald-900"
@@ -639,6 +691,52 @@ const AlphaWaterReceiptImport = () => {
     () => lines.filter((line) => !line.matchedItemId && line.createDatabaseItem).length,
     [lines]
   );
+  const databaseItemOptions = useMemo(
+    () =>
+      databaseItems.map((item) => {
+        const name = item.name || item.description || item.sku || "Database Item";
+        const sku = item.sku || "";
+        const category = item.category || "";
+        const subCategory = item.subCategory || "";
+        const uom = item.UOM || item.uom || "";
+        const description = item.description || "";
+
+        return {
+          value: item.id,
+          label: [name, sku].filter(Boolean).join(" - "),
+          name,
+          sku,
+          category,
+          subCategory,
+          uom,
+          description,
+          searchText: [name, sku, category, subCategory, uom, description, item.id].filter(Boolean).join(" "),
+        };
+      }),
+    [databaseItems]
+  );
+  const databaseItemOptionsById = useMemo(
+    () => new Map(databaseItemOptions.map((option) => [option.value, option])),
+    [databaseItemOptions]
+  );
+  const selectMenuPortalTarget = typeof document !== "undefined" ? document.body : null;
+
+  const formatDatabaseItemOption = (option, meta) => {
+    if (meta.context === "value") {
+      return option.name;
+    }
+
+    return (
+      <div>
+        <p className="font-semibold text-slate-900">{option.name}</p>
+        <p className="text-xs text-slate-500">
+          {[option.sku ? `SKU: ${option.sku}` : "", option.category, option.uom ? `UOM: ${option.uom}` : ""]
+            .filter(Boolean)
+            .join(" | ") || "No item details saved"}
+        </p>
+      </div>
+    );
+  };
 
   const buildParseFeedback = (parsed, sourceLabel, extractedText = "") => {
     const details = [];
@@ -789,6 +887,7 @@ const AlphaWaterReceiptImport = () => {
     setBulkQueue(nextQueue);
     setBulkIndex(0);
     setBulkSavedCount(0);
+    setBulkQueueExpanded(false);
     await parseSourceFile(files[0], { index: 0, total: files.length });
   };
 
@@ -799,8 +898,8 @@ const AlphaWaterReceiptImport = () => {
         const nextLine = { ...line, ...updates };
         if (updates.matchedItemId !== undefined) {
           const match = databaseItems.find((item) => item.id === updates.matchedItemId);
-          nextLine.createDatabaseItem = !match;
-          nextLine.billable = Boolean(match?.billable);
+          nextLine.createDatabaseItem = updates.createDatabaseItem !== undefined ? updates.createDatabaseItem : !match;
+          nextLine.billable = updates.billable !== undefined ? updates.billable : Boolean(match?.billable);
           nextLine.billingRate = match?.billingRate ? String(Number(match.billingRate) / 100) : nextLine.billingRate;
           nextLine.category = match?.category || nextLine.category;
         }
@@ -931,6 +1030,7 @@ const AlphaWaterReceiptImport = () => {
       setBulkIndex(0);
       setBulkSavedCount(0);
     }
+    setBulkQueueExpanded(false);
     setSourceFile(null);
     setSourceInputKey((current) => current + 1);
     setReceipt(blankParsedReceipt);
@@ -1011,6 +1111,11 @@ const AlphaWaterReceiptImport = () => {
       const pdfUrlList = [];
       const createdDatabaseItems = [];
       let databaseItemsForNextReceipt = databaseItems;
+      const receiptNoteParts = String(receipt.notes || "")
+        .split(/\r?\n/)
+        .map((note) => note.trim())
+        .filter(Boolean);
+      const importedSourceNote = `Imported from ${sourceFileName || receipt.invoiceNum || "Alpha Water import"}`;
 
       if (sourceFile) {
         const fileRef = ref(
@@ -1085,9 +1190,9 @@ const AlphaWaterReceiptImport = () => {
           sku: databaseItem?.sku || line.sku || "",
           lotSerial: line.lotSerial || "",
           notes: [
-            `Imported from Alpha Water invoice ${receipt.invoiceNum}`,
-            receipt.notes || "",
+            ...receiptNoteParts,
             line.lotSerial ? `Lot/Serial: ${line.lotSerial}` : "",
+            importedSourceNote,
           ]
             .filter(Boolean)
             .join(" | "),
@@ -1198,7 +1303,98 @@ const AlphaWaterReceiptImport = () => {
           </button>
         </div>
 
-        <div className="grid gap-6 xl:grid-cols-[300px_minmax(0,1fr)_340px] 2xl:grid-cols-[320px_minmax(0,1fr)_360px]">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <h2 className="text-lg font-bold text-gray-900">Receipt Fields</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-12">
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-2">
+              Invoice #
+              <input
+                value={receipt.invoiceNum}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, invoiceNum: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              />
+            </label>
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-2">
+              Date
+              <input
+                type="date"
+                value={receipt.invoiceDate}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, invoiceDate: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              />
+            </label>
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-4">
+              Vendor
+              <select
+                value={selectedVendorId}
+                onChange={(event) => setSelectedVendorId(event.target.value)}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              >
+                <option value="">Select vendor</option>
+                {vendors.map((vendor) => (
+                  <option key={vendor.id} value={vendor.id}>
+                    {vendor.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="text-sm font-semibold text-gray-700 xl:col-span-4">
+              <p>Technician</p>
+              <div className="mt-1 font-normal">
+                <Select
+                  value={selectedTech}
+                  options={technicianOptions}
+                  onChange={(option) => setSelectedTechId(option ? getCompanyUserId(option) : "")}
+                  isClearable
+                  isSearchable
+                  placeholder="Select a Tech"
+                  noOptionsMessage={() => "No technicians found"}
+                  filterOption={(option, inputValue) =>
+                    option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                  }
+                  theme={selectTheme}
+                  styles={selectStyles}
+                />
+              </div>
+            </div>
+            <label className="text-sm font-semibold text-gray-700 md:col-span-2 xl:col-span-6">
+              Notes
+              <textarea
+                rows={2}
+                value={receipt.notes}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, notes: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+                placeholder="Receipt notes"
+              />
+            </label>
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-2">
+              Subtotal
+              <input
+                value={receipt.subtotal}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, subtotal: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              />
+            </label>
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-2">
+              Tax
+              <input
+                value={receipt.tax}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, tax: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              />
+            </label>
+            <label className="text-sm font-semibold text-gray-700 xl:col-span-2">
+              Total
+              <input
+                value={receipt.total}
+                onChange={(event) => setReceipt((prev) => ({ ...prev, total: event.target.value }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)] 2xl:grid-cols-[340px_minmax(0,1fr)]">
           <div className="space-y-6">
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-gray-900">Source</h2>
@@ -1218,48 +1414,93 @@ const AlphaWaterReceiptImport = () => {
                     {sourceFile.name}
                   </p>
                 ) : null}
-                {isBulkImport ? (
-                  <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="font-semibold text-gray-900">Bulk queue</p>
-                      <p className="text-xs font-semibold text-gray-500">
-                        {bulkSavedCount} saved / {bulkQueue.length} selected
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-semibold text-gray-900">Bulk Queue</p>
+                      <p className="mt-1 text-xs font-semibold text-gray-500">
+                        {bulkSavedCount} Saved / {selectedSourceCount} Selected
                       </p>
-                    </div>
-                    <div className="mt-3 max-h-44 space-y-2 overflow-y-auto">
-                      {bulkQueue.map((queueItem, queueIndex) => {
-                        const isCurrent = queueIndex === bulkIndex;
-                        const isComplete = queueIndex < bulkIndex;
-
-                        return (
-                          <div
-                            key={queueItem.id}
-                            className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
-                              isCurrent
-                                ? "border-blue-200 bg-blue-50 text-blue-900"
-                                : isComplete
-                                  ? "border-emerald-200 bg-emerald-50 text-emerald-900"
-                                  : "border-gray-200 bg-white text-gray-600"
-                            }`}
-                          >
-                            <span className="min-w-0 truncate">{queueItem.file.name}</span>
-                            <span className="shrink-0 text-xs font-semibold">
-                              {isCurrent ? "Reviewing" : isComplete ? "Done" : "Waiting"}
-                            </span>
-                          </div>
-                        );
-                      })}
                     </div>
                     <button
                       type="button"
-                      onClick={clearBulkImport}
-                      disabled={parsing || saving}
-                      className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                      onClick={() => setBulkQueueExpanded((expanded) => !expanded)}
+                      className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50"
                     >
-                      Clear Queue
+                      {bulkQueueExpanded ? "Collapse" : "Expand"}
                     </button>
                   </div>
-                ) : null}
+                  {bulkQueueExpanded ? (
+                    <div className="mt-4 space-y-4">
+                      {isBulkImport ? (
+                        <div>
+                          <div className="max-h-44 space-y-2 overflow-y-auto">
+                            {bulkQueue.map((queueItem, queueIndex) => {
+                              const isCurrent = queueIndex === bulkIndex;
+                              const isComplete = queueIndex < bulkIndex;
+
+                              return (
+                                <div
+                                  key={queueItem.id}
+                                  className={`flex items-center justify-between gap-3 rounded-lg border px-3 py-2 ${
+                                    isCurrent
+                                      ? "border-blue-200 bg-blue-50 text-blue-900"
+                                      : isComplete
+                                        ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+                                        : "border-gray-200 bg-white text-gray-600"
+                                  }`}
+                                >
+                                  <span className="min-w-0 truncate">{queueItem.file.name}</span>
+                                  <span className="shrink-0 text-xs font-semibold">
+                                    {isCurrent ? "Reviewing" : isComplete ? "Done" : "Waiting"}
+                                  </span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={clearBulkImport}
+                            disabled={parsing || saving}
+                            className="mt-3 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                          >
+                            Clear Queue
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-gray-600">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="min-w-0 truncate">{sourceFileName || "No receipts selected"}</span>
+                            {sourceFileName ? <span className="shrink-0 text-xs font-semibold">Reviewing</span> : null}
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <div className="mb-2 flex items-center justify-between gap-3">
+                          <p className="text-xs font-semibold uppercase text-gray-500">Parsed Invoice Text</p>
+                          {receipt.rawText.trim() ? (
+                            <p className="text-xs font-semibold text-gray-400">{receipt.rawText.length} characters</p>
+                          ) : null}
+                        </div>
+                        <textarea
+                          rows={14}
+                          value={receipt.rawText}
+                          onChange={(event) => handleRawTextChange(event.target.value)}
+                          className="w-full rounded-lg border border-gray-300 bg-white p-3 text-sm"
+                          placeholder="Upload a PDF to auto-fill this, or paste Alpha Water invoice email text here"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleParse}
+                          disabled={parsing || !receipt.rawText.trim()}
+                          className="mt-3 w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
+                        >
+                          {parsing ? "Parsing..." : "Parse Invoice Text"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 <div className={`rounded-lg border p-3 text-sm ${feedbackClass}`}>
                   <p className="font-semibold">{parsing ? "Working..." : parseFeedback.title}</p>
                   {parseFeedback.details?.length ? (
@@ -1270,110 +1511,27 @@ const AlphaWaterReceiptImport = () => {
                     </ul>
                   ) : null}
                 </div>
-                <textarea
-                  rows={14}
-                  value={receipt.rawText}
-                  onChange={(event) => handleRawTextChange(event.target.value)}
-                  className="w-full rounded-lg border border-gray-300 p-3 text-sm"
-                  placeholder="Upload a PDF to auto-fill this, or paste Alpha Water invoice email text here"
-                />
-                <button
-                  type="button"
-                  onClick={handleParse}
-                  disabled={parsing || !receipt.rawText.trim()}
-                  className="w-full rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-60"
-                >
-                  {parsing ? "Parsing..." : "Parse Invoice Text"}
-                </button>
               </div>
             </div>
 
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-lg font-bold text-gray-900">Receipt Fields</h2>
-              <div className="mt-4 grid gap-3">
-                <label className="text-sm font-semibold text-gray-700">
-                  Invoice #
-                  <input
-                    value={receipt.invoiceNum}
-                    onChange={(event) => setReceipt((prev) => ({ ...prev, invoiceNum: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                  />
-                </label>
-                <label className="text-sm font-semibold text-gray-700">
-                  Date
-                  <input
-                    type="date"
-                    value={receipt.invoiceDate}
-                    onChange={(event) => setReceipt((prev) => ({ ...prev, invoiceDate: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                  />
-                </label>
-                <label className="text-sm font-semibold text-gray-700">
-                  Vendor
-                  <select
-                    value={selectedVendorId}
-                    onChange={(event) => setSelectedVendorId(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                  >
-                    <option value="">Select vendor</option>
-                    {vendors.map((vendor) => (
-                      <option key={vendor.id} value={vendor.id}>
-                        {vendor.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm font-semibold text-gray-700">
-                  Technician
-                  <select
-                    value={selectedTechId}
-                    onChange={(event) => setSelectedTechId(event.target.value)}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                  >
-                    <option value="">No technician</option>
-                    {companyUsers.map((user) => (
-                      <option key={user.userId || user.id} value={user.userId || user.id}>
-                        {getCompanyUserDisplayName(user) || "Technician"}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="text-sm font-semibold text-gray-700">
-                  Notes
-                  <textarea
-                    rows={4}
-                    value={receipt.notes}
-                    onChange={(event) => setReceipt((prev) => ({ ...prev, notes: event.target.value }))}
-                    className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    placeholder="Receipt notes"
-                  />
-                </label>
-                <div className="grid grid-cols-3 gap-3">
-                  <label className="text-sm font-semibold text-gray-700">
-                    Subtotal
-                    <input
-                      value={receipt.subtotal}
-                      onChange={(event) => setReceipt((prev) => ({ ...prev, subtotal: event.target.value }))}
-                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    />
-                  </label>
-                  <label className="text-sm font-semibold text-gray-700">
-                    Tax
-                    <input
-                      value={receipt.tax}
-                      onChange={(event) => setReceipt((prev) => ({ ...prev, tax: event.target.value }))}
-                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    />
-                  </label>
-                  <label className="text-sm font-semibold text-gray-700">
-                    Total
-                    <input
-                      value={receipt.total}
-                      onChange={(event) => setReceipt((prev) => ({ ...prev, total: event.target.value }))}
-                      className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
-                    />
-                  </label>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h2 className="text-lg font-bold text-gray-900">Preview</h2>
+                  <p className="mt-1 truncate text-sm text-gray-500">
+                    {sourceFileName || receipt.invoiceNum || "No source selected"}
+                  </p>
                 </div>
+                {sourcePreviewUrl ? (
+                  <a
+                    href={sourcePreviewUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="shrink-0 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
+                  >
+                    Open
+                  </a>
+                ) : null}
               </div>
             </div>
           </div>
@@ -1494,18 +1652,24 @@ const AlphaWaterReceiptImport = () => {
                         />
                       </td>
                       <td className="px-2 py-2">
-                        <select
-                          value={line.matchedItemId}
-                          onChange={(event) => updateLine(line.id, { matchedItemId: event.target.value })}
-                          className="w-56 rounded-lg border border-gray-300 px-2 py-1"
-                        >
-                          <option value="">Create new item</option>
-                          {databaseItems.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {item.name} {item.sku ? `- ${item.sku}` : ""}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="w-72">
+                          <Select
+                            value={databaseItemOptionsById.get(line.matchedItemId) || null}
+                            onChange={(option) => updateLine(line.id, { matchedItemId: option?.value || "" })}
+                            options={databaseItemOptions}
+                            isClearable
+                            isSearchable
+                            placeholder="Search database items"
+                            noOptionsMessage={() => "No database items found"}
+                            formatOptionLabel={formatDatabaseItemOption}
+                            filterOption={(option, inputValue) =>
+                              option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                            }
+                            theme={selectTheme}
+                            styles={selectStyles}
+                            menuPortalTarget={selectMenuPortalTarget || undefined}
+                          />
+                        </div>
                         <label className="mt-1 flex items-center gap-2 text-xs text-gray-600">
                           <input
                             type="checkbox"
@@ -1515,13 +1679,15 @@ const AlphaWaterReceiptImport = () => {
                           />
                           New database item
                         </label>
-                        <button
-                          type="button"
-                          onClick={() => openCreateItemModal(line)}
-                          className="mt-2 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                        >
-                          Create New Item
-                        </button>
+                        {line.createDatabaseItem ? (
+                          <button
+                            type="button"
+                            onClick={() => openCreateItemModal(line)}
+                            className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                          >
+                            Create New Item
+                          </button>
+                        ) : null}
                       </td>
                       <td className="px-2 py-2">
                         <select
@@ -1602,85 +1768,6 @@ const AlphaWaterReceiptImport = () => {
             </div>
           </div>
 
-          <div className="space-y-6">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm xl:sticky xl:top-6">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2 className="text-lg font-bold text-gray-900">Preview</h2>
-                  <p className="mt-1 text-sm text-gray-500">
-                    {sourceFileName || receipt.invoiceNum || "No source selected"}
-                  </p>
-                </div>
-                {sourcePreviewUrl ? (
-                  <a
-                    href={sourcePreviewUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
-                  >
-                    Open
-                  </a>
-                ) : null}
-              </div>
-
-              <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-gray-50">
-                {sourcePreviewUrl && sourceIsPdf ? (
-                  <iframe
-                    title="Alpha Water receipt preview"
-                    src={sourcePreviewUrl}
-                    className="h-[720px] w-full bg-white"
-                  />
-                ) : null}
-
-                {sourcePreviewUrl && sourceIsImage ? (
-                  <img
-                    src={sourcePreviewUrl}
-                    alt="Alpha Water receipt preview"
-                    className="max-h-[720px] w-full object-contain bg-white"
-                  />
-                ) : null}
-
-                {sourcePreviewUrl && sourceIsText ? (
-                  <pre className="max-h-[720px] overflow-auto whitespace-pre-wrap p-4 text-xs text-gray-700">
-                    {receipt.rawText || "Text source loaded. Parse the invoice to populate this preview."}
-                  </pre>
-                ) : null}
-
-                {!sourcePreviewUrl && receipt.rawText.trim() ? (
-                  <pre className="max-h-[720px] overflow-auto whitespace-pre-wrap p-4 text-xs text-gray-700">
-                    {receipt.rawText}
-                  </pre>
-                ) : null}
-
-                {!sourcePreviewUrl && !receipt.rawText.trim() ? (
-                  <div className="flex min-h-[320px] items-center justify-center p-6 text-center text-sm text-gray-500">
-                    Upload a PDF or receipt image to preview it here. Pasted invoice text will appear after parsing.
-                  </div>
-                ) : null}
-              </div>
-
-              <div className="mt-4 rounded-xl border border-gray-200 bg-white p-4">
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p className="font-semibold text-gray-500">Invoice</p>
-                    <p className="mt-1 font-bold text-gray-900">{receipt.invoiceNum || "--"}</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-500">Date</p>
-                    <p className="mt-1 font-bold text-gray-900">{receipt.invoiceDate || "--"}</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-500">Subtotal</p>
-                    <p className="mt-1 font-bold text-gray-900">{money(receipt.subtotal || lineTotals.subtotal)}</p>
-                  </div>
-                  <div>
-                    <p className="font-semibold text-gray-500">Total</p>
-                    <p className="mt-1 font-bold text-gray-900">{money(receipt.total || lineTotals.total)}</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
       </div>
       {receiptLoading ? (

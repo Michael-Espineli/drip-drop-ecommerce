@@ -199,6 +199,9 @@ const queryTargetDocs = async (db, companyId, target, customerId) => {
 const getCustomerContacts = (db, companyId, customerId) =>
   getDocs(collection(db, "companies", companyId, "customers", customerId, "contacts"));
 
+const getCustomerExpiredJobs = (db, companyId, customerId) =>
+  getDocs(collection(db, "companies", companyId, "customers", customerId, "expiredJobs"));
+
 const getDeleteTargetDocs = async (db, companyId, customerId) =>
   Promise.all(deleteTargets.map((target) => queryTargetDocs(db, companyId, target, customerId)));
 
@@ -246,10 +249,11 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
   }
 
   const customerRef = doc(db, "companies", companyId, "customers", customerId);
-  const [customerSnapshot, targetResults, contactsSnapshot] = await Promise.all([
+  const [customerSnapshot, targetResults, contactsSnapshot, expiredJobsSnapshot] = await Promise.all([
     getDoc(customerRef),
     getDeleteTargetDocs(db, companyId, customerId),
     getCustomerContacts(db, companyId, customerId),
+    getCustomerExpiredJobs(db, companyId, customerId),
   ]);
 
   if (!customerSnapshot.exists()) {
@@ -260,6 +264,7 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
   const targetCounts = [];
   let deletedSubcollectionDocs = 0;
   let deletedContactDocs = 0;
+  let deletedExpiredJobDocs = 0;
 
   for (const { target, docs } of targetResults) {
     let deletedForTarget = 0;
@@ -280,6 +285,11 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
     if (deleted) deletedContactDocs += 1;
   }
 
+  for (const expiredJobSnapshot of expiredJobsSnapshot.docs) {
+    const deleted = await writer.delete(expiredJobSnapshot.ref);
+    if (deleted) deletedExpiredJobDocs += 1;
+  }
+
   await writer.delete(customerRef);
   const writeCount = await writer.commit();
   const deletedTargetDocs = targetCounts.reduce((total, item) => total + item.count, 0);
@@ -287,8 +297,9 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
   return {
     writeCount,
     contacts: deletedContactDocs,
+    expiredJobs: deletedExpiredJobDocs,
     targets: targetCounts,
     deletedSubcollectionDocs,
-    totalDeleted: deletedTargetDocs + deletedSubcollectionDocs + deletedContactDocs + 1,
+    totalDeleted: deletedTargetDocs + deletedSubcollectionDocs + deletedContactDocs + deletedExpiredJobDocs + 1,
   };
 };

@@ -12,6 +12,7 @@ import {
     DocumentTextIcon,
     BuildingStorefrontIcon,
     TruckIcon,
+    ChevronRightIcon,
     ArrowDownIcon,
     ArrowUpIcon,
     XMarkIcon
@@ -30,24 +31,38 @@ const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
     const isAccounting = accent === "accounting";
 
     return (
-    <Link
-        to={to}
-        className={`flex items-start rounded-lg p-4 shadow-sm transition-colors ${
-            isAccounting
-                ? "border border-emerald-300 bg-emerald-600 text-white hover:bg-emerald-700"
-                : "bg-white hover:bg-gray-50"
-        }`}
-    >
-        <div className={`shrink-0 flex h-12 w-12 items-center justify-center rounded-lg ${
-            isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-gray-100 text-gray-600"
-        }`}>
-            {icon}
-        </div>
-        <div className="ml-4">
-            <p className={`font-semibold ${isAccounting ? "text-white" : "text-gray-800"}`}>{title}</p>
-            <p className={`text-sm ${isAccounting ? "text-emerald-50" : "text-gray-500"}`}>{description}</p>
-        </div>
-    </Link>
+        <Link
+            to={to}
+            className={`group flex items-center gap-4 px-4 py-3 transition-colors sm:px-5 ${
+                isAccounting
+                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                    : "bg-white hover:bg-slate-50"
+            }`}
+        >
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
+                isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-slate-100 text-slate-600"
+            }`}>
+                {icon}
+            </div>
+            <div className="min-w-0 flex-1">
+                <p className={`font-semibold ${isAccounting ? "text-white" : "text-slate-900"}`}>{title}</p>
+                <p className={`mt-0.5 text-sm ${isAccounting ? "text-emerald-50" : "text-slate-500"}`}>{description}</p>
+            </div>
+            <ChevronRightIcon className={`h-5 w-5 shrink-0 transition-transform group-hover:translate-x-0.5 ${
+                isAccounting ? "text-white/80" : "text-slate-400"
+            }`} />
+        </Link>
+    );
+};
+
+const SettingsSection = ({ title, items }) => {
+    return (
+        <section className="mb-8">
+            <h2 className="mb-3 text-lg font-semibold text-slate-900">{title}</h2>
+            <div className="overflow-hidden rounded-md border border-slate-200 bg-white divide-y divide-slate-200">
+                {items.map(item => <SettingsLink key={item.to} {...item} />)}
+            </div>
+        </section>
     );
 };
 
@@ -376,34 +391,14 @@ const CompanySettings = () => {
     return (
         <div className='p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen'>
             <div className="w-full">
-                <div>
-                    <h1 className="text-3xl font-bold text-gray-900 mb-8">Settings</h1>
+                <div className="mb-8">
+                    <h1 className="text-3xl font-bold text-gray-900">Settings</h1>
                     <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
                 </div>
 
-                {/* General Settings */}
-                <div className="mb-10">
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">General</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                        {settings.general.map(item => <SettingsLink key={item.to} {...item} />)}
-                    </div>
-                </div>
-
-                {/* Company Settings */}
-                <div className="mb-10">
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Company</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                        {settings.company.map(item => <SettingsLink key={item.to} {...item} />)}
-                    </div>
-                </div>
-
-                {/* Billing Settings */}
-                <div className="mb-10">
-                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Billing & Payroll</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
-                        {settings.billing.map(item => <SettingsLink key={item.to} {...item} />)}
-                    </div>
-                </div>
+                <SettingsSection title="General" items={settings.general} />
+                <SettingsSection title="Company" items={settings.company} />
+                <SettingsSection title="Billing & Payroll" items={settings.billing} />
 
                 {/* Stripe Connected Account Settings Update 3.1 */}
 

@@ -1,7 +1,15 @@
 import { Navigate, useLocation } from "react-router-dom";
 import React, { useContext } from "react";
+import { getAuth } from "firebase/auth";
 import { Context } from "../context/AuthContext";
 import { getCompanyPermissionForPath } from "../utils/companyPermissionAccess";
+import { CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID } from "../utils/models/FeatureFlag";
+
+const emailVerificationAllowedCompanyPaths = [
+    /^\/company\/selector/i,
+    /^\/company\/selection/i,
+    /^\/company\/create-info/i,
+];
 
 export function Protected({ route, children }) {
 
@@ -38,6 +46,21 @@ export function Protected({ route, children }) {
                 return <Navigate to='/' replace />
             }
         } else if (accountType === 'Company') {
+            if (routeRole === 'company') {
+                if (!featureFlagsLoaded) {
+                    return null;
+                }
+
+                const confirmEmailOnInviteEnabled = isFeatureEnabled(CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID);
+                const currentAuthUser = getAuth().currentUser || user;
+                const emailVerified = currentAuthUser?.emailVerified === true || user?.emailVerified === true;
+                const emailVerificationPathAllowed = emailVerificationAllowedCompanyPaths.some((pattern) => pattern.test(location.pathname));
+
+                if (confirmEmailOnInviteEnabled && !emailVerified && !emailVerificationPathAllowed) {
+                    return <Navigate to='/company/selector?verifyEmail=1' replace />
+                }
+            }
+
             if (companySubscription === null) {
                 return children;
             } else {

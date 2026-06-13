@@ -15,6 +15,7 @@ import {
 
 const SKIMMER_REQUIRED_COLUMNS = ["Customer", "Address", "Start Time", "Pool"];
 const MAX_WRITES_PER_BATCH = 450;
+const UNASSIGNED_TECHNICIAN_VALUE = "__unassigned__";
 
 const metadataColumnAliases = [
   "Customer",
@@ -565,6 +566,56 @@ const readingTemplateLabel = (template = {}) =>
 const dosageTemplateLabel = (template = {}) =>
   [template.name || "Unnamed dosage", template.UOM ? template.UOM : ""].filter(Boolean).join(" - ");
 
+const technicianSourceKey = (techName) => normalizeText(techName);
+
+const companyUserMappingValue = (companyUser = {}) => {
+  const user = companyUser || {};
+  return user.userId || user.id || "";
+};
+
+const displayCompanyUserName = (companyUser = {}) => {
+  const user = companyUser || {};
+  return (
+    user.userName ||
+    user.name ||
+    [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+    user.email ||
+    user.id ||
+    "Unnamed user"
+  );
+};
+
+const companyUserOptionLabel = (companyUser = {}) => {
+  const label = displayCompanyUserName(companyUser);
+  const status = cleanString(companyUser.status);
+  return status && normalizeText(status) !== "active" ? `${label} - ${status}` : label;
+};
+
+const companyUserKeys = (companyUser = {}) =>
+  [
+    displayCompanyUserName(companyUser),
+    companyUser.userName,
+    companyUser.name,
+    companyUser.email,
+    companyUser.userId,
+    companyUser.id,
+  ]
+    .map(normalizeText)
+    .filter(Boolean);
+
+const findMatchingCompanyUser = (techName, companyUsers) => {
+  const techKey = technicianSourceKey(techName);
+  if (!techKey) return null;
+
+  return (
+    companyUsers.find((companyUser) => companyUserKeys(companyUser).includes(techKey)) ||
+    companyUsers.find((companyUser) =>
+      companyUserKeys(companyUser).some((companyUserKey) => companyUserKey.includes(techKey) || techKey.includes(companyUserKey))
+    ) ||
+    null
+  );
+};
+
 const readingTemplateKeys = (template = {}) =>
   [template.name, template.chemType, template.dosageType, template.readingType, template.linkedItemName]
     .map(canonicalReadingName)
@@ -614,6 +665,13 @@ const buildAutoDosageMappings = ({ sourceDosages, dosageTemplates }) =>
   sourceDosages.reduce((acc, dosage) => {
     const template = findMatchingDosageTemplate(dosage.displayName, dosageTemplates);
     acc[dosage.key] = template?.id || "";
+    return acc;
+  }, {});
+
+const buildAutoTechnicianMappings = ({ sourceTechnicians, companyUsers }) =>
+  sourceTechnicians.reduce((acc, sourceTechnician) => {
+    const companyUser = findMatchingCompanyUser(sourceTechnician.displayName, companyUsers);
+    acc[sourceTechnician.key] = companyUserMappingValue(companyUser);
     return acc;
   }, {});
 
@@ -746,6 +804,7 @@ function SkimmerPreviousDosagesUpload() {
   const [customers, setCustomers] = useState([]);
   const [serviceLocations, setServiceLocations] = useState([]);
   const [bodiesOfWater, setBodiesOfWater] = useState([]);
+  const [companyUsers, setCompanyUsers] = useState([]);
   const [readingTemplates, setReadingTemplates] = useState([]);
   const [dosageTemplates, setDosageTemplates] = useState([]);
   const [companyDataLoading, setCompanyDataLoading] = useState(false);
@@ -756,6 +815,7 @@ function SkimmerPreviousDosagesUpload() {
   const [mappings, setMappings] = useState({});
   const [readingMappings, setReadingMappings] = useState({});
   const [dosageMappings, setDosageMappings] = useState({});
+  const [technicianMappings, setTechnicianMappings] = useState({});
   const [fallbackDate, setFallbackDate] = useState(todayInputValue());
   const [sourceFilter, setSourceFilter] = useState("all");
   const [uploading, setUploading] = useState(false);
@@ -777,12 +837,14 @@ function SkimmerPreviousDosagesUpload() {
           customersSnapshot,
           serviceLocationsSnapshot,
           bodiesOfWaterSnapshot,
+          companyUsersSnapshot,
           readingTemplatesSnapshot,
           dosageTemplatesSnapshot,
         ] = await Promise.all([
           getDocs(collection(db, "companies", recentlySelectedCompany, "customers")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "serviceLocations")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "bodiesOfWater")),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "readings", "readings")),
           getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages")),
         ]);
@@ -792,6 +854,7 @@ function SkimmerPreviousDosagesUpload() {
         setCustomers(customersSnapshot.docs.map((customerDoc) => ({ id: customerDoc.id, ...customerDoc.data() })));
         setServiceLocations(serviceLocationsSnapshot.docs.map((locationDoc) => ({ id: locationDoc.id, ...locationDoc.data() })));
         setBodiesOfWater(bodiesOfWaterSnapshot.docs.map((bodyDoc) => ({ id: bodyDoc.id, ...bodyDoc.data() })));
+        setCompanyUsers(companyUsersSnapshot.docs.map((userDoc) => ({ id: userDoc.id, ...userDoc.data() })));
         setReadingTemplates(readingTemplatesSnapshot.docs.map((readingDoc) => ({ id: readingDoc.id, ...readingDoc.data() })));
         setDosageTemplates(dosageTemplatesSnapshot.docs.map((dosageDoc) => ({ id: dosageDoc.id, ...dosageDoc.data() })));
       } catch (error) {
@@ -909,6 +972,36 @@ function SkimmerPreviousDosagesUpload() {
     return Array.from(byKey.values()).sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [records]);
 
+  const sourceTechnicians = useMemo(() => {
+    const byKey = new Map();
+
+    records.forEach((record) => {
+      const displayName = cleanString(record.techName);
+      const key = technicianSourceKey(displayName);
+      if (!key) return;
+
+      if (!byKey.has(key)) {
+        byKey.set(key, {
+          key,
+          displayName,
+          recordCount: 0,
+          sourceRows: new Set(),
+        });
+      }
+
+      const sourceTechnician = byKey.get(key);
+      sourceTechnician.recordCount += 1;
+      (record.sourceRows || [record.rowNumber]).forEach((rowNumber) => sourceTechnician.sourceRows.add(rowNumber));
+    });
+
+    return Array.from(byKey.values())
+      .map((sourceTechnician) => ({
+        ...sourceTechnician,
+        sourceRows: Array.from(sourceTechnician.sourceRows),
+      }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [records]);
+
   const autoReadingMappings = useMemo(
     () => buildAutoReadingMappings({ sourceReadings, readingTemplates }),
     [sourceReadings, readingTemplates]
@@ -919,6 +1012,11 @@ function SkimmerPreviousDosagesUpload() {
     [sourceDosages, dosageTemplates]
   );
 
+  const autoTechnicianMappings = useMemo(
+    () => buildAutoTechnicianMappings({ sourceTechnicians, companyUsers }),
+    [sourceTechnicians, companyUsers]
+  );
+
   useEffect(() => {
     setReadingMappings(autoReadingMappings);
   }, [autoReadingMappings]);
@@ -926,6 +1024,17 @@ function SkimmerPreviousDosagesUpload() {
   useEffect(() => {
     setDosageMappings(autoDosageMappings);
   }, [autoDosageMappings]);
+
+  useEffect(() => {
+    setTechnicianMappings((current) => {
+      if (!sourceTechnicians.length) return autoTechnicianMappings;
+
+      return sourceTechnicians.reduce((next, sourceTechnician) => {
+        next[sourceTechnician.key] = current[sourceTechnician.key] || autoTechnicianMappings[sourceTechnician.key] || "";
+        return next;
+      }, {});
+    });
+  }, [autoTechnicianMappings, sourceTechnicians]);
 
   const customerOptions = useMemo(
     () =>
@@ -963,6 +1072,21 @@ function SkimmerPreviousDosagesUpload() {
     [dosageTemplates]
   );
 
+  const technicianOptions = useMemo(
+    () => [
+      { value: UNASSIGNED_TECHNICIAN_VALUE, label: "Leave unassigned", user: null },
+      ...companyUsers
+        .map((companyUser) => ({
+          value: companyUserMappingValue(companyUser),
+          label: companyUserOptionLabel(companyUser),
+          user: companyUser,
+        }))
+        .filter((option) => option.value)
+        .sort((a, b) => a.label.localeCompare(b.label)),
+    ],
+    [companyUsers]
+  );
+
   const readingTemplatesById = useMemo(
     () => new Map(readingTemplates.map((template) => [template.id, template])),
     [readingTemplates]
@@ -971,6 +1095,11 @@ function SkimmerPreviousDosagesUpload() {
   const dosageTemplatesById = useMemo(
     () => new Map(dosageTemplates.map((template) => [template.id, template])),
     [dosageTemplates]
+  );
+
+  const companyUsersByMappingId = useMemo(
+    () => new Map(companyUsers.map((companyUser) => [companyUserMappingValue(companyUser), companyUser])),
+    [companyUsers]
   );
 
   const recordsBySourceLocationId = useMemo(() => {
@@ -1009,12 +1138,14 @@ function SkimmerPreviousDosagesUpload() {
       const mapping = mappings[record.sourceLocationId] || {};
       const locationReady = mapping.customerId && mapping.serviceLocationId && mapping.bodyOfWaterId;
       const dosagesReady = record.dosages.every((dosage) => dosageTemplatesById.has(dosageMappings[dosage.key]));
+      const technicianKey = technicianSourceKey(record.techName);
+      const technicianReady = !technicianKey || Boolean(technicianMappings[technicianKey]);
       const hasMappedReadings = record.readings.some((reading) => readingTemplatesById.has(readingMappings[reading.key]));
       const hasUploadableData = record.dosages.length > 0 || hasMappedReadings;
 
-      return locationReady && dosagesReady && hasUploadableData;
+      return locationReady && dosagesReady && technicianReady && hasUploadableData;
     },
-    [dosageMappings, dosageTemplatesById, mappings, readingMappings, readingTemplatesById]
+    [dosageMappings, dosageTemplatesById, mappings, readingMappings, readingTemplatesById, technicianMappings]
   );
 
   const totals = useMemo(() => {
@@ -1026,6 +1157,7 @@ function SkimmerPreviousDosagesUpload() {
     }).length;
     const mappedSourceDosageCount = sourceDosages.filter((dosage) => dosageTemplatesById.has(dosageMappings[dosage.key])).length;
     const mappedSourceReadingCount = sourceReadings.filter((reading) => readingTemplatesById.has(readingMappings[reading.key])).length;
+    const mappedSourceTechnicianCount = sourceTechnicians.filter((technician) => Boolean(technicianMappings[technician.key])).length;
     const uploadableRecordCount = records.filter(recordIsUploadable).length;
 
     return {
@@ -1041,6 +1173,9 @@ function SkimmerPreviousDosagesUpload() {
       sourceReadingCount: sourceReadings.length,
       mappedSourceReadingCount,
       unmappedSourceReadingCount: Math.max(sourceReadings.length - mappedSourceReadingCount, 0),
+      sourceTechnicianCount: sourceTechnicians.length,
+      mappedSourceTechnicianCount,
+      unmappedSourceTechnicianCount: Math.max(sourceTechnicians.length - mappedSourceTechnicianCount, 0),
       uploadableRecordCount,
     };
   }, [
@@ -1054,6 +1189,8 @@ function SkimmerPreviousDosagesUpload() {
     sourceDosages,
     sourceLocations,
     sourceReadings,
+    sourceTechnicians,
+    technicianMappings,
   ]);
 
   const uploadableRecords = useMemo(
@@ -1090,6 +1227,7 @@ function SkimmerPreviousDosagesUpload() {
     setParseIssues([]);
     setReadingMappings({});
     setDosageMappings({});
+    setTechnicianMappings({});
     setUploadProgress({ current: 0, total: 0 });
     setCreatingBodyOfWaterIds({});
 
@@ -1313,6 +1451,13 @@ function SkimmerPreviousDosagesUpload() {
     }));
   }, []);
 
+  const handleTechnicianMappingChange = useCallback((sourceTechnicianKey, technicianId) => {
+    setTechnicianMappings((current) => ({
+      ...current,
+      [sourceTechnicianKey]: technicianId || "",
+    }));
+  }, []);
+
   const handleUpload = async () => {
     if (!recentlySelectedCompany) {
       toast.error("Select a company before uploading.");
@@ -1332,6 +1477,14 @@ function SkimmerPreviousDosagesUpload() {
       for (let index = 0; index < uploadableRecords.length; index += 1) {
         const record = uploadableRecords[index];
         const mapping = mappings[record.sourceLocationId];
+        const technicianKey = technicianSourceKey(record.techName);
+        const mappedTechnicianId = technicianMappings[technicianKey] || "";
+        const mappedTechnician =
+          mappedTechnicianId && mappedTechnicianId !== UNASSIGNED_TECHNICIAN_VALUE
+            ? companyUsersByMappingId.get(mappedTechnicianId) || null
+            : null;
+        const stopDataUserId = mappedTechnician ? companyUserMappingValue(mappedTechnician) : "";
+        const stopDataTechName = mappedTechnician ? displayCompanyUserName(mappedTechnician) : "";
         const recordDate = record.serviceDate || dateFromInput(fallbackDate);
         const recordDateKey = Number.isNaN(recordDate.getTime()) ? fallbackDate : recordDate.toISOString();
         const recordId = `com_sd_skimmer_service_${hashString(`${record.key}|${recordDateKey}`)}`;
@@ -1364,7 +1517,7 @@ function SkimmerPreviousDosagesUpload() {
               customerId: mapping.customerId,
               serviceLocationId: mapping.serviceLocationId,
               bodyOfWaterId: mapping.bodyOfWaterId,
-              userId: user?.uid || "",
+              userId: stopDataUserId,
             },
             bodyOfWaterId: mapping.bodyOfWaterId,
             readings,
@@ -1373,10 +1526,13 @@ function SkimmerPreviousDosagesUpload() {
               `Skimmer service history upload${fileName ? `: ${fileName}` : ""}`,
               record.serviceNotes ? `Skimmer note: ${record.serviceNotes}` : "",
             ]),
-            userId: user?.uid || "",
+            userId: stopDataUserId,
             date: recordDate,
             equipmentMeasurements: [],
           }),
+          techId: stopDataUserId,
+          techName: stopDataTechName,
+          tech: stopDataTechName,
           imported: "From Skimmer",
           importedFrom: "skimmer",
           migrationSource: {
@@ -1392,6 +1548,8 @@ function SkimmerPreviousDosagesUpload() {
             sourceAddress: skimmerAddressText(record),
             sourcePoolName: record.poolName,
             sourceTechName: record.techName,
+            mappedTechnicianId: stopDataUserId,
+            mappedTechnicianName: stopDataTechName,
             sourceStartTime: record.startTimeRaw,
             sourceCompleteTime: record.completeTimeRaw,
             sourceRows: record.sourceRows,
@@ -1751,6 +1909,60 @@ function SkimmerPreviousDosagesUpload() {
           </section>
         )}
 
+        {sourceTechnicians.length > 0 && (
+          <section className="border border-slate-200 bg-white shadow-sm">
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <h2 className="text-base font-semibold text-slate-950">Technician Mapping</h2>
+              <span
+                className={`text-sm font-medium ${
+                  totals.unmappedSourceTechnicianCount > 0 ? "text-amber-700" : "text-emerald-700"
+                }`}
+              >
+                {totals.mappedSourceTechnicianCount}/{totals.sourceTechnicianCount} mapped
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 p-4 md:grid-cols-2 xl:grid-cols-4">
+              {sourceTechnicians.map((sourceTechnician) => {
+                const selectedTechnicianId = technicianMappings[sourceTechnician.key] || "";
+                const selectedOption = technicianOptions.find((option) => option.value === selectedTechnicianId) || null;
+                const mappedLabel = selectedTechnicianId === UNASSIGNED_TECHNICIAN_VALUE ? "Unassigned" : "Mapped";
+
+                return (
+                  <div key={sourceTechnician.key} className="border border-slate-200 bg-slate-50 p-3">
+                    <div className="mb-2 flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-slate-900">{sourceTechnician.displayName}</p>
+                        <p className="text-xs text-slate-500">
+                          Source: Tech column H · {sourceTechnician.recordCount} stops
+                        </p>
+                      </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${
+                          selectedTechnicianId ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
+                        }`}
+                      >
+                        {selectedTechnicianId ? mappedLabel : "Map"}
+                      </span>
+                    </div>
+                    <Select
+                      value={selectedOption}
+                      options={technicianOptions}
+                      onChange={(option) => handleTechnicianMappingChange(sourceTechnician.key, option?.value || "")}
+                      isClearable
+                      isSearchable
+                      placeholder="Search Drip Drop technician"
+                      classNamePrefix="react-select"
+                      menuPortalTarget={selectPortalTarget}
+                      menuPosition="fixed"
+                      styles={selectStyles}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
+
         <section className="border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
             <h2 className="text-base font-semibold text-slate-950">Mapping Preview</h2>
@@ -1789,6 +2001,10 @@ function SkimmerPreviousDosagesUpload() {
                     const locationReady = mapping.customerId && mapping.serviceLocationId && mapping.bodyOfWaterId;
                     const dosagesReady = sourceLocation.dosageKeys.every((dosageKey) => dosageTemplatesById.has(dosageMappings[dosageKey]));
                     const sourceRecords = recordsBySourceLocationId.get(sourceLocation.id) || [];
+                    const technicianReady = sourceRecords.every((record) => {
+                      const technicianKey = technicianSourceKey(record.techName);
+                      return !technicianKey || Boolean(technicianMappings[technicianKey]);
+                    });
                     const readyStopCount = sourceRecords.filter(recordIsUploadable).length;
                     const ready = locationReady && dosagesReady && readyStopCount > 0;
                     const visibleDosageNames = sourceLocation.dosageNames.slice(0, 4).join(", ");
@@ -1899,7 +2115,15 @@ function SkimmerPreviousDosagesUpload() {
                               ready ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"
                             }`}
                           >
-                            {ready ? `${readyStopCount} ready` : locationReady ? "Map dosages" : "Map location"}
+                            {ready
+                              ? `${readyStopCount} ready`
+                              : !locationReady
+                                ? "Map location"
+                                : !dosagesReady
+                                  ? "Map dosages"
+                                  : !technicianReady
+                                    ? "Map technician"
+                                    : "Map location"}
                           </span>
                         </td>
                       </tr>

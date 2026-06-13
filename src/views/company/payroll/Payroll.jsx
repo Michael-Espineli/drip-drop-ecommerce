@@ -3,7 +3,40 @@ import { collection, doc, getDoc, getDocs, query, runTransaction, setDoc, update
 import { Link, useLocation } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import { estimateServiceStopPay } from "../../../utils/payroll/payEstimate";
 import { v4 as uuidv4 } from "uuid";
+import {
+  IoBriefcaseOutline,
+  IoBuildOutline,
+  IoBusinessOutline,
+  IoCalendarOutline,
+  IoCallOutline,
+  IoCardOutline,
+  IoCarOutline,
+  IoCashOutline,
+  IoChatbubbleEllipsesOutline,
+  IoCheckmarkCircleOutline,
+  IoClipboardOutline,
+  IoConstructOutline,
+  IoDocumentTextOutline,
+  IoFlaskOutline,
+  IoHammerOutline,
+  IoHomeOutline,
+  IoListOutline,
+  IoLocationOutline,
+  IoMapOutline,
+  IoPeopleOutline,
+  IoPersonOutline,
+  IoPricetagOutline,
+  IoReaderOutline,
+  IoSparklesOutline,
+  IoTimeOutline,
+  IoTrailSignOutline,
+  IoWarningOutline,
+  IoWaterOutline,
+} from "react-icons/io5";
+
+const SERVICE_STOP_BACKFILL_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -151,11 +184,303 @@ const hourlyPaySourceOptions = ["activeRouteDuration", "activeRouteLogs", "servi
 const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
+const workCategoryOptions = ["route", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "extra", "custom"];
+
+const defaultStopPayCategories = [
+  {
+    id: "route",
+    label: "Routes",
+    category: "Route",
+    sourceId: "system_recurring_service_stop",
+    helper: "Recurring route work and scheduled route visits.",
+    defaultWorkCategory: "route",
+    defaultRateType: "flatPerStop",
+    defaultIconName: "figure.pool.swim",
+  },
+  {
+    id: "job",
+    label: "Jobs",
+    category: "Job",
+    sourceId: "system_job_service_stop",
+    helper: "Actual job work performed by a technician.",
+    defaultWorkCategory: "serviceCall",
+    defaultRateType: "flatPerStop",
+    defaultIconName: "briefcase",
+  },
+  {
+    id: "jobEstimate",
+    label: "Job Estimates",
+    category: "Job Estimate",
+    sourceId: "system_job_estimate_service_stop",
+    helper: "Fact-finding visits for requested job work before quoting.",
+    defaultWorkCategory: "serviceCall",
+    defaultRateType: "flatPerStop",
+    defaultIconName: "doc.text.magnifyingglass",
+  },
+  {
+    id: "serviceAgreementEstimate",
+    label: "Service Agreement Estimates",
+    category: "Service Agreement Estimate",
+    sourceId: "system_service_agreement_estimate_service_stop",
+    helper: "New recurring service surveys, new pools, and agreement inspections.",
+    defaultWorkCategory: "startup",
+    defaultRateType: "flatPerStop",
+    defaultIconName: "list.clipboard",
+  },
+  {
+    id: "customerRelationship",
+    label: "Customer Relationship",
+    category: "Customer Relationship",
+    sourceId: "system_customer_relationship_service_stop",
+    helper: "Open-ended customer visits, follow-ups, corrections, and conversations.",
+    defaultWorkCategory: "serviceCall",
+    defaultRateType: "flatPerStop",
+    defaultIconName: "person.wave.2",
+  },
+];
+
+const iosIconOptions = [
+  { name: "figure.pool.swim", label: "Pool Service", category: "Pool", Icon: IoWaterOutline },
+  { name: "briefcase", label: "Job", category: "Work", Icon: IoBriefcaseOutline },
+  { name: "doc.text.magnifyingglass", label: "Estimate", category: "Sales", Icon: IoDocumentTextOutline },
+  { name: "list.clipboard", label: "Checklist", category: "Work", Icon: IoClipboardOutline },
+  { name: "person.wave.2", label: "Customer Visit", category: "Customer", Icon: IoPeopleOutline },
+  { name: "wrench.and.screwdriver", label: "Repair", category: "Repair", Icon: IoConstructOutline },
+  { name: "hammer", label: "Install", category: "Repair", Icon: IoHammerOutline },
+  { name: "drop", label: "Water", category: "Pool", Icon: IoWaterOutline },
+  { name: "testtube.2", label: "Water Test", category: "Pool", Icon: IoFlaskOutline },
+  { name: "leaf", label: "Cleaning", category: "Pool", Icon: IoSparklesOutline },
+  { name: "sparkles", label: "Clean Up", category: "Pool", Icon: IoSparklesOutline },
+  { name: "calendar", label: "Scheduled", category: "Scheduling", Icon: IoCalendarOutline },
+  { name: "clock", label: "Hourly", category: "Scheduling", Icon: IoTimeOutline },
+  { name: "checkmark.circle", label: "Completed", category: "Status", Icon: IoCheckmarkCircleOutline },
+  { name: "exclamationmark.triangle", label: "Needs Review", category: "Status", Icon: IoWarningOutline },
+  { name: "house", label: "Residential", category: "Customer", Icon: IoHomeOutline },
+  { name: "building.2", label: "Commercial", category: "Customer", Icon: IoBusinessOutline },
+  { name: "person", label: "Customer", category: "Customer", Icon: IoPersonOutline },
+  { name: "phone", label: "Call", category: "Customer", Icon: IoCallOutline },
+  { name: "bubble.left.and.bubble.right", label: "Conversation", category: "Customer", Icon: IoChatbubbleEllipsesOutline },
+  { name: "truck.box", label: "Route", category: "Route", Icon: IoTrailSignOutline },
+  { name: "car", label: "Drive Time", category: "Route", Icon: IoCarOutline },
+  { name: "map", label: "Route Map", category: "Route", Icon: IoMapOutline },
+  { name: "location", label: "Location", category: "Route", Icon: IoLocationOutline },
+  { name: "dollarsign.circle", label: "Pay", category: "Payroll", Icon: IoCashOutline },
+  { name: "creditcard", label: "Payment", category: "Payroll", Icon: IoCardOutline },
+  { name: "doc.plaintext", label: "Paperwork", category: "Admin", Icon: IoReaderOutline },
+  { name: "checklist", label: "Task List", category: "Work", Icon: IoListOutline },
+  { name: "gearshape.2", label: "Equipment", category: "Repair", Icon: IoBuildOutline },
+  { name: "tag", label: "Custom", category: "General", Icon: IoPricetagOutline },
+];
+
+const IosIconPicker = ({ label, value, onChange }) => {
+  const [query, setQuery] = useState("");
+  const selectedIcon = iosIconOptions.find((icon) => icon.name === value);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleIcons = iosIconOptions.filter((icon) => {
+    if (!normalizedQuery) return true;
+    return [icon.name, icon.label, icon.category].some((field) => field.toLowerCase().includes(normalizedQuery));
+  });
+
+  return (
+    <div className="text-sm font-semibold text-slate-700 sm:col-span-2">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <span>{label}</span>
+        <span className="text-xs font-normal text-slate-500">
+          {selectedIcon ? `${selectedIcon.label} - ${selectedIcon.name}` : value ? `Current - ${value}` : "Choose an iOS icon"}
+        </span>
+      </div>
+      <input
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") event.preventDefault();
+        }}
+        placeholder="Search pool, repair, route, pay..."
+        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+      />
+      {value && !selectedIcon ? (
+        <p className="mt-1 text-xs font-normal text-amber-700">
+          This record is using an icon that is not in the picker yet. Choose a new one below to replace it.
+        </p>
+      ) : null}
+      <div className="mt-2 grid max-h-64 gap-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2 sm:grid-cols-2">
+        {visibleIcons.length === 0 ? (
+          <p className="rounded-md bg-white p-3 text-xs font-normal text-slate-500 sm:col-span-2">
+            No icons match that search.
+          </p>
+        ) : visibleIcons.map((icon) => {
+          const PreviewIcon = icon.Icon;
+          const isSelected = value === icon.name;
+
+          return (
+            <button
+              type="button"
+              key={icon.name}
+              onClick={() => onChange(icon.name)}
+              aria-pressed={isSelected}
+              className={`flex min-h-[4.5rem] items-center gap-3 rounded-md border p-3 text-left transition ${
+                isSelected
+                  ? "border-blue-500 bg-blue-50 text-blue-800 ring-1 ring-blue-500"
+                  : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-white"
+              }`}
+            >
+              <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${isSelected ? "bg-white" : "bg-slate-100"}`}>
+                <PreviewIcon className="h-5 w-5" aria-hidden="true" />
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate font-semibold">{icon.label}</span>
+                <span className="block truncate text-xs font-normal text-slate-500">{icon.name}</span>
+                <span className="block text-[11px] font-normal text-slate-400">{icon.category}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const normalizeStopPayCategory = (value = "") =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "")
+    .replace(/[_/-]/g, "");
+
+const stopPayCategoryForValue = (value = "", categories = defaultStopPayCategories) => {
+  const normalized = normalizeStopPayCategory(value);
+  return categories.find((category) => (
+    normalizeStopPayCategory(category.id) === normalized ||
+    normalizeStopPayCategory(category.category) === normalized ||
+    normalizeStopPayCategory(category.label) === normalized ||
+    normalizeStopPayCategory(category.sourceId) === normalized
+  )) || null;
+};
+
+const stopPayCategoryForServiceStopType = (type = {}, categories = defaultStopPayCategories) => {
+  const explicitMatch =
+    stopPayCategoryForValue(type.stopPayBucketId, categories) ||
+    stopPayCategoryForValue(type.serviceStopBucketId, categories) ||
+    stopPayCategoryForValue(type.stopPayBucketLabel, categories) ||
+    stopPayCategoryForValue(type.category, categories) ||
+    stopPayCategoryForValue(type.serviceStopCategory, categories) ||
+    stopPayCategoryForValue(type.serviceStopTypeUseCaseRawValue, categories) ||
+    stopPayCategoryForValue(type.id, categories);
+
+  if (explicitMatch) return explicitMatch;
+
+  const searchable = `${type.name || ""} ${type.type || ""}`.toLowerCase();
+  if (searchable.includes("service agreement") || searchable.includes("recurring service estimate") || searchable.includes("startup")) {
+    return categories.find((category) => category.id === "serviceAgreementEstimate");
+  }
+  if (searchable.includes("estimate")) {
+    return categories.find((category) => category.id === "jobEstimate");
+  }
+  if (searchable.includes("route") || searchable.includes("weekly")) {
+    return categories.find((category) => category.id === "route");
+  }
+  if (searchable.includes("customer") || searchable.includes("follow up") || searchable.includes("courtesy")) {
+    return categories.find((category) => category.id === "customerRelationship");
+  }
+
+  return categories.find((category) => category.id === "job") || categories[0] || null;
+};
+
+const stopPayCategoryForWorkType = (type = {}, categories = defaultStopPayCategories) => {
+  const explicitMatch =
+    stopPayCategoryForValue(type.stopPayBucketId, categories) ||
+    stopPayCategoryForValue(type.serviceStopBucketId, categories) ||
+    stopPayCategoryForValue(type.stopPayBucketLabel, categories) ||
+    stopPayCategoryForValue(type.serviceStopCategory, categories) ||
+    stopPayCategoryForValue(type.stopPayCategory, categories) ||
+    stopPayCategoryForValue(type.serviceStopBucket, categories) ||
+    stopPayCategoryForValue(type.sourceId, categories);
+
+  if (explicitMatch) return explicitMatch;
+
+  const searchable = `${type.name || ""} ${type.type || ""}`.toLowerCase();
+  if (searchable.includes("service agreement") || searchable.includes("recurring service estimate") || searchable.includes("startup")) {
+    return categories.find((category) => category.id === "serviceAgreementEstimate");
+  }
+  if (searchable.includes("estimate")) {
+    return categories.find((category) => category.id === "jobEstimate");
+  }
+  if (searchable.includes("route") || searchable.includes("weekly") || type.category === "route") {
+    return categories.find((category) => category.id === "route");
+  }
+  if (searchable.includes("customer") || searchable.includes("follow up") || searchable.includes("courtesy")) {
+    return categories.find((category) => category.id === "customerRelationship");
+  }
+
+  return categories.find((category) => category.id === "job") || categories[0] || null;
+};
+
+const emptyWorkTypeForm = () => ({
+  name: "",
+  stopPayCategoryId: "job",
+  category: "serviceCall",
+  iconName: "",
+  defaultRateType: "flatPerStop",
+  defaultStackBehavior: "stackable",
+});
+
+const emptyServiceStopTypeForm = () => ({
+  name: "",
+  categoryId: "job",
+  imageName: "",
+  defaultWorkTypeIds: [],
+});
 
 const dollarsToCents = (value) => {
   const amount = Number(value || 0);
   return Number.isFinite(amount) ? Math.round(amount * 100) : 0;
 };
+
+const centsToInputDollars = (value) => {
+  const amount = Number(value || 0) / 100;
+  return Number.isFinite(amount) ? String(amount) : "";
+};
+
+const suggestedPayBasisForMatrixWorkType = (workType = {}) => {
+  if (workType.defaultRateType === "hourly") return "technicianHourly";
+
+  switch (workType.category) {
+    case "route":
+    case "serviceCall":
+    case "commercial":
+    case "startup":
+      return "serviceStop";
+    case "repair":
+    case "installation":
+    case "cleaning":
+    case "drainAndRefill":
+    case "extra":
+    case "custom":
+      return "serviceStopTask";
+    default:
+      return "serviceStop";
+  }
+};
+
+const rateMatrixCellKey = (technicianId, columnId) => `${technicianId || "unknown"}__${columnId || "general"}`;
+
+const activeRateRank = (rate = {}) => {
+  const status = String(rate.status || "active").toLowerCase();
+  if (status === "active") return 0;
+  if (status === "scheduled") return 1;
+  if (status === "draft") return 2;
+  if (status === "expired") return 3;
+  if (status === "archived") return 4;
+  return 5;
+};
+
+const compareTechnicianRates = (left = {}, right = {}) => {
+  const statusDiff = activeRateRank(left) - activeRateRank(right);
+  if (statusDiff !== 0) return statusDiff;
+  return (dateFromValue(right.effectiveStartDate)?.getTime() || 0) - (dateFromValue(left.effectiveStartDate)?.getTime() || 0);
+};
+
+const sortedTechnicianRates = (rates = []) => [...rates].sort(compareTechnicianRates);
 
 const displayWorkTitle = (item) =>
   item.taskName ||
@@ -181,6 +506,55 @@ const isLineItemApproved = (item) =>
 
 const isLineItemVoided = (item) => Boolean(item?.voidedAt) || item?.calculationStatus === "voided";
 
+const isActiveCompanyServiceStopType = (type = {}) =>
+  type?.isActive !== false &&
+  !["archived", "deleted", "inactive"].includes(String(type?.status || "").trim().toLowerCase());
+
+const isFinishedStatus = (status) => {
+  const normalized = String(status || "").trim().toLowerCase();
+  return ["finished", "completed", "done", "complete"].includes(normalized);
+};
+
+const isServiceStopFinished = (stop) =>
+  isFinishedStatus(stop?.operationStatus) ||
+  Boolean(dateFromValue(stop?.endTime) || dateFromValue(stop?.finishedAt) || dateFromValue(stop?.completedAt));
+
+const dateAtStartOfDay = (value) => {
+  const date = value instanceof Date ? value : new Date(`${value}T00:00:00`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const dateAtEndOfDay = (value) => {
+  const date = value instanceof Date ? value : new Date(`${value}T23:59:59`);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const minutesBetween = (start, end) => {
+  const startValue = dateFromValue(start);
+  const endValue = dateFromValue(end);
+  if (!startValue || !endValue) return 0;
+  return Math.max(0, Math.round((endValue.getTime() - startValue.getTime()) / 60000));
+};
+
+const serviceStopStreetAddress = (stop = {}) =>
+  stop?.address?.streetAddress ||
+  stop?.address?.address01 ||
+  stop?.serviceLocationAddress ||
+  (typeof stop?.address === "string" ? stop.address : "") ||
+  "";
+
+const makePayLineItemId = ({ source, serviceStopId, serviceStopTaskId, technicianId, workTypeId }) =>
+  [
+    "comp_pay_line",
+    source || "serviceStop",
+    serviceStopId || "no_stop",
+    serviceStopTaskId || "no_task",
+    "no_route",
+    "no_route_log",
+    technicianId || "no_technician",
+    workTypeId || "no_work_type",
+  ].join("_");
+
 const payStatementReference = (statementNumber) => `PS-${String(statementNumber).padStart(6, "0")}`;
 
 const Payroll = ({ mode = "payroll" }) => {
@@ -196,11 +570,17 @@ const Payroll = ({ mode = "payroll" }) => {
   const [lineItems, setLineItems] = useState([]);
   const [statements, setStatements] = useState([]);
   const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
+  const [companyStopPayBuckets, setCompanyStopPayBuckets] = useState([]);
   const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
   const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
+  const [workTypeMappings, setWorkTypeMappings] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
   const [technicianRates, setTechnicianRates] = useState([]);
   const [rateForm, setRateForm] = useState(emptyRateForm);
+  const [workTypeForm, setWorkTypeForm] = useState(emptyWorkTypeForm);
+  const [serviceStopTypeForm, setServiceStopTypeForm] = useState(emptyServiceStopTypeForm);
+  const [editingWorkTypeId, setEditingWorkTypeId] = useState("");
+  const [editingServiceStopTypeId, setEditingServiceStopTypeId] = useState("");
   const [editingRateId, setEditingRateId] = useState("");
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(location.search).get("tab");
@@ -215,6 +595,10 @@ const Payroll = ({ mode = "payroll" }) => {
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
   const [detailLineItem, setDetailLineItem] = useState(null);
+  const [backfillResult, setBackfillResult] = useState(null);
+  const [stopPayModal, setStopPayModal] = useState(null);
+  const [rateMatrixEditMode, setRateMatrixEditMode] = useState(false);
+  const [rateMatrixDrafts, setRateMatrixDrafts] = useState({});
 
   useEffect(() => {
     setActiveTab((currentTab) => {
@@ -232,12 +616,21 @@ const Payroll = ({ mode = "payroll" }) => {
       setLineItems([]);
       setStatements([]);
       setSettingsForm(defaultPaySettings(""));
+      setCompanyStopPayBuckets([]);
       setCompanyServiceStopTypes([]);
       setCompanyWorkTypes([]);
+      setWorkTypeMappings([]);
       setCompanyUsers([]);
       setTechnicianRates([]);
       setRateForm(emptyRateForm());
+      setWorkTypeForm(emptyWorkTypeForm());
+      setServiceStopTypeForm(emptyServiceStopTypeForm());
+      setEditingWorkTypeId("");
+      setEditingServiceStopTypeId("");
       setEditingRateId("");
+      setBackfillResult(null);
+      setRateMatrixEditMode(false);
+      setRateMatrixDrafts({});
       return;
     }
 
@@ -258,8 +651,10 @@ const Payroll = ({ mode = "payroll" }) => {
 
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
+        const stopPayBucketsRef = collection(db, "companies", recentlySelectedCompany, "companyStopPayBuckets");
         const serviceStopTypesRef = collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes");
         const workTypesRef = collection(db, "companies", recentlySelectedCompany, "companyWorkTypes");
+        const workTypeMappingsRef = collection(db, "companies", recentlySelectedCompany, "workTypeMappings");
         const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
         const technicianRatesRef = collection(db, "companies", recentlySelectedCompany, "technicianRates");
 
@@ -267,16 +662,20 @@ const Payroll = ({ mode = "payroll" }) => {
           lineItemsSnap,
           statementsSnap,
           settingsSnap,
+          stopPayBucketsSnap,
           serviceStopTypesSnap,
           workTypesSnap,
+          workTypeMappingsSnap,
           companyUsersSnap,
           technicianRatesSnap,
         ] = await Promise.all([
           getDocs(lineItemsQuery),
           getDocs(statementsRef),
           getDoc(settingsRef),
+          getDocs(stopPayBucketsRef),
           getDocs(serviceStopTypesRef),
           getDocs(workTypesRef),
+          getDocs(workTypeMappingsRef),
           getDocs(companyUsersRef),
           getDocs(technicianRatesRef),
         ]);
@@ -302,6 +701,11 @@ const Payroll = ({ mode = "payroll" }) => {
           recentlySelectedCompany
         );
         setSettingsForm(nextPaySettings);
+        setCompanyStopPayBuckets(
+          stopPayBucketsSnap.docs
+            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+            .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.label || a.name || "").localeCompare(String(b.label || b.name || "")))
+        );
         setCompanyServiceStopTypes(
           serviceStopTypesSnap.docs
             .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
@@ -311,6 +715,9 @@ const Payroll = ({ mode = "payroll" }) => {
           workTypesSnap.docs
             .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
             .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+        );
+        setWorkTypeMappings(
+          workTypeMappingsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
         );
         setCompanyUsers(
           companyUsersSnap.docs
@@ -432,6 +839,274 @@ const Payroll = ({ mode = "payroll" }) => {
     return ids.map(workTypeName).join(", ");
   };
 
+  const activeCompanyServiceStopTypes = useMemo(
+    () => companyServiceStopTypes.filter(isActiveCompanyServiceStopType),
+    [companyServiceStopTypes]
+  );
+
+  const stopPayCategories = useMemo(() => {
+    const byId = new Map(
+      defaultStopPayCategories.map((bucket, index) => [
+        bucket.id,
+        {
+          ...bucket,
+          isActive: true,
+          isSystemDefault: true,
+          sortOrder: index * 10,
+        },
+      ])
+    );
+
+    companyStopPayBuckets.forEach((bucket, index) => {
+      if (!bucket?.id) return;
+      const base = byId.get(bucket.id) || {};
+      const label = String(bucket.label || bucket.name || base.label || "Stop Bucket").trim();
+      const category = bucket.category || base.category || "Job";
+
+      byId.set(bucket.id, {
+        ...base,
+        ...bucket,
+        label,
+        category,
+        helper: bucket.helper || base.helper || "",
+        defaultWorkCategory: bucket.defaultWorkCategory || base.defaultWorkCategory || "serviceCall",
+        defaultRateType: bucket.defaultRateType || base.defaultRateType || "flatPerStop",
+        defaultIconName: bucket.defaultIconName || bucket.iconName || base.defaultIconName || "briefcase",
+        sourceId: bucket.sourceId || base.sourceId || bucket.id,
+        isActive: bucket.isActive !== false,
+        isSystemDefault: Boolean(base.isSystemDefault),
+        sortOrder: bucket.sortOrder ?? base.sortOrder ?? (defaultStopPayCategories.length + index) * 10,
+      });
+    });
+
+    return [...byId.values()]
+      .filter((bucket) => bucket.isActive !== false)
+      .sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0) || String(a.label || "").localeCompare(String(b.label || "")));
+  }, [companyStopPayBuckets]);
+
+  const serviceStopTypesByStopPayCategory = useMemo(() => {
+    const grouped = Object.fromEntries(stopPayCategories.map((category) => [category.id, []]));
+
+    activeCompanyServiceStopTypes.forEach((type) => {
+      const category = stopPayCategoryForServiceStopType(type, stopPayCategories);
+      const categoryId = category?.id || "job";
+      grouped[categoryId] = [...(grouped[categoryId] || []), type];
+    });
+
+    return grouped;
+  }, [activeCompanyServiceStopTypes, stopPayCategories]);
+
+  const workTypesByStopPayCategory = useMemo(() => {
+    const grouped = Object.fromEntries(stopPayCategories.map((category) => [category.id, []]));
+
+    companyWorkTypes.forEach((type) => {
+      const category = stopPayCategoryForWorkType(type, stopPayCategories);
+      const categoryId = category?.id || "job";
+      grouped[categoryId] = [...(grouped[categoryId] || []), type];
+    });
+
+    return grouped;
+  }, [companyWorkTypes, stopPayCategories]);
+
+  const serviceStopTypeFormWorkTypeOptions = workTypesByStopPayCategory[serviceStopTypeForm.categoryId] || [];
+  const rateMatrixRows = useMemo(
+    () =>
+      companyUsers
+        .map((worker) => ({
+          ...worker,
+          matrixTechnicianId: worker.userId || worker.id || worker.docId || "",
+          matrixName: worker.userName || worker.name || worker.displayName || "Technician",
+        }))
+        .filter((worker) => worker.matrixTechnicianId)
+        .sort((a, b) => String(a.matrixName || "").localeCompare(String(b.matrixName || ""))),
+    [companyUsers]
+  );
+  const rateMatrixColumns = useMemo(
+    () => [
+      {
+        id: "generalHourly",
+        label: "General Hourly",
+        helper: "Fallback hourly rate",
+        workTypeId: "",
+        defaultPayBasis: "technicianHourly",
+        defaultRateType: "hourly",
+        isGeneralHourly: true,
+      },
+      ...companyWorkTypes
+        .filter((workType) => workType.status !== "Inactive" && workType.active !== false && workType.isActive !== false)
+        .map((workType) => ({
+          id: workType.id,
+          label: workType.name || "Work Type",
+          helper: statusLabel(workType.category || suggestedPayBasisForMatrixWorkType(workType)),
+          workTypeId: workType.id,
+          defaultPayBasis: suggestedPayBasisForMatrixWorkType(workType),
+          defaultRateType: workType.defaultRateType || "flatPerStop",
+          isGeneralHourly: false,
+        }))
+        .sort((a, b) => String(a.label || "").localeCompare(String(b.label || ""))),
+    ],
+    [companyWorkTypes]
+  );
+
+  const nextWorkTypeSortOrder = () => (companyWorkTypes.map((type) => Number(type.sortOrder || 0)).reduce((max, value) => Math.max(max, value), 0) || 0) + 10;
+  const nextServiceStopTypeSortOrder = () => (activeCompanyServiceStopTypes.map((type) => Number(type.sortOrder || 0)).reduce((max, value) => Math.max(max, value), 0) || 0) + 10;
+
+  const updateWorkTypeStopPayCategory = (categoryId) => {
+    const category = stopPayCategories.find((item) => item.id === categoryId) || stopPayCategories[1];
+    setWorkTypeForm((form) => ({
+      ...form,
+      stopPayCategoryId: category.id,
+      category: category.defaultWorkCategory,
+      defaultRateType: category.defaultRateType,
+      iconName: form.iconName || category.defaultIconName,
+    }));
+  };
+
+  const updateServiceStopTypeCategory = (categoryId) => {
+    const category = stopPayCategories.find((item) => item.id === categoryId) || stopPayCategories[1];
+    const allowedWorkTypeIds = new Set(
+      companyWorkTypes
+        .filter((type) => stopPayCategoryForWorkType(type, stopPayCategories)?.id === category.id)
+        .map((type) => type.id)
+    );
+    setServiceStopTypeForm((form) => ({
+      ...form,
+      categoryId: category.id,
+      imageName: form.imageName || category.defaultIconName,
+      defaultWorkTypeIds: (form.defaultWorkTypeIds || []).filter((id) => allowedWorkTypeIds.has(id)),
+    }));
+  };
+
+  const resetWorkTypeForm = () => {
+    setEditingWorkTypeId("");
+    setWorkTypeForm(emptyWorkTypeForm());
+  };
+
+  const resetServiceStopTypeForm = () => {
+    setEditingServiceStopTypeId("");
+    setServiceStopTypeForm(emptyServiceStopTypeForm());
+  };
+
+  const openCreateWorkTypeModal = () => {
+    resetWorkTypeForm();
+    setStopPayModal("workType");
+  };
+
+  const openCreateServiceStopTypeModal = () => {
+    resetServiceStopTypeForm();
+    setStopPayModal("serviceStopType");
+  };
+
+  const closeStopPayModal = () => {
+    setStopPayModal(null);
+    resetWorkTypeForm();
+    resetServiceStopTypeForm();
+  };
+
+  const editWorkType = (workType) => {
+    const category = stopPayCategoryForWorkType(workType, stopPayCategories) || stopPayCategories[1];
+    setEditingWorkTypeId(workType.id);
+    setWorkTypeForm({
+      name: workType.name || "",
+      stopPayCategoryId: category.id,
+      category: workType.category || category.defaultWorkCategory,
+      iconName: workType.iconName || "",
+      defaultRateType: workType.defaultRateType || category.defaultRateType,
+      defaultStackBehavior: workType.defaultStackBehavior || "stackable",
+    });
+    setStopPayModal("workType");
+  };
+
+  const editServiceStopType = (serviceStopType) => {
+    const category = stopPayCategoryForServiceStopType(serviceStopType, stopPayCategories) || stopPayCategories[1];
+    setEditingServiceStopTypeId(serviceStopType.id);
+    setServiceStopTypeForm({
+      name: serviceStopType.name || "",
+      categoryId: category.id,
+      imageName: serviceStopType.imageName || serviceStopType.typeImage || "",
+      defaultWorkTypeIds: Array.isArray(serviceStopType.defaultWorkTypeIds) ? serviceStopType.defaultWorkTypeIds : [],
+    });
+    setStopPayModal("serviceStopType");
+  };
+
+  const loadOutstandingStopsForServiceStopType = async (serviceStopType) => {
+    if (!recentlySelectedCompany || !serviceStopType?.id) return [];
+
+    const serviceStopsRef = collection(db, "companies", recentlySelectedCompany, "serviceStops");
+    const lookupFields = [
+      ["serviceStopTypeId", serviceStopType.id],
+      ["typeId", serviceStopType.id],
+      ["serviceStopTypeName", serviceStopType.name],
+      ["type", serviceStopType.name],
+    ].filter(([, value]) => Boolean(value));
+
+    const snapshots = await Promise.all(
+      lookupFields.map(([fieldName, value]) =>
+        getDocs(query(serviceStopsRef, where(fieldName, "==", value)))
+      )
+    );
+
+    const stopsById = new Map();
+    snapshots.forEach((snapshot) => {
+      snapshot.docs.forEach((docSnap) => {
+        stopsById.set(docSnap.id, { id: docSnap.id, ...docSnap.data() });
+      });
+    });
+
+    return [...stopsById.values()]
+      .filter((stop) => !isServiceStopFinished(stop))
+      .sort((a, b) => (dateFromValue(a.serviceDate)?.getTime() || 0) - (dateFromValue(b.serviceDate)?.getTime() || 0));
+  };
+
+  const deleteCompanyServiceStopType = async (serviceStopType) => {
+    if (!recentlySelectedCompany || !serviceStopType?.id) return;
+
+    const actionKey = `delete-service-stop-type-${serviceStopType.id}`;
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const outstandingStops = await loadOutstandingStopsForServiceStopType(serviceStopType);
+      const warning = outstandingStops.length > 0
+        ? `There are ${outstandingStops.length} unfinished service stop(s) using "${serviceStopType.name || "this type"}". Archiving keeps historical payroll references, but new setup screens will no longer show this stop type. Archive it anyway?`
+        : `Archive "${serviceStopType.name || "this service stop type"}"? Historical payroll and service stop references will stay stored.`;
+
+      if (!window.confirm(warning)) {
+        setSavingAction("");
+        return;
+      }
+
+      const payload = {
+        isActive: false,
+        status: "Archived",
+        archivedAt: new Date(),
+        archivedByUserId: currentUserId,
+        deletedAt: new Date(),
+        deletedByUserId: currentUserId,
+        deletionMode: "company_soft_delete",
+        deletionNotes: outstandingStops.length > 0
+          ? `Archived with ${outstandingStops.length} unfinished service stop(s) still referencing this type.`
+          : "Archived from payroll setup.",
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopType.id), payload);
+      setCompanyServiceStopTypes((types) =>
+        types.map((type) => (type.id === serviceStopType.id ? { ...type, ...payload } : type))
+      );
+      if (editingServiceStopTypeId === serviceStopType.id) {
+        closeStopPayModal();
+      }
+      setActionNotice("Service stop type archived. Historical payroll references were preserved.");
+    } catch (err) {
+      console.error("Error archiving service stop type:", err);
+      setActionFailure("Could not archive that service stop type.");
+    } finally {
+      setSavingAction("");
+    }
+  };
+
   const savePaySettings = async (event) => {
     event.preventDefault();
     if (!recentlySelectedCompany) return;
@@ -497,6 +1172,132 @@ const Payroll = ({ mode = "payroll" }) => {
     }
   };
 
+  const createCompanyWorkType = async (event) => {
+    event.preventDefault();
+    if (!recentlySelectedCompany) return;
+
+    const cleanName = workTypeForm.name.trim();
+    if (!cleanName) {
+      setActionFailure("Add a payroll work type name first.");
+      return;
+    }
+
+    const duplicate = companyWorkTypes.some((workType) =>
+      workType.id !== editingWorkTypeId &&
+      String(workType.name || "").trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (duplicate) {
+      setActionFailure(`A payroll work type named ${cleanName} already exists.`);
+      return;
+    }
+
+    const actionKey = editingWorkTypeId ? "update-work-type" : "create-work-type";
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const wasEditing = Boolean(editingWorkTypeId);
+      const category = stopPayCategories.find((item) => item.id === workTypeForm.stopPayCategoryId) || stopPayCategories[1];
+      const existingWorkType = companyWorkTypes.find((workType) => workType.id === editingWorkTypeId);
+      const workTypeId = existingWorkType?.id || `comp_work_type_${uuidv4()}`;
+      const payload = {
+        id: workTypeId,
+        companyId: recentlySelectedCompany,
+        name: cleanName,
+        category: workTypeForm.category || category.defaultWorkCategory,
+        iconName: workTypeForm.iconName.trim() || category.defaultIconName,
+        isActive: existingWorkType?.isActive !== false,
+        defaultRateType: workTypeForm.defaultRateType || category.defaultRateType,
+        defaultStackBehavior: workTypeForm.defaultStackBehavior || "stackable",
+        sortOrder: existingWorkType?.sortOrder ?? nextWorkTypeSortOrder(),
+        stopPayBucketId: category.id,
+        stopPayBucketLabel: category.label,
+        serviceStopCategory: category.category,
+        createdAt: existingWorkType?.createdAt || new Date(),
+        createdByUserId: existingWorkType?.createdByUserId || currentUserId,
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyWorkTypes", workTypeId), payload, { merge: true });
+      setCompanyWorkTypes((workTypes) =>
+        [payload, ...workTypes.filter((workType) => workType.id !== workTypeId)]
+          .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+      );
+      resetWorkTypeForm();
+      setStopPayModal(null);
+      setActionNotice(wasEditing ? "Payroll work type updated." : "Payroll work type created.");
+    } catch (err) {
+      console.error("Error saving company work type:", err);
+      setActionFailure("Could not save that payroll work type.");
+    } finally {
+      setSavingAction("");
+    }
+  };
+
+  const createCompanyServiceStopType = async (event) => {
+    event.preventDefault();
+    if (!recentlySelectedCompany) return;
+
+    const cleanName = serviceStopTypeForm.name.trim();
+    if (!cleanName) {
+      setActionFailure("Add a service stop type name first.");
+      return;
+    }
+
+    const duplicate = activeCompanyServiceStopTypes.some((type) =>
+      type.id !== editingServiceStopTypeId &&
+      String(type.name || "").trim().toLowerCase() === cleanName.toLowerCase()
+    );
+    if (duplicate) {
+      setActionFailure(`A service stop type named ${cleanName} already exists.`);
+      return;
+    }
+
+    const actionKey = editingServiceStopTypeId ? "update-service-stop-type" : "create-service-stop-type";
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const wasEditing = Boolean(editingServiceStopTypeId);
+      const category = stopPayCategories.find((item) => item.id === serviceStopTypeForm.categoryId) || stopPayCategories[1];
+      const existingServiceStopType = companyServiceStopTypes.find((type) => type.id === editingServiceStopTypeId);
+      const serviceStopTypeId = existingServiceStopType?.id || `comp_ss_type_${uuidv4()}`;
+      const payload = {
+        id: serviceStopTypeId,
+        companyId: recentlySelectedCompany,
+        name: cleanName,
+        imageName: serviceStopTypeForm.imageName.trim() || category.defaultIconName,
+        isActive: existingServiceStopType?.isActive !== false,
+        status: existingServiceStopType?.status || "Active",
+        sortOrder: existingServiceStopType?.sortOrder ?? nextServiceStopTypeSortOrder(),
+        category: category.category,
+        serviceStopCategory: category.category,
+        stopPayBucketId: category.id,
+        stopPayBucketLabel: category.label,
+        defaultWorkTypeIds: [...new Set((serviceStopTypeForm.defaultWorkTypeIds || []).filter(Boolean))],
+        createdAt: existingServiceStopType?.createdAt || new Date(),
+        createdByUserId: existingServiceStopType?.createdByUserId || currentUserId,
+        updatedAt: new Date(),
+        updatedByUserId: currentUserId,
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "companyServiceStopTypes", serviceStopTypeId), payload, { merge: true });
+      setCompanyServiceStopTypes((types) =>
+        [payload, ...types.filter((type) => type.id !== serviceStopTypeId)]
+          .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0) || String(a.name || "").localeCompare(String(b.name || "")))
+      );
+      resetServiceStopTypeForm();
+      setStopPayModal(null);
+      setActionNotice(wasEditing ? "Service stop type updated." : "Service stop type created.");
+    } catch (err) {
+      console.error("Error saving company service stop type:", err);
+      setActionFailure("Could not save that service stop type.");
+    } finally {
+      setSavingAction("");
+    }
+  };
+
   const editTechnicianRate = (rate) => {
     setEditingRateId(rate.id);
     setRateForm({
@@ -514,6 +1315,150 @@ const Payroll = ({ mode = "payroll" }) => {
   const resetRateForm = () => {
     setEditingRateId("");
     setRateForm(emptyRateForm());
+  };
+
+  const rateForMatrixCell = (technicianId, column) => {
+    const matches = technicianRates.filter((rate) => {
+      if ((rate.technicianId || "") !== technicianId) return false;
+      if (column.isGeneralHourly) {
+        return rate.payBasis === "technicianHourly" && !rate.workTypeId;
+      }
+      return (rate.workTypeId || "") === column.workTypeId;
+    });
+
+    return sortedTechnicianRates(matches)[0] || null;
+  };
+
+  const matrixDraftForCell = (worker, column) => {
+    const rate = rateForMatrixCell(worker.matrixTechnicianId, column);
+    const effectiveStartDate = isoDate(dateFromValue(rate?.effectiveStartDate) || new Date());
+    const amount = rate ? centsToInputDollars(rate.amountCents) : "";
+
+    return {
+      key: rateMatrixCellKey(worker.matrixTechnicianId, column.id),
+      rateId: rate?.id || "",
+      technicianId: worker.matrixTechnicianId,
+      technicianName: worker.matrixName,
+      workTypeId: column.workTypeId,
+      workTypeName: column.label,
+      payBasis: rate?.payBasis || column.defaultPayBasis,
+      rateType: rate?.rateType || column.defaultRateType,
+      amount,
+      status: rate?.status || "active",
+      effectiveStartDate,
+      reason: rate?.reason || "",
+      ratePlanId: rate?.ratePlanId || "web_matrix_rate_plan",
+      createdAt: rate?.createdAt || null,
+      createdByUserId: rate?.createdByUserId || "",
+      originalAmountCents: Number(rate?.amountCents || 0),
+      originalRateType: rate?.rateType || column.defaultRateType,
+      originalStatus: rate?.status || "active",
+      originalEffectiveStartDate: effectiveStartDate,
+      originalReason: rate?.reason || "",
+    };
+  };
+
+  const buildRateMatrixDrafts = () => {
+    const drafts = {};
+    rateMatrixRows.forEach((worker) => {
+      rateMatrixColumns.forEach((column) => {
+        const draft = matrixDraftForCell(worker, column);
+        drafts[draft.key] = draft;
+      });
+    });
+    return drafts;
+  };
+
+  const startRateMatrixEditMode = () => {
+    setRateMatrixDrafts(buildRateMatrixDrafts());
+    setRateMatrixEditMode(true);
+    resetRateForm();
+  };
+
+  const cancelRateMatrixEditMode = () => {
+    setRateMatrixEditMode(false);
+    setRateMatrixDrafts({});
+  };
+
+  const updateRateMatrixDraft = (key, field, value) => {
+    setRateMatrixDrafts((drafts) => ({
+      ...drafts,
+      [key]: {
+        ...(drafts[key] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const hasRateMatrixDraftChange = (draft = {}) => {
+    const hasAmount = String(draft.amount || "").trim() !== "";
+    if (!draft.rateId && !hasAmount) return false;
+    return (
+      dollarsToCents(draft.amount) !== Number(draft.originalAmountCents || 0) ||
+      draft.rateType !== draft.originalRateType ||
+      draft.status !== draft.originalStatus ||
+      draft.effectiveStartDate !== draft.originalEffectiveStartDate ||
+      String(draft.reason || "") !== String(draft.originalReason || "")
+    );
+  };
+
+  const saveRateMatrix = async () => {
+    if (!recentlySelectedCompany) return;
+
+    const draftsToSave = Object.values(rateMatrixDrafts).filter(hasRateMatrixDraftChange);
+    if (draftsToSave.length === 0) {
+      cancelRateMatrixEditMode();
+      setActionNotice("No technician rate changes to save.");
+      return;
+    }
+
+    const actionKey = "save-rate-matrix";
+    setSavingAction(actionKey);
+    setActionNotice();
+
+    try {
+      const batch = writeBatch(db);
+      const now = new Date();
+      const savedRates = draftsToSave.map((draft) => {
+        const rateId = draft.rateId || `comp_tech_rate_${uuidv4()}`;
+        const payload = {
+          id: rateId,
+          companyId: recentlySelectedCompany,
+          technicianId: draft.technicianId,
+          payBasis: draft.payBasis || "serviceStop",
+          workTypeId: draft.workTypeId || null,
+          amountCents: dollarsToCents(draft.amount),
+          rateType: draft.rateType || "flatPerStop",
+          effectiveStartDate: new Date(`${draft.effectiveStartDate || isoDate(new Date())}T12:00:00`),
+          effectiveEndDate: null,
+          status: draft.status || "active",
+          reason: String(draft.reason || "").trim() || null,
+          ratePlanId: draft.ratePlanId || "web_matrix_rate_plan",
+          createdAt: draft.createdAt || now,
+          createdByUserId: draft.createdByUserId || currentUserId,
+          updatedAt: now,
+          updatedByUserId: currentUserId,
+        };
+
+        batch.set(doc(db, "companies", recentlySelectedCompany, "technicianRates", rateId), payload, { merge: true });
+        return payload;
+      });
+
+      await batch.commit();
+      setTechnicianRates((rates) => {
+        const byId = new Map(rates.map((rate) => [rate.id, rate]));
+        savedRates.forEach((rate) => byId.set(rate.id, { ...(byId.get(rate.id) || {}), ...rate }));
+        return sortedTechnicianRates([...byId.values()]);
+      });
+      setRateMatrixEditMode(false);
+      setRateMatrixDrafts({});
+      setActionNotice(`Saved ${savedRates.length} technician rate cell${savedRates.length === 1 ? "" : "s"}.`);
+    } catch (err) {
+      console.error("Error saving technician rate matrix:", err);
+      setActionFailure("Could not save technician rate matrix.");
+    } finally {
+      setSavingAction("");
+    }
   };
 
   const saveTechnicianRate = async (event) => {
@@ -587,6 +1532,313 @@ const Payroll = ({ mode = "payroll" }) => {
       externalReferenceId: paymentReference || null,
       paidNotes: paidNotes || null,
     };
+  };
+
+  const showServiceStopBackfill = recentlySelectedCompany === SERVICE_STOP_BACKFILL_COMPANY_ID;
+
+  const serviceStopTypeForStop = (stop = {}) => {
+    const typeId = stop.typeId || stop.serviceStopTypeId || "";
+    return (
+      companyServiceStopTypes.find((type) => type.id === typeId) || {
+        id: typeId,
+        name: stop.type || stop.serviceStopTypeName || "Service Stop",
+        stopPayBucketId: stop.stopPayBucketId || stop.serviceStopBucketId || "",
+        stopPayBucketLabel: stop.stopPayBucketLabel || stop.serviceStopBucketLabel || "",
+        category: stop.category || stop.serviceStopCategory || "",
+        serviceStopCategory: stop.serviceStopCategory || stop.category || "",
+        defaultWorkTypeIds: stop.defaultWorkTypeIds || stop.serviceStopDefaultWorkTypeIds || [],
+      }
+    );
+  };
+
+  const workerForStop = (stop = {}) => {
+    const workerId = stop.techId || stop.userId || stop.technicianId || "";
+    const knownWorker = companyUsers.find((companyUser) =>
+      companyUser.userId === workerId ||
+      companyUser.id === workerId ||
+      companyUser.docId === workerId
+    );
+
+    return knownWorker || {
+      id: workerId,
+      userId: workerId,
+      userName: stop.tech || stop.techName || stop.userName || "Technician",
+      workerType: stop.workerType || "",
+    };
+  };
+
+  const shouldKeepExistingPayLine = (existingLineItem) => {
+    if (!existingLineItem) return false;
+    if (existingLineItem.calculationStatus === "paid" || existingLineItem.paidAt) return true;
+    if (existingLineItem.calculationStatus === "voided") {
+      return ["adminVoided", "duplicate"].includes(existingLineItem.voidReason);
+    }
+    if (settingsForm.lockPayAfterApproval && (existingLineItem.calculationStatus === "approved" || existingLineItem.approvedAt)) {
+      return true;
+    }
+    if (!settingsForm.recalculateUnapprovedPayWhenRatesChange) {
+      return ["pending", "calculated", "adjusted"].includes(existingLineItem.calculationStatus);
+    }
+    return false;
+  };
+
+  const buildPayLineItemPayload = ({ line, serviceStop, serviceStopType, tasks, worker, completedDate, calculatedAt }) => {
+    const technicianId = worker?.userId || worker?.id || serviceStop.techId || "";
+    const task = tasks.find((taskItem) => taskItem.id === line.sourceTaskId);
+    const source = line.source || "serviceStop";
+    const serviceStopTaskId = source === "serviceStopTask" ? line.sourceTaskId || task?.id || "" : "";
+    const lineId = makePayLineItemId({
+      source,
+      serviceStopId: serviceStop.id,
+      serviceStopTaskId,
+      technicianId,
+      workTypeId: line.workTypeId || "",
+    });
+    const category =
+      stopPayCategoryForServiceStopType(serviceStopType, stopPayCategories) ||
+      stopPayCategoryForServiceStopType(serviceStop, stopPayCategories);
+    const title = line.title || line.workTypeName || task?.name || serviceStop.type || "Payroll Line";
+    const subtitleParts = [
+      serviceStop.customerName,
+      serviceStopStreetAddress(serviceStop),
+      serviceStop.jobName || serviceStop.jobInternalId,
+    ].filter(Boolean);
+
+    return {
+      id: lineId,
+      companyId: recentlySelectedCompany,
+      technicianId,
+      technicianName: worker?.userName || worker?.name || worker?.displayName || serviceStop.tech || "Technician",
+      workerType: worker?.workerType || serviceStop.workerType || "",
+      source,
+      serviceStopId: serviceStop.id,
+      serviceStopTaskId: serviceStopTaskId || null,
+      activeRouteId: null,
+      activeRouteLogId: null,
+      workTypeId: line.workTypeId || null,
+      workTypeName: line.workTypeName || null,
+      rateId: line.rateId || null,
+      rateAmountCents: Number(line.rateAmountCents || 0),
+      rateType: line.rateType || "manual",
+      payBasis: line.payBasis || null,
+      quantity: Number(line.quantity || 0),
+      quantityUnit: line.quantityUnit || "each",
+      totalAmountCents: Number(line.totalAmountCents || 0),
+      completedDate,
+      calculatedAt,
+      calculationStatus: line.calculationStatus || "calculated",
+      approvedAt: null,
+      approvedByUserId: null,
+      paidAt: null,
+      paidByUserId: null,
+      voidedAt: null,
+      voidedByUserId: null,
+      voidReason: null,
+      payStatementId: null,
+      exportBatchId: null,
+      notes: line.notes || null,
+      adminReviewNotes: "Generated by payroll setup bulk finish.",
+      lineNumber: null,
+      lineReference: null,
+      paymentReference: null,
+      displayTitle: title,
+      displaySubtitle: subtitleParts.join(" - "),
+      customerId: serviceStop.customerId || null,
+      customerName: serviceStop.customerName || null,
+      serviceLocationId: serviceStop.serviceLocationId || null,
+      serviceLocationAddress: serviceStopStreetAddress(serviceStop) || null,
+      jobId: serviceStop.jobId || null,
+      jobInternalId: serviceStop.jobInternalId || null,
+      taskName: task?.name || task?.description || (source === "serviceStopTask" ? title : null),
+      serviceStopTypeName: serviceStopType?.name || serviceStop.type || serviceStop.serviceStopTypeName || null,
+      serviceStopCategory: category?.category || serviceStop.category || serviceStop.serviceStopCategory || null,
+      generatedBySource: "payroll_setup_bulk_finish",
+      generatedByUserId: currentUserId,
+      updatedAt: calculatedAt,
+    };
+  };
+
+  const finishUnfinishedServiceStopsForRange = async () => {
+    if (!showServiceStopBackfill || !recentlySelectedCompany) return;
+
+    const start = dateAtStartOfDay(startDate);
+    const end = dateAtEndOfDay(endDate);
+    if (!start || !end || start > end) {
+      setActionFailure("Choose a valid service stop date range first.");
+      return;
+    }
+
+    const actionKey = "finish-service-stop-range";
+    setSavingAction(actionKey);
+    setActionNotice();
+    setBackfillResult(null);
+
+    try {
+      const stopsSnap = await getDocs(
+        query(
+          collection(db, "companies", recentlySelectedCompany, "serviceStops"),
+          where("serviceDate", ">=", start),
+          where("serviceDate", "<=", end)
+        )
+      );
+      const unfinishedStops = stopsSnap.docs
+        .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+        .filter((stop) => !isServiceStopFinished(stop))
+        .sort((a, b) => (dateFromValue(a.serviceDate)?.getTime() || 0) - (dateFromValue(b.serviceDate)?.getTime() || 0));
+
+      if (unfinishedStops.length === 0) {
+        setBackfillResult({ finishedStops: 0, generatedLines: 0, preservedLines: 0, finishedTasks: 0 });
+        setActionNotice("No unfinished service stops were found in that date range.");
+        return;
+      }
+
+      const generatedLineItems = [];
+      let generatedLines = 0;
+      let preservedLines = 0;
+      let finishedTasks = 0;
+
+      for (const stop of unfinishedStops) {
+        const tasksSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks"));
+        const rawTasks = tasksSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+        const serviceDate = dateFromValue(stop.serviceDate) || new Date();
+        const completedAt = dateFromValue(stop.endTime) || dateFromValue(stop.completedAt) || dateFromValue(stop.finishedAt) || new Date(serviceDate);
+        if (completedAt.getHours() === 0 && completedAt.getMinutes() === 0 && completedAt.getSeconds() === 0) {
+          completedAt.setHours(17, 0, 0, 0);
+        }
+        const fallbackDuration = Number(stop.estimatedDuration || stop.duration || 0);
+        const startAt = dateFromValue(stop.startTime) || new Date(completedAt.getTime() - fallbackDuration * 60000);
+        const duration = minutesBetween(startAt, completedAt) || fallbackDuration;
+        const worker = workerForStop(stop);
+        const finishedTasksForStop = rawTasks.map((task) => ({
+          ...task,
+          status: isFinishedStatus(task.status) ? task.status : "Finished",
+          workerId: task.workerId || worker.userId || stop.techId || "",
+          workerName: task.workerName || worker.userName || worker.name || stop.tech || "",
+          completedAt: dateFromValue(task.completedAt) || completedAt,
+          updatedAt: completedAt,
+        }));
+        const newlyFinishedTasks = finishedTasksForStop.filter((task) => {
+          const original = rawTasks.find((item) => item.id === task.id);
+          return original && !isFinishedStatus(original.status);
+        });
+
+        const finishedStop = {
+          ...stop,
+          companyId: recentlySelectedCompany,
+          operationStatus: "Finished",
+          startTime: startAt,
+          endTime: completedAt,
+          finishedAt: completedAt,
+          completedAt,
+          completedDate: completedAt,
+          duration,
+          manuallyFinished: true,
+          manualFinishSource: "payroll_setup_bulk_finish",
+          completedWithoutCustomerEmail: true,
+          updatedAt: completedAt,
+        };
+        const serviceStopType = serviceStopTypeForStop(finishedStop);
+        const payLines = estimateServiceStopPay({
+          companyId: recentlySelectedCompany,
+          settings: settingsForm,
+          serviceStop: finishedStop,
+          serviceStopType,
+          tasks: finishedTasksForStop,
+          worker,
+          workTypes: companyWorkTypes,
+          mappings: workTypeMappings,
+          rates: technicianRates,
+          date: serviceDate,
+        });
+
+        const existingPaySnap = await getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
+            where("serviceStopId", "==", stop.id)
+          )
+        );
+        const existingPayById = new Map(
+          existingPaySnap.docs.map((docSnap) => [docSnap.id, { id: docSnap.id, ...docSnap.data() }])
+        );
+        const batch = writeBatch(db);
+
+        batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id), {
+          operationStatus: "Finished",
+          startTime: startAt,
+          endTime: completedAt,
+          finishedAt: completedAt,
+          completedAt,
+          completedDate: completedAt,
+          duration,
+          manuallyFinished: true,
+          manualFinishSource: "payroll_setup_bulk_finish",
+          completedWithoutCustomerEmail: true,
+          updatedAt: completedAt,
+        });
+
+        newlyFinishedTasks.forEach((task) => {
+          batch.update(doc(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks", task.id), {
+            status: "Finished",
+            workerId: task.workerId,
+            workerName: task.workerName,
+            completedAt,
+            updatedAt: completedAt,
+          });
+        });
+
+        payLines.forEach((line) => {
+          const payload = buildPayLineItemPayload({
+            line,
+            serviceStop: finishedStop,
+            serviceStopType,
+            tasks: finishedTasksForStop,
+            worker,
+            completedDate: serviceDate,
+            calculatedAt: new Date(),
+          });
+          const existingLine = existingPayById.get(payload.id);
+          if (shouldKeepExistingPayLine(existingLine)) {
+            preservedLines += 1;
+            return;
+          }
+
+          batch.set(
+            doc(db, "companies", recentlySelectedCompany, "technicianPayLineItems", payload.id),
+            payload,
+            { merge: true }
+          );
+          generatedLineItems.push(payload);
+          generatedLines += 1;
+        });
+
+        await batch.commit();
+        finishedTasks += newlyFinishedTasks.length;
+      }
+
+      if (generatedLineItems.length) {
+        const generatedIds = new Set(generatedLineItems.map((item) => item.id));
+        setLineItems((items) =>
+          [...generatedLineItems, ...items.filter((item) => !generatedIds.has(item.id))]
+            .sort((a, b) => (dateFromValue(b.completedDate)?.getTime() || 0) - (dateFromValue(a.completedDate)?.getTime() || 0))
+        );
+      }
+
+      const result = {
+        finishedStops: unfinishedStops.length,
+        generatedLines,
+        preservedLines,
+        finishedTasks,
+      };
+      setBackfillResult(result);
+      setActionNotice(
+        `Finished ${result.finishedStops} service stop(s), finished ${result.finishedTasks} task(s), and generated ${result.generatedLines} payroll line item(s).`
+      );
+    } catch (err) {
+      console.error("Error finishing service stops for payroll:", err);
+      setActionFailure(err.message || "Could not finish service stops for that date range.");
+    } finally {
+      setSavingAction("");
+    }
   };
 
   const createStatementForGroup = async (group) => {
@@ -1309,58 +2561,372 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const renderStopPaySetup = () => (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="flex flex-col gap-1 border-b border-slate-100 pb-4">
-          <h2 className="text-lg font-bold text-slate-900">Stop Pay Setup</h2>
-          <p className="text-sm text-slate-500">Connect each scheduled service stop type to the payroll work it should create.</p>
+    <section className="space-y-4">
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900">Stop Pay Setup</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Split service stop payroll by bucket, then map each stop type to payroll work.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={openCreateServiceStopTypeModal}
+              className="rounded-md bg-indigo-600 px-3 py-2 text-sm font-bold text-white hover:bg-indigo-700"
+            >
+              Create New Service Stop
+            </button>
+            <button
+              type="button"
+              onClick={openCreateWorkTypeModal}
+              className="rounded-md bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700"
+            >
+              Create New Work Type
+            </button>
+          </div>
         </div>
-        <div className="mt-4 grid gap-4">
-          {companyServiceStopTypes.length === 0 ? (
-            <p className="text-sm text-slate-500">No service stop types found.</p>
-          ) : companyServiceStopTypes.map((type) => {
-            const selectedIds = new Set(Array.isArray(type.defaultWorkTypeIds) ? type.defaultWorkTypeIds : []);
-            return (
-              <div key={type.id} className="rounded-lg border border-slate-200 p-4">
+      </div>
+
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+        {stopPayCategories.map((category) => {
+          const categoryTypes = serviceStopTypesByStopPayCategory[category.id] || [];
+          const categoryWorkTypes = workTypesByStopPayCategory[category.id] || [];
+
+          return (
+            <div key={category.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+              <div className="flex flex-col gap-1 border-b border-slate-100 pb-2.5">
                 <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                   <div>
-                    <h3 className="font-bold text-slate-900">{type.name || "Service stop type"}</h3>
-                    <p className="mt-1 text-sm text-slate-500">
-                      {(type.category || "Uncategorized")} - {serviceStopTypeWorkTypeNames(type)}
-                    </p>
+                    <h3 className="text-sm font-bold text-slate-900">{category.label}</h3>
+                    <p className="mt-1 text-xs text-slate-500">{category.helper}</p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => saveServiceStopTypeWorkTypes(type.id, [...selectedIds])}
-                    disabled={savingAction === `save-stop-type-${type.id}`}
-                    className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {savingAction === `save-stop-type-${type.id}` ? "Saving" : "Save Mapping"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                      {categoryTypes.length} stop type{categoryTypes.length === 1 ? "" : "s"}
+                    </span>
+                    <span className="rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                      {categoryWorkTypes.length} work type{categoryWorkTypes.length === 1 ? "" : "s"}
+                    </span>
+                  </div>
                 </div>
-                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {companyWorkTypes.map((workType) => (
-                    <label key={workType.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                      <input
-                        type="checkbox"
-                        defaultChecked={selectedIds.has(workType.id)}
-                        onChange={(event) => {
-                          if (event.target.checked) {
-                            selectedIds.add(workType.id);
-                          } else {
-                            selectedIds.delete(workType.id);
-                          }
-                        }}
-                      />
-                      <span>{workType.name}</span>
-                    </label>
+                <p className="truncate text-[11px] text-slate-400">Fallback source: {category.sourceId}</p>
+              </div>
+
+              <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 p-2">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Payroll Work Types</p>
+                <div className="mt-2 grid gap-1.5">
+                  {categoryWorkTypes.length === 0 ? (
+                    <p className="text-xs text-slate-500">No payroll work types in this bucket.</p>
+                  ) : categoryWorkTypes.map((workType) => (
+                    <div key={workType.id} className="flex items-center justify-between gap-2 rounded-md bg-white px-2 py-1.5 text-xs">
+                      <div className="min-w-0">
+                        <p className="truncate font-semibold text-slate-800">{workType.name}</p>
+                        <p className="truncate text-[11px] text-slate-500">{statusLabel(workType.defaultRateType)} / {statusLabel(workType.category)}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => editWorkType(workType)}
+                        className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                      >
+                        Edit
+                      </button>
+                    </div>
                   ))}
                 </div>
               </div>
-            );
-          })}
-        </div>
-      </section>
+
+              <div className="mt-3 rounded-md border border-slate-100 bg-slate-50 p-2">
+                <p className="text-[11px] font-bold uppercase tracking-wide text-slate-500">Service Stop Types</p>
+                <div className="mt-2 grid gap-2.5">
+                  {categoryTypes.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-slate-300 bg-white p-3 text-xs text-slate-500">
+                      No service stop types are set up for this bucket yet.
+                    </p>
+                  ) : categoryTypes.map((type) => {
+                    const selectedIds = new Set(Array.isArray(type.defaultWorkTypeIds) ? type.defaultWorkTypeIds : []);
+                    const categoryWorkTypeIds = new Set(categoryWorkTypes.map((workType) => workType.id));
+                    const legacySelectedWorkTypes = companyWorkTypes.filter((workType) => selectedIds.has(workType.id) && !categoryWorkTypeIds.has(workType.id));
+                    const visibleWorkTypes = [...categoryWorkTypes, ...legacySelectedWorkTypes];
+                    return (
+                      <div key={type.id} className="rounded-md border border-slate-200 bg-white p-3">
+                        <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                          <div className="min-w-0">
+                            <h4 className="truncate text-sm font-bold text-slate-900">{type.name || "Service stop type"}</h4>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              {(type.category || category.category)} - {serviceStopTypeWorkTypeNames(type)}
+                            </p>
+                          </div>
+                          <div className="flex shrink-0 flex-wrap gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => editServiceStopType(type)}
+                              className="rounded-md border border-slate-300 px-2.5 py-1.5 text-[11px] font-semibold text-slate-700 hover:bg-slate-50"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => deleteCompanyServiceStopType(type)}
+                              disabled={savingAction === `delete-service-stop-type-${type.id}`}
+                              className="rounded-md border border-red-200 px-2.5 py-1.5 text-[11px] font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {savingAction === `delete-service-stop-type-${type.id}` ? "Deleting" : "Delete"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => saveServiceStopTypeWorkTypes(type.id, [...selectedIds])}
+                              disabled={savingAction === `save-stop-type-${type.id}`}
+                              className="rounded-md bg-blue-600 px-2.5 py-1.5 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {savingAction === `save-stop-type-${type.id}` ? "Saving" : "Save Mapping"}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+                          {visibleWorkTypes.length === 0 ? (
+                            <p className="text-xs text-slate-500">Create payroll work types before mapping this stop type.</p>
+                          ) : visibleWorkTypes.map((workType) => {
+                            const workTypeCategory = stopPayCategoryForWorkType(workType, stopPayCategories);
+                            const isOutsideBucket = workTypeCategory?.id !== category.id;
+
+                            return (
+                              <label key={workType.id} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+                                <input
+                                  type="checkbox"
+                                  defaultChecked={selectedIds.has(workType.id)}
+                                  onChange={(event) => {
+                                    if (event.target.checked) {
+                                      selectedIds.add(workType.id);
+                                    } else {
+                                      selectedIds.delete(workType.id);
+                                    }
+                                  }}
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate">{workType.name}</span>
+                                  {isOutsideBucket ? (
+                                    <span className="text-[11px] text-amber-600">Mapped from {workTypeCategory?.label || "another bucket"}</span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
+
+  const renderStopPayEditorModal = () => {
+    if (!stopPayModal) return null;
+
+    const isWorkTypeModal = stopPayModal === "workType";
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+        {isWorkTypeModal ? (
+          <form onSubmit={createCompanyWorkType} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">{editingWorkTypeId ? "Edit Payroll Work Type" : "Create New Work Type"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Work types are the rows technicians get rates for.</p>
+              </div>
+              <button type="button" onClick={closeStopPayModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                Name
+                <input
+                  value={workTypeForm.name}
+                  onChange={(event) => setWorkTypeForm((form) => ({ ...form, name: event.target.value }))}
+                  placeholder="Job Estimate, Service Agreement Estimate..."
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+
+              <label className="text-sm font-semibold text-slate-700">
+                Stop Bucket
+                <select
+                  value={workTypeForm.stopPayCategoryId}
+                  onChange={(event) => updateWorkTypeStopPayCategory(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {stopPayCategories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-semibold text-slate-700">
+                Work Category
+                <select
+                  value={workTypeForm.category}
+                  onChange={(event) => setWorkTypeForm((form) => ({ ...form, category: event.target.value }))}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {workCategoryOptions.map((category) => (
+                    <option key={category} value={category}>{statusLabel(category)}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-semibold text-slate-700">
+                Rate Type
+                <select
+                  value={workTypeForm.defaultRateType}
+                  onChange={(event) => setWorkTypeForm((form) => ({ ...form, defaultRateType: event.target.value }))}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {rateTypeOptions.map((option) => (
+                    <option key={option} value={option}>{statusLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="text-sm font-semibold text-slate-700">
+                Stack
+                <select
+                  value={workTypeForm.defaultStackBehavior}
+                  onChange={(event) => setWorkTypeForm((form) => ({ ...form, defaultStackBehavior: event.target.value }))}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {stackBehaviorOptions.map((option) => (
+                    <option key={option} value={option}>{statusLabel(option)}</option>
+                  ))}
+                </select>
+              </label>
+
+              <IosIconPicker
+                label="Icon"
+                value={workTypeForm.iconName}
+                onChange={(iconName) => setWorkTypeForm((form) => ({ ...form, iconName }))}
+              />
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button type="button" onClick={closeStopPayModal} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={["create-work-type", "update-work-type"].includes(savingAction)}
+                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingAction === "update-work-type" ? "Updating" : savingAction === "create-work-type" ? "Creating" : editingWorkTypeId ? "Update Work Type" : "Create Work Type"}
+              </button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={createCompanyServiceStopType} className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">{editingServiceStopTypeId ? "Edit Service Stop Type" : "Create New Service Stop"}</h2>
+                <p className="mt-1 text-sm text-slate-500">Stop types point to default payroll work.</p>
+              </div>
+              <button type="button" onClick={closeStopPayModal} className="rounded-md px-2 py-1 text-sm font-semibold text-slate-500 hover:bg-slate-100">
+                Close
+              </button>
+            </div>
+
+            <div className="mt-5 grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                Name
+                <input
+                  value={serviceStopTypeForm.name}
+                  onChange={(event) => setServiceStopTypeForm((form) => ({ ...form, name: event.target.value }))}
+                  placeholder="Job Estimate, Courtesy Visit..."
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                />
+              </label>
+
+              <label className="text-sm font-semibold text-slate-700">
+                Stop Bucket
+                <select
+                  value={serviceStopTypeForm.categoryId}
+                  onChange={(event) => updateServiceStopTypeCategory(event.target.value)}
+                  className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {stopPayCategories.map((category) => (
+                    <option key={category.id} value={category.id}>{category.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              <IosIconPicker
+                label="Icon"
+                value={serviceStopTypeForm.imageName}
+                onChange={(imageName) => setServiceStopTypeForm((form) => ({ ...form, imageName }))}
+              />
+
+              <label className="text-sm font-semibold text-slate-700 sm:col-span-2">
+                Default Payroll Work Types
+                <select
+                  multiple
+                  value={serviceStopTypeForm.defaultWorkTypeIds}
+                  onChange={(event) => {
+                    const selectedIds = Array.from(event.target.selectedOptions).map((option) => option.value);
+                    setServiceStopTypeForm((form) => ({ ...form, defaultWorkTypeIds: selectedIds }));
+                  }}
+                  className="mt-1 min-h-[8rem] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  {serviceStopTypeFormWorkTypeOptions.map((workType) => (
+                    <option key={workType.id} value={workType.id}>{workType.name}</option>
+                  ))}
+                </select>
+                {serviceStopTypeFormWorkTypeOptions.length === 0 ? (
+                  <span className="mt-1 block text-xs font-normal text-slate-500">
+                    Create a payroll work type in this bucket before selecting defaults.
+                  </span>
+                ) : null}
+              </label>
+            </div>
+
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                {editingServiceStopTypeId ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const serviceStopType = companyServiceStopTypes.find((type) => type.id === editingServiceStopTypeId);
+                      if (serviceStopType) deleteCompanyServiceStopType(serviceStopType);
+                    }}
+                    disabled={savingAction === `delete-service-stop-type-${editingServiceStopTypeId}`}
+                    className="rounded-md border border-red-200 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {savingAction === `delete-service-stop-type-${editingServiceStopTypeId}` ? "Deleting" : "Delete"}
+                  </button>
+                ) : null}
+              </div>
+              <div className="flex justify-end gap-2">
+                <button type="button" onClick={closeStopPayModal} className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={["create-service-stop-type", "update-service-stop-type"].includes(savingAction)}
+                  className="rounded-md bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAction === "update-service-stop-type" ? "Updating" : savingAction === "create-service-stop-type" ? "Creating" : editingServiceStopTypeId ? "Update Stop Type" : "Create Stop Type"}
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+      </div>
+    );
+  };
 
   const renderTechnicianRates = () => (
       <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1473,70 +3039,109 @@ const Payroll = ({ mode = "payroll" }) => {
     ];
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
-        <header className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-slate-900">{isSetupMode ? "Payroll Setup" : "Payroll"}</h1>
-            <p className="mt-1 text-slate-600">
-              {isSetupMode
-                ? "Configure how scheduled work turns into technician pay."
-                : "Review payroll line items, create statements from approved pay, and mark technician pay as paid."}
-            </p>
-          </div>
-          {isSetupMode ? (
-            <Link
-              to="/company/payroll"
-              className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-            >
-              Open Payroll
-            </Link>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
-              <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
-              <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
-              <Link
-                to="/company/settings/payroll-setup"
-                className="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
-              >
-                Payroll Setup
-              </Link>
-              <button
-                type="button"
-                onClick={approveAllLineItems}
-                disabled={approvableLineItems.length === 0 || Boolean(savingAction)}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
-              </button>
-              <button
-                type="button"
-                onClick={createAllCandidateStatements}
-                disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
-                className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {savingAction.startsWith("create-statement") ? "Generating" : "Generate Statements"}
-              </button>
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                {isSetupMode ? "Company Settings" : "Payroll Review"}
+              </p>
+              <h1 className="mt-2 text-3xl font-bold text-slate-950">{isSetupMode ? "Payroll Setup" : "Payroll"}</h1>
+              <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                {isSetupMode
+                  ? "Configure how scheduled work turns into technician pay."
+                  : "Review payroll line items, create statements from approved pay, and mark technician pay as paid."}
+              </p>
             </div>
-          )}
-        </header>
+            {isSetupMode ? (
+              <Link
+                to="/company/payroll"
+                className="inline-flex items-center justify-center rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+              >
+                Open Payroll
+              </Link>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
+                <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <Link
+                  to="/company/settings/payroll-setup"
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
+                >
+                  Payroll Setup
+                </Link>
+                <button
+                  type="button"
+                  onClick={approveAllLineItems}
+                  disabled={approvableLineItems.length === 0 || Boolean(savingAction)}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
+                </button>
+                <button
+                  type="button"
+                  onClick={createAllCandidateStatements}
+                  disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
+                  className="rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAction.startsWith("create-statement") ? "Generating" : "Generate Statements"}
+                </button>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {isSetupMode && showServiceStopBackfill ? (
+          <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
+            <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Company Service Stop Backfill</p>
+                <h2 className="mt-1 text-base font-bold text-slate-950">Finish Unfinished Stops and Generate Payroll</h2>
+                <p className="mt-1 max-w-3xl text-sm text-slate-700">
+                  Uses the selected service date range, skips customer emails, marks unfinished stops complete, and creates technician pay line items.
+                </p>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <button
+                  type="button"
+                  onClick={finishUnfinishedServiceStopsForRange}
+                  disabled={savingAction === "finish-service-stop-range" || Boolean(savingAction && savingAction !== "finish-service-stop-range")}
+                  className="rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAction === "finish-service-stop-range" ? "Finishing" : "Finish Stops"}
+                </button>
+              </div>
+            </div>
+            {backfillResult ? (
+              <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-amber-800">
+                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedStops} stop(s)</span>
+                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.finishedTasks} task(s)</span>
+                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.generatedLines} line item(s)</span>
+                <span className="rounded-full bg-white px-2.5 py-1">{backfillResult.preservedLines} preserved</span>
+              </div>
+            ) : null}
+          </section>
+        ) : null}
 
         {!isSetupMode ? (
-          <div className="mb-6 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <StatCard title="Payroll total" value={moneyFromCents(summary.totalCents)} subtitle={`${summary.activeItems.length} active line item(s)`} />
             <StatCard title="Needs review" value={summary.needsReview} subtitle="Line items requiring attention" />
             <StatCard title="Approved" value={summary.approved} subtitle="Approved line items" />
             <StatCard title="Ready for statements" value={moneyFromCents(summary.statementCandidateCents)} subtitle={`${summary.statementCandidateItems.length} approved unpaid line(s)`} />
             <StatCard title="Paid" value={summary.paid} subtitle="Marked paid internally" />
-          </div>
+          </section>
         ) : null}
 
-        <div className="mb-5 flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
           {tabItems.map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`rounded-lg px-4 py-2 text-sm font-semibold transition ${
+              className={`rounded-md px-4 py-2 text-sm font-bold transition ${
                 activeTab === tab ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
               }`}
             >
@@ -1545,8 +3150,8 @@ const Payroll = ({ mode = "payroll" }) => {
           ))}
         </div>
 
-        {actionMessage ? <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{actionMessage}</div> : null}
-        {actionError ? <div className="mb-4 rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{actionError}</div> : null}
+        {actionMessage ? <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm font-semibold text-emerald-700">{actionMessage}</div> : null}
+        {actionError ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{actionError}</div> : null}
         {loading ? <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">Loading payroll...</div> : null}
         {error ? <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm font-semibold text-red-700">{error}</div> : null}
         {!loading && !error && !isSetupMode && activeTab === "lineItems" ? renderLineItems() : null}
@@ -1556,6 +3161,7 @@ const Payroll = ({ mode = "payroll" }) => {
         {!loading && !error && isSetupMode && activeTab === "rates" ? renderTechnicianRates() : null}
         {!loading && !error && isSetupMode && activeTab === "settings" ? renderSettings() : null}
       </div>
+      {renderStopPayEditorModal()}
       {paymentModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <form onSubmit={submitPayment} className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">

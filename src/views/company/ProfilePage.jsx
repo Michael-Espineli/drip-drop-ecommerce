@@ -421,7 +421,10 @@ export default function ProfilePage() {
             toast.success('Profile updated successfully!', { id: toastId });
         } catch (error) {
             console.error("Error updating user:", error);
-            toast.error('Failed to update profile.', { id: toastId });
+            const message = error?.code === "storage/unauthorized"
+                ? "Profile photo uploads are blocked by Firebase Storage rules."
+                : "Failed to update profile.";
+            toast.error(message, { id: toastId });
         } finally {
             setProfileSaving(false);
         }

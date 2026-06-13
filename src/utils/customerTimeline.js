@@ -187,6 +187,23 @@ const buildWorkOrderCommentEvent = (job, comment) => ({
   target: `/company/jobs/detail/${job.id}`,
 });
 
+const buildExpiredJobEvent = (expiredJob) => ({
+  id: `expired-job-${expiredJob.id || expiredJob.jobId}`,
+  type: "expiredJob",
+  label: "Expired Job",
+  title: expiredJob.title || `Expired job: ${expiredJob.jobInternalId || expiredJob.jobType || "Work order"}`,
+  subtitle: compact([
+    expiredJob.jobInternalId,
+    expiredJob.previousBillingStatus ? `${expiredJob.previousBillingStatus} -> Expired` : "Expired",
+    moneyFromCents(expiredJob.jobRateCents || expiredJob.rate),
+  ]).join(" • "),
+  detail: expiredJob.note || expiredJob.jobDescription || "",
+  date: validDate(expiredJob.expiredAt || expiredJob.updatedAt || expiredJob.createdAt || expiredJob.expiredAtMillis),
+  bodyOfWaterId: expiredJob.bodyOfWaterId || "",
+  serviceLocationId: expiredJob.serviceLocationId || "",
+  target: expiredJob.jobId ? `/company/jobs/detail/${expiredJob.jobId}` : "",
+});
+
 const buildToDoEvent = (toDo) => ({
   id: `todo-${toDo.id}`,
   type: "toDo",
@@ -292,6 +309,7 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     equipmentSnap,
     bodiesOfWaterSnap,
     workOrdersSnap,
+    expiredJobsSnap,
     toDosSnap,
     repairRequestsSnap,
     homeownerRepairRequestsSnap,
@@ -306,6 +324,7 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     safeGetDocs(query(collection(db, "companies", companyId, "equipment"), where("customerId", "==", customerId)), "equipment"),
     safeGetDocs(query(collection(db, "companies", companyId, "bodiesOfWater"), where("customerId", "==", customerId)), "bodies of water"),
     safeGetDocs(query(collection(db, "companies", companyId, "workOrders"), where("customerId", "==", customerId)), "jobs"),
+    safeGetDocs(collection(db, "companies", companyId, "customers", customerId, "expiredJobs"), "expired jobs"),
     safeGetDocs(query(collection(db, "companies", companyId, "toDos"), where("linkedCustomerId", "==", customerId)), "to-dos"),
     safeGetDocs(query(collection(db, "companies", companyId, "repairRequests"), where("customerId", "==", customerId)), "repair requests"),
     safeGetDocs(query(collection(db, "homeownerRepairRequests"), where("companyId", "==", companyId), where("customerId", "==", customerId)), "homeowner repair requests"),
@@ -323,6 +342,7 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   const equipmentById = new Map(equipment.map((item) => [item.id, item]));
   const bodyOfWaterById = new Map(bodiesOfWater.map((item) => [item.id, item]));
   const workOrders = workOrdersSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const expiredJobs = expiredJobsSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const toDos = toDosSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const repairRequestsById = new Map();
   [...repairRequestsSnap.docs, ...homeownerRepairRequestsSnap.docs].forEach((item) => {
@@ -389,6 +409,7 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   return [
     ...serviceStops.map(buildServiceStopEvent),
     ...workOrders.map(buildWorkOrderEvent),
+    ...expiredJobs.map(buildExpiredJobEvent),
     ...repairRequests.map(buildRepairRequestEvent),
     ...purchases.map(buildPurchaseEvent),
     ...agreements.map(buildSalesAgreementEvent),

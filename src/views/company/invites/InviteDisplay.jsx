@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { collection, doc, getDoc, getDocs } from "firebase/firestore";
 import { Link } from "react-router-dom";
+import toast from "react-hot-toast";
 import {
   ArrowTopRightOnSquareIcon,
   BuildingOffice2Icon,
@@ -19,6 +20,7 @@ import {
   XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { db } from "../../../utils/config";
+import { buildCompanyInviteUrl, isCompanyAccessInactive } from "../../../utils/invites";
 
 const KNOWN_INVITE_FIELDS = new Set([
   "id",
@@ -37,9 +39,26 @@ const KNOWN_INVITE_FIELDS = new Set([
   "createdAt",
   "acceptedAt",
   "rejectedAt",
+  "revokedAt",
   "updatedAt",
   "linkedCompanyId",
   "linkedCompanyName",
+  "inviteUrl",
+  "companyUserStatus",
+  "userAccessStatus",
+  "accessStatus",
+  "accessActive",
+  "accessUpdatedAt",
+  "lastSentAt",
+  "lastSentByUserId",
+  "lastEmailActualTo",
+  "lastEmailIntendedTo",
+  "lastEmailTestMode",
+  "lastEmailTemplateId",
+  "lastEmailTemplateMode",
+  "createdByUserId",
+  "updatedByUserId",
+  "revokedByUserId",
 ]);
 
 const normalizeStatus = (value) => String(value || "").trim().toLowerCase();
@@ -97,9 +116,14 @@ export const getInviteeName = (invite) => {
 const statusStyles = (status) => {
   switch (normalizeStatus(status)) {
     case "accepted":
+    case "active":
       return "border-emerald-200 bg-emerald-50 text-emerald-700";
+    case "inactive":
+    case "past":
+      return "border-slate-300 bg-slate-100 text-slate-700";
     case "rejected":
     case "declined":
+    case "revoked":
       return "border-rose-200 bg-rose-50 text-rose-700";
     case "pending":
       return "border-amber-200 bg-amber-50 text-amber-700";
@@ -113,6 +137,48 @@ const StatusChip = ({ status }) => (
     {titleize(status)}
   </span>
 );
+
+const getInviteAccessStatus = (invite) => {
+  const safeInvite = invite || {};
+  const explicitStatus = String(safeInvite.companyUserStatus || safeInvite.userAccessStatus || safeInvite.accessStatus || "").trim();
+  const normalizedExplicitStatus = normalizeStatus(explicitStatus);
+  if (["active", "inactive", "past"].includes(normalizedExplicitStatus)) {
+    return explicitStatus;
+  }
+  if (normalizeStatus(safeInvite.status) === "accepted") {
+    return isCompanyAccessInactive(safeInvite) ? "Inactive" : "Active";
+  }
+  return "";
+};
+
+const getInviteUrl = (invite) => {
+  const safeInvite = invite || {};
+  const directUrl = String(safeInvite.inviteUrl || "").trim();
+  if (directUrl) return directUrl;
+  if (!safeInvite.id || typeof window === "undefined") return "";
+  return buildCompanyInviteUrl(window.location.origin, safeInvite.id);
+};
+
+const copyText = async (value, successMessage) => {
+  const text = String(value || "").trim();
+  if (!text) {
+    toast.error("Nothing to copy.");
+    return;
+  }
+
+  if (typeof navigator === "undefined" || !navigator.clipboard?.writeText) {
+    toast.error("Clipboard is not available in this browser.");
+    return;
+  }
+
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success(successMessage);
+  } catch (error) {
+    console.error("Error copying invite text:", error);
+    toast.error("Copy failed.");
+  }
+};
 
 const Field = ({ label, value }) => (
   <div className="rounded-md border border-slate-200 bg-white p-3">
@@ -323,21 +389,26 @@ export const InviteSummaryCard = ({ invite, audience = "company", status, onOpen
   const primaryTitle = audience === "company" ? inviteeName : invite.companyName || "Company invite";
   const secondaryTitle = audience === "company" ? invite.email : inviteeName;
   const inviteId = invite.id || "Not provided";
-  const shortInviteId = inviteId.length > 18 ? `${inviteId.slice(0, 18)}...` : inviteId;
+  const accessStatus = getInviteAccessStatus(invite);
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+    <article className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm transition hover:border-slate-300 hover:shadow-md">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <StatusChip status={invite.status || status} />
             <span className="inline-flex items-center rounded-md border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
               {invite.currentUser ? "Existing user" : "New user"}
             </span>
+            {accessStatus ? (
+              <span className={`inline-flex items-center rounded-md border px-2.5 py-1 text-xs font-semibold ${statusStyles(accessStatus)}`}>
+                Access: {titleize(accessStatus)}
+              </span>
+            ) : null}
           </div>
 
-          <div className="mt-3 flex min-w-0 items-start gap-3">
-            <div className="flex h-10 w-10 flex-none items-center justify-center rounded-md bg-slate-900 text-sm font-bold text-white">
+          <div className="mt-2 flex min-w-0 items-start gap-3">
+            <div className="flex h-9 w-9 flex-none items-center justify-center rounded-md bg-slate-900 text-sm font-bold text-white">
               {String(primaryTitle || "I").charAt(0).toUpperCase()}
             </div>
             <div className="min-w-0">
@@ -346,21 +417,15 @@ export const InviteSummaryCard = ({ invite, audience = "company", status, onOpen
             </div>
           </div>
 
-          <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <div className="mt-3 grid gap-x-4 gap-y-2 md:grid-cols-2 xl:grid-cols-4">
             <IconText icon={EnvelopeIcon} label="Email" value={invite.email} />
             <IconText icon={IdentificationIcon} label="Role" value={invite.roleName} />
             <IconText icon={UserCircleIcon} label="Type" value={invite.workerType} />
             <IconText icon={CalendarDaysIcon} label="Created" value={invite.dateCreated || invite.createdAt} />
           </div>
-
-          <div className="mt-3 flex min-w-0 items-center gap-2 text-xs text-slate-500">
-            <ClipboardDocumentIcon className="h-4 w-4 flex-none" />
-            <span className="font-semibold">Invite ID</span>
-            <span className="min-w-0 truncate font-mono">{shortInviteId}</span>
-          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 lg:justify-end">
+        <div className="flex flex-wrap items-center gap-2 xl:justify-end">
           {actions}
           <button
             type="button"
@@ -378,7 +443,8 @@ export const InviteSummaryCard = ({ invite, audience = "company", status, onOpen
 };
 
 export const InviteDetailModal = ({ invite, onClose, actions }) => {
-  const companyId = invite?.companyId || invite?.linkedCompanyId || "";
+  const safeInvite = invite || {};
+  const companyId = safeInvite.companyId || safeInvite.linkedCompanyId || "";
   const [company, setCompany] = useState(null);
   const [companyReviews, setCompanyReviews] = useState([]);
   const [companyLoading, setCompanyLoading] = useState(false);
@@ -443,17 +509,16 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
   }, [companyId]);
 
   const primaryCompanyName = useMemo(
-    () => getCompanyDisplayName(company) || invite?.companyName || "Company not provided",
-    [company, invite?.companyName]
+    () => getCompanyDisplayName(company) || safeInvite.companyName || "Company not provided",
+    [company, safeInvite.companyName]
   );
+  const inviteUrl = useMemo(() => getInviteUrl(safeInvite), [safeInvite]);
+  const accessStatus = useMemo(() => getInviteAccessStatus(safeInvite), [safeInvite]);
 
   if (!invite) return null;
 
-  const copyInviteId = () => {
-    if (invite.id && typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(invite.id);
-    }
-  };
+  const copyInviteId = async () => copyText(invite.id, "Invite ID copied.");
+  const copyInviteLink = async () => copyText(inviteUrl, "Invite link copied.");
 
   const additionalFields = Object.entries(invite)
     .filter(([key, value]) => !KNOWN_INVITE_FIELDS.has(key) && value !== undefined && value !== null && String(value).trim() !== "")
@@ -469,6 +534,11 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
               <span className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
                 {invite.currentUser ? "Existing user" : "New user"}
               </span>
+              {accessStatus ? (
+                <span className={`rounded-md border px-2.5 py-1 text-xs font-semibold ${statusStyles(accessStatus)}`}>
+                  Access: {titleize(accessStatus)}
+                </span>
+              ) : null}
             </div>
             <h2 className="mt-3 truncate text-xl font-semibold text-slate-950">{getInviteeName(invite)}</h2>
             <p className="mt-1 text-sm text-slate-500">{primaryCompanyName}</p>
@@ -485,19 +555,45 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
 
         <div className="max-h-[calc(90vh-9rem)] overflow-y-auto p-5">
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
               <div className="min-w-0">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Invite ID</div>
                 <div className="mt-1 break-all font-mono text-sm text-slate-950">{formatInviteValue(invite.id)}</div>
+                {inviteUrl ? (
+                  <>
+                    <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Invite Link</div>
+                    <a
+                      href={inviteUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-1 inline-flex items-center gap-2 break-all text-sm font-medium text-blue-700 hover:text-blue-900"
+                    >
+                      <span className="break-all">{inviteUrl}</span>
+                      <ArrowTopRightOnSquareIcon className="h-4 w-4 flex-none" />
+                    </a>
+                  </>
+                ) : null}
               </div>
-              <button
-                type="button"
-                onClick={copyInviteId}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
-              >
-                <ClipboardDocumentIcon className="h-4 w-4" />
-                Copy ID
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={copyInviteId}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                >
+                  <ClipboardDocumentIcon className="h-4 w-4" />
+                  Copy ID
+                </button>
+                {inviteUrl ? (
+                  <button
+                    type="button"
+                    onClick={copyInviteLink}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                  >
+                    <ClipboardDocumentIcon className="h-4 w-4" />
+                    Copy Invite Link
+                  </button>
+                ) : null}
+              </div>
             </div>
           </div>
 
@@ -513,9 +609,13 @@ export const InviteDetailModal = ({ invite, onClose, actions }) => {
             <Field label="Worker Type" value={invite.workerType} />
             <Field label="Current User" value={invite.currentUser} />
             <Field label="Status" value={invite.status} />
+            <Field label="Access Status" value={accessStatus} />
             <Field label="Created" value={invite.dateCreated || invite.createdAt} />
             <Field label="Accepted At" value={invite.acceptedAt} />
             <Field label="Rejected At" value={invite.rejectedAt} />
+            <Field label="Revoked At" value={invite.revokedAt} />
+            <Field label="Last Sent" value={invite.lastSentAt} />
+            <Field label="Access Updated" value={invite.accessUpdatedAt} />
             <Field label="Updated At" value={invite.updatedAt} />
             {/* <Field label="Linked Company Name" value={invite.linkedCompanyName} /> */}
             {/* <Field label="Linked Company ID" value={invite.linkedCompanyId} /> */}

@@ -16,6 +16,7 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
+import Select from "react-select";
 
 const ReceiptDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -28,6 +29,8 @@ const ReceiptDetailView = () => {
     const [updating, setUpdating] = useState(false);
     const [uploadingFiles, setUploadingFiles] = useState(false);
     const [edit, setEdit] = useState(false);
+    const [companyUserList, setCompanyUserList] = useState([]);
+    const [selectedTech, setSelectedTech] = useState(null);
 
     const [receipt, setReceipt] = useState({
         id: "",
@@ -54,14 +57,118 @@ const ReceiptDetailView = () => {
         date: "",
         numberOfItems: "",
         storeName: "",
+        techId: "",
         techName: "",
         cost: "",
         costAfterTax: "",
     });
 
+    const selectTheme = (theme) => ({
+        ...theme,
+        borderRadius: 12,
+        colors: {
+            ...theme.colors,
+            primary25: "#EFF6FF",
+            primary: "#2563EB",
+            neutral0: "#FFFFFF",
+            neutral20: "#D1D5DB",
+            neutral30: "#9CA3AF",
+        },
+    });
+
+    const selectStyles = {
+        control: (base, state) => ({
+            ...base,
+            minHeight: 44,
+            borderRadius: 12,
+            borderColor: state.isFocused ? "#2563EB" : "#D1D5DB",
+            boxShadow: state.isFocused ? "0 0 0 2px rgba(37,99,235,0.25)" : "none",
+            "&:hover": { borderColor: state.isFocused ? "#2563EB" : "#9CA3AF" },
+        }),
+        menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden", zIndex: 50 }),
+    };
+
+    const normalizeTextValue = (value) => String(value || "").trim();
+
+    const getCompanyUserId = (userOption) =>
+        userOption?.userId || userOption?.id || userOption?.value || "";
+
+    const getCompanyUserDisplayName = (userOption) =>
+        normalizeTextValue(
+            userOption?.userName ||
+            userOption?.name ||
+            userOption?.label ||
+            `${userOption?.firstName || ""} ${userOption?.lastName || ""}`
+        );
+
+    const buildCompanyUserOption = (userData, docId = "") => {
+        const userId = userData.userId || userData.id || docId || "";
+        const userName = getCompanyUserDisplayName(userData) || userData.email || "Unnamed Technician";
+
+        return {
+            ...userData,
+            id: userData.id || docId || userId,
+            userId,
+            userName,
+            value: userId,
+            label: userName,
+        };
+    };
+
+    const resolveTechOption = (techId, techName, options = companyUserList) => {
+        const normalizedTechId = normalizeTextValue(techId);
+        const normalizedTechName = normalizeTextValue(techName);
+        const lowerTechName = normalizedTechName.toLowerCase();
+
+        const matchingOption =
+            options.find((option) => normalizedTechId && getCompanyUserId(option) === normalizedTechId) ||
+            options.find((option) => lowerTechName && getCompanyUserDisplayName(option).toLowerCase() === lowerTechName);
+
+        if (matchingOption) return matchingOption;
+        if (!normalizedTechId && !normalizedTechName) return null;
+
+        return {
+            id: normalizedTechId || "receipt-tech",
+            userId: normalizedTechId,
+            userName: normalizedTechName || "Unknown Technician",
+            value: normalizedTechId || normalizedTechName,
+            label: normalizedTechName || "Unknown Technician",
+        };
+    };
+
     useEffect(() => {
         fetchReceipt();
     }, [recentlySelectedCompany, receiptId]);
+
+    useEffect(() => {
+        const fetchCompanyUsers = async () => {
+            if (!recentlySelectedCompany) {
+                setCompanyUserList([]);
+                setSelectedTech(null);
+                return;
+            }
+
+            try {
+                const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
+                const snapshot = await getDocs(query(usersRef));
+                const users = snapshot.docs
+                    .map((docSnap) => buildCompanyUserOption(docSnap.data(), docSnap.id))
+                    .sort((left, right) => getCompanyUserDisplayName(left).localeCompare(getCompanyUserDisplayName(right)));
+
+                setCompanyUserList(users);
+            } catch (error) {
+                console.log("Error loading company users for receipt detail");
+                console.log(error);
+            }
+        };
+
+        fetchCompanyUsers();
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        if (edit) return;
+        setSelectedTech(resolveTechOption(receipt.techId, receipt.techName, companyUserList));
+    }, [companyUserList, edit, receipt.techId, receipt.techName]);
 
     const fetchReceipt = async () => {
         try {
@@ -105,6 +212,7 @@ const ReceiptDetailView = () => {
                     date: dateRaw ? format(dateRaw, "yyyy-MM-dd") : "",
                     numberOfItems: data.numberOfItems || 0,
                     storeName: data.storeName || "",
+                    techId: data.techId || "",
                     techName: data.techName || data.tech || "",
                     cost: ((data.cost || 0) / 100).toString(),
                     costAfterTax: ((data.costAfterTax || 0) / 100).toString(),
@@ -129,13 +237,16 @@ const ReceiptDetailView = () => {
 
                     return {
                         id: purchaseData.id || docSnap.id,
+                        itemId: purchaseData.itemId || "",
                         name: purchaseData.name,
                         category: purchaseData.category || "Uncategorized",
                         invoiceNum: purchaseData.invoiceNum,
                         price,
                         quantityString: purchaseData.quantityString,
-                        techName: purchaseData.techName,
+                        techId: purchaseData.techId || "",
+                        techName: purchaseData.techName || purchaseData.tech || "",
                         venderName: purchaseData.venderName,
+                        notes: purchaseData.notes || "",
                         date: formattedPurchaseDate,
                         total,
                     };
@@ -182,26 +293,40 @@ const ReceiptDetailView = () => {
         }));
     };
 
+    const handleTechChange = (selectedOption) => {
+        setSelectedTech(selectedOption);
+        setEditForm((prev) => ({
+            ...prev,
+            techId: getCompanyUserId(selectedOption),
+            techName: getCompanyUserDisplayName(selectedOption),
+        }));
+    };
+
     const editJob = () => {
+        const currentTech = resolveTechOption(receipt.techId, receipt.techName, companyUserList);
         setEditForm({
             invoiceNum: receipt.invoiceNum || "",
             date: receipt.dateRaw ? format(receipt.dateRaw, "yyyy-MM-dd") : "",
             numberOfItems: receipt.numberOfItems || 0,
             storeName: receipt.storeName || "",
+            techId: receipt.techId || "",
             techName: receipt.techName || "",
             cost: ((receipt.costRaw || 0) / 100).toString(),
             costAfterTax: ((receipt.costAfterTaxRaw || 0) / 100).toString(),
         });
+        setSelectedTech(currentTech);
         setEdit(true);
     };
 
     const cancelEditJob = () => {
         setEdit(false);
+        setSelectedTech(resolveTechOption(receipt.techId, receipt.techName, companyUserList));
         setEditForm({
             invoiceNum: receipt.invoiceNum || "",
             date: receipt.dateRaw ? format(receipt.dateRaw, "yyyy-MM-dd") : "",
             numberOfItems: receipt.numberOfItems || 0,
             storeName: receipt.storeName || "",
+            techId: receipt.techId || "",
             techName: receipt.techName || "",
             cost: ((receipt.costRaw || 0) / 100).toString(),
             costAfterTax: ((receipt.costAfterTaxRaw || 0) / 100).toString(),
@@ -216,14 +341,17 @@ const ReceiptDetailView = () => {
             const parsedDate = editForm.date ? new Date(`${editForm.date}T00:00:00`) : null;
             const costCents = Math.round((parseFloat(editForm.cost || 0) || 0) * 100);
             const costAfterTaxCents = Math.round((parseFloat(editForm.costAfterTax || 0) || 0) * 100);
+            const nextTechId = getCompanyUserId(selectedTech);
+            const nextTechName = getCompanyUserDisplayName(selectedTech);
 
             const updatePayload = {
                 invoiceNum: editForm.invoiceNum || "",
                 ...(parsedDate ? { date: parsedDate } : {}),
                 numberOfItems: parseInt(editForm.numberOfItems || 0, 10),
                 storeName: editForm.storeName || "",
-                techName: editForm.techName || "",
-                tech: editForm.techName || "",
+                techId: nextTechId,
+                techName: nextTechName,
+                tech: nextTechName,
                 cost: costCents,
                 costAfterTax: costAfterTaxCents,
                 tax: Math.max(costAfterTaxCents - costCents, 0),
@@ -243,7 +371,9 @@ const ReceiptDetailView = () => {
                     ...(parsedDate ? { date: parsedDate } : {}),
                     venderName: updatePayload.storeName,
                     vendorName: updatePayload.storeName,
+                    techId: updatePayload.techId,
                     techName: updatePayload.techName,
+                    tech: updatePayload.tech,
                 });
             });
 
@@ -268,6 +398,7 @@ const ReceiptDetailView = () => {
                     invoiceNum: updatePayload.invoiceNum,
                     date: parsedDate ? format(parsedDate, "MM / d / yyyy") : item.date,
                     venderName: updatePayload.storeName,
+                    techId: updatePayload.techId,
                     techName: updatePayload.techName,
                 }))
             );
@@ -379,16 +510,18 @@ const ReceiptDetailView = () => {
         }
     };
 
+    const detailFieldClass = "rounded-lg border border-gray-200 bg-gray-50 p-4";
+
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-xl mx-auto">
-                <div className="flex justify-between items-center mb-6">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
+                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
                         <Link
-                            to="/company/purchased-items"
+                            to="/company/receipts"
                             className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                         >
-                            &larr; Back to Purchased Items
+                            &larr; Back to Receipts
                         </Link>
                         <h2 className="text-3xl font-bold text-gray-800">Receipt Detail View</h2>
                     </div>
@@ -401,7 +534,7 @@ const ReceiptDetailView = () => {
                             Edit
                         </button>
                     ) : (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2">
                             <button
                                 onClick={saveEditChanges}
                                 disabled={updating}
@@ -427,18 +560,18 @@ const ReceiptDetailView = () => {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <div className="lg:col-span-2 space-y-6">
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+                    <div className="space-y-6 lg:col-span-3">
+                        <div className="rounded-lg bg-white p-6 shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Receipt Details</h3>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-gray-700">
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Receipt Reference</p>
                                     <p>{receipt.invoiceNum || "Receipt"}</p>
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Invoice Number</p>
                                     {edit ? (
                                         <input
@@ -454,7 +587,7 @@ const ReceiptDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Date</p>
                                     {edit ? (
                                         <input
@@ -470,7 +603,7 @@ const ReceiptDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Store</p>
                                     {edit ? (
                                         <input
@@ -486,23 +619,24 @@ const ReceiptDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Tech</p>
                                     {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.techName}
-                                            onChange={(e) =>
-                                                handleEditFieldChange("techName", e.target.value)
-                                            }
-                                            className="w-full p-2 border border-gray-300 rounded-lg"
+                                        <Select
+                                            value={selectedTech}
+                                            options={companyUserList}
+                                            onChange={handleTechChange}
+                                            isSearchable
+                                            placeholder="Select a Tech"
+                                            theme={selectTheme}
+                                            styles={selectStyles}
                                         />
                                     ) : (
                                         <p>{receipt.techName || "—"}</p>
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Number of Items</p>
                                     {edit ? (
                                         <input
@@ -518,7 +652,7 @@ const ReceiptDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Subtotal</p>
                                     {edit ? (
                                         <input
@@ -535,7 +669,7 @@ const ReceiptDetailView = () => {
                                     )}
                                 </div>
 
-                                <div>
+                                <div className={detailFieldClass}>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Total After Tax</p>
                                     {edit ? (
                                         <input
@@ -554,26 +688,29 @@ const ReceiptDetailView = () => {
                             </div>
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <div className="rounded-lg bg-white p-6 shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Items</h3>
 
                             {purchaseList.length > 0 ? (
                                 <div className="overflow-x-auto">
-                                    <table className="w-full text-sm text-left text-gray-700">
-                                        <thead className="text-sm text-gray-600 border-b border-gray-200">
+                                    <table className="min-w-full bg-white text-left text-sm text-gray-700">
+                                        <thead className="bg-gray-100">
                                             <tr>
-                                                <th className="py-3 px-4">Name</th>
-                                                <th className="py-3 px-4">Category</th>
-                                                <th className="py-3 px-4">Price</th>
-                                                <th className="py-3 px-4">Quantity</th>
-                                                <th className="py-3 px-4">Total</th>
-                                                <th className="py-3 px-4"></th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Name</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Database Item</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Category</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Technician</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Notes</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Price</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Quantity</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">Total</th>
+                                                <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600"></th>
                                             </tr>
                                         </thead>
-                                        <tbody>
+                                        <tbody className="divide-y divide-gray-200">
                                             {purchaseList.map((item) => (
-                                                <tr key={item.id} className="border-b border-gray-100">
-                                                    <td className="py-3 px-4 font-medium">
+                                                <tr key={item.id} className="transition-colors hover:bg-gray-50">
+                                                    <td className="whitespace-nowrap p-4 font-medium">
                                                         <Link
                                                             to={`/company/purchased-items/detail/${item.id}`}
                                                             className="text-blue-600 hover:text-blue-800"
@@ -581,19 +718,37 @@ const ReceiptDetailView = () => {
                                                             {item.name}
                                                         </Link>
                                                     </td>
-                                                    <td className="py-3 px-4">
+                                                    <td className="whitespace-nowrap p-4">
+                                                        {item.itemId ? (
+                                                            <Link
+                                                                to={`/company/items/detail/${item.itemId}`}
+                                                                className="font-semibold text-blue-600 hover:text-blue-800"
+                                                            >
+                                                                Open
+                                                            </Link>
+                                                        ) : (
+                                                            <span className="text-gray-400">—</span>
+                                                        )}
+                                                    </td>
+                                                    <td className="whitespace-nowrap p-4">
                                                         {item.category || "Uncategorized"}
                                                     </td>
-                                                    <td className="py-3 px-4">
+                                                    <td className="whitespace-nowrap p-4">
+                                                        {item.techName || "—"}
+                                                    </td>
+                                                    <td className="min-w-[18rem] max-w-lg whitespace-normal break-words p-4 text-gray-600">
+                                                        {item.notes || "—"}
+                                                    </td>
+                                                    <td className="whitespace-nowrap p-4">
                                                         {formatCurrency(item.price)}
                                                     </td>
-                                                    <td className="py-3 px-4">
+                                                    <td className="whitespace-nowrap p-4">
                                                         {item.quantityString}
                                                     </td>
-                                                    <td className="py-3 px-4 font-semibold">
+                                                    <td className="whitespace-nowrap p-4 font-semibold text-gray-900">
                                                         {formatCurrency(item.total)}
                                                     </td>
-                                                    <td className="py-3 px-4">
+                                                    <td className="whitespace-nowrap p-4">
                                                         <Link
                                                             to={`/company/purchased-items/detail/${item.id}`}
                                                             className="text-sm font-semibold text-gray-600 hover:text-gray-800"
@@ -613,7 +768,7 @@ const ReceiptDetailView = () => {
                             )}
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <div className="rounded-lg bg-white p-6 shadow-lg">
                             <div className="flex items-center justify-between gap-4 mb-4">
                                 <h3 className="text-xl font-bold text-gray-800">Uploads</h3>
 
@@ -670,34 +825,34 @@ const ReceiptDetailView = () => {
                     </div>
 
                     <div className="space-y-6">
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <div className="rounded-lg bg-white p-6 shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Summary</h3>
                             <div className="space-y-3 text-gray-700">
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Store:</span>
                                     <span>{receipt.storeName || "—"}</span>
                                 </div>
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Tech:</span>
                                     <span>{receipt.techName || "—"}</span>
                                 </div>
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Date:</span>
                                     <span>{receipt.date || "—"}</span>
                                 </div>
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Items:</span>
                                     <span>{receipt.numberOfItems || 0}</span>
                                 </div>
-                                <div className="flex justify-between border-t pt-3">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Receipt Subtotal:</span>
                                     <span>{receipt.cost || formatCurrency(0)}</span>
                                 </div>
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Receipt Tax:</span>
                                     <span>{formatCurrency(itemSummary.storedTax)}</span>
                                 </div>
-                                <div className="flex justify-between">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
                                     <span>Item Subtotal:</span>
                                     <span>{formatCurrency(itemSummary.subtotal)}</span>
                                 </div>
@@ -707,14 +862,14 @@ const ReceiptDetailView = () => {
                                         {formatCurrency(itemSummary.subtotalDifference)}.
                                     </div>
                                 )}
-                                <div className="flex justify-between font-bold text-lg text-gray-800 border-t pt-3">
+                                <div className="flex justify-between rounded-lg border border-gray-200 bg-gray-50 p-3 text-lg font-bold text-gray-800">
                                     <span>Receipt Total:</span>
                                     <span>{formatCurrency(itemSummary.storedTotal)}</span>
                                 </div>
                             </div>
                         </div>
 
-                        <div className="bg-white p-6 rounded-xl shadow-lg">
+                        <div className="rounded-lg bg-white p-6 shadow-lg">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Quick Actions</h3>
                             <div className="space-y-3">
                                 <Link

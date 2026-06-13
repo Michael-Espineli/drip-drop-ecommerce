@@ -304,11 +304,11 @@ const OperationsDashboard = () => {
     }, [jobs, legacyContracts]);
 
     if (loading) {
-        return <div className="min-h-screen bg-slate-50 p-8 text-sm text-slate-500">Loading operations dashboard...</div>;
+        return <div className="min-h-screen bg-slate-50 px-2 py-6 text-sm text-slate-500 sm:px-3 lg:px-4">Loading operations dashboard...</div>;
     }
 
     return (
-        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

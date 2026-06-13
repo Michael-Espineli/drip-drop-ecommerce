@@ -317,6 +317,10 @@ const buildUrl = (baseUrl, path, query = {}) => {
     return `${cleanBaseUrl}${cleanPath}${queryString ? `?${queryString}` : ""}`;
 };
 
+const buildCompanyUserInviteUrl = (baseUrl, inviteId) => (
+    inviteId ? buildUrl(baseUrl, `/company/invite/${inviteId}`) : ""
+);
+
 const buildCustomerAccessTemplateData = async ({
     companyId,
     customerId,
@@ -497,6 +501,173 @@ const escapeHtml = (value) => String(value || "")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+
+const getCompanyInviteeName = (invite = {}) => (
+    `${invite.firstName || ""} ${invite.lastName || ""}`.trim() ||
+    invite.email ||
+    "there"
+);
+
+const buildCompanyUserInviteFallbackText = (templateData = {}) => ([
+    `${templateData.companyName} invited you to join DripDrop.`,
+    "",
+    `Role: ${templateData.roleName || "Company User"}`,
+    templateData.workerType ? `Worker type: ${templateData.workerType}` : "",
+    "",
+    templateData.inviteMessage || "Use the invite link below to accept your invitation:",
+    templateData.inviteUrl || "",
+    "",
+    templateData.companyProfileUrl ? `Company profile: ${templateData.companyProfileUrl}` : "",
+    templateData.signInUrl ? `Already have an account? Sign in: ${templateData.signInUrl}` : "",
+    "",
+    `Invite ID: ${templateData.inviteId || ""}`,
+    `This message was sent by ${templateData.companyName} through DripDrop.`,
+].filter(Boolean).join("\n"));
+
+const buildCompanyUserInviteFallbackHtml = (templateData = {}) => `
+    <div style="background:#f8fafc;padding:32px 16px;font-family:Arial,sans-serif;color:#0f172a;">
+        <div style="max-width:640px;margin:0 auto;background:#ffffff;border:1px solid #e2e8f0;border-radius:18px;overflow:hidden;box-shadow:0 16px 32px rgba(15,23,42,0.08);">
+            <div style="padding:28px 28px 18px;background:linear-gradient(135deg,#0f172a 0%,#1d4ed8 100%);color:#ffffff;">
+                <div style="font-size:12px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;opacity:0.85;">Company Invitation</div>
+                <h1 style="margin:12px 0 8px;font-size:28px;line-height:1.2;">Join ${escapeHtml(templateData.companyName || "DripDrop")}</h1>
+                <p style="margin:0;font-size:15px;line-height:1.6;opacity:0.92;">
+                    ${escapeHtml(templateData.inviteMessage || "You have been invited to join a company workspace on DripDrop.")}
+                </p>
+            </div>
+
+            <div style="padding:28px;">
+                <p style="margin:0 0 16px;font-size:16px;line-height:1.6;">
+                    Hi ${escapeHtml(templateData.inviteeName || "there")},
+                </p>
+
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:0 0 24px;">
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#f8fafc;">
+                        <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Role</div>
+                        <div style="margin-top:6px;font-size:16px;font-weight:700;color:#0f172a;">${escapeHtml(templateData.roleName || "Company User")}</div>
+                    </div>
+                    <div style="border:1px solid #e2e8f0;border-radius:12px;padding:14px;background:#f8fafc;">
+                        <div style="font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;color:#64748b;">Worker Type</div>
+                        <div style="margin-top:6px;font-size:16px;font-weight:700;color:#0f172a;">${escapeHtml(templateData.workerType || "Not specified")}</div>
+                    </div>
+                </div>
+
+                <a href="${escapeHtml(templateData.inviteUrl || "")}" style="display:inline-block;background:#0f172a;color:#ffffff;text-decoration:none;border-radius:10px;padding:14px 18px;font-weight:700;">
+                    Accept Invite
+                </a>
+
+                <p style="margin:18px 0 0;font-size:14px;line-height:1.6;color:#475569;">
+                    If the button does not work, copy and paste this link into your browser:
+                </p>
+                <p style="margin:10px 0 0;padding:12px 14px;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;word-break:break-all;font-size:13px;color:#1d4ed8;">
+                    ${escapeHtml(templateData.inviteUrl || "")}
+                </p>
+
+                ${templateData.companyProfileUrl ? `
+                    <p style="margin:20px 0 0;font-size:14px;line-height:1.6;color:#475569;">
+                        You can also preview the company profile here:
+                        <a href="${escapeHtml(templateData.companyProfileUrl)}" style="color:#2563eb;font-weight:700;">${escapeHtml(templateData.companyProfileUrl)}</a>
+                    </p>
+                ` : ""}
+
+                ${templateData.signInUrl ? `
+                    <p style="margin:16px 0 0;font-size:14px;line-height:1.6;color:#475569;">
+                        Already have a DripDrop company account? <a href="${escapeHtml(templateData.signInUrl)}" style="color:#2563eb;font-weight:700;">Sign in and accept the invite</a>.
+                    </p>
+                ` : ""}
+
+                <div style="margin-top:24px;padding-top:18px;border-top:1px solid #e2e8f0;font-size:12px;line-height:1.7;color:#64748b;">
+                    <div>Invite ID: ${escapeHtml(templateData.inviteId || "")}</div>
+                    <div>This message was sent by ${escapeHtml(templateData.companyName || "DripDrop")} through DripDrop.</div>
+                    <div>Questions? Reply to this email.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+`;
+
+const sendCompanyUserInviteEmailInternal = async ({
+    invite = {},
+    companyData = {},
+    baseUrl = "",
+} = {}) => {
+    const inviteId = String(invite.id || "").trim();
+    const inviteEmail = normalizeEmail(invite.email);
+    const companyName = companyData.name || companyData.companyName || invite.companyName || "DripDrop";
+
+    if (!inviteId) {
+        throw new HttpsError("invalid-argument", "Invite id is required to send an invite email.");
+    }
+
+    if (!inviteEmail) {
+        throw new HttpsError("invalid-argument", "Invite email is required to send an invite email.");
+    }
+
+    if (!process.env.SEND_GRID_API_KEY || !process.env.SEND_GRID_API_KEY.startsWith("SG.")) {
+        throw new HttpsError("failed-precondition", "Invite email delivery is not configured.");
+    }
+
+    const emailConfigDoc = invite.companyId
+        ? await db.collection("companies").doc(invite.companyId).collection("settings").doc("emailConfiguration").get()
+        : null;
+    const emailConfig = emailConfigDoc?.exists ? emailConfigDoc.data() : {};
+    const emailDelivery = await resolveEmailDeliveryRecipient(inviteEmail);
+    const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
+    const replyToEmail = emailConfig.replyToEmail || getCompanyContactEmail(companyData) || fromEmail;
+    const templateId = process.env.SEND_GRID_COMPANY_USER_INVITE_TEMPLATE_ID || process.env.SENDGRID_COMPANY_USER_INVITE_TEMPLATE_ID || "";
+    const inviteUrl = buildCompanyUserInviteUrl(baseUrl, inviteId);
+    const redirectPath = `/company/invite/${inviteId}`;
+
+    const templateData = addDeliveryModeTemplateData({
+        subject: `${companyName} invited you to join DripDrop`,
+        preHeader: `Accept your invitation to join ${companyName}.`,
+        inviteId,
+        inviteUrl,
+        inviteeName: getCompanyInviteeName(invite),
+        inviteEmail,
+        companyName,
+        companyId: invite.companyId || "",
+        roleName: invite.roleName || "Company User",
+        workerType: invite.workerType || "",
+        inviteMessage: `Use the link below to accept your invite and join ${companyName} on DripDrop.`,
+        companyProfileUrl: invite.companyId ? buildUrl(baseUrl, `/companies/profile/${invite.companyId}`) : "",
+        signInUrl: buildUrl(baseUrl, "/signIn", { redirect: redirectPath }),
+        signUpUrl: buildUrl(baseUrl, "/signUp"),
+        isExistingUserInvite: invite.currentUser === true,
+    }, emailDelivery);
+
+    const msg = templateId
+        ? {
+            to: emailDelivery.actualTo,
+            from: fromEmail,
+            replyTo: replyToEmail,
+            templateId,
+            dynamicTemplateData: templateData,
+        }
+        : {
+            to: emailDelivery.actualTo,
+            from: fromEmail,
+            replyTo: replyToEmail,
+            subject: templateData.subject,
+            text: buildCompanyUserInviteFallbackText(templateData),
+            html: buildCompanyUserInviteFallbackHtml(templateData),
+        };
+
+    await sgMail.send(msg);
+
+    return {
+        inviteUrl,
+        to: emailDelivery.actualTo,
+        intendedTo: emailDelivery.intendedTo,
+        testMode: emailDelivery.testMode,
+        provider: "sendGrid",
+        templateId: templateId || "fallback-html",
+        templateMode: templateId ? "sendGridDynamicTemplate" : "fallbackHtml",
+        from: fromEmail,
+        replyTo: replyToEmail,
+    };
+};
+
+exports.sendCompanyUserInviteEmailInternal = sendCompanyUserInviteEmailInternal;
 
 const normalizeAgreementLocation = (agreement) => {
     const firstLocation = Array.isArray(agreement.serviceLocationSnapshots)

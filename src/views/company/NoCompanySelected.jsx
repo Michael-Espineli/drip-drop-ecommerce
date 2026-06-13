@@ -1,7 +1,7 @@
 import React, { useContext } from 'react';
 import { Link } from 'react-router-dom';
 import { Context } from '../../context/AuthContext';
-import { BriefcaseIcon, BuildingOffice2Icon, ClipboardDocumentListIcon } from '@heroicons/react/24/outline';
+import { BriefcaseIcon, BuildingOffice2Icon } from '@heroicons/react/24/outline';
 import RecentChatsWidget from '../dashboard/components/RecentChatsWidget';
 import InvitesWidget from '../dashboard/components/InvitesWidget'; // Import the new widget
  
@@ -36,7 +36,7 @@ const NoCompanySelected = () => {
                         buttonClass="bg-purple-500 hover:bg-purple-600"
                     /> */}
                     <ActionCard
-                        to="/company/create-Info"
+                        to="/company/create-info"
                         icon={<BuildingOffice2Icon className="w-10 h-10 text-green-500" />}
                         title="Start Your Own"
                         description="Create a company and start managing your business."

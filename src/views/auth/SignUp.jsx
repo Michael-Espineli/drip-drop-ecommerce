@@ -1,12 +1,13 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { getFunctions, httpsCallable } from 'firebase/functions';
 import { getFirestore, doc, setDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { Context } from "../../context/AuthContext";
+import useFeatureFlagDocument from '../../hooks/useFeatureFlagDocument';
+import { APP_LIVE_FEATURE_FLAG_ID } from '../../utils/models/FeatureFlag';
+import AppLaunchCountdown from '../components/AppLaunchCountdown';
 
-const functions = getFunctions();
 const db = getFirestore();
 const auth = getAuth();
 
@@ -23,6 +24,12 @@ export default function SignUp() {
     });
     const [loading, setLoading] = useState(false);
     const navigate = useNavigate();
+    const {
+        loaded: appLaunchLoaded,
+        enabled: appIsLive,
+        releaseDate: appReleaseDate,
+    } = useFeatureFlagDocument(APP_LIVE_FEATURE_FLAG_ID);
+    const companyCreationOpen = appLaunchLoaded && appIsLive;
     
     const { user } = useContext(Context);
     useEffect(() => {
@@ -159,6 +166,34 @@ export default function SignUp() {
             </p>
         </form>
     );
+
+    if (!companyCreationOpen) {
+        return (
+            <div className="min-h-screen bg-gray-50">
+                <header className="py-6 px-4 sm:px-6 lg:px-8">
+                    <Link to="/" className="text-2xl font-bold text-blue-600 hover:text-blue-700">Drip Drop</Link>
+                </header>
+                <main className="flex items-center justify-center px-4 py-12 sm:px-6 lg:px-8">
+                    <div className="w-full max-w-2xl">
+                        <AppLaunchCountdown
+                            loading={!appLaunchLoaded}
+                            releaseDate={appReleaseDate}
+                            title="Company signup opens soon"
+                            body="New company accounts are paused until Drip Drop goes live. Existing users can still sign in, and invited teammates can redeem an invite."
+                        />
+                        <div className="mt-6 flex flex-col gap-3 sm:flex-row">
+                            <Link to="/signIn" className="inline-flex flex-1 justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white hover:bg-blue-700">
+                                Sign In
+                            </Link>
+                            <Link to="/reedemInviteCode" className="inline-flex flex-1 justify-center rounded-md border border-slate-300 bg-white px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                                Redeem Invite
+                            </Link>
+                        </div>
+                    </div>
+                </main>
+            </div>
+        );
+    }
 
 
     return (

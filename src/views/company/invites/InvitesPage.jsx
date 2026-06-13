@@ -10,7 +10,7 @@ import { CheckCircleIcon, InviteDetailModal, InviteSummaryCard, XMarkIcon } from
 
 const statusVariantsFor = (status) => {
     const normalized = String(status || 'pending').toLowerCase();
-    if (normalized === 'rejected') return ['rejected', 'Rejected', 'declined', 'Declined'];
+    if (normalized === 'rejected') return ['rejected', 'Rejected', 'declined', 'Declined', 'revoked', 'Revoked'];
     return [normalized, normalized.charAt(0).toUpperCase() + normalized.slice(1)];
 };
 

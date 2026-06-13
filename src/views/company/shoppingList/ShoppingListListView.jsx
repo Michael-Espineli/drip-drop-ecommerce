@@ -88,8 +88,8 @@ const ShoppingListListView = () => {
     }, [shoppingList, search, categoryFilter, statusFilter]);
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-xl mx-auto">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
                 <div className="flex justify-between items-center mb-6">
                     <div>
                         <h2 className="text-3xl font-bold text-gray-800">Shopping List</h2>
@@ -106,7 +106,7 @@ const ShoppingListListView = () => {
                     </Link>
                 </div>
 
-                <div className="bg-white p-4 rounded-xl shadow-lg mb-6">
+                <div className="mb-6 rounded-lg bg-white p-4 shadow-lg">
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <input
                             type="text"
@@ -143,7 +143,7 @@ const ShoppingListListView = () => {
                     </div>
                 </div>
 
-                <div className="bg-white rounded-xl shadow-lg overflow-hidden">
+                <div className="overflow-hidden rounded-lg bg-white shadow-lg">
                     {filteredList.length > 0 ? (
                         <div className="overflow-x-auto">
                             <table className="w-full text-sm text-left text-gray-700">

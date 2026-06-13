@@ -14,6 +14,7 @@ const {
   ensureCustomerAccountInvite,
   getCustomerAccountInvitePreview,
 } = require("../customerAccountInvites");
+const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
 
 const db = admin.firestore();
 
@@ -22,6 +23,20 @@ const mySecret = defineSecret('stripe_secret_key');
 const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee419";
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
+const APP_LIVE_FEATURE_FLAG_ID = "feature_flag_000";
+
+const isCompanyCreationEnabled = async () => {
+  const flagDoc = await getFirestore()
+    .collection("featureFlags")
+    .doc(APP_LIVE_FEATURE_FLAG_ID)
+    .get();
+
+  return flagDoc.exists && flagDoc.data().enabled === true;
+};
+
+const getCompanyDisplayName = (company = {}, fallback = "") => (
+  String(company.name || company.companyName || company.displayName || company.businessName || fallback || "").trim()
+);
 
 const defaultServiceStopCategoryEmailSettings = (companyName = "your pool company") => ({
   "Route": {
@@ -405,6 +420,31 @@ const getVerifiedCallableAuth = async (payload = {}, context = {}) => {
   }
 };
 
+const getAppBaseUrl = (preferredBaseUrl = "") => (
+  String(preferredBaseUrl || process.env.APP_BASE_URL || "https://dripdrop-poolapp.com")
+    .trim()
+    .replace(/\/+$/, "")
+);
+
+const buildUrl = (baseUrl, path, query = {}) => {
+  const cleanBaseUrl = getAppBaseUrl(baseUrl);
+  const cleanPath = String(path || "").startsWith("/") ? path : `/${path || ""}`;
+  const params = new URLSearchParams();
+
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      params.set(key, String(value));
+    }
+  });
+
+  const queryString = params.toString();
+  return `${cleanBaseUrl}${cleanPath}${queryString ? `?${queryString}` : ""}`;
+};
+
+const buildCompanyUserInviteUrl = (baseUrl, inviteId) => (
+  inviteId ? buildUrl(baseUrl, `/company/invite/${inviteId}`) : ""
+);
+
 const safeDocIdPart = (value) => String(value || "")
   .trim()
   .replace(/\//g, "_")
@@ -635,7 +675,10 @@ const userCanAccessCompany = async (firestore, userId, companyId) => {
   ]);
 
   const userData = userSnap.exists ? userSnap.data() || {} : {};
-  return userData.accountType === "Admin" || accessSnap.exists;
+  if (userData.accountType === "Admin") return true;
+  if (!accessSnap.exists) return false;
+
+  return isCompanyAccessActive(accessSnap.data() || {});
 };
 
 const MAX_LINKED_SERVICE_HISTORY_RECORDS = 104;
@@ -2808,7 +2851,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
   */
 
   console.log('Creating All functions for company')
-  let receivedData = data.data
+  let receivedData = data.data || data || {}
   console.log("Received Data")
   console.log(receivedData)
   let ownerId = receivedData.ownerId
@@ -2818,6 +2861,14 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
   let phoneNumber = receivedData.phoneNumber
   let zipCodes = receivedData.zipCodes
   let services = receivedData.services
+
+  if (!(await isCompanyCreationEnabled())) {
+    throw new functions.https.HttpsError(
+      "failed-precondition",
+      "Company creation is not available until Drip Drop is live."
+    );
+  }
+
   const companyId = 'com_' + uuidv4()
   try {
     //Body Of function
@@ -3467,6 +3518,17 @@ const CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS = {
   ],
 };
 
+const COMPANY_USER_INVITE_CALLABLE_OPTIONS = {
+  cors: true,
+};
+
+const normalizeCompanyInviteStatus = (status) => String(status || "").trim().toLowerCase();
+
+const isCompanyAccessActive = (access = {}) => {
+  const status = normalizeCompanyInviteStatus(access.status);
+  return access.active !== false && !["inactive", "past", "revoked"].includes(status);
+};
+
 const customerCanRespondToPartApproval = (auth, approval = {}) => {
   if (!auth?.uid) return false;
   if (approval.customerUserId && approval.customerUserId === auth.uid) return true;
@@ -3764,6 +3826,342 @@ exports.getAdminCompanyListStats = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGINS },
     companies,
     summary,
   };
+});
+
+exports.createCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, async (request) => {
+  try {
+    const payload = getCallablePayload(request.data);
+    const authContext = await getVerifiedCallableAuth(payload, getV2CallableContext(request));
+    const authUserId = authContext?.uid;
+
+    if (!authUserId) {
+      return {
+        status: 401,
+        error: "You must be signed in to create a company invite",
+      };
+    }
+
+    const firestore = getFirestore();
+    const companyId = String(payload.companyId || "").trim();
+    const inviteEmail = normalizeEmail(payload.email);
+    const roleId = String(payload.roleId || "").trim();
+    const roleName = String(payload.roleName || "").trim();
+
+    if (!companyId || !inviteEmail || !roleId || !roleName) {
+      return {
+        status: 400,
+        error: "companyId, email, roleId, and roleName are required.",
+      };
+    }
+
+    const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
+    if (!hasAccess) {
+      return {
+        status: 403,
+        error: "You do not have access to this company.",
+      };
+    }
+
+    const companyRef = firestore.collection("companies").doc(companyId);
+    const companySnap = await companyRef.get();
+    if (!companySnap.exists) {
+      return {
+        status: 404,
+        error: "Company not found.",
+      };
+    }
+
+    const companyData = companySnap.data() || {};
+    const inviteId = String(payload.inviteId || `invi_${uuidv4()}`).trim();
+    const inviteRef = firestore.collection("invites").doc(inviteId);
+    const inviteSnap = await inviteRef.get();
+    const existingInvite = inviteSnap.exists ? inviteSnap.data() || {} : {};
+    const companyName = getCompanyDisplayName(companyData, payload.companyName || existingInvite.companyName || "DripDrop");
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const inviteUrl = buildCompanyUserInviteUrl(payload.baseUrl || payload.appBaseUrl || "", inviteId);
+
+    const inviteData = removeUndefinedDeep({
+      id: inviteId,
+      userId: payload.userId || existingInvite.userId || null,
+      firstName: String(payload.firstName || existingInvite.firstName || "").trim(),
+      lastName: String(payload.lastName || existingInvite.lastName || "").trim(),
+      email: inviteEmail,
+      companyName,
+      companyId,
+      roleId,
+      roleName,
+      workerType: String(payload.workerType || existingInvite.workerType || "Employee").trim(),
+      currentUser: payload.currentUser === true,
+      status: "pending",
+      inviteUrl,
+      companyUserStatus: "Pending",
+      updatedAt: now,
+      updatedByUserId: authUserId,
+      revokedAt: admin.firestore.FieldValue.delete(),
+      revokedByUserId: admin.firestore.FieldValue.delete(),
+      rejectedAt: admin.firestore.FieldValue.delete(),
+      acceptedAt: admin.firestore.FieldValue.delete(),
+    });
+
+    if (!inviteSnap.exists) {
+      inviteData.dateCreated = now;
+      inviteData.createdAt = now;
+      inviteData.createdByUserId = authUserId;
+    }
+
+    await inviteRef.set(inviteData, { merge: true });
+
+    let emailResult = null;
+    let emailError = "";
+
+    if (payload.sendEmail !== false) {
+      try {
+        emailResult = await sendCompanyUserInviteEmailInternal({
+          invite: {
+            ...existingInvite,
+            ...inviteData,
+            id: inviteId,
+          },
+          companyData,
+          baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+        });
+
+        await inviteRef.set({
+          inviteUrl: emailResult.inviteUrl || inviteUrl,
+          lastSentAt: now,
+          lastSentByUserId: authUserId,
+          lastEmailActualTo: emailResult.to || "",
+          lastEmailIntendedTo: emailResult.intendedTo || inviteEmail,
+          lastEmailTestMode: emailResult.testMode === true,
+          lastEmailTemplateId: emailResult.templateId || "",
+          lastEmailTemplateMode: emailResult.templateMode || "",
+        }, { merge: true });
+      } catch (error) {
+        console.error("Error sending company invite email", error);
+        emailError = error.message || "Could not send company invite email.";
+      }
+    }
+
+    return {
+      status: 200,
+      inviteId,
+      inviteUrl: emailResult?.inviteUrl || inviteUrl,
+      invite: {
+        id: inviteId,
+        userId: payload.userId || existingInvite.userId || null,
+        firstName: String(payload.firstName || existingInvite.firstName || "").trim(),
+        lastName: String(payload.lastName || existingInvite.lastName || "").trim(),
+        email: inviteEmail,
+        companyName,
+        companyId,
+        roleId,
+        roleName,
+        workerType: String(payload.workerType || existingInvite.workerType || "Employee").trim(),
+        currentUser: payload.currentUser === true,
+        status: "pending",
+        inviteUrl: emailResult?.inviteUrl || inviteUrl,
+        companyUserStatus: "Pending",
+      },
+      email: {
+        sent: Boolean(emailResult),
+        error: emailError,
+        to: emailResult?.to || "",
+        intendedTo: emailResult?.intendedTo || inviteEmail,
+        testMode: emailResult?.testMode === true,
+      },
+    };
+  } catch (error) {
+    console.error("Error creating company user invite", error);
+    return {
+      status: 500,
+      error: error.message || "Could not create company invite.",
+    };
+  }
+});
+
+exports.manageCompanyUserInvite = onCall(COMPANY_USER_INVITE_CALLABLE_OPTIONS, async (request) => {
+  try {
+    const payload = getCallablePayload(request.data);
+    const authContext = await getVerifiedCallableAuth(payload, getV2CallableContext(request));
+    const authUserId = authContext?.uid;
+
+    if (!authUserId) {
+      return {
+        status: 401,
+        error: "You must be signed in to manage company invites",
+      };
+    }
+
+    const inviteId = String(payload.inviteId || "").trim();
+    const action = String(payload.action || "").trim().toLowerCase();
+
+    if (!inviteId || !action) {
+      return {
+        status: 400,
+        error: "inviteId and action are required.",
+      };
+    }
+
+    const firestore = getFirestore();
+    const inviteRef = firestore.collection("invites").doc(inviteId);
+    const inviteSnap = await inviteRef.get();
+
+    if (!inviteSnap.exists) {
+      return {
+        status: 404,
+        error: "Invite not found.",
+      };
+    }
+
+    const invite = { id: inviteSnap.id, ...(inviteSnap.data() || {}) };
+    const companyId = String(invite.companyId || "").trim();
+    const hasAccess = await userCanAccessCompany(firestore, authUserId, companyId);
+    if (!hasAccess) {
+      return {
+        status: 403,
+        error: "You do not have access to this company.",
+      };
+    }
+
+    const companyRef = firestore.collection("companies").doc(companyId);
+    const companySnap = await companyRef.get();
+    if (!companySnap.exists) {
+      return {
+        status: 404,
+        error: "Company not found.",
+      };
+    }
+
+    const companyData = companySnap.data() || {};
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const inviteStatus = normalizeCompanyInviteStatus(invite.status);
+
+    if (action === "resend") {
+      if (inviteStatus !== "pending") {
+        return {
+          status: 409,
+          error: "Only pending invites can be resent.",
+        };
+      }
+
+      const emailResult = await sendCompanyUserInviteEmailInternal({
+        invite,
+        companyData,
+        baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+      });
+
+      await inviteRef.set({
+        inviteUrl: emailResult.inviteUrl || invite.inviteUrl || buildCompanyUserInviteUrl(payload.baseUrl || payload.appBaseUrl || "", inviteId),
+        updatedAt: now,
+        updatedByUserId: authUserId,
+        lastSentAt: now,
+        lastSentByUserId: authUserId,
+        lastEmailActualTo: emailResult.to || "",
+        lastEmailIntendedTo: emailResult.intendedTo || normalizeEmail(invite.email),
+        lastEmailTestMode: emailResult.testMode === true,
+        lastEmailTemplateId: emailResult.templateId || "",
+        lastEmailTemplateMode: emailResult.templateMode || "",
+      }, { merge: true });
+
+      return {
+        status: 200,
+        inviteId,
+        inviteUrl: emailResult.inviteUrl || invite.inviteUrl || "",
+        email: {
+          sent: true,
+          to: emailResult.to || "",
+          intendedTo: emailResult.intendedTo || normalizeEmail(invite.email),
+          testMode: emailResult.testMode === true,
+        },
+      };
+    }
+
+    if (action === "revoke") {
+      if (inviteStatus === "accepted") {
+        return {
+          status: 409,
+          error: "Accepted invites must be managed through active/inactive access.",
+        };
+      }
+
+      await inviteRef.set({
+        status: "revoked",
+        updatedAt: now,
+        updatedByUserId: authUserId,
+        revokedAt: now,
+        revokedByUserId: authUserId,
+      }, { merge: true });
+
+      return {
+        status: 200,
+        inviteId,
+        inviteStatus: "revoked",
+      };
+    }
+
+    if (action === "setaccessactive") {
+      const nextActive = payload.active !== false;
+      const acceptedStatuses = new Set(["accepted"]);
+
+      if (!acceptedStatuses.has(inviteStatus) || !invite.userId) {
+        return {
+          status: 409,
+          error: "Only accepted invites with a linked user can update company access.",
+        };
+      }
+
+      const companyUserRef = firestore.collection("companies").doc(companyId).collection("companyUsers").doc(invite.userId);
+      const userAccessRef = firestore.collection("users").doc(invite.userId).collection("userAccess").doc(companyId);
+      const accessStatus = nextActive ? "Active" : "Inactive";
+      const batch = firestore.batch();
+
+      batch.set(companyUserRef, {
+        status: accessStatus,
+        active: nextActive,
+        updatedAt: now,
+      }, { merge: true });
+
+      batch.set(userAccessRef, {
+        id: companyId,
+        companyId,
+        companyName: getCompanyDisplayName(companyData, invite.companyName || ""),
+        roleId: invite.roleId || "",
+        roleName: invite.roleName || "",
+        status: accessStatus,
+        active: nextActive,
+        updatedAt: now,
+        revokedAt: nextActive ? admin.firestore.FieldValue.delete() : now,
+      }, { merge: true });
+
+      batch.set(inviteRef, {
+        companyUserStatus: accessStatus,
+        accessActive: nextActive,
+        accessUpdatedAt: now,
+        updatedAt: now,
+        updatedByUserId: authUserId,
+      }, { merge: true });
+
+      await batch.commit();
+
+      return {
+        status: 200,
+        inviteId,
+        active: nextActive,
+        companyUserStatus: accessStatus,
+      };
+    }
+
+    return {
+      status: 400,
+      error: "Unsupported action.",
+    };
+  } catch (error) {
+    console.error("Error managing company user invite", error);
+    return {
+      status: 500,
+      error: error.message || "Could not manage company invite.",
+    };
+  }
 });
 
 exports.acceptLinkedInvite = onCall(CUSTOMER_ACCOUNT_INVITE_CALLABLE_OPTIONS, async (request) => {
@@ -4485,6 +4883,13 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       };
     }
 
+    let companyData = {};
+    if (invite.companyId) {
+      const companySnap = await db.collection("companies").doc(invite.companyId).get();
+      companyData = companySnap.exists ? companySnap.data() || {} : {};
+    }
+
+    const companyName = getCompanyDisplayName(companyData, invite.companyName || "");
     const acceptedStatus = "accepted";
     const now = admin.firestore.FieldValue.serverTimestamp();
     const fullName = `${profile.firstName || invite.firstName || ""} ${profile.lastName || invite.lastName || ""}`.trim();
@@ -4522,6 +4927,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       roleName: invite.roleName,
       dateCreated: now,
       status: "Active",
+      active: true,
       workerType: workerType,
       linkedCompanyId: invite.linkedCompanyId || null,
       linkedCompanyName: invite.linkedCompanyName || null,
@@ -4536,16 +4942,21 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
     batch.set(userAccessRef, {
       id: invite.companyId,
       companyId: invite.companyId,
-      companyName: invite.companyName,
+      companyName,
       roleId: invite.roleId,
       roleName: invite.roleName,
       dateCreated: now,
+      status: "Active",
+      active: true,
     }, { merge: true });
 
     batch.update(inviteRef, {
       status: acceptedStatus,
       userId: userId,
+      companyName,
       acceptedAt: now,
+      companyUserStatus: "Active",
+      accessActive: true,
     });
 
     await batch.commit();

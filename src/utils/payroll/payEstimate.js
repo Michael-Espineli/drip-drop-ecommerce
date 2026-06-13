@@ -354,6 +354,7 @@ const lineFromRate = ({
     workTypeId,
     workTypeName: workTypeName(workTypesById, workTypeId),
     title,
+    rateId: rate.id,
     rateAmountCents: cents(rate.amountCents),
     rateType: rate.rateType,
     payBasis: rate.payBasis,

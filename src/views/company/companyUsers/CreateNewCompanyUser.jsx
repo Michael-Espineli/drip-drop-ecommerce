@@ -1,14 +1,15 @@
 
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate } from 'react-router-dom';
-import { query, collection, getDocs, where, setDoc, doc } from "firebase/firestore";
+import { query, collection, getDocs, where, doc, getDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { v4 as uuidv4 } from 'uuid';
 import Select from 'react-select';
 import toast from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { normalizeEmail } from '../../../utils/email';
+import { buildCompanyInviteUrl, createCompanyUserInvite } from "../../../utils/invites";
+import { WorkerTypeEnum } from '../../../utils/models/CompanyUser';
 
 const Input = (props) => <input {...props} className={`bg-gray-50 border-2 border-gray-200 text-gray-900 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block w-full p-2.5 ${props.className}`} />;
 const SelectInput = (props) => <Select {...props} styles={{ control: (base) => ({ ...base, background: '#F9FAFB', border: '2px solid #E5E7EB', borderRadius: '0.5rem', padding: '0.25rem' }) }} />;
@@ -27,8 +28,25 @@ const TabButton = ({ active, onClick, children }) => (
     </button>
 );
 
+const workerTypeOptions = [
+    {
+        value: WorkerTypeEnum.employee,
+        label: "Employee",
+        description: "A direct team member managed by this company.",
+    },
+    {
+        value: WorkerTypeEnum.contractor,
+        label: "Independent Contractor",
+        description: "An external worker invited to handle assigned work.",
+    },
+];
+
+const getCompanyDisplayName = (company = {}) => (
+    String(company.name || company.companyName || company.displayName || company.businessName || "").trim()
+);
+
 const CreateNewCompanyUser = () => {
-    const { name: companyName, recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
@@ -39,6 +57,7 @@ const CreateNewCompanyUser = () => {
     const [lastName, setLastName] = useState('');
     const [email, setEmail] = useState('');
     const [role, setRole] = useState(null);
+    const [workerType, setWorkerType] = useState(WorkerTypeEnum.employee);
 
     const [roleList, setRoleList] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -79,6 +98,18 @@ const CreateNewCompanyUser = () => {
         return exactSnapshot.docs[0] || null;
     };
 
+    const resolveSelectedCompanyName = async () => {
+        const contextCompanyName = String(recentlySelectedCompanyName || "").trim();
+        if (contextCompanyName) return contextCompanyName;
+
+        if (!recentlySelectedCompany) return "";
+
+        const companySnap = await getDoc(doc(db, "companies", recentlySelectedCompany));
+        if (!companySnap.exists()) return "";
+
+        return getCompanyDisplayName(companySnap.data());
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (!requirePermission("262", "create company users")) return;
@@ -111,17 +142,38 @@ const CreateNewCompanyUser = () => {
                 return;
             }
 
-            const inviteId = 'invi_' + uuidv4();
             const roleId = role.id || role.value;
-            const inviteData = {
-                id: inviteId, userId: null, firstName: firstName.trim(), lastName: lastName.trim(), email: normalizedInviteEmail, companyName,
-                companyId: recentlySelectedCompany, roleId, roleName: role.label,
-                status: 'pending', workerType: 'Employee', currentUser: false, dateCreated: new Date(),
-            };
+            const selectedCompanyName = await resolveSelectedCompanyName();
+            const response = await createCompanyUserInvite({
+                companyId: recentlySelectedCompany,
+                companyName: selectedCompanyName,
+                firstName: firstName.trim(),
+                lastName: lastName.trim(),
+                email: normalizedInviteEmail,
+                roleId,
+                roleName: role.label,
+                workerType,
+                currentUser: false,
+                sendEmail: true,
+                baseUrl: window.location.origin,
+            });
 
-            await setDoc(doc(db, "invites", inviteId), inviteData);
+            if (response.status !== 200) {
+                throw new Error(response.error || 'Could not create the invite.');
+            }
 
-            toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
+            const inviteUrl = response.inviteUrl || buildCompanyInviteUrl(window.location.origin, response.inviteId);
+            if (inviteUrl && navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(inviteUrl);
+            }
+
+            if (response.email?.sent) {
+                toast.success('Invite created, email sent, and invite link copied.', { id: toastId });
+            } else if (inviteUrl) {
+                toast.success('Invite created. Email was not sent, but the invite link was copied.', { id: toastId });
+            } else {
+                toast.success('Invite created successfully.', { id: toastId });
+            }
             navigate('/company/companyUsers');
 
         } catch (error) {
@@ -159,27 +211,39 @@ const CreateNewCompanyUser = () => {
             const fallbackName = String(userData.userName || userData.displayName || userData.name || "").trim();
             const [fallbackFirstName = "", ...fallbackLastNameParts] = fallbackName.split(/\s+/).filter(Boolean);
             const roleId = role.id || role.value;
+            const selectedCompanyName = await resolveSelectedCompanyName();
 
-            const inviteId = 'invi_' + uuidv4();
-            const inviteData = {
-                id: inviteId,
+            const response = await createCompanyUserInvite({
+                companyId: recentlySelectedCompany,
+                companyName: selectedCompanyName,
                 userId: userDoc.id,
                 firstName: existingFirstName || fallbackFirstName,
                 lastName: existingLastName || fallbackLastNameParts.join(" "),
                 email: normalizeEmail(userData.email || normalizedInviteEmail),
-                companyName,
-                companyId: recentlySelectedCompany,
                 roleId,
                 roleName: role.label,
-                status: 'pending',
-                workerType: 'Employee',
+                workerType,
                 currentUser: true,
-                dateCreated: new Date(),
-            };
+                sendEmail: true,
+                baseUrl: window.location.origin,
+            });
 
-            await setDoc(doc(db, "invites", inviteId), inviteData);
+            if (response.status !== 200) {
+                throw new Error(response.error || 'Could not create the invite.');
+            }
 
-            toast.success('Invite sent successfully! The user needs to accept it.', { id: toastId });
+            const inviteUrl = response.inviteUrl || buildCompanyInviteUrl(window.location.origin, response.inviteId);
+            if (inviteUrl && navigator?.clipboard?.writeText) {
+                await navigator.clipboard.writeText(inviteUrl);
+            }
+
+            if (response.email?.sent) {
+                toast.success('Invite created, email sent, and invite link copied.', { id: toastId });
+            } else if (inviteUrl) {
+                toast.success('Invite created. Email was not sent, but the invite link was copied.', { id: toastId });
+            } else {
+                toast.success('Invite created successfully.', { id: toastId });
+            }
             navigate('/company/companyUsers');
 
         } catch (error) {
@@ -205,7 +269,7 @@ const CreateNewCompanyUser = () => {
                     </div>
                 </div>
 
-                <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg border border-gray-200 space-y-6">
+                <form onSubmit={handleSubmit} className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 space-y-6 sm:p-8">
                     {activeTab === 'new' && (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                             <div className="md:col-span-2">
@@ -236,6 +300,29 @@ const CreateNewCompanyUser = () => {
                         <div className="md:col-span-2">
                             <label className="block mb-2 text-sm font-medium text-gray-700">Assign Role</label>
                             <SelectInput value={role} options={roleList} onChange={setRole} placeholder="Select a role..." isLoading={areRolesLoading} required />
+                        </div>
+                        <div className="md:col-span-2">
+                            <label className="block mb-2 text-sm font-medium text-gray-700">Worker Type</label>
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                {workerTypeOptions.map((option) => {
+                                    const isSelected = workerType === option.value;
+
+                                    return (
+                                        <button
+                                            key={option.value}
+                                            type="button"
+                                            onClick={() => setWorkerType(option.value)}
+                                            className={`rounded-lg border px-4 py-3 text-left transition ${isSelected
+                                                ? "border-blue-500 bg-blue-50 text-blue-900 ring-2 ring-blue-100"
+                                                : "border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50"}`
+                                            }
+                                        >
+                                            <span className="block text-sm font-semibold">{option.label}</span>
+                                            <span className="mt-1 block text-xs text-gray-500">{option.description}</span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>
 

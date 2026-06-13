@@ -43,17 +43,28 @@ export const normalizeReadingForStopData = (template = {}, amount = "", bodyOfWa
   bodyOfWaterId,
 });
 
-export const normalizeDosageForStopData = (template = {}, amount = "", bodyOfWaterId = "") => ({
-  id: template.stopDataDosageId || `dosage_${cleanId(template.id || template.dosageTemplateId || fallbackId())}`,
-  templateId: template.templateId || template.id || "",
-  universalTemplateId: template.universalTemplateId || template.dosageTemplateId || template.id || "",
-  name: template.name || "",
-  amount: amount === null || amount === undefined ? "" : String(amount),
-  UOM: template.UOM || template.uom || "",
-  rate: template.rate || "",
-  linkedItem: template.linkedItem || template.linkedItemId || template.linkedDosage || template.itemId || "",
-  bodyOfWaterId,
-});
+export const normalizeDosageForStopData = (template = {}, amount = "", bodyOfWaterId = "") => {
+  const linkedItemIds = compact([
+    ...(Array.isArray(template.linkedItemIds) ? template.linkedItemIds : []),
+    template.linkedItemId,
+    template.linkedItem,
+    template.linkedDosage,
+    template.itemId,
+  ]);
+
+  return {
+    id: template.stopDataDosageId || `dosage_${cleanId(template.id || template.dosageTemplateId || fallbackId())}`,
+    templateId: template.templateId || template.id || "",
+    universalTemplateId: template.universalTemplateId || template.dosageTemplateId || template.id || "",
+    name: template.name || "",
+    amount: amount === null || amount === undefined ? "" : String(amount),
+    UOM: template.UOM || template.uom || "",
+    rate: template.rate || "",
+    linkedItem: linkedItemIds[0] || "",
+    linkedItemIds,
+    bodyOfWaterId,
+  };
+};
 
 export const buildStopDataRecord = ({
   existingStopData = null,

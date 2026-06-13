@@ -1,3 +1,7 @@
+export const CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID = 'feature_flag_013';
+
+export const APP_LIVE_FEATURE_FLAG_ID = 'feature_flag_000';
+
 export class FeatureFlag {
   constructor({
     id,
@@ -5,6 +9,7 @@ export class FeatureFlag {
     name = '',
     description = '',
     enabled = false,
+    releaseDate = null,
     index = 0,
     createdAt = null,
     updatedAt = null,
@@ -14,6 +19,7 @@ export class FeatureFlag {
     this.name = name;
     this.description = description;
     this.enabled = Boolean(enabled);
+    this.releaseDate = releaseDate;
     this.index = index;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
@@ -26,6 +32,7 @@ export class FeatureFlag {
   static defaultName(index) {
     return (
       {
+        0: 'App Launch',
         1: 'iOS Messages',
         2: 'Company User Profile History',
         3: 'Management Technician Performance History',
@@ -37,6 +44,7 @@ export class FeatureFlag {
         10: 'Todo List',
         11: 'Alerts and Notifications',
         12: 'Turn on real emails',
+        13: 'Confirm user email on invite',
       }[index] || ''
     );
   }
@@ -44,6 +52,7 @@ export class FeatureFlag {
   static defaultDescription(index) {
     return (
       {
+        0: 'Controls whether Drip Drop is live for new company creation. When off, signup and company creation stay blocked and the home page shows the release countdown.',
         1: 'Enables the iOS Messages experience.',
         2: 'Enables company user profile history views.',
         3: 'Enables management technician performance history.',
@@ -55,6 +64,7 @@ export class FeatureFlag {
         10: 'Enables the web Todo List for team tasks, specific assignments, linked records, due dates, and reminders.',
         11: 'Enables the shared alerts and notifications framework for dashboard alerts and future iOS notification delivery.',
         12: 'When off, customer-facing emails are routed to the internal test inbox instead of homeowners.',
+        13: 'When on, invited company users must verify their signup email before selecting and accessing a company.',
       }[index] || ''
     );
   }
@@ -68,6 +78,7 @@ export class FeatureFlag {
       name: FeatureFlag.defaultName(index),
       description: FeatureFlag.defaultDescription(index),
       enabled: false,
+      releaseDate: null,
       index,
       createdAt: timestamp,
       updatedAt: timestamp,

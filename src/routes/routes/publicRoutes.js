@@ -81,6 +81,11 @@ const publicRoutes = [
   }
   ,
   {
+    path: "/company/invite/:inviteId",
+    element: <ReedemInviteCode />,
+  }
+  ,
+  {
     path: "/homeownerSignUp",
     element: <HomeOwnerSignUp />,
   }

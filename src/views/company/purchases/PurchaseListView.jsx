@@ -255,6 +255,7 @@ const PurchaseListView = () => {
           Vendor: eq?.venderName || "",
           Technician: eq?.techName || "",
           Name: eq?.name || "",
+          "Database Item": eq?.itemId ? "Linked" : "",
           Category: eq?.category || "Uncategorized",
           Subcategory: eq?.subCategory || "",
           Price: eq?.price || "",
@@ -474,8 +475,8 @@ const PurchaseListView = () => {
   );
 
   return (
-    <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-      <div className="">
+    <div className='min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4'>
+      <div className="w-full">
         <div className="flex justify-between items-center mb-6">
           <h2 className="text-3xl font-bold text-gray-800">Purchases</h2>
           <div className="flex flex-wrap justify-end gap-2">
@@ -499,7 +500,7 @@ const PurchaseListView = () => {
             </Link>
           </div>
         </div>
-        <div className="bg-white shadow-lg rounded-xl p-6">
+        <div className="rounded-lg bg-white p-6 shadow-lg">
           <div className='flex flex-col sm:flex-row justify-between items-center mb-4 gap-4'>
             <input
               value={searchTerm}
@@ -546,6 +547,7 @@ const PurchaseListView = () => {
                     <tr>
                       <SortHeader label="Status" keyName="status" />
                       <SortHeader label="Name" keyName="name" />
+                      <SortHeader label="Database Item" keyName="itemId" />
                       <SortHeader label="Category" keyName="category" />
                       <SortHeader label="Invoice #" keyName="invoiceNum" />
                       <SortHeader label="Date" keyName="date" />
@@ -579,6 +581,18 @@ const PurchaseListView = () => {
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.name}
+                        </td>
+                        <td className="p-4 whitespace-nowrap text-gray-700" onClick={(event) => event.stopPropagation()}>
+                          {item.itemId ? (
+                            <Link
+                              to={`/company/items/detail/${item.itemId}`}
+                              className="font-semibold text-blue-600 hover:text-blue-800"
+                            >
+                              Open
+                            </Link>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
                         </td>
                         <td className="p-4 whitespace-nowrap text-gray-700">
                           {item.category || "Uncategorized"}

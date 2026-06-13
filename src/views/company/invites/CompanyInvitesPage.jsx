@@ -3,11 +3,15 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import { Link, useLocation } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import { ArrowPathIcon, ClipboardDocumentIcon, NoSymbolIcon, PowerIcon } from '@heroicons/react/24/outline';
 import { InviteDetailModal, InviteSummaryCard } from './InviteDisplay';
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { buildCompanyInviteUrl, isCompanyAccessInactive, manageCompanyUserInvite } from '../../../utils/invites';
 
 const statusVariantsFor = (status) => {
     const normalized = String(status || 'pending').toLowerCase();
-    if (normalized === 'rejected') return ['rejected', 'Rejected', 'declined', 'Declined'];
+    if (normalized === 'rejected') return ['rejected', 'Rejected', 'declined', 'Declined', 'revoked', 'Revoked'];
     return [normalized, normalized.charAt(0).toUpperCase() + normalized.slice(1)];
 };
 
@@ -24,7 +28,9 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
     const [invites, setInvites] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedInvite, setSelectedInvite] = useState(null);
+    const [actionLoadingId, setActionLoadingId] = useState('');
     const location = useLocation();
+    const { can } = useCompanyPermissions();
 
     const routeStatus = location.pathname.split('/').pop();
     const status = String(routeStatus || initialStatus || 'pending').toLowerCase();
@@ -57,6 +63,91 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
         return () => unsubscribe();
     }, [recentlySelectedCompany, status]);
 
+    useEffect(() => {
+        if (!selectedInvite) return;
+
+        const refreshedInvite = invites.find((invite) => invite.id === selectedInvite.id);
+        if (!refreshedInvite) {
+            setSelectedInvite(null);
+            return;
+        }
+
+        if (refreshedInvite !== selectedInvite) {
+            setSelectedInvite(refreshedInvite);
+        }
+    }, [invites, selectedInvite]);
+
+    const resolveInviteUrl = (invite) => {
+        if (invite?.inviteUrl) return invite.inviteUrl;
+        if (typeof window === 'undefined') return '';
+        return buildCompanyInviteUrl(window.location.origin, invite?.id);
+    };
+
+    const handleCopyInviteLink = async (invite) => {
+        const inviteUrl = resolveInviteUrl(invite);
+        if (!inviteUrl) {
+            toast.error('Invite link is not available.');
+            return;
+        }
+
+        if (typeof navigator === 'undefined' || !navigator.clipboard?.writeText) {
+            toast.error('Clipboard is not available in this browser.');
+            return;
+        }
+
+        try {
+            await navigator.clipboard.writeText(inviteUrl);
+            toast.success('Invite link copied.');
+        } catch (error) {
+            console.error('Error copying invite link:', error);
+            toast.error('Invite link could not be copied.');
+        }
+    };
+
+    const handleManageInvite = async (invite, action, options = {}) => {
+        const loadingKey = `${invite.id}:${action}:${options.active === false ? 'inactive' : options.active === true ? 'active' : ''}`;
+        const loadingMessage = action === 'resend'
+            ? 'Resending invite...'
+            : action === 'revoke'
+                ? 'Revoking invite...'
+                : options.active === false
+                    ? 'Removing company access...'
+                    : 'Restoring company access...';
+        const successMessage = action === 'resend'
+            ? 'Invite resent.'
+            : action === 'revoke'
+                ? 'Invite revoked.'
+                : options.active === false
+                    ? 'Company access removed.'
+                    : 'Company access restored.';
+        const toastId = toast.loading(loadingMessage);
+
+        setActionLoadingId(loadingKey);
+
+        try {
+            const result = await manageCompanyUserInvite({
+                inviteId: invite.id,
+                action,
+                active: options.active,
+                baseUrl: typeof window === 'undefined' ? '' : window.location.origin,
+            });
+
+            if (result?.status !== 200) {
+                throw new Error(result?.error || 'Invite could not be updated.');
+            }
+
+            toast.success(successMessage, { id: toastId });
+            if (selectedInvite?.id === invite.id) {
+                setSelectedInvite(null);
+            }
+        } catch (error) {
+            console.error('Error managing company invite:', error);
+            toast.error(error.message || 'Invite could not be updated.', { id: toastId });
+        } finally {
+            setActionLoadingId('');
+        }
+    };
+
     const Tab = ({ to, title, active }) => (
         <Link to={to}
             className={`rounded-md border px-4 py-2 text-sm font-semibold shadow-sm transition ${active ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800' : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'}`}
@@ -85,6 +176,65 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
         </div>
     );
 
+    const InviteActions = ({ invite }) => {
+        const inactive = isCompanyAccessInactive(invite);
+        const copyLoading = actionLoadingId === `${invite.id}:copy`;
+        const resendLoading = actionLoadingId === `${invite.id}:resend:`;
+        const revokeLoading = actionLoadingId === `${invite.id}:revoke:`;
+        const toggleLoading = actionLoadingId === `${invite.id}:setAccessActive:${inactive ? 'active' : 'inactive'}`;
+        const anyLoading = Boolean(actionLoadingId);
+
+        if (status === 'pending' && can("262")) {
+            return (
+                <>
+                    <button
+                        type="button"
+                        onClick={() => handleCopyInviteLink(invite)}
+                        disabled={copyLoading || anyLoading}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <ClipboardDocumentIcon className="h-4 w-4" />
+                        Copy Link
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleManageInvite(invite, 'resend')}
+                        disabled={anyLoading}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 shadow-sm transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <ArrowPathIcon className={`h-4 w-4 ${resendLoading ? 'animate-spin' : ''}`} />
+                        {resendLoading ? 'Resending' : 'Resend Invite'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => handleManageInvite(invite, 'revoke')}
+                        disabled={anyLoading}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <NoSymbolIcon className="h-4 w-4" />
+                        {revokeLoading ? 'Revoking' : 'Revoke'}
+                    </button>
+                </>
+            );
+        }
+
+        if (status === 'accepted' && can("264")) {
+            return (
+                <button
+                    type="button"
+                    onClick={() => handleManageInvite(invite, 'setAccessActive', { active: inactive })}
+                    disabled={anyLoading}
+                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${inactive ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'}`}
+                >
+                    <PowerIcon className="h-4 w-4" />
+                    {toggleLoading ? (inactive ? 'Activating' : 'Deactivating') : (inactive ? 'Make Active' : 'Make Inactive')}
+                </button>
+            );
+        }
+
+        return null;
+    };
+
     return (
         <div className='min-h-screen w-full bg-slate-50 p-4 text-slate-900 sm:p-6 lg:p-8'>
             <div className="mx-auto space-y-6">
@@ -100,6 +250,13 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
                         <p className="mt-1 text-sm text-slate-500">Review user invitations for this company.</p>
                     </div>
 
+                    {can("262") && (
+                        <Link to="/company/companyUsers/createNew"
+                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                        >
+                            + Create New User
+                        </Link>
+                    )}
                     <div className="flex flex-wrap gap-2">
                         <Tab to="/company/invites/pending" title="Pending" active={status === 'pending'} />
                         <Tab to="/company/invites/accepted" title="Accepted" active={status === 'accepted'} />
@@ -117,6 +274,7 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
                                     audience="company"
                                     status={status}
                                     onOpen={() => setSelectedInvite(invite)}
+                                    actions={<InviteActions invite={invite} />}
                                 />
                             ))
                         ) : (
@@ -128,7 +286,11 @@ const CompanyInvitesPage = ({ status: initialStatus }) => {
                 )}
             </div>
 
-            <InviteDetailModal invite={selectedInvite} onClose={() => setSelectedInvite(null)} />
+            <InviteDetailModal
+                invite={selectedInvite}
+                onClose={() => setSelectedInvite(null)}
+                actions={selectedInvite ? <InviteActions invite={selectedInvite} /> : null}
+            />
         </div>
     );
 };

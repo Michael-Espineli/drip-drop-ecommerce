@@ -1,17 +1,25 @@
 import React, { useState, useEffect, useContext } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useNavigate } from "react-router-dom";
 import {
+  collection,
   doc,
   getDoc,
-  deleteDoc,
-  updateDoc,
+  getDocs,
+  writeBatch,
 } from "firebase/firestore";
+import Select from "react-select";
+import { format } from "date-fns";
+import { toast } from "react-hot-toast";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
-import { format } from "date-fns";
-import { useNavigate } from "react-router-dom";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-import Select from "react-select";
+import {
+  applyDatabaseItemDosageLinksLocally,
+  dosageLabel,
+  linkedDosageIdsForItem,
+  queueDatabaseItemDosageLinkUpdates,
+  sortDosageTemplates,
+} from "../../../utils/dosageItemLinks";
 import {
   CATEGORY_OPTIONS,
   databaseItemSelectStyles,
@@ -21,16 +29,27 @@ import {
   UOM_OPTIONS,
 } from "./databaseItemOptions";
 
-const DataBaseItemDetailView = () => {
-  const { name, recentlySelectedCompany } = useContext(Context);
-  const { can, requirePermission } = useCompanyPermissions();
+const formatCurrency = (number, locale = "en-US", currency = "USD") =>
+  new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+  }).format(number || 0);
 
+const DetailField = ({ label, value }) => (
+  <div className="rounded-lg border border-slate-200 bg-white p-4">
+    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
+    <p className="mt-1 break-words text-sm font-semibold text-slate-900">{value || "--"}</p>
+  </div>
+);
+
+const DataBaseItemDetailView = () => {
+  const { recentlySelectedCompany } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const navigate = useNavigate();
   const { id } = useParams();
 
   const [purchase, setPurchase] = useState({});
   const [edit, setEdit] = useState(false);
-
   const [rate, setRate] = useState("");
   const [uom, setUom] = useState("");
   const [category, setCategory] = useState("");
@@ -42,74 +61,112 @@ const DataBaseItemDetailView = () => {
   const [sellPrice, setSellPrice] = useState("");
   const [sku, setSku] = useState("");
   const [tracking, setTracking] = useState("");
+  const [billable, setBillable] = useState(false);
+  const [dosages, setDosages] = useState([]);
+  const [linkedDosageIds, setLinkedDosageIds] = useState([]);
+  const [dosageSearchTerm, setDosageSearchTerm] = useState("");
 
   useEffect(() => {
     (async () => {
+      if (!recentlySelectedCompany || !id) return;
+
       try {
         const docRef = doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id);
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
           const itemData = docSnap.data();
           const dateUpdated = itemData.dateUpdated?.toDate ? itemData.dateUpdated.toDate() : new Date();
-          const formattedDate1 = format(dateUpdated, "MM / d / yyyy");
+          const formattedDate = format(dateUpdated, "MM / d / yyyy");
+          const rateDollars = Number(itemData.rate || 0) / 100;
+          const sellPriceDollars = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
 
-          let rateDouble = Number(itemData.rate || 0) / 100;
-          let formattedRateUSD = formatCurrency(rateDouble);
-
-          let sellPriceDouble = Number(itemData.sellPrice ?? itemData.billingRate ?? 0) / 100;
-          let formattedSellPriceUSD = formatCurrency(sellPriceDouble);
-
-          setPurchase((purchase) => ({
-            ...purchase,
-            UOM: itemData.UOM,
-            billable: itemData.billable,
-            category: itemData.category,
-            color: itemData.color,
-            dateUpdated: formattedDate1,
-            description: itemData.description,
-            id: itemData.id,
-            name: itemData.name,
-            rateFormatted: formattedRateUSD,
-            rate: Number(itemData.rate || 0) / 100,
-            size: itemData.size,
-            sku: itemData.sku,
-            storeName: itemData.storeName,
-            subCategory: itemData.subCategory,
+          setPurchase({
+            UOM: itemData.UOM || "",
+            billable: Boolean(itemData.billable),
+            category: itemData.category || "",
+            color: itemData.color || "",
+            dateUpdated: formattedDate,
+            description: itemData.description || "",
+            id: itemData.id || id,
+            name: itemData.name || "",
+            rateFormatted: formatCurrency(rateDollars),
+            rate: rateDollars,
+            size: itemData.size || "",
+            sku: itemData.sku || "",
+            storeName: itemData.storeName || "",
+            subCategory: itemData.subCategory || "",
             timesPurchased: itemData.timesPurchased,
-            venderId: itemData.venderId,
-            label: itemData.name + " " + itemData.rate + " " + itemData.sku,
-            sellPrice: formattedSellPriceUSD,
-            sellPriceRaw: sellPriceDouble,
-            billingRate: formattedSellPriceUSD,
-            billingRateRaw: sellPriceDouble,
+            venderId: itemData.venderId || "",
+            label: `${itemData.name || ""} ${itemData.rate || ""} ${itemData.sku || ""}`.trim(),
+            sellPrice: formatCurrency(sellPriceDollars),
+            sellPriceRaw: sellPriceDollars,
+            billingRate: formatCurrency(sellPriceDollars),
+            billingRateRaw: sellPriceDollars,
             tracking: itemData.tracking || "",
-          }));
+          });
         } else {
           console.log("No such document!");
         }
       } catch (error) {
         console.log("Error");
+        console.log(error);
       }
     })();
-  }, []);
+  }, [id, recentlySelectedCompany]);
+
+  useEffect(() => {
+    (async () => {
+      if (!recentlySelectedCompany) {
+        setDosages([]);
+        setLinkedDosageIds([]);
+        return;
+      }
+
+      try {
+        const dosageSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages"));
+        const nextDosages = sortDosageTemplates(dosageSnap.docs.map((dosageDoc) => ({ id: dosageDoc.id, ...dosageDoc.data() })));
+        setDosages(nextDosages);
+        setLinkedDosageIds(linkedDosageIdsForItem(nextDosages, id));
+      } catch (error) {
+        console.error("Error loading linked dosages:", error);
+      }
+    })();
+  }, [id, recentlySelectedCompany]);
+
+  const currentLinkedDosageIds = linkedDosageIdsForItem(dosages, id);
+  const linkedDosages = dosages.filter((dosage) => currentLinkedDosageIds.includes(dosage.id));
+  const filteredDosages = dosages.filter((dosage) =>
+    dosageLabel(dosage).toLowerCase().includes(dosageSearchTerm.trim().toLowerCase())
+  );
+  const selectedLinkedDosages = dosages.filter((dosage) => linkedDosageIds.includes(dosage.id));
+
+  const toggleLinkedDosageId = (dosageId) => {
+    setLinkedDosageIds((currentIds) =>
+      currentIds.includes(dosageId)
+        ? currentIds.filter((currentId) => currentId !== dosageId)
+        : [...currentIds, dosageId]
+    );
+  };
 
   async function editItem(e) {
     e.preventDefault();
     if (!requirePermission("854", "update database items")) return;
 
     try {
-      setEdit(true);
-      setRate(purchase.rate);
-      setUom(purchase.UOM);
-      setCategory(purchase.category);
-      setColor(purchase.color);
-      setDescription(purchase.description);
-      setItemName(purchase.name);
-      setSize(purchase.size);
+      setRate(purchase.rate ?? "");
+      setUom(purchase.UOM || "");
+      setCategory(purchase.category || "");
+      setColor(purchase.color || "");
+      setDescription(purchase.description || "");
+      setItemName(purchase.name || "");
+      setSize(purchase.size || "");
       setSellPrice(purchase.sellPriceRaw ?? purchase.billingRateRaw ?? 0);
-      setSku(purchase.sku);
-      setSubcategory(purchase.subCategory);
+      setSku(purchase.sku || "");
+      setSubcategory(purchase.subCategory || "");
       setTracking(purchase.tracking || "");
+      setBillable(Boolean(purchase.billable));
+      setLinkedDosageIds(currentLinkedDosageIds);
+      setEdit(true);
     } catch (error) {
       console.log(error);
     }
@@ -120,7 +177,15 @@ const DataBaseItemDetailView = () => {
     if (!requirePermission("856", "delete database items")) return;
 
     try {
-      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id));
+      const batch = writeBatch(db);
+      queueDatabaseItemDosageLinkUpdates(batch, {
+        companyId: recentlySelectedCompany,
+        itemId: id,
+        dosages,
+        selectedDosageIds: [],
+      });
+      batch.delete(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id));
+      await batch.commit();
       navigate("/company/items");
     } catch (error) {
       console.log(error);
@@ -129,11 +194,8 @@ const DataBaseItemDetailView = () => {
 
   async function cancelEdit(e) {
     e.preventDefault();
-    try {
-      setEdit(false);
-    } catch (error) {
-      console.log(error);
-    }
+    setLinkedDosageIds(currentLinkedDosageIds);
+    setEdit(false);
   }
 
   async function saveEdit(e) {
@@ -141,23 +203,38 @@ const DataBaseItemDetailView = () => {
     if (!requirePermission("854", "update database items")) return;
 
     try {
+      const rateCents = Math.round(Number(rate || 0) * 100);
+      const sellPriceCents = Math.round(Number(sellPrice || 0) * 100);
       const updatedItem = {
         UOM: uom,
+        billable: Boolean(billable),
         category,
         color,
         dateUpdated: new Date(),
         description,
         name: itemName,
-        rate: Math.round(Number(rate || 0) * 100),
+        rate: rateCents,
         size,
         sku,
         subCategory: subcategory,
-        sellPrice: Math.round(Number(sellPrice || 0) * 100),
-        billingRate: Math.round(Number(sellPrice || 0) * 100),
+        sellPrice: sellPriceCents,
+        billingRate: sellPriceCents,
         tracking,
       };
 
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), updatedItem);
+      const batch = writeBatch(db);
+      batch.update(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), updatedItem);
+      queueDatabaseItemDosageLinkUpdates(batch, {
+        companyId: recentlySelectedCompany,
+        itemId: id,
+        dosages,
+        selectedDosageIds: linkedDosageIds,
+      });
+      await batch.commit();
+
+      const nextDosages = applyDatabaseItemDosageLinksLocally(dosages, id, linkedDosageIds);
+      setDosages(nextDosages);
+      setLinkedDosageIds(linkedDosageIdsForItem(nextDosages, id));
       setPurchase((current) => ({
         ...current,
         ...updatedItem,
@@ -170,16 +247,11 @@ const DataBaseItemDetailView = () => {
         dateUpdated: format(updatedItem.dateUpdated, "MM / d / yyyy"),
       }));
       setEdit(false);
+      toast.success("Database item updated.");
     } catch (error) {
       console.log(error);
+      toast.error("Could not update database item.");
     }
-  }
-
-  function formatCurrency(number, locale = "en-US", currency = "USD") {
-    return new Intl.NumberFormat(locale, {
-      style: "currency",
-      currency: currency,
-    }).format(number);
   }
 
   const selectedUom = findOptionByLabel(
@@ -198,162 +270,147 @@ const DataBaseItemDetailView = () => {
     subcategory ? { id: "current-subcategory", label: subcategory } : null
   );
 
+  const inputClass = "mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+  const labelClass = "block text-sm font-semibold text-slate-700";
+  const currentBillable = edit ? billable : Boolean(purchase.billable);
+  const billableBadgeClass = currentBillable
+    ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+    : "border-slate-200 bg-slate-100 text-slate-600";
+
   return (
-    <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
-      <div className="mx-auto space-y-6">
-        {/* Top Bar */}
-        <div className="flex items-center justify-between">
-          {!edit ? (
-
-            <Link
-              to="/company/items"
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900"
-            >
-              &larr; Back to Items
-            </Link>
-          ) : (
-            can("856") && (
-              <button
-                onClick={(e) => {
-                  deleteItem(e);
-                }}
-                className="px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
-              >
-                Delete
-              </button>
-            )
-          )}
-
-          {edit ? (
-            <button
-              onClick={(e) => {
-                cancelEdit(e);
-              }}
-              className="px-4 py-2 text-sm font-medium text-grey-700 bg-grey-50 border border-grey-200 rounded-xl shadow-sm hover:bg-grey-100 transition"
-            >
-              Cancel
-            </button>
-          ) : (
-            can("854") && (
-              <button
-                onClick={(e) => {
-                  editItem(e);
-                }}
-                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-              >
-                Edit
-              </button>
-            )
-          )}
-        </div>
-
-        {/* Main Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
-          <div className="px-6 py-5 border-b border-slate-200 bg-slate-50 flex items-start justify-between">
-            <div>
-              <div className="text-sm font-semibold text-slate-700">Item Detail View</div>
-              <div className="text-xs text-slate-500 mt-1">
-                {edit ? "Edit fields and save changes." : "Review details for this catalog item."}
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <Link to="/company/items" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+                &larr; Back to Items
+              </Link>
+              <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Database Item</p>
+              <h1 className="mt-1 break-words text-3xl font-bold text-slate-950">
+                {edit ? "Edit Database Item" : purchase.name || "Database Item"}
+              </h1>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
+                  Updated {purchase.dateUpdated || "--"}
+                </span>
+                <span className={`inline-flex items-center rounded-full border px-3 py-1 text-xs font-bold ${billableBadgeClass}`}>
+                  {currentBillable ? "Billable" : "Not Billable"}
+                </span>
               </div>
             </div>
 
-            {!edit && (
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
-                Updated {purchase.dateUpdated || "--"}
-              </span>
-            )}
+            <div className="flex flex-wrap gap-2">
+              {edit ? (
+                <>
+                  {can("856") && (
+                    <button
+                      onClick={(e) => deleteItem(e)}
+                      className="inline-flex items-center justify-center rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-bold text-red-700 shadow-sm transition hover:bg-red-100"
+                    >
+                      Delete
+                    </button>
+                  )}
+                  <button
+                    onClick={(e) => cancelEdit(e)}
+                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={(e) => saveEdit(e)}
+                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                </>
+              ) : (
+                can("854") && (
+                  <button
+                    onClick={(e) => editItem(e)}
+                    className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+                  >
+                    Edit
+                  </button>
+                )
+              )}
+            </div>
           </div>
+        </section>
 
-          {edit ? (
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Item Name</label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  onChange={(e) => {
-                    setItemName(e.target.value);
-                  }}
-                  type="text"
-                  placeholder="Item Name"
-                  value={itemName}
-                />
+        {edit ? (
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+              <h2 className="text-lg font-bold text-slate-950">Catalog Details</h2>
+              <p className="mt-1 text-sm text-slate-500">Edit item pricing, classification, tracking, and billing defaults.</p>
+            </div>
+
+            <div className="grid gap-4 p-5 lg:grid-cols-2">
+              <div className="lg:col-span-2">
+                <label className={labelClass}>Item Name</label>
+                <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Item Name" value={itemName} />
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">Rate</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setRate(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="Rate"
-                    value={rate}
+              <div>
+                <label className={labelClass}>Rate</label>
+                <input className={inputClass} onChange={(e) => setRate(e.target.value)} type="number" step="0.01" placeholder="Rate" value={rate} />
+              </div>
+
+              <div>
+                <label className={labelClass}>Sell Price</label>
+                <input className={inputClass} onChange={(e) => setSellPrice(e.target.value)} type="number" step="0.01" placeholder="Sell Price" value={sellPrice} />
+              </div>
+
+              <div>
+                <label className={labelClass}>SKU</label>
+                <input className={inputClass} onChange={(e) => setSku(e.target.value)} type="text" placeholder="SKU" value={sku} />
+              </div>
+
+              <label className="flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={billable}
+                  onChange={(e) => setBillable(e.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span className="block font-bold text-slate-900">Billable</span>
+                  <span className="mt-1 block text-slate-500">Use this item as billable by default when it is selected for jobs, purchases, or customer-facing material.</span>
+                </span>
+              </label>
+
+              <div>
+                <label className={labelClass}>UOM</label>
+                <div className="mt-2">
+                  <Select
+                    value={selectedUom}
+                    options={UOM_OPTIONS}
+                    onChange={(selectedOption) => setUom(selectedOption?.label || "")}
+                    isSearchable
+                    placeholder="Select a UOM"
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
+              </div>
 
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">Sell Price</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setSellPrice(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="Sell Price"
-                    value={sellPrice}
+              <div>
+                <label className={labelClass}>Category</label>
+                <div className="mt-2">
+                  <Select
+                    value={selectedCategory}
+                    options={CATEGORY_OPTIONS}
+                    onChange={(selectedOption) => setCategory(selectedOption?.label || "")}
+                    isSearchable
+                    placeholder="Select a Category"
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700">SKU</label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  onChange={(e) => {
-                    setSku(e.target.value);
-                  }}
-                  type="text"
-                  placeholder="sku"
-                  value={sku}
-                />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">UOM</label>
-                  <div className="mt-2">
-                    <Select
-                      value={selectedUom}
-                      options={UOM_OPTIONS}
-                      onChange={(selectedOption) => setUom(selectedOption?.label || "")}
-                      isSearchable
-                      placeholder="Select a UOM"
-                      styles={databaseItemSelectStyles}
-                      theme={databaseItemSelectTheme}
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">Category</label>
-                  <div className="mt-2">
-                    <Select
-                      value={selectedCategory}
-                      options={CATEGORY_OPTIONS}
-                      onChange={(selectedOption) => setCategory(selectedOption?.label || "")}
-                      isSearchable
-                      placeholder="Select a Category"
-                      styles={databaseItemSelectStyles}
-                      theme={databaseItemSelectTheme}
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-sm font-semibold text-slate-700">Subcategory</label>
+                <label className={labelClass}>Subcategory</label>
                 <div className="mt-2">
                   <Select
                     value={selectedSubcategory}
@@ -367,134 +424,167 @@ const DataBaseItemDetailView = () => {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">Color</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setColor(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="color"
-                    value={color}
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-slate-700">Size</label>
-                  <input
-                    className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                    onChange={(e) => {
-                      setSize(e.target.value);
-                    }}
-                    type="text"
-                    placeholder="size"
-                    value={size}
-                  />
-                </div>
+              <div>
+                <label className={labelClass}>Tracking</label>
+                <input className={inputClass} onChange={(e) => setTracking(e.target.value)} type="text" placeholder="Tracking" value={tracking} />
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700">Description</label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  onChange={(e) => {
-                    setDescription(e.target.value);
-                  }}
-                  type="text"
-                  placeholder="description"
-                  value={description}
-                />
+                <label className={labelClass}>Color</label>
+                <input className={inputClass} onChange={(e) => setColor(e.target.value)} type="text" placeholder="Color" value={color} />
               </div>
 
               <div>
-                <label className="block text-sm font-semibold text-slate-700">Tracking</label>
-                <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
-                  onChange={(e) => {
-                    setTracking(e.target.value);
-                  }}
-                  type="text"
-                  placeholder="tracking"
-                  value={tracking}
-                />
+                <label className={labelClass}>Size</label>
+                <input className={inputClass} onChange={(e) => setSize(e.target.value)} type="text" placeholder="Size" value={size} />
               </div>
 
-              <button
-                onClick={(e) => {
-                  saveEdit(e);
-                }}
-                className="w-full px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-              >
-                Save
-              </button>
-            </div>
-          ) : (
-            <div className="p-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Name</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.name || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">SKU</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.sku || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rate</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.rateFormatted || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Sell Price</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.sellPrice || purchase.billingRate || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">UOM</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.UOM || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.category || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subcategory</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.subCategory || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Color</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.color || "--"}</div>
-                </div>
-
-                <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Size</div>
-                  <div className="mt-1 text-sm font-semibold text-slate-900">{purchase.size || "--"}</div>
-                </div>
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Description</div>
-                <div className="mt-1 text-sm text-slate-700">{purchase.description || "--"}</div>
-              </div>
-
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Other</div>
-                <div className="mt-2 text-sm text-slate-700 space-y-1">
-                  <div>Store Name - {purchase.storeName || "--"}</div>
-                  <div>Times Purchased - {purchase.timesPurchased ?? "--"}</div>
-                  <div>Tracking - {purchase.tracking || "--"}</div>
-                </div>
+              <div className="lg:col-span-2">
+                <label className={labelClass}>Description</label>
+                <textarea className={`${inputClass} min-h-[110px]`} onChange={(e) => setDescription(e.target.value)} placeholder="Description" value={description} />
               </div>
             </div>
-          )}
-        </div>
+
+            <div className="border-t border-slate-200 p-5">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Linked Dosages</h3>
+                  <p className="mt-1 text-sm text-slate-500">Select which dosage templates should count purchases of this item as usable inventory.</p>
+                </div>
+                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
+                  {linkedDosageIds.length} selected
+                </span>
+              </div>
+
+              <input
+                className={`${inputClass} mt-4`}
+                type="search"
+                value={dosageSearchTerm}
+                onChange={(event) => setDosageSearchTerm(event.target.value)}
+                placeholder="Search dosage name, amount, or unit"
+              />
+
+              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
+                {filteredDosages.map((dosage) => {
+                  const checked = linkedDosageIds.includes(dosage.id);
+                  return (
+                    <label
+                      key={dosage.id}
+                      className={`flex items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                        checked ? "border-blue-300 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleLinkedDosageId(dosage.id)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      <span>
+                        <span className="block font-semibold">{dosage.name || dosage.chemType || "Unnamed dosage"}</span>
+                        <span className="block text-xs text-slate-500">{dosageLabel(dosage)}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+
+                {filteredDosages.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                    No dosage templates match that search.
+                  </p>
+                ) : null}
+              </div>
+
+              {selectedLinkedDosages.length ? (
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {selectedLinkedDosages.map((dosage) => (
+                    <span key={dosage.id} className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                      {dosage.name || dosage.chemType || "Unnamed dosage"}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
+        ) : (
+          <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,360px)]">
+            <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="border-b border-slate-200 bg-slate-50 px-5 py-4">
+                <h2 className="text-lg font-bold text-slate-950">Catalog Details</h2>
+                <p className="mt-1 text-sm text-slate-500">Pricing, classification, and item identifiers.</p>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 p-5 md:grid-cols-2 xl:grid-cols-3">
+                <DetailField label="Name" value={purchase.name} />
+                <DetailField label="SKU" value={purchase.sku} />
+                <DetailField label="Billing" value={purchase.billable ? "Billable" : "Not Billable"} />
+                <DetailField label="Rate" value={purchase.rateFormatted} />
+                <DetailField label="Sell Price" value={purchase.sellPrice || purchase.billingRate} />
+                <DetailField label="UOM" value={purchase.UOM} />
+                <DetailField label="Category" value={purchase.category} />
+                <DetailField label="Subcategory" value={purchase.subCategory} />
+                <DetailField label="Color" value={purchase.color} />
+                <DetailField label="Size" value={purchase.size} />
+                <DetailField label="Tracking" value={purchase.tracking} />
+                <DetailField label="Vendor" value={purchase.storeName} />
+              </div>
+
+              <div className="border-t border-slate-200 p-5">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Description</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{purchase.description || "--"}</p>
+              </div>
+
+              <div className="border-t border-slate-200 p-5">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Linked Dosages</p>
+                {linkedDosages.length ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {linkedDosages.map((dosage) => (
+                      <Link
+                        key={dosage.id}
+                        to={`/company/readingsAndDosages?tab=Dosages&template=${encodeURIComponent(dosage.id)}`}
+                        className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800 transition hover:bg-blue-200 hover:text-blue-950"
+                      >
+                        {dosageLabel(dosage)}
+                      </Link>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="mt-2 text-sm text-slate-500">No dosages linked yet.</p>
+                )}
+              </div>
+            </div>
+
+            <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h2 className="text-lg font-bold text-slate-950">Item Summary</h2>
+              <div className="mt-4 space-y-3 text-sm text-slate-700">
+                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-500">Updated</span>
+                  <span className="text-right font-semibold text-slate-900">{purchase.dateUpdated || "--"}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-500">Times Purchased</span>
+                  <span className="text-right font-semibold text-slate-900">{purchase.timesPurchased ?? "--"}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-500">Tracking</span>
+                  <span className="text-right font-semibold text-slate-900">{purchase.tracking || "--"}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-500">Linked Dosages</span>
+                  <span className="text-right font-semibold text-slate-900">{linkedDosages.length}</span>
+                </div>
+                <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">
+                  <span className="font-semibold text-slate-500">Vendor ID</span>
+                  <span className="max-w-[180px] break-words text-right font-semibold text-slate-900">{purchase.venderId || "--"}</span>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Catalog Label</p>
+                  <p className="mt-2 break-words font-semibold text-slate-900">{purchase.label || purchase.name || "--"}</p>
+                </div>
+              </div>
+            </aside>
+          </section>
+        )}
       </div>
     </div>
   );

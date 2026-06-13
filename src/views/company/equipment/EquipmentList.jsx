@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
-import { Timestamp, collection, doc, getCountFromServer, getDocs, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
+import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  EQUIPMENT_STATUS,
   Equipment,
   displayEquipmentStatus,
   normalizeEquipmentStatus,
@@ -22,28 +21,6 @@ import {
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 
-const MAINTENANCE_STATUS_QUERY_VALUES = [
-  EQUIPMENT_STATUS.NEEDS_MAINTENANCE,
-  "Maintenance",
-  "Needs Service",
-  "needsmaintenance",
-  "maintenance",
-  "needsservice",
-];
-
-const REPAIR_STATUS_QUERY_VALUES = [
-  EQUIPMENT_STATUS.NEEDS_REPAIR,
-  "NeedsRepair",
-  "needsrepair",
-];
-
-const NON_OPERATIONAL_STATUS_QUERY_VALUES = [
-  EQUIPMENT_STATUS.NON_OPERATIONAL,
-  EQUIPMENT_STATUS.LEGACY_NONOPERATIONAL,
-  "Non Operational",
-  "nonoperational",
-];
-
 const EMPTY_TOP_COUNTS = {
   all: 0,
   maintenance: 0,
@@ -52,8 +29,18 @@ const EMPTY_TOP_COUNTS = {
 };
 
 const CUSTOM_CATALOG_VALUE = "__custom__";
+const DEFAULT_MAINTENANCE_NAME = "Clean";
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500";
+
+const todayDateInputValue = () => format(new Date(), "yyyy-MM-dd");
+
+const dateInputToLocalDate = (value) => {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
 
 const Field = ({ label, children }) => (
   <div className="space-y-1">
@@ -128,45 +115,20 @@ const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFreque
   return null;
 };
 
+const sortableDateMillis = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toDate === "function") return value.toDate().getTime();
+
+  const parsed = new Date(value);
+  const millis = parsed.getTime();
+  return Number.isNaN(millis) ? null : millis;
+};
+
 const companyUserDisplayName = (user = {}) =>
   user.userName || user.name || user.fullName || user.displayName || user.email || "";
 
 const companyUserRecordId = (user = {}) => user.userId || user.id || "";
-
-const dedupeSnapshotsToEquipment = (snapshots) => {
-  const docsById = new Map();
-
-  snapshots.forEach((snapshot) => {
-    snapshot.docs.forEach((docSnapshot) => {
-      docsById.set(docSnapshot.id, docSnapshot);
-    });
-  });
-
-  return Array.from(docsById.values()).map((docSnapshot) => Equipment.fromFirestore(docSnapshot));
-};
-
-const buildEquipmentQueries = (equipmentCollectionRef, filter) => {
-  if (filter === "maintenance") {
-    return [
-      query(equipmentCollectionRef, where("status", "in", MAINTENANCE_STATUS_QUERY_VALUES)),
-      query(equipmentCollectionRef, where("nextServiceDate", "<=", Timestamp.fromDate(endOfToday()))),
-    ];
-  }
-
-  if (filter === "repair") {
-    return [
-      query(equipmentCollectionRef, where("status", "in", REPAIR_STATUS_QUERY_VALUES)),
-    ];
-  }
-
-  if (filter === "nonOperational") {
-    return [
-      query(equipmentCollectionRef, where("status", "in", NON_OPERATIONAL_STATUS_QUERY_VALUES)),
-    ];
-  }
-
-  return [query(equipmentCollectionRef)];
-};
 
 const TopFilterButton = ({ label, count, active, onClick }) => (
   <button
@@ -174,7 +136,7 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
     type="button"
     className={[
       "flex items-center justify-between gap-3 w-full sm:w-auto",
-      "px-4 py-3 rounded-2xl border text-sm font-semibold transition-all",
+      "px-4 py-3 rounded-lg border text-sm font-semibold transition-all",
       active
         ? "bg-blue-600 text-white border-blue-600 shadow-sm"
         : "bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:shadow-sm",
@@ -212,6 +174,15 @@ const QuickActionMenuItem = ({ label, icon: Icon, tone = "blue", onClick }) => {
   );
 };
 
+const EquipmentDetailLink = ({ equipment, children }) => (
+  <Link
+    to={`/company/equipment/detail/${equipment.id}`}
+    className="font-semibold text-blue-700 hover:text-blue-900 hover:underline"
+  >
+    {children || "—"}
+  </Link>
+);
+
 export default function EquipmentList() {
   const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
@@ -227,7 +198,7 @@ export default function EquipmentList() {
   // "" | "true" | "false"
   const [needsServiceFilter, setNeedsServiceFilter] = useState("");
 
-  const [sortBy, setSortBy] = useState("customerName");
+  const [sortBy, setSortBy] = useState("nextServiceDate");
   const [sortOrder, setSortOrder] = useState("asc");
 
   const [types, setTypes] = useState([]);
@@ -259,15 +230,15 @@ export default function EquipmentList() {
   const [quickUniversalEquipmentId, setQuickUniversalEquipmentId] = useState("");
   const [quickManualPdfLink, setQuickManualPdfLink] = useState("");
 
-  const [maintenanceName, setMaintenanceName] = useState("");
-  const [maintenanceDate, setMaintenanceDate] = useState(new Date());
+  const [maintenanceName, setMaintenanceName] = useState(DEFAULT_MAINTENANCE_NAME);
+  const [maintenanceDate, setMaintenanceDate] = useState(todayDateInputValue);
   const [maintenancePerformedBy, setMaintenancePerformedBy] = useState("Company");
   const [maintenanceCompanyUserId, setMaintenanceCompanyUserId] = useState("");
   const [maintenanceCustomerName, setMaintenanceCustomerName] = useState("");
   const [maintenanceNotes, setMaintenanceNotes] = useState("");
 
   const [repairName, setRepairName] = useState("");
-  const [repairDate, setRepairDate] = useState(new Date());
+  const [repairDate, setRepairDate] = useState(todayDateInputValue);
   const [repairPerformedBy, setRepairPerformedBy] = useState("Company");
   const [repairCompanyUserId, setRepairCompanyUserId] = useState("");
   const [repairCustomerName, setRepairCustomerName] = useState("");
@@ -406,50 +377,11 @@ export default function EquipmentList() {
   useEffect(() => {
     let cancelled = false;
 
-    const fetchEquipmentCounts = async () => {
-      if (!recentlySelectedCompany) {
-        setTopCounts(EMPTY_TOP_COUNTS);
-        return;
-      }
-
-      const equipmentCollectionRef = collection(db, "companies", recentlySelectedCompany, "equipment");
-
-      try {
-        setTopCounts(EMPTY_TOP_COUNTS);
-
-        const [allSnap, repairSnap, nonOperationalSnap] = await Promise.all([
-          getCountFromServer(equipmentCollectionRef),
-          getCountFromServer(query(equipmentCollectionRef, where("status", "in", REPAIR_STATUS_QUERY_VALUES))),
-          getCountFromServer(query(equipmentCollectionRef, where("status", "in", NON_OPERATIONAL_STATUS_QUERY_VALUES))),
-        ]);
-
-        if (!cancelled) {
-          setTopCounts((counts) => ({
-            ...counts,
-            all: allSnap.data().count || 0,
-            repair: repairSnap.data().count || 0,
-            nonOperational: nonOperationalSnap.data().count || 0,
-          }));
-        }
-      } catch (error) {
-        console.error("Equipment count error:", error);
-      }
-    };
-
-    fetchEquipmentCounts();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [recentlySelectedCompany]);
-
-  useEffect(() => {
-    let cancelled = false;
-
     const fetchEquipment = async () => {
       if (!recentlySelectedCompany) {
         setEquipmentList([]);
         setTypes([]);
+        setTopCounts(EMPTY_TOP_COUNTS);
         setEquipmentError("");
         setLoadingEquipment(false);
         return;
@@ -459,11 +391,13 @@ export default function EquipmentList() {
         setLoadingEquipment(true);
         setEquipmentError("");
 
-        const equipmentCollectionRef = collection(db, "companies", recentlySelectedCompany, "equipment");
-        const snapshots = await Promise.all(
-          buildEquipmentQueries(equipmentCollectionRef, topFilter).map((equipmentQuery) => getDocs(equipmentQuery))
+        const equipmentSnap = await getDocs(
+          query(
+            collection(db, "companies", recentlySelectedCompany, "equipment"),
+            where("isActive", "==", true)
+          )
         );
-        const equipmentData = dedupeSnapshotsToEquipment(snapshots);
+        const equipmentData = equipmentSnap.docs.map((equipmentDoc) => Equipment.fromFirestore(equipmentDoc));
 
         if (cancelled) return;
 
@@ -472,25 +406,19 @@ export default function EquipmentList() {
         const uniqueTypes = [...new Set(equipmentData.map((item) => item.type))].filter(Boolean);
         setTypes(uniqueTypes);
 
-        setTopCounts((counts) => ({
-          ...counts,
-          all: topFilter === "all" ? equipmentData.length : counts.all,
-          maintenance: topFilter === "all" || topFilter === "maintenance"
-            ? equipmentData.filter(isNeedsMaintenance).length
-            : counts.maintenance,
-          repair: topFilter === "all"
-            ? equipmentData.filter(isNeedsRepair).length
-            : topFilter === "repair" ? equipmentData.length : counts.repair,
-          nonOperational: topFilter === "all"
-            ? equipmentData.filter(isNonOperational).length
-            : topFilter === "nonOperational" ? equipmentData.length : counts.nonOperational,
-        }));
+        setTopCounts({
+          all: equipmentData.length,
+          maintenance: equipmentData.filter(isNeedsMaintenance).length,
+          repair: equipmentData.filter(isNeedsRepair).length,
+          nonOperational: equipmentData.filter(isNonOperational).length,
+        });
       } catch (error) {
         console.error("Equipment Data Error!:", error);
         if (!cancelled) {
           setEquipmentError("Could not load equipment for the selected view.");
           setEquipmentList([]);
           setTypes([]);
+          setTopCounts(EMPTY_TOP_COUNTS);
         }
       } finally {
         if (!cancelled) {
@@ -504,7 +432,7 @@ export default function EquipmentList() {
     return () => {
       cancelled = true;
     };
-  }, [recentlySelectedCompany, topFilter]);
+  }, [recentlySelectedCompany]);
 
   // -----------------------------
   // ✅ Unique customer count
@@ -563,8 +491,15 @@ export default function EquipmentList() {
       const fieldB = b?.[sortBy];
 
       // Dates
-      if (fieldA instanceof Date && fieldB instanceof Date) {
-        const comparison = fieldA.getTime() - fieldB.getTime();
+      if (sortBy === "nextServiceDate" || fieldA instanceof Date || fieldB instanceof Date) {
+        const timeA = sortableDateMillis(fieldA);
+        const timeB = sortableDateMillis(fieldB);
+
+        if (timeA === null && timeB === null) return 0;
+        if (timeA === null) return 1;
+        if (timeB === null) return -1;
+
+        const comparison = timeA - timeB;
         return sortOrder === "desc" ? comparison * -1 : comparison;
       }
 
@@ -588,6 +523,15 @@ export default function EquipmentList() {
     const order = sortBy === field && sortOrder === "asc" ? "desc" : "asc";
     setSortBy(field);
     setSortOrder(order);
+  };
+
+  const handleTopFilterChange = (filter) => {
+    setTopFilter(filter);
+
+    if (filter === "maintenance") {
+      setSortBy("nextServiceDate");
+      setSortOrder("asc");
+    }
   };
 
   const getStatusClass = (status, maintenanceFlag) => {
@@ -655,17 +599,17 @@ export default function EquipmentList() {
     }
 
     if (modalName === "maintenance") {
-      setMaintenanceName("");
-      setMaintenanceDate(new Date());
+      setMaintenanceName(DEFAULT_MAINTENANCE_NAME);
+      setMaintenanceDate(todayDateInputValue());
       setMaintenancePerformedBy("Company");
       setMaintenanceCompanyUserId(companyUsers?.[0]?.id || "");
-      setMaintenanceCustomerName("");
+      setMaintenanceCustomerName(equipment.customerName || "");
       setMaintenanceNotes("");
     }
 
     if (modalName === "repair") {
       setRepairName("");
-      setRepairDate(new Date());
+      setRepairDate(todayDateInputValue());
       setRepairPerformedBy("Company");
       setRepairCompanyUserId(companyUsers?.[0]?.id || "");
       setRepairCustomerName("");
@@ -775,6 +719,12 @@ export default function EquipmentList() {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
 
     try {
+      const maintenanceDateValue = dateInputToLocalDate(maintenanceDate);
+      if (!maintenanceDateValue) {
+        toast.error("Choose a maintenance date");
+        return;
+      }
+
       const equipmentRef = doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id);
       const serviceId = "com_equ_sh_" + uuidv4();
       const serviceHistoryDoc = doc(equipmentRef, "serviceHistory", serviceId);
@@ -786,7 +736,7 @@ export default function EquipmentList() {
           ? companyUserDisplayName(selectedCompanyUser)
           : (maintenanceCustomerName || "").trim();
       const nextServiceDate = computeNextServiceDate(
-        maintenanceDate,
+        maintenanceDateValue,
         selectedQuickEquipment.serviceFrequency,
         selectedQuickEquipment.serviceFrequencyEvery
       );
@@ -795,7 +745,7 @@ export default function EquipmentList() {
         id: serviceId,
         name: (maintenanceName || "").trim(),
         type: "Maintenance",
-        date: maintenanceDate,
+        date: maintenanceDateValue,
         performedBy,
         addedBy: "Manual",
         description: maintenanceNotes,
@@ -806,7 +756,7 @@ export default function EquipmentList() {
       });
 
       const updates = {
-        lastServiceDate: maintenanceDate,
+        lastServiceDate: maintenanceDateValue,
         nextServiceDate,
       };
 
@@ -820,10 +770,23 @@ export default function EquipmentList() {
     }
   };
 
+  const handleMaintenancePerformedByChange = (value) => {
+    setMaintenancePerformedBy(value);
+    if (value === "Customer") {
+      setMaintenanceCustomerName(selectedQuickEquipment?.customerName || "");
+    }
+  };
+
   const handleCreateRepair = async () => {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
 
     try {
+      const repairDateValue = dateInputToLocalDate(repairDate);
+      if (!repairDateValue) {
+        toast.error("Choose a repair date");
+        return;
+      }
+
       const equipmentRef = doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id);
       const serviceId = "com_equ_sh_" + uuidv4();
       const serviceHistoryDoc = doc(equipmentRef, "serviceHistory", serviceId);
@@ -858,7 +821,7 @@ export default function EquipmentList() {
         id: serviceId,
         name: (repairName || "").trim(),
         type: "Repair",
-        date: repairDate,
+        date: repairDateValue,
         performedBy,
         addedBy: "Manual",
         description: repairNotes,
@@ -956,8 +919,8 @@ export default function EquipmentList() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto">
+    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+      <div className="w-full">
         <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6">
           <div>
             <h2 className="text-3xl font-bold text-gray-800">Equipment</h2>
@@ -990,41 +953,41 @@ export default function EquipmentList() {
             label="All Equipment"
             count={topCounts.all}
             active={topFilter === "all"}
-            onClick={() => setTopFilter("all")}
+            onClick={() => handleTopFilterChange("all")}
           />
           <TopFilterButton
             label="Needs Maintenance"
             count={topCounts.maintenance}
             active={topFilter === "maintenance"}
-            onClick={() => setTopFilter("maintenance")}
+            onClick={() => handleTopFilterChange("maintenance")}
           />
           <TopFilterButton
             label="Needs Repair"
             count={topCounts.repair}
             active={topFilter === "repair"}
-            onClick={() => setTopFilter("repair")}
+            onClick={() => handleTopFilterChange("repair")}
           />
           <TopFilterButton
             label="Non-Operational"
             count={topCounts.nonOperational}
             active={topFilter === "nonOperational"}
-            onClick={() => setTopFilter("nonOperational")}
+            onClick={() => handleTopFilterChange("nonOperational")}
           />
         </div>
 
         {maintenanceDueCount > 0 && (
-          <div className="p-4 mb-6 text-sm text-red-800 rounded-2xl bg-red-100 border border-red-200" role="alert">
+          <div className="p-4 mb-6 text-sm text-red-800 rounded-lg bg-red-100 border border-red-200" role="alert">
             <span className="font-bold">Maintenance Alert:</span> You have {maintenanceDueCount} item(s) needing maintenance (by status or due date).
           </div>
         )}
 
         {equipmentError && (
-          <div className="p-4 mb-6 text-sm text-red-800 rounded-2xl bg-red-100 border border-red-200" role="alert">
+          <div className="p-4 mb-6 text-sm text-red-800 rounded-lg bg-red-100 border border-red-200" role="alert">
             {equipmentError}
           </div>
         )}
 
-        <div className="bg-white shadow-lg rounded-2xl border border-gray-200 overflow-hidden">
+        <div className="rounded-lg bg-white shadow-lg border border-gray-200 overflow-hidden">
           {/* Filters */}
           <div className="p-6 border-b border-gray-100 bg-white">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1099,15 +1062,21 @@ export default function EquipmentList() {
                   return (
                     <tr key={equipment.id} className="hover:bg-gray-50 transition-colors">
                       <td className="p-4 whitespace-nowrap">
-                        {equipment.customerName}
+                        <EquipmentDetailLink equipment={equipment}>
+                          {equipment.customerName}
+                        </EquipmentDetailLink>
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
-                        {equipment.make}
+                        <EquipmentDetailLink equipment={equipment}>
+                          {equipment.make}
+                        </EquipmentDetailLink>
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
-                        {equipment.model}
+                        <EquipmentDetailLink equipment={equipment}>
+                          {equipment.model}
+                        </EquipmentDetailLink>
                       </td>
 
                       <td className="p-4 whitespace-nowrap text-gray-700">
@@ -1401,8 +1370,8 @@ export default function EquipmentList() {
               <Field label="Date">
                 <input
                   type="date"
-                  value={format(maintenanceDate, "yyyy-MM-dd")}
-                  onChange={(event) => setMaintenanceDate(new Date(event.target.value))}
+                  value={maintenanceDate}
+                  onChange={(event) => setMaintenanceDate(event.target.value)}
                   className={inputBase}
                 />
               </Field>
@@ -1410,7 +1379,7 @@ export default function EquipmentList() {
               <Field label="Performed By">
                 <select
                   value={maintenancePerformedBy}
-                  onChange={(event) => setMaintenancePerformedBy(event.target.value)}
+                  onChange={(event) => handleMaintenancePerformedByChange(event.target.value)}
                   className={inputBase}
                 >
                   <option value="Company">Company</option>
@@ -1493,8 +1462,8 @@ export default function EquipmentList() {
               <Field label="Date">
                 <input
                   type="date"
-                  value={format(repairDate, "yyyy-MM-dd")}
-                  onChange={(event) => setRepairDate(new Date(event.target.value))}
+                  value={repairDate}
+                  onChange={(event) => setRepairDate(event.target.value)}
                   className={inputBase}
                 />
               </Field>

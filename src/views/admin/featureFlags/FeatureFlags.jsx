@@ -7,28 +7,34 @@ import {
   orderBy,
   query,
   serverTimestamp,
+  Timestamp,
   updateDoc,
   writeBatch,
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { db } from '../../../utils/config';
-import { FeatureFlag } from '../../../utils/models/FeatureFlag';
+import { APP_LIVE_FEATURE_FLAG_ID, FeatureFlag } from '../../../utils/models/FeatureFlag';
 
-const FLAG_COUNT = 100;
+const MAX_FLAG_INDEX = 100;
 const ADMIN_YELLOW = '#debf44';
 const REAL_EMAILS_FLAG_ID = 'feature_flag_012';
 const LEGACY_REAL_EMAILS_FLAG_ID = 'feature_flag_005';
 const LEGACY_REAL_EMAILS_NAME = 'Turn on real emails';
 const LEGACY_REAL_EMAILS_DESCRIPTION = 'When off, service agreement and invoice emails are routed to the internal test inbox instead of homeowners.';
 
+function toDate(value) {
+  if (!value) return null;
+  if (typeof value.toDate === 'function') return value.toDate();
+  if (value instanceof Date) return value;
+  if (typeof value.seconds === 'number') return new Date(value.seconds * 1000);
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function formatDate(value) {
-  if (!value) return 'Never';
-
-  const date = typeof value.toDate === 'function' ? value.toDate() : value;
-
-  if (!(date instanceof Date) || Number.isNaN(date.getTime())) {
-    return 'Never';
-  }
+  const date = toDate(value);
+  if (!date) return 'Never';
 
   return new Intl.DateTimeFormat('en-US', {
     month: 'short',
@@ -39,9 +45,18 @@ function formatDate(value) {
   }).format(date);
 }
 
+function toDateTimeInputValue(value) {
+  const date = toDate(value);
+  if (!date) return '';
+
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
+  return offsetDate.toISOString().slice(0, 16);
+}
+
 function FeatureFlags() {
   const [flags, setFlags] = useState([]);
   const [draftNames, setDraftNames] = useState({});
+  const [draftReleaseDates, setDraftReleaseDates] = useState({});
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
   const [savingFlagIds, setSavingFlagIds] = useState({});
@@ -59,7 +74,7 @@ function FeatureFlags() {
       );
       const writes = [];
 
-      Array.from({ length: FLAG_COUNT }, (_, index) => index + 1).forEach((index) => {
+      Array.from({ length: MAX_FLAG_INDEX + 1 }, (_, index) => index).forEach((index) => {
         const flagId = FeatureFlag.documentId(index);
         const existingFlag = existingFlagsById.get(flagId);
         const defaultName = FeatureFlag.defaultName(index);
@@ -153,6 +168,17 @@ function FeatureFlags() {
 
           return nextDrafts;
         });
+        setDraftReleaseDates((currentDrafts) => {
+          const nextDrafts = { ...currentDrafts };
+
+          nextFlags.forEach((flag) => {
+            if (nextDrafts[flag.id] === undefined) {
+              nextDrafts[flag.id] = toDateTimeInputValue(flag.releaseDate);
+            }
+          });
+
+          return nextDrafts;
+        });
         setLoading(false);
       },
       (error) => {
@@ -213,6 +239,45 @@ function FeatureFlags() {
     }
   };
 
+  const saveReleaseDate = async (flag) => {
+    const nextValue = draftReleaseDates[flag.id] || '';
+    const currentValue = toDateTimeInputValue(flag.releaseDate);
+
+    if (nextValue === currentValue) {
+      return;
+    }
+
+    const parsedDate = nextValue ? new Date(nextValue) : null;
+
+    if (nextValue && Number.isNaN(parsedDate.getTime())) {
+      toast.error('Enter a valid release date.');
+      setDraftReleaseDates((currentDrafts) => ({
+        ...currentDrafts,
+        [flag.id]: currentValue,
+      }));
+      return;
+    }
+
+    setSaving(flag.id, true);
+
+    try {
+      await updateDoc(doc(flagsRef, flag.id), {
+        releaseDate: parsedDate ? Timestamp.fromDate(parsedDate) : null,
+        updatedAt: serverTimestamp(),
+      });
+      toast.success('Feature flag release date saved.');
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to save release date.');
+      setDraftReleaseDates((currentDrafts) => ({
+        ...currentDrafts,
+        [flag.id]: currentValue,
+      }));
+    } finally {
+      setSaving(flag.id, false);
+    }
+  };
+
   const toggleFlag = async (flag) => {
     setSaving(flag.id, true);
 
@@ -230,6 +295,7 @@ function FeatureFlags() {
   };
 
   const realEmailsFlag = flags.find((flag) => flag.id === REAL_EMAILS_FLAG_ID);
+  const appLiveFlag = flags.find((flag) => flag.id === APP_LIVE_FEATURE_FLAG_ID);
 
   return (
     <div className="min-h-screen bg-slate-900 px-2 py-5 md:px-7">
@@ -264,7 +330,7 @@ function FeatureFlags() {
           </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="border border-slate-800/60 bg-slate-900/50 p-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">Total</p>
             <p className="text-2xl font-bold text-slate-100">{flags.length}</p>
@@ -282,6 +348,15 @@ function FeatureFlags() {
             </p>
           </div>
           <div className="border border-slate-800/60 bg-slate-900/50 p-3">
+            <p className="text-xs uppercase tracking-wide text-slate-500">App Launch</p>
+            <p className={`text-2xl font-bold ${appLiveFlag?.enabled ? 'text-emerald-300' : 'text-amber-300'}`}>
+              {appLiveFlag?.enabled ? 'Live' : 'Closed'}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {appLiveFlag?.releaseDate ? formatDate(appLiveFlag.releaseDate) : 'No release date set'}
+            </p>
+          </div>
+          <div className="border border-slate-800/60 bg-slate-900/50 p-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">Real Emails</p>
             <p className={`text-2xl font-bold ${realEmailsFlag?.enabled ? 'text-emerald-300' : 'text-amber-300'}`}>
               {realEmailsFlag?.enabled ? 'On' : 'Test'}
@@ -295,6 +370,7 @@ function FeatureFlags() {
               <tr className="text-slate-200">
                 <th className="px-4 py-3 text-left font-bold">Flag</th>
                 <th className="px-4 py-3 text-left font-bold">Name</th>
+                <th className="px-4 py-3 text-left font-bold">Release Date</th>
                 <th className="px-4 py-3 text-left font-bold">Status</th>
                 <th className="px-4 py-3 text-left font-bold">Updated</th>
               </tr>
@@ -334,6 +410,30 @@ function FeatureFlags() {
                     )}
                   </td>
 
+                  <td className="min-w-[240px] px-4 py-3 align-middle">
+                    <input
+                      type="datetime-local"
+                      value={draftReleaseDates[flag.id] ?? ''}
+                      onChange={(event) =>
+                        setDraftReleaseDates((currentDrafts) => ({
+                          ...currentDrafts,
+                          [flag.id]: event.target.value,
+                        }))
+                      }
+                      onBlur={() => saveReleaseDate(flag)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          event.currentTarget.blur();
+                        }
+                      }}
+                      disabled={savingFlagIds[flag.id]}
+                      className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <p className="mt-2 text-xs text-slate-500">
+                      {flag.releaseDate ? formatDate(flag.releaseDate) : 'Optional'}
+                    </p>
+                  </td>
+
                   <td className="px-4 py-3 align-middle">
                     <button
                       type="button"
@@ -363,7 +463,7 @@ function FeatureFlags() {
 
               {!loading && filteredFlags.length === 0 && (
                 <tr>
-                  <td className="px-4 py-8 text-slate-400" colSpan={4}>
+                  <td className="px-4 py-8 text-slate-400" colSpan={5}>
                     No feature flags found.
                   </td>
                 </tr>
@@ -371,7 +471,7 @@ function FeatureFlags() {
 
               {loading && (
                 <tr>
-                  <td className="px-4 py-8 text-slate-400" colSpan={4}>
+                  <td className="px-4 py-8 text-slate-400" colSpan={5}>
                     Loading feature flags...
                   </td>
                 </tr>

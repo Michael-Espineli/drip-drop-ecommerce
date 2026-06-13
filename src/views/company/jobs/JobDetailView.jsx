@@ -218,6 +218,7 @@ const JobDetailView = () => {
   const [showCreateTemplateModal, setShowCreateTemplateModal] = useState(false);
   const [templateName, setTemplateName] = useState("");
   const [savingJobTemplate, setSavingJobTemplate] = useState(false);
+  const [expiringJob, setExpiringJob] = useState(false);
 
   // Tasks
   const [taskTypeList, setTaskTypeList] = useState([]);
@@ -239,6 +240,7 @@ const JobDetailView = () => {
   const [shoppingList, setShoppingList] = useState([]);
   const [showAllPlannedMaterials, setShowAllPlannedMaterials] = useState(false);
   const [newShoppingList, setNewShoppingList] = useState(false);
+  const [markingPurchasedShoppingItemId, setMarkingPurchasedShoppingItemId] = useState("");
 
   const shoppingSubCategoryOptions = [
     { value: "Data Base", label: "Data Base" },
@@ -387,6 +389,7 @@ const JobDetailView = () => {
   );
 
   const selectedBillingRecord = selectedSalesAgreement || selectedContract;
+  const isJobExpired = String(job.billingStatus || "").trim().toLowerCase() === "expired";
 
   const contractStatusOptions = useMemo(
     () => ["Draft", "Sent", "Viewed", "Accepted", "Rejected", "Expired", "Invoiced", "Paid"],
@@ -651,6 +654,104 @@ const JobDetailView = () => {
     } catch (err) {
       console.warn("[JobDetailView] Failed to record job history", err);
     }
+  };
+
+  const upsertExpiredJobRecord = async ({
+    previousBillingStatus = job.billingStatus || "",
+    previousOperationStatus = job.operationStatus || "",
+    nextOperationStatus = job.operationStatus || "",
+    expiredAtMillis = Date.now(),
+    reason = "Job canceled from job detail",
+  } = {}) => {
+    if (!recentlySelectedCompany || !jobId) return null;
+
+    const customerId = job.customerId || customer.id || "";
+    if (!customerId) {
+      throw new Error("This job needs a customer before it can be canceled.");
+    }
+
+    const customerName =
+      job.customerName ||
+      [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+      customer.companyName ||
+      "Customer";
+    const locationAddress = [
+      serviceLocation.streetAddress,
+      serviceLocation.city,
+      serviceLocation.state,
+      serviceLocation.zip,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const locationName = serviceLocation.nickName || serviceLocation.name || "";
+    const openTaskCount = (taskList || []).filter(
+      (task) => String(task.status || "").toLowerCase() !== "finished"
+    ).length;
+    const jobLabel = job.internalId || job.type || jobId;
+    const noteLines = [
+      `Job ${jobLabel} was canceled without deleting the work order.`,
+      job.type ? `Type: ${job.type}` : "",
+      job.description ? `Scope: ${job.description}` : "",
+      `Billing: ${previousBillingStatus || "Not set"} -> Expired`,
+      `Operations: ${previousOperationStatus || "Not set"} -> ${nextOperationStatus || "Not set"}`,
+      Number(job.rate || 0) ? `Customer price: ${moneyFromCents(job.rate)}` : "",
+      locationName || locationAddress ? `Location: ${[locationName, locationAddress].filter(Boolean).join(" - ")}` : "",
+      job.bodyOfWaterName ? `Body of water: ${job.bodyOfWaterName}` : "",
+      job.equipmentName ? `Equipment: ${job.equipmentName}` : "",
+      `Tasks: ${(taskList || []).length}${openTaskCount ? ` (${openTaskCount} open)` : ""}`,
+      shoppingList.length ? `Planned materials: ${shoppingList.length}` : "",
+      purchasedItems.length ? `Purchased items: ${purchasedItems.length}` : "",
+    ].filter(Boolean);
+
+    const expiredJobRecord = {
+      id: jobId,
+      companyId: recentlySelectedCompany,
+      customerId,
+      customerName,
+      jobId,
+      jobInternalId: job.internalId || "",
+      jobType: job.type || "",
+      jobDescription: job.description || "",
+      jobRateCents: Number(job.rate || 0),
+      jobLaborCostCents: Number(job.laborCost || 0),
+      previousBillingStatus,
+      previousOperationStatus,
+      billingStatus: "Expired",
+      operationStatus: nextOperationStatus || "",
+      serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+      serviceLocationName: locationName,
+      serviceLocationAddress: locationAddress,
+      bodyOfWaterId: job.bodyOfWaterId || "",
+      bodyOfWaterName: job.bodyOfWaterName || "",
+      equipmentId: job.equipmentId || "",
+      equipmentName: job.equipmentName || "",
+      adminId: job.adminId || "",
+      adminName: job.adminName || "",
+      repairRequestId: job.repairRequestId || "",
+      serviceStopIds: Array.isArray(job.serviceStopIds) ? job.serviceStopIds : [],
+      taskCount: (taskList || []).length,
+      openTaskCount,
+      plannedServiceStopCount: (plannedServiceStops || []).length,
+      plannedMaterialCount: (shoppingList || []).length,
+      purchasedItemCount: (purchasedItems || []).length,
+      title: `Expired job: ${jobLabel}`,
+      note: noteLines.join("\n"),
+      reason,
+      sourcePath: `companies/${recentlySelectedCompany}/workOrders/${jobId}`,
+      expiredAt: serverTimestamp(),
+      expiredAtMillis,
+      expiredByUserId: getUserId() || "",
+      expiredByUserName: getAuditUserName(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(
+      doc(db, "companies", recentlySelectedCompany, "customers", customerId, "expiredJobs", jobId),
+      expiredJobRecord,
+      { merge: true }
+    );
+
+    return expiredJobRecord;
   };
 
   const centsFromCurrencyInput = (value) => {
@@ -1521,12 +1622,12 @@ const JobDetailView = () => {
       (current || []).map((item) =>
         items.some((readyItem) => readyItem.id === item.id)
           ? {
-              ...item,
-              status: "Ready to Purchase",
-              estimateAccepted: true,
-              estimateAcceptedAt: new Date(),
-              jobBillingStatus: "accepted",
-            }
+            ...item,
+            status: "Ready to Purchase",
+            estimateAccepted: true,
+            estimateAcceptedAt: new Date(),
+            jobBillingStatus: "accepted",
+          }
           : item
       )
     );
@@ -2718,8 +2819,8 @@ const JobDetailView = () => {
   };
 
   // MARK: initial load
-	  useEffect(() => {
-	    if (!recentlySelectedCompany || !jobId) return;
+  useEffect(() => {
+    if (!recentlySelectedCompany || !jobId) return;
 
     (async () => {
       try {
@@ -3404,6 +3505,10 @@ const JobDetailView = () => {
         updates.operationStatus = selectedOperationStatus.value;
       }
 
+      if (updates.billingStatus === "Expired" && !(job.customerId || customer.id)) {
+        return toast.error("Attach a customer before canceling this job.");
+      }
+
       if (Object.keys(updates).length) {
         await updateDoc(jobRef, updates);
         await recordJobHistory({
@@ -3415,6 +3520,16 @@ const JobDetailView = () => {
             buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", updates.operationStatus ?? job.operationStatus),
           ],
         });
+
+        if (updates.billingStatus === "Expired") {
+          await upsertExpiredJobRecord({
+            previousBillingStatus: job.billingStatus || "",
+            previousOperationStatus: job.operationStatus || "",
+            nextOperationStatus: updates.operationStatus ?? job.operationStatus ?? "",
+            reason: "Job expired from edit status",
+          });
+        }
+
         toast.success("Saved");
       } else {
         toast.success("No changes");
@@ -3451,20 +3566,79 @@ const JobDetailView = () => {
     }
   };
 
-  const deleteJob = async (e) => {
+  const cancelJob = async (e) => {
     e.preventDefault();
-    if (!requirePermission("26", "delete jobs")) return;
+    if (!requirePermission("24", "update jobs")) return;
 
     try {
-      const ok = window.confirm("Delete this job? This cannot be undone.");
+      const previousBillingStatus = job.billingStatus || "";
+      const previousOperationStatus = job.operationStatus || "";
+      const nextOperationStatus = suggestOperationForBilling(
+        "Expired",
+        job.operationStatus || "Estimate Pending"
+      );
+      if (!(job.customerId || customer.id)) {
+        return toast.error("Attach a customer before canceling this job.");
+      }
+
+      const ok = isJobExpired
+        ? true
+        : window.confirm("Cancel this job? The job will not be deleted. Billing status will be set to Expired and a note will be added to the customer history.");
       if (!ok) return;
 
-      await deleteDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId));
-      toast.success("Deleted");
-      navigate("/company/jobs");
+      setExpiringJob(true);
+      const nowMillis = Date.now();
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+
+      if (!isJobExpired || job.operationStatus !== nextOperationStatus) {
+        await updateDoc(jobRef, {
+          billingStatus: "Expired",
+          operationStatus: nextOperationStatus,
+          updatedAt: serverTimestamp(),
+          updatedAtMillis: nowMillis,
+        });
+      }
+
+      await upsertExpiredJobRecord({
+        previousBillingStatus,
+        previousOperationStatus,
+        nextOperationStatus,
+        expiredAtMillis: nowMillis,
+        reason: "Job canceled from job detail",
+      });
+
+      await recordJobHistory({
+        eventType: "Job Canceled",
+        title: isJobExpired ? "Expired job customer note refreshed" : "Job canceled and marked expired",
+        description: "The job was preserved and copied to the customer's expired jobs history.",
+        changes: isJobExpired
+          ? []
+          : [
+            buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus || "—", "Expired"),
+            buildHistoryChange("operationStatus", "Operation Status", previousOperationStatus || "—", nextOperationStatus),
+          ],
+        metadata: {
+          customerId: job.customerId || customer.id || "",
+          customerExpiredJobId: jobId,
+        },
+        severity: "warning",
+      });
+
+      setJob((prev) => ({
+        ...prev,
+        billingStatus: "Expired",
+        operationStatus: nextOperationStatus,
+        updatedAt: new Date(nowMillis),
+        updatedAtMillis: nowMillis,
+      }));
+      setSelectedBillingStatus({ value: "Expired", label: "Expired" });
+      setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
+      toast.success(isJobExpired ? "Expired job note refreshed" : "Job canceled");
     } catch (err) {
       console.error(err);
-      toast.error("Failed to delete job");
+      toast.error(err?.message || "Failed to cancel job");
+    } finally {
+      setExpiringJob(false);
     }
   };
 
@@ -4374,6 +4548,90 @@ const JobDetailView = () => {
       toast.error("Failed to delete item");
     }
   };
+
+  const isShoppingListItemPurchased = (item) => {
+    const status = String(item?.status || "").toLowerCase();
+    return status === "purchased" || status === "installed";
+  };
+
+  const markShoppingListItemPurchased = async (e, item) => {
+    e.preventDefault();
+
+    if (!recentlySelectedCompany || !jobId || !item?.id) return;
+    if (isShoppingListItemPurchased(item)) return;
+
+    const purchasedAt = new Date();
+    const purchaserId = item.purchaserId || dataBaseUser?.id || dataBaseUser?.userId || getUserId() || "";
+    const purchaserName = item.purchaserName || getAuditUserName();
+
+    const firestoreUpdates = {
+      status: "Purchased",
+      datePurchased: Timestamp.fromDate(purchasedAt),
+      purchasedAt: serverTimestamp(),
+      purchasedByUserId: purchaserId,
+      purchasedByUserName: purchaserName,
+      purchaserId,
+      purchaserName,
+      needsAction: false,
+      updatedAt: serverTimestamp(),
+    };
+
+    const stateUpdates = {
+      status: "Purchased",
+      datePurchased: purchasedAt,
+      purchasedAt,
+      purchasedByUserId: purchaserId,
+      purchasedByUserName: purchaserName,
+      purchaserId,
+      purchaserName,
+      needsAction: false,
+      updatedAt: purchasedAt,
+    };
+
+    try {
+      setMarkingPurchasedShoppingItemId(item.id);
+
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id),
+        firestoreUpdates
+      );
+
+      const nextShoppingList = (shoppingList || []).map((shoppingItem) =>
+        shoppingItem.id === item.id ? { ...shoppingItem, ...stateUpdates } : shoppingItem
+      );
+      setShoppingList(nextShoppingList);
+
+      await recordJobHistory({
+        eventType: "Planned Material",
+        title: `Planned material purchased: ${getMaterialName(item)}`,
+        description: item.description || "",
+        changes: [
+          buildHistoryChange("status", "Status", item.status || "Need to Purchase", "Purchased"),
+          buildHistoryChange("datePurchased", "Date Purchased", item.datePurchased, purchasedAt),
+          buildHistoryChange("purchaserName", "Purchaser", item.purchaserName || "—", purchaserName || "—"),
+        ],
+        metadata: {
+          shoppingListItemId: item.id,
+          linkedTaskId: item.linkedTaskId || item.linkedJobTaskId || item.jobTaskId || item.sourceTaskId || "",
+        },
+      });
+
+      await loadJobWorkflowData({
+        companyId: recentlySelectedCompany,
+        currentJobId: jobId,
+        currentTaskList: taskList,
+        currentShoppingList: nextShoppingList,
+      });
+
+      toast.success("Marked planned material as purchased");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to mark material as purchased");
+    } finally {
+      setMarkingPurchasedShoppingItemId("");
+    }
+  };
+
   const getMaterialStatusClass = (status) => {
     switch (status) {
       case "Installed":
@@ -4508,6 +4766,8 @@ const JobDetailView = () => {
     const linkedTask = linkedTaskId
       ? (taskList || []).find((task) => task.id === linkedTaskId)
       : null;
+    const materialPurchased = isShoppingListItemPurchased(item);
+    const isMarkingPurchased = markingPurchasedShoppingItemId === item.id;
 
     return (
       <div
@@ -4605,6 +4865,12 @@ const JobDetailView = () => {
             </span>
           )}
 
+          {materialPurchased && item.datePurchased && (
+            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+              Purchased: {formatDateValue(item.datePurchased)}
+            </span>
+          )}
+
           {(linkedTask || item.linkedTaskName) && (
             <span className="px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
               Task: {linkedTask?.name || item.linkedTaskName}
@@ -4621,7 +4887,18 @@ const JobDetailView = () => {
           )}
         </div>
 
-        <div className="mt-4 flex justify-end">
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          {!materialPurchased && (
+            <button
+              type="button"
+              onClick={(e) => markShoppingListItemPurchased(e, item)}
+              disabled={isMarkingPurchased}
+              className="px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isMarkingPurchased ? "Marking..." : "Mark Purchased"}
+            </button>
+          )}
+
           <button
             type="button"
             onClick={(e) => deleteShoppingListItem(e, item.id)}
@@ -5910,7 +6187,7 @@ const JobDetailView = () => {
 
           <div className="flex flex-wrap justify-end gap-2">
             <Link
-              to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}`}
+              to={`/company/serviceStops/createNew/${jobId}?plannedStopId=${stop.id}&category=jobVisit`}
               className="px-3 py-1 text-xs font-bold rounded-full bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 transition"
             >
               Schedule
@@ -6161,130 +6438,140 @@ const JobDetailView = () => {
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <Link
-              to="/company/jobs"
-              className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
-            >
-              Back to Jobs
-            </Link>
-            {isInitialShellLoading ? (
-              <div className="mt-3 animate-pulse space-y-3">
-                <div className="flex flex-wrap gap-2">
-                  <div className="h-7 w-24 rounded-full bg-slate-200" />
-                  <div className="h-7 w-28 rounded-full bg-slate-200" />
-                  <div className="h-7 w-32 rounded-full bg-slate-200" />
+            <div>
+              <Link
+                to="/company/jobs"
+                className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+              >
+                Back to Jobs
+              </Link>
+              {isInitialShellLoading ? (
+                <div className="mt-3 animate-pulse space-y-3">
+                  <div className="flex flex-wrap gap-2">
+                    <div className="h-7 w-24 rounded-full bg-slate-200" />
+                    <div className="h-7 w-28 rounded-full bg-slate-200" />
+                    <div className="h-7 w-32 rounded-full bg-slate-200" />
+                  </div>
+                  <div className="h-8 w-64 rounded bg-slate-200" />
+                  <div className="h-4 w-80 rounded bg-slate-100" />
                 </div>
-                <div className="h-8 w-64 rounded bg-slate-200" />
-                <div className="h-4 w-80 rounded bg-slate-100" />
-              </div>
-            ) : (
-              <>
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {job.internalId && (
-                    <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                      {job.internalId}
-                    </span>
-                  )}
-                  {edit ? (
-                    <>
-                      <div className="min-w-[180px]">
-                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Billing</p>
-                        <Select
-                          value={selectedBillingStatus}
-                          options={billingStatusOptions}
-                          onChange={handleSelectedBillingStatus}
-                          isSearchable
-                          placeholder="Billing status"
-                          theme={selectTheme}
-                          styles={selectStyles}
-                        />
-                      </div>
-                      <div className="min-w-[190px]">
-                        <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Operations</p>
-                        <Select
-                          value={selectedOperationStatus}
-                          options={operationStatusOptions}
-                          onChange={handleSelectedOperationStatus}
-                          isSearchable
-                          placeholder="Operations status"
-                          theme={selectTheme}
-                          styles={selectStyles}
-                        />
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <StatusBadge status={job.billingStatus} />
-                      <StatusBadge status={job.operationStatus} />
-                    </>
-                  )}
-                </div>
-                <h1 className="mt-3 text-3xl font-bold text-slate-950">{job.type || "Job Details"}</h1>
-                <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                  {job.customerName || "Customer"} · Created {formattedDateCreated} · Last updated {formattedLastUpdated}
-                </p>
-              </>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            {!edit ? (
-              <>
-                <button
-                  onClick={handleSendEstimate}
-                  disabled={sendingEstimateEmail}
-                  className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
-                </button>
-                <button
-                  onClick={handleMarkEstimateAccepted}
-                  className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                >
-                  Mark Accepted
-                </button>
-                <button
-                  onClick={handleMarkAsInvoiced}
-                  disabled={sendingInvoiceEmail}
-                  className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark As Invoiced"}
-                </button>
-                {can("24") && (
+              ) : (
+                <>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    {job.internalId && (
+                      <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                        {job.internalId}
+                      </span>
+                    )}
+                    {edit ? (
+                      <>
+                        <div className="min-w-[180px]">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Billing</p>
+                          <Select
+                            value={selectedBillingStatus}
+                            options={billingStatusOptions}
+                            onChange={handleSelectedBillingStatus}
+                            isSearchable
+                            placeholder="Billing status"
+                            theme={selectTheme}
+                            styles={selectStyles}
+                          />
+                        </div>
+                        <div className="min-w-[190px]">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Operations</p>
+                          <Select
+                            value={selectedOperationStatus}
+                            options={operationStatusOptions}
+                            onChange={handleSelectedOperationStatus}
+                            isSearchable
+                            placeholder="Operations status"
+                            theme={selectTheme}
+                            styles={selectStyles}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <StatusBadge status={job.billingStatus} />
+                        <StatusBadge status={job.operationStatus} />
+                      </>
+                    )}
+                  </div>
+                  <h1 className="mt-3 text-3xl font-bold text-slate-950">{job.type || "Job Details"}</h1>
+                  <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                    {job.customerName || "Customer"} · Created {formattedDateCreated} · Last updated {formattedLastUpdated}
+                  </p>
+                </>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {!edit ? (
+                <>
                   <button
-                    type="button"
-                    onClick={openCreateTemplateModal}
+                    onClick={handleSendEstimate}
+                    disabled={sendingEstimateEmail}
+                    className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
+                  </button>
+                  <button
+                    onClick={handleMarkEstimateAccepted}
                     className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
                   >
-                    Create Template
+                    Mark Accepted
                   </button>
-                )}
-                {can("24") && (
                   <button
-                    onClick={editJob}
+                    onClick={handleMarkAsInvoiced}
+                    disabled={sendingInvoiceEmail}
+                    className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark As Invoiced"}
+                  </button>
+                  {can("24") && (
+                    <button
+                      type="button"
+                      onClick={openCreateTemplateModal}
+                      className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                    >
+                      Create Template
+                    </button>
+                  )}
+                  {can("24") && (
+                    <button
+                      type="button"
+                      onClick={cancelJob}
+                      disabled={expiringJob}
+                      className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Expire Job"}
+                    </button>
+                  )}
+                  {can("24") && (
+                    <button
+                      onClick={editJob}
+                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Edit
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={saveEditChanges}
+                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                  >
+                    Save
+                  </button>
+                  <button
+                    onClick={cancelEditJob}
                     className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
-                    Edit
+                    Cancel
                   </button>
-                )}
-              </>
-            ) : (
-              <>
-                <button
-                  onClick={saveEditChanges}
-                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={cancelEditJob}
-                  className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  Cancel
-                </button>
-              </>
-            )}
-          </div>
+                </>
+              )}
+            </div>
           </div>
         </section>
 
@@ -6335,30 +6622,30 @@ const JobDetailView = () => {
                   ))}
                 </div>
               ) : (
-              <dl className="mt-3 space-y-3">
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
-                  <dd className="mt-1 font-semibold text-slate-900">{job.customerName || "Not set"}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
-                  <dd className="mt-1 font-semibold text-slate-900">{job.adminName || "Not set"}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Site</dt>
-                  <dd className="mt-1 text-slate-700">{siteAddress || "Not set"}</dd>
-                </div>
-                <div className="border-t border-slate-200 pt-3">
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Price</dt>
-                  <dd className="mt-1 text-lg font-bold text-slate-950">{moneyFromCents(job.rate)}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Projected Profit</dt>
-                  <dd className={projectedProfitCents < 0 ? "mt-1 font-bold text-rose-700" : "mt-1 font-bold text-emerald-700"}>
-                    {moneyFromCents(projectedProfitCents)}
-                  </dd>
-                </div>
-              </dl>
+                <dl className="mt-3 space-y-3">
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{job.customerName || "Not set"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
+                    <dd className="mt-1 font-semibold text-slate-900">{job.adminName || "Not set"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Site</dt>
+                    <dd className="mt-1 text-slate-700">{siteAddress || "Not set"}</dd>
+                  </div>
+                  <div className="border-t border-slate-200 pt-3">
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Price</dt>
+                    <dd className="mt-1 text-lg font-bold text-slate-950">{moneyFromCents(job.rate)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Projected Profit</dt>
+                    <dd className={projectedProfitCents < 0 ? "mt-1 font-bold text-rose-700" : "mt-1 font-bold text-emerald-700"}>
+                      {moneyFromCents(projectedProfitCents)}
+                    </dd>
+                  </div>
+                </dl>
               )}
             </div>
 
@@ -6446,1679 +6733,1685 @@ const JobDetailView = () => {
           </aside>
 
           <div className="min-w-0 space-y-4">
-        {activeTab === "Planned" && (
-          <div className="space-y-4">
-            {sectionLoading.plannedOverview ? (
-              <SectionSkeleton title="Loading overview" rows={6} />
-            ) : (
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Overview</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">Core job details and statuses</p>
-                </div>
-              </div>
-              <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-                {!edit ? (
-                  <StatCard
-                    title="Customer Price"
-                    value={moneyFromCents(job.rate)}
-                    subtitle="Saved job rate"
-                    tone="blue"
-                  />
+            {activeTab === "Planned" && (
+              <div className="space-y-4">
+                {sectionLoading.plannedOverview ? (
+                  <SectionSkeleton title="Loading overview" rows={6} />
                 ) : (
-                  <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
-                      Customer Price
-                    </p>
-
-                    <div className="mt-1 flex items-center gap-2">
-                      <span className="text-sm font-bold">$</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={customerPriceInput}
-                        onChange={(e) => setCustomerPriceInput(e.target.value)}
-                        className="w-full rounded-md border border-blue-200 bg-white px-2 py-1.5 text-sm font-bold text-gray-800"
-                        placeholder="0.00"
-                      />
-                    </div>
-
-                    <p className="mt-0.5 text-xs opacity-80">
-                      Saves to job.rate as cents
-                    </p>
-                  </div>
-                )}
-
-                <StatCard
-                  title="Labor"
-                  value={moneyFromCents(plannedTotalLaborCents)}
-                  subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tasks`}
-                />
-
-                <StatCard
-                  title="Materials"
-                  value={moneyFromCents(plannedMaterialCostCents)}
-                  subtitle={`${moneyFromCents(plannedMaterialPriceCents)} billable`}
-                />
-
-                <StatCard
-                  title="Profit"
-                  value={moneyFromCents(projectedProfitCents)}
-                  subtitle="Price minus planned cost"
-                  tone={projectedProfitCents < 0 ? "red" : "green"}
-                />
-
-                <StatCard
-                  title="Stops"
-                  value={String(plannedServiceStops.length)}
-                  subtitle="Expected visits before scheduling"
-                />
-
-                <StatCard
-                  title="Work Offers"
-                  value={String(workOffers.length)}
-                  subtitle="Direct offers and board posts"
-                  tone="amber"
-                />
-
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 gap-3">
-                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</p>
-
-                    <button
-                      type="button"
-                      onClick={saveDescription}
-                      disabled={savingDescription || descriptionDraft === (job.description || "")}
-                      className={[
-                        "rounded-md border px-2.5 py-1 text-xs font-semibold transition",
-                        savingDescription || descriptionDraft === (job.description || "")
-                          ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
-                          : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100",
-                      ].join(" ")}
-                    >
-                      {savingDescription ? "Saving…" : "Save"}
-                    </button>
-                  </div>
-
-                  <textarea
-                    className="mt-2 w-full min-h-[88px] rounded-md border border-slate-300 bg-white p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    placeholder="Add job description…"
-                    value={descriptionDraft}
-                    onChange={(e) => setDescriptionDraft(e.target.value)}
-                    onBlur={() => {
-                      if (descriptionDraft !== (job.description || "")) saveDescription();
-                    }}
-                  />
-                </div>
-
-                {job.repairRequestId && (
-                  <Link
-                    to={`/company/repair-requests/detail/${job.repairRequestId}`}
-                    state={{ sourcePath: job.repairRequestSourcePath || "company" }}
-                    className="rounded-md border border-slate-200 bg-slate-50 p-3 transition hover:bg-slate-100"
-                  >
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Source Repair Request</p>
-                    <p className="mt-1 text-sm font-semibold text-blue-700">{job.repairRequestId}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">Converted to this job</p>
-                  </Link>
-                )}
-              </div>
-            </div>
-            )}
-          </div>
-        )}
-
-        {activeTab === "Planned" && (
-          sectionLoading.plannedWork ? (
-            <SectionSkeleton title="Loading planned work" rows={4} />
-          ) : (
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Tasks</h3>
-                <p className="mt-0.5 text-xs text-slate-500">Track work items, costs, and assignments</p>
-              </div>
-              <div className="flex gap-2">
-                {!newTask && (
-                  <button
-                    onClick={showNewTaskItem}
-                    className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                  >
-                    + Add Task
-                  </button>
-                )}
-              </div>
-            </div>
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h4 className="text-sm font-bold text-slate-900">Planned Service Stops</h4>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Expected visits for this job before scheduling actual service stops.
-                  </p>
-                </div>
-
-                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
-                  {plannedServiceStops.length}
-                </span>
-              </div>
-
-              <div className="mt-3 space-y-2">
-                {!plannedServiceStops.length ? (
-                  <div className="rounded-md border border-dashed border-slate-300 p-3 text-xs text-slate-500">
-                    No planned service stops yet.
-                  </div>
-                ) : (
-                  plannedServiceStops.map((stop) => renderPlannedServiceStopCard(stop))
-                )}
-              </div>
-            </div>
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full bg-white text-sm">
-                <thead className="bg-slate-100">
-                  <tr>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
-                    <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 xl:table-cell">
-                      Equipment Result
-                    </th>
-                    <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 md:table-cell">
-                      Worker
-                    </th>
-                    <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 md:table-cell">
-                      Worker Type
-                    </th>
-                    <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 lg:table-cell">
-                      Customer Approval
-                    </th>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Labor</th>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Time (Hr)</th>
-                    <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"></th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {taskList?.map((task) => (
-                    <tr key={task.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="whitespace-nowrap p-3 font-medium text-slate-800">
-                        <div>{task.name}</div>
-                        {taskContextLabel(task) && (
-                          <div className="mt-1 max-w-xs truncate text-xs font-normal text-gray-500">
-                            {taskContextLabel(task)}
-                          </div>
-                        )}
-                      </td>
-                      <td className="whitespace-nowrap p-3 text-slate-700">{task.type}</td>
-                      <td className="whitespace-nowrap p-3">
-                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                          {task.status || "—"}
-                        </span>
-                      </td>
-                      <td className="hidden whitespace-nowrap p-3 xl:table-cell">
-                        {task.equipmentId ? (
-                          <select
-                            value={taskEquipmentStatusDrafts[task.id] || EQUIPMENT_STATUS.OPERATIONAL}
-                            onChange={(e) => handleTaskEquipmentStatusDraftChange(task.id, e.target.value)}
-                            disabled={task.status === "Finished"}
-                            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100 disabled:text-slate-400"
-                          >
-                            {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
-                              <option key={statusOption} value={statusOption}>
-                                {statusOption}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <span className="text-gray-500">—</span>
-                        )}
-                      </td>
-                      <td className="hidden whitespace-nowrap p-3 text-slate-700 md:table-cell">{task.workerName || "—"}</td>
-                      <td className="hidden whitespace-nowrap p-3 text-slate-700 md:table-cell">{task.workerType || "—"}</td>
-                      <td className="hidden whitespace-nowrap p-3 text-slate-700 lg:table-cell">
-                        {String(task.customerApproval)}
-                      </td>
-                      <td className="whitespace-nowrap p-3 text-slate-800">
-                        {formatCurrency((Number(task.contractedRate || 0) / 100) || 0)}
-                      </td>
-                      <td className="whitespace-nowrap p-3 text-slate-700">
-                        {((Number(task.estimatedTime || 0) / 60) || 0).toFixed(2)}
-                      </td>
-                      <td className="whitespace-nowrap p-3 text-right">
-                        <button
-                          onClick={(e) => deleteTaskItem(e, task.id)}
-                          className="text-sm font-semibold text-red-600 hover:text-red-800"
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                  {!taskList?.length && (
-                    <tr>
-                      <td className="p-4 text-slate-500" colSpan={10}>
-                        No tasks yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-
-            {newTask && (
-              <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <div className="flex flex-col items-stretch gap-2 lg:flex-row">
-                  <div className="flex items-center justify-between lg:hidden">
-                    <h4 className="text-sm font-bold text-slate-900">Add Task</h4>
-                    <button
-                      onClick={clearNewTask}
-                      className="rounded-md bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-300"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-
-                  <input
-                    className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    type="text"
-                    placeholder="Description"
-                    value={taskDescription}
-                    onChange={(e) => setTaskDescription(e.target.value)}
-                  />
-
-                  <div className="w-full">
-                    <Select
-                      value={selectedTaskType}
-                      options={taskTypeList}
-                      onChange={setSelectedTaskType}
-                      isSearchable
-                      placeholder="Select a Task Type"
-                      theme={selectTheme}
-                      styles={selectStyles}
-                    />
-                  </div>
-
-                  {taskNeedsBodyOfWater && (
-                    <div className="w-full">
-                      <Select
-                        value={selectedTaskBodyOfWater}
-                        options={taskBodyOfWaterList}
-                        onChange={setSelectedTaskBodyOfWater}
-                        isSearchable
-                        placeholder="Select Body of Water"
-                        theme={selectTheme}
-                        styles={selectStyles}
-                      />
-                    </div>
-                  )}
-
-                  {taskNeedsEquipment && (
-                    <div className="w-full">
-                      <Select
-                        value={selectedTaskEquipment}
-                        options={taskEquipmentOptions}
-                        onChange={setSelectedTaskEquipment}
-                        isSearchable
-                        placeholder="Select Equipment"
-                        theme={selectTheme}
-                        styles={selectStyles}
-                      />
-                    </div>
-                  )}
-
-                  {taskNeedsInstallItem && (
-                    <>
-                      <div className="w-full">
-                        <Select
-                          value={selectedTaskDbItem}
-                          options={shoppingDbItemList}
-                          onChange={setSelectedTaskDbItem}
-                          isSearchable
-                          placeholder="Select Item"
-                          theme={selectTheme}
-                          styles={selectStyles}
-                        />
-                      </div>
-
-                      <input
-                        className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                        type="text"
-                        placeholder="Quantity"
-                        value={taskQuantity}
-                        onChange={(e) => setTaskQuantity(e.target.value)}
-                      />
-                    </>
-                  )}
-
-                  <input
-                    className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    type="text"
-                    placeholder="Labor Cost (USD)"
-                    value={taskLaborCost}
-                    onChange={(e) => setTaskLaborCost(e.target.value)}
-                  />
-
-                  <input
-                    className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                    type="text"
-                    placeholder="Estimated Time (Min)"
-                    value={estimatedTime}
-                    onChange={(e) => setEstimatedTime(e.target.value)}
-                  />
-
-                  <div className="flex gap-2">
-                    <button
-                      onClick={handleAddTask}
-                      className="w-full rounded-md bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                    >
-                      Add
-                    </button>
-                    <button
-                      onClick={clearNewTask}
-                      className="hidden w-full rounded-md border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 lg:block"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 flex flex-col gap-2 sm:flex-row">
-              <button
-                onClick={openCreateWorkOfferModal}
-                className="rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-              >
-                Create Work Offer
-              </button>
-            </div>
-          </div>
-          )
-        )}
-
-        {activeTab === "Planned" && (
-          sectionLoading.plannedMaterials ? (
-            <SectionSkeleton title="Loading planned materials" rows={2} />
-          ) : (
-          <div className="space-y-4">
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Planned Materials</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Materials expected before purchasing.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap items-center justify-end gap-2">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                    {shoppingList.length}
-                  </span>
-
-                  {!newShoppingList && (
-                    <button
-                      onClick={showNewShoppingListItem}
-                      className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                    >
-                      + Add Planned Material
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                <StatCard
-                  title="Cost"
-                  value={moneyFromCents(plannedMaterialCostCents)}
-                  subtitle={`${shoppingList.length} planned item(s)`}
-                />
-
-                <StatCard
-                  title="Billable"
-                  value={moneyFromCents(plannedMaterialPriceCents)}
-                  subtitle="Expected customer charge"
-                  tone="blue"
-                />
-              </div>
-
-              <div className="mt-3 border-t border-slate-200 pt-3">
-                <div className="space-y-2">
-                  {!shoppingList.length ? (
-                    <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-                      <p className="text-sm font-medium text-slate-700">No planned materials yet.</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        Add planned materials to estimate job cost and billing.
-                      </p>
-                    </div>
-                  ) : (
-                    visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
-                  )}
-                </div>
-
-                {hiddenPlannedMaterialCount > 0 && (
-                  <div className="pt-2 text-center">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllPlannedMaterials((prev) => !prev)}
-                      className="text-sm font-semibold text-blue-700 hover:text-blue-900"
-                    >
-                      {showAllPlannedMaterials
-                        ? "Show first 5 planned materials"
-                        : `Show ${hiddenPlannedMaterialCount} more planned material${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {newShoppingList && (
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-sm font-bold text-slate-900">
-                      Add Planned Material
-                    </h4>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Add a reusable planned material snapshot for this job.
-                    </p>
-                  </div>
-
-                  <button
-                    onClick={clearNewShoppingListItem}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                  >
-                    Cancel
-                  </button>
-                </div>
-
-                <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                  <div className="space-y-3 lg:col-span-2">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Sub Category
-                      </label>
-                      <select
-                        value={shoppingFormData.subCategory}
-                        onChange={(e) => handleShoppingSubCategoryChange(e.target.value)}
-                        className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-                      >
-                        {shoppingSubCategoryOptions.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    {requiresShoppingDbItem && (
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex items-start justify-between gap-4">
                       <div>
-                        <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                          Database Item
-                        </label>
-                        <Select
-                          value={selectedShoppingDbItem}
-                          options={shoppingDbItemList}
-                          onChange={handleShoppingDbItemChange}
-                          isSearchable
-                          isClearable
-                          placeholder="Select a database item"
-                          theme={selectTheme}
-                          styles={selectStyles}
+                        <h3 className="text-base font-bold text-slate-900">Overview</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">Core job details and statuses</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+                      {!edit ? (
+                        <StatCard
+                          title="Customer Price"
+                          value={moneyFromCents(job.rate)}
+                          subtitle="Saved job rate"
+                          tone="blue"
+                        />
+                      ) : (
+                        <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-blue-800">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide opacity-70">
+                            Customer Price
+                          </p>
+
+                          <div className="mt-1 flex items-center gap-2">
+                            <span className="text-sm font-bold">$</span>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={customerPriceInput}
+                              onChange={(e) => setCustomerPriceInput(e.target.value)}
+                              className="w-full rounded-md border border-blue-200 bg-white px-2 py-1.5 text-sm font-bold text-gray-800"
+                              placeholder="0.00"
+                            />
+                          </div>
+
+                          <p className="mt-0.5 text-xs opacity-80">
+                            Saves to job.rate as cents
+                          </p>
+                        </div>
+                      )}
+
+                      <StatCard
+                        title="Labor"
+                        value={moneyFromCents(plannedTotalLaborCents)}
+                        subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tasks`}
+                      />
+
+                      <StatCard
+                        title="Materials"
+                        value={moneyFromCents(plannedMaterialCostCents)}
+                        subtitle={`${moneyFromCents(plannedMaterialPriceCents)} billable`}
+                      />
+
+                      <StatCard
+                        title="Profit"
+                        value={moneyFromCents(projectedProfitCents)}
+                        subtitle="Price minus planned cost"
+                        tone={projectedProfitCents < 0 ? "red" : "green"}
+                      />
+
+                      <StatCard
+                        title="Stops"
+                        value={String(plannedServiceStops.length)}
+                        subtitle="Expected visits before scheduling"
+                      />
+
+                      <StatCard
+                        title="Work Offers"
+                        value={String(workOffers.length)}
+                        subtitle="Direct offers and board posts"
+                        tone="amber"
+                      />
+
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-3">
+                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Description</p>
+
+                          <button
+                            type="button"
+                            onClick={saveDescription}
+                            disabled={savingDescription || descriptionDraft === (job.description || "")}
+                            className={[
+                              "rounded-md border px-2.5 py-1 text-xs font-semibold transition",
+                              savingDescription || descriptionDraft === (job.description || "")
+                                ? "bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed"
+                                : "bg-white text-gray-700 border-gray-300 hover:bg-gray-100",
+                            ].join(" ")}
+                          >
+                            {savingDescription ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+
+                        <textarea
+                          className="mt-2 w-full min-h-[88px] rounded-md border border-slate-300 bg-white p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          placeholder="Add job description…"
+                          value={descriptionDraft}
+                          onChange={(e) => setDescriptionDraft(e.target.value)}
+                          onBlur={() => {
+                            if (descriptionDraft !== (job.description || "")) saveDescription();
+                          }}
                         />
                       </div>
-                    )}
 
-                    {requiresShoppingManualDetails && (
-                      <>
-                        <div>
-                          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Name
-                          </label>
-                          <input
-                            type="text"
-                            value={shoppingFormData.name}
-                            onChange={(e) => handleShoppingFormChange("name", e.target.value)}
-                            className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                            placeholder="Enter custom material name"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                            Description
-                          </label>
-                          <textarea
-                            value={shoppingFormData.description}
-                            onChange={(e) => handleShoppingFormChange("description", e.target.value)}
-                            className="w-full min-h-[88px] rounded-md border border-slate-300 p-2 text-sm"
-                            placeholder="Enter custom material description"
-                          />
-                        </div>
-                      </>
-                    )}
-
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Quantity
-                      </label>
-                      <input
-                        type="text"
-                        value={shoppingFormData.quantity}
-                        onChange={(e) => handleShoppingFormChange("quantity", e.target.value)}
-                        className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                        placeholder="Quantity"
-                      />
+                      {job.repairRequestId && (
+                        <Link
+                          to={`/company/repair-requests/detail/${job.repairRequestId}`}
+                          state={{ sourcePath: job.repairRequestSourcePath || "company" }}
+                          className="rounded-md border border-slate-200 bg-slate-50 p-3 transition hover:bg-slate-100"
+                        >
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Source Repair Request</p>
+                          <p className="mt-1 text-sm font-semibold text-blue-700">{job.repairRequestId}</p>
+                          <p className="mt-0.5 text-xs text-slate-500">Converted to this job</p>
+                        </Link>
+                      )}
                     </div>
-
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        Linked Task
-                      </label>
-                      <select
-                        value={shoppingFormData.linkedTaskId}
-                        onChange={(e) => handleShoppingFormChange("linkedTaskId", e.target.value)}
-                        className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-                      >
-                        <option value="">No linked task</option>
-                        {(taskList || []).map((task) => (
-                          <option key={task.id} value={task.id}>
-                            {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-
-                    <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(shoppingFormData.customerApprovalRequired)}
-                        onChange={(e) => handleShoppingFormChange("customerApprovalRequired", e.target.checked)}
-                        className="mt-1"
-                      />
-                      <span>
-                        <span className="block font-bold text-amber-900">Require customer approval</span>
-                        <span className="mt-1 block text-amber-800">
-                          Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
-                        </span>
-                      </span>
-                    </label>
-
                   </div>
+                )}
+              </div>
+            )}
 
-                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                    <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Database item pricing is stored as cents and copied into this material.
-                    </p>
+            {activeTab === "Planned" && (
+              sectionLoading.plannedWork ? (
+                <SectionSkeleton title="Loading planned work" rows={4} />
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Tasks</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">Track work items, costs, and assignments</p>
+                    </div>
+                    <div className="flex gap-2">
+                      {!newTask && (
+                        <button
+                          onClick={showNewTaskItem}
+                          className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                        >
+                          + Add Task
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900">Planned Service Stops</h4>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Expected visits for this job before scheduling actual service stops.
+                        </p>
+                      </div>
+
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-600">
+                        {plannedServiceStops.length}
+                      </span>
+                    </div>
 
                     <div className="mt-3 space-y-2">
-                      <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Unit Cost
-                        </p>
-                        <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                          {moneyFromCents(selectedShoppingDbItem?.rate || selectedShoppingDbItem?.cost || 0)}
+                      {!plannedServiceStops.length ? (
+                        <div className="rounded-md border border-dashed border-slate-300 p-3 text-xs text-slate-500">
+                          No planned service stops yet.
+                        </div>
+                      ) : (
+                        plannedServiceStops.map((stop) => renderPlannedServiceStopCard(stop))
+                      )}
+                    </div>
+                  </div>
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="min-w-full bg-white text-sm">
+                      <thead className="bg-slate-100">
+                        <tr>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                          <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 xl:table-cell">
+                            Equipment Result
+                          </th>
+                          <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 md:table-cell">
+                            Worker
+                          </th>
+                          <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 md:table-cell">
+                            Worker Type
+                          </th>
+                          <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 lg:table-cell">
+                            Customer Approval
+                          </th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Labor</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Time (Hr)</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"></th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {taskList?.map((task) => (
+                          <tr key={task.id} className="hover:bg-gray-50 transition-colors">
+                            <td className="whitespace-nowrap p-3 font-medium text-slate-800">
+                              <div>{task.name}</div>
+                              {taskContextLabel(task) && (
+                                <div className="mt-1 max-w-xs truncate text-xs font-normal text-gray-500">
+                                  {taskContextLabel(task)}
+                                </div>
+                              )}
+                            </td>
+                            <td className="whitespace-nowrap p-3 text-slate-700">{task.type}</td>
+                            <td className="whitespace-nowrap p-3">
+                              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                                {task.status || "—"}
+                              </span>
+                            </td>
+                            <td className="hidden whitespace-nowrap p-3 xl:table-cell">
+                              {task.equipmentId ? (
+                                <select
+                                  value={taskEquipmentStatusDrafts[task.id] || EQUIPMENT_STATUS.OPERATIONAL}
+                                  onChange={(e) => handleTaskEquipmentStatusDraftChange(task.id, e.target.value)}
+                                  disabled={task.status === "Finished"}
+                                  className="rounded-md border border-slate-300 bg-white px-2 py-1 text-sm disabled:bg-slate-100 disabled:text-slate-400"
+                                >
+                                  {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                                    <option key={statusOption} value={statusOption}>
+                                      {statusOption}
+                                    </option>
+                                  ))}
+                                </select>
+                              ) : (
+                                <span className="text-gray-500">—</span>
+                              )}
+                            </td>
+                            <td className="hidden whitespace-nowrap p-3 text-slate-700 md:table-cell">{task.workerName || "—"}</td>
+                            <td className="hidden whitespace-nowrap p-3 text-slate-700 md:table-cell">{task.workerType || "—"}</td>
+                            <td className="hidden whitespace-nowrap p-3 text-slate-700 lg:table-cell">
+                              {String(task.customerApproval)}
+                            </td>
+                            <td className="whitespace-nowrap p-3 text-slate-800">
+                              {formatCurrency((Number(task.contractedRate || 0) / 100) || 0)}
+                            </td>
+                            <td className="whitespace-nowrap p-3 text-slate-700">
+                              {((Number(task.estimatedTime || 0) / 60) || 0).toFixed(2)}
+                            </td>
+                            <td className="whitespace-nowrap p-3 text-right">
+                              <button
+                                onClick={(e) => deleteTaskItem(e, task.id)}
+                                className="text-sm font-semibold text-red-600 hover:text-red-800"
+                              >
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                        {!taskList?.length && (
+                          <tr>
+                            <td className="p-4 text-slate-500" colSpan={10}>
+                              No tasks yet.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {newTask && (
+                    <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <div className="flex flex-col items-stretch gap-2 lg:flex-row">
+                        <div className="flex items-center justify-between lg:hidden">
+                          <h4 className="text-sm font-bold text-slate-900">Add Task</h4>
+                          <button
+                            onClick={clearNewTask}
+                            className="rounded-md bg-slate-200 px-3 py-2 text-xs font-semibold text-slate-800 transition hover:bg-slate-300"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+
+                        <input
+                          className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          type="text"
+                          placeholder="Description"
+                          value={taskDescription}
+                          onChange={(e) => setTaskDescription(e.target.value)}
+                        />
+
+                        <div className="w-full">
+                          <Select
+                            value={selectedTaskType}
+                            options={taskTypeList}
+                            onChange={setSelectedTaskType}
+                            isSearchable
+                            placeholder="Select a Task Type"
+                            theme={selectTheme}
+                            styles={selectStyles}
+                          />
+                        </div>
+
+                        {taskNeedsBodyOfWater && (
+                          <div className="w-full">
+                            <Select
+                              value={selectedTaskBodyOfWater}
+                              options={taskBodyOfWaterList}
+                              onChange={setSelectedTaskBodyOfWater}
+                              isSearchable
+                              placeholder="Select Body of Water"
+                              theme={selectTheme}
+                              styles={selectStyles}
+                            />
+                          </div>
+                        )}
+
+                        {taskNeedsEquipment && (
+                          <div className="w-full">
+                            <Select
+                              value={selectedTaskEquipment}
+                              options={taskEquipmentOptions}
+                              onChange={setSelectedTaskEquipment}
+                              isSearchable
+                              placeholder="Select Equipment"
+                              theme={selectTheme}
+                              styles={selectStyles}
+                            />
+                          </div>
+                        )}
+
+                        {taskNeedsInstallItem && (
+                          <>
+                            <div className="w-full">
+                              <Select
+                                value={selectedTaskDbItem}
+                                options={shoppingDbItemList}
+                                onChange={setSelectedTaskDbItem}
+                                isSearchable
+                                placeholder="Select Item"
+                                theme={selectTheme}
+                                styles={selectStyles}
+                              />
+                            </div>
+
+                            <input
+                              className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                              type="text"
+                              placeholder="Quantity"
+                              value={taskQuantity}
+                              onChange={(e) => setTaskQuantity(e.target.value)}
+                            />
+                          </>
+                        )}
+
+                        <input
+                          className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          type="text"
+                          placeholder="Labor Cost (USD)"
+                          value={taskLaborCost}
+                          onChange={(e) => setTaskLaborCost(e.target.value)}
+                        />
+
+                        <input
+                          className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          type="text"
+                          placeholder="Estimated Time (Min)"
+                          value={estimatedTime}
+                          onChange={(e) => setEstimatedTime(e.target.value)}
+                        />
+
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleAddTask}
+                            className="w-full rounded-md bg-blue-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                          >
+                            Add
+                          </button>
+                          <button
+                            onClick={clearNewTask}
+                            className="hidden w-full rounded-md border border-slate-300 bg-white px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 lg:block"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+                    <button
+                      onClick={openCreateWorkOfferModal}
+                      className="rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                    >
+                      Create Work Offer
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
+
+            {activeTab === "Planned" && (
+              sectionLoading.plannedMaterials ? (
+                <SectionSkeleton title="Loading planned materials" rows={2} />
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900">Planned Materials</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Materials expected before purchasing.
                         </p>
                       </div>
 
-                      <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Unit Billable
-                        </p>
-                        <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                          {moneyFromCents(
-                            selectedShoppingDbItem?.sellPrice ||
-                            selectedShoppingDbItem?.rate ||
-                            selectedShoppingDbItem?.cost ||
-                            0
+                      <div className="flex flex-wrap items-center justify-end gap-2">
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                          {shoppingList.length}
+                        </span>
+
+                        {!newShoppingList && (
+                          <button
+                            onClick={showNewShoppingListItem}
+                            className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                          >
+                            + Add Planned Material
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+                      <StatCard
+                        title="Cost"
+                        value={moneyFromCents(plannedMaterialCostCents)}
+                        subtitle={`${shoppingList.length} planned item(s)`}
+                      />
+
+                      <StatCard
+                        title="Billable"
+                        value={moneyFromCents(plannedMaterialPriceCents)}
+                        subtitle="Expected customer charge"
+                        tone="blue"
+                      />
+                    </div>
+
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <div className="space-y-2">
+                        {!shoppingList.length ? (
+                          <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+                            <p className="text-sm font-medium text-slate-700">No planned materials yet.</p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              Add planned materials to estimate job cost and billing.
+                            </p>
+                          </div>
+                        ) : (
+                          visiblePlannedMaterials.map((item) => renderPlannedMaterialCard(item))
+                        )}
+                      </div>
+
+                      {hiddenPlannedMaterialCount > 0 && (
+                        <div className="pt-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setShowAllPlannedMaterials((prev) => !prev)}
+                            className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                          >
+                            {showAllPlannedMaterials
+                              ? "Show first 5 planned materials"
+                              : `Show ${hiddenPlannedMaterialCount} more planned material${hiddenPlannedMaterialCount === 1 ? "" : "s"}`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {newShoppingList && (
+                    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-sm font-bold text-slate-900">
+                            Add Planned Material
+                          </h4>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            Add a reusable planned material snapshot for this job.
+                          </p>
+                        </div>
+
+                        <button
+                          onClick={clearNewShoppingListItem}
+                          className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+
+                      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                        <div className="space-y-3 lg:col-span-2">
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Sub Category
+                            </label>
+                            <select
+                              value={shoppingFormData.subCategory}
+                              onChange={(e) => handleShoppingSubCategoryChange(e.target.value)}
+                              className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                            >
+                              {shoppingSubCategoryOptions.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          {requiresShoppingDbItem && (
+                            <div>
+                              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Database Item
+                              </label>
+                              <Select
+                                value={selectedShoppingDbItem}
+                                options={shoppingDbItemList}
+                                onChange={handleShoppingDbItemChange}
+                                isSearchable
+                                isClearable
+                                placeholder="Select a database item"
+                                theme={selectTheme}
+                                styles={selectStyles}
+                              />
+                            </div>
                           )}
+
+                          {requiresShoppingManualDetails && (
+                            <>
+                              <div>
+                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Name
+                                </label>
+                                <input
+                                  type="text"
+                                  value={shoppingFormData.name}
+                                  onChange={(e) => handleShoppingFormChange("name", e.target.value)}
+                                  className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                  placeholder="Enter custom material name"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                  Description
+                                </label>
+                                <textarea
+                                  value={shoppingFormData.description}
+                                  onChange={(e) => handleShoppingFormChange("description", e.target.value)}
+                                  className="w-full min-h-[88px] rounded-md border border-slate-300 p-2 text-sm"
+                                  placeholder="Enter custom material description"
+                                />
+                              </div>
+                            </>
+                          )}
+
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Quantity
+                            </label>
+                            <input
+                              type="text"
+                              value={shoppingFormData.quantity}
+                              onChange={(e) => handleShoppingFormChange("quantity", e.target.value)}
+                              className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                              placeholder="Quantity"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              Linked Task
+                            </label>
+                            <select
+                              value={shoppingFormData.linkedTaskId}
+                              onChange={(e) => handleShoppingFormChange("linkedTaskId", e.target.value)}
+                              className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                            >
+                              <option value="">No linked task</option>
+                              {(taskList || []).map((task) => (
+                                <option key={task.id} value={task.id}>
+                                  {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(shoppingFormData.customerApprovalRequired)}
+                              onChange={(e) => handleShoppingFormChange("customerApprovalRequired", e.target.checked)}
+                              className="mt-1"
+                            />
+                            <span>
+                              <span className="block font-bold text-amber-900">Require customer approval</span>
+                              <span className="mt-1 block text-amber-800">
+                                Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
+                              </span>
+                            </span>
+                          </label>
+
+                        </div>
+
+                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                          <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
+                          <p className="mt-0.5 text-xs text-slate-500">
+                            Database item pricing is stored as cents and copied into this material.
+                          </p>
+
+                          <div className="mt-3 space-y-2">
+                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Unit Cost
+                              </p>
+                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                {moneyFromCents(selectedShoppingDbItem?.rate || selectedShoppingDbItem?.cost || 0)}
+                              </p>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Unit Billable
+                              </p>
+                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                {moneyFromCents(
+                                  selectedShoppingDbItem?.sellPrice ||
+                                  selectedShoppingDbItem?.rate ||
+                                  selectedShoppingDbItem?.cost ||
+                                  0
+                                )}
+                              </p>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Quantity
+                              </p>
+                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                {shoppingFormData.quantity || "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          <button
+                            onClick={handleAddShoppingListItem}
+                            disabled={!canSaveShoppingItem}
+                            className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            Add Material
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            )}
+
+            {activeTab === "Planned" && (
+              sectionLoading.workOffers ? (
+                <SectionSkeleton title="Loading work offers" rows={4} />
+              ) : (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div>
+                        <h3 className="text-base font-bold text-slate-900">Work Offers</h3>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Offers and internal board posts connected to this job.
                         </p>
                       </div>
 
-                      <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                          Quantity
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={openCreateWorkOfferModal}
+                          className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                        >
+                          Create Work Offer
+                        </button>
+
+                        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
+                          {workOffers.length} total
+                        </span>
+
+                        <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-bold text-green-700">
+                          {workOffers.filter((offer) => offer.status === "Accepted" || offer.status === "accepted").length} accepted
+                        </span>
+
+                        <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                          {workOffers.filter((offer) => !offer.status || ["Pending", "pending", "Open", "open", "Posted", "posted", "Sent", "sent", "Viewed", "viewed", "Draft", "draft"].includes(offer.status)).length} open
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
+                      <StatCard
+                        title="Offers"
+                        value={String(workOffers.length)}
+                        subtitle="Total offers for this job"
+                      />
+
+                      <StatCard
+                        title="Accepted"
+                        value={String(
+                          workOffers.filter((offer) => offer.status === "Accepted" || offer.status === "accepted").length
+                        )}
+                        subtitle="Accepted by technician"
+                        tone="green"
+                      />
+
+                      <StatCard
+                        title="Board Posts"
+                        value={String(workOffers.filter((offer) => offer.postedToBoard || offer.isBoardPost).length)}
+                        subtitle="Posted internally"
+                        tone="amber"
+                      />
+
+                      <StatCard
+                        title="Self-Schedule"
+                        value={String(workOffers.filter((offer) => getOfferCanSelfSchedule(offer)).length)}
+                        subtitle="Tech can schedule"
+                        tone="blue"
+                      />
+                    </div>
+
+                    <div className="mt-3 border-t border-slate-200 pt-3">
+                      <div className="space-y-2">
+                        {!workOffers.length ? (
+                          <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+                            <p className="text-sm font-medium text-slate-700">No work offers yet.</p>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              Create an offer to send this work to a technician or post it to the internal board.
+                            </p>
+                          </div>
+                        ) : (
+                          visibleWorkOffers.map((offer) => renderWorkOfferCard(offer))
+                        )}
+                      </div>
+
+                      {hiddenWorkOfferCount > 0 && (
+                        <div className="pt-2 text-center">
+                          <button
+                            type="button"
+                            onClick={() => setShowAllWorkOffers((prev) => !prev)}
+                            className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                          >
+                            {showAllWorkOffers
+                              ? "Show first 5 work offers"
+                              : `Show ${hiddenWorkOfferCount} more work offer${hiddenWorkOfferCount === 1 ? "" : "s"}`}
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            )}
+
+            {activeTab === "Actual" && (
+              sectionLoading.actual ? (
+                <SectionSkeleton title="Loading service stops" rows={3} />
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Service Stops</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        {serviceStops.length} recorded for this job
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={markJobAsFinished}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+                      >
+                        Mark Job as Finished
+                      </button>
+                      <Link
+                        to={`/company/serviceStops/createNew/${jobId}?category=jobEstimate`}
+                        className="inline-flex items-center justify-center rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition hover:bg-indigo-100"
+                      >
+                        Schedule Job Estimate
+                      </Link>
+                      <Link
+                        to={`/company/serviceStops/createNew/${jobId}?category=jobVisit`}
+                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                      >
+                        Schedule Service Stop
+                      </Link>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 space-y-2">
+                    {!serviceStops.length ? (
+                      <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
+                        <p className="text-sm font-medium text-slate-700">No service stops yet.</p>
+                        <p className="mt-0.5 text-xs text-slate-500">
+                          Schedule a stop to record actual work for this job.
                         </p>
-                        <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                          {shoppingFormData.quantity || "—"}
+                      </div>
+                    ) : (
+                      visibleActualServiceStops.map((stop) => renderServiceStopCard(stop))
+                    )}
+
+                    {hiddenActualServiceStopCount > 0 && (
+                      <div className="pt-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setShowAllActualServiceStops((prev) => !prev)}
+                          className="text-sm font-semibold text-blue-700 hover:text-blue-900"
+                        >
+                          {showAllActualServiceStops
+                            ? "Show first 5 service stops"
+                            : `Show ${hiddenActualServiceStopCount} more service stop${hiddenActualServiceStopCount === 1 ? "" : "s"}`}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            )}
+
+
+            {activeTab === "Actual" && (
+              sectionLoading.actual ? (
+                <SectionSkeleton title="Loading actual work" rows={4} />
+              ) : (
+                <div className="space-y-6">
+                  <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div>
+                        <h3 className="text-xl font-bold text-gray-800">Actual Work</h3>
+                        <p className="text-gray-600 mt-1">
+                          Actual labor and purchased material cost connected to this job.
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
+                          {actualPayLineItems.length} payroll line(s)
+                        </span>
+
+                        <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
+                          {serviceStops.length} service stop(s)
+                        </span>
+
+                        <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
+                          {purchasedItems.length} purchased item(s)
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                      <StatCard
+                        title="Customer Price"
+                        value={moneyFromCents(job.rate)}
+                        subtitle="Saved job rate"
+                        tone="blue"
+                      />
+
+                      <StatCard
+                        title="Actual Labor"
+                        value={moneyFromCents(actualLaborTotalCents)}
+                        subtitle={`${moneyFromCents(actualPayrollTotalCents)} payroll • ${moneyFromCents(scheduledStopLaborEstimateCents)} stop labor`}
+                        tone="amber"
+                      />
+
+                      <StatCard
+                        title="Actual Materials"
+                        value={moneyFromCents(actualPurchasedMaterialCostCents)}
+                        subtitle="Purchased material cost"
+                        tone="amber"
+                      />
+
+                      <StatCard
+                        title="Actual Profit"
+                        value={moneyFromCents(actualProfitCents)}
+                        subtitle="Customer price minus actual labor and materials"
+                        tone={actualProfitCents < 0 ? "red" : "green"}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div className="bg-white shadow-lg rounded-xl p-6">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-lg font-bold text-gray-800">Actual Payroll</h4>
+                          <p className="text-gray-600 mt-1 text-sm">
+                            Payroll line items created from service stops, tasks, or adjustments. Stops without payroll lines are estimated in the labor total.
+                          </p>
+                        </div>
+
+                        <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
+                          {moneyFromCents(actualPayrollTotalCents)}
+                        </span>
+                      </div>
+
+                      <div className="mt-6 space-y-3">
+                        {!actualPayLineItems.length ? (
+                          <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                            <p className="text-gray-700 font-medium">Payroll line items not connected yet.</p>
+                            <p className="text-sm text-gray-500 mt-1">
+                              This tab is ready, but the exact web payroll line item path still needs to be confirmed.
+                            </p>
+                          </div>
+                        ) : (
+                          actualPayLineItems.map((line) => renderActualPayrollLineCard(line))
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="bg-white shadow-lg rounded-xl p-6">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-lg font-bold text-gray-800">Purchased Materials</h4>
+                          <p className="text-gray-600 mt-1 text-sm">
+                            Actual vendor receipt items attached to this job.
+                          </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                          <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
+                            {moneyFromCents(actualPurchasedMaterialCostCents)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowPurchasedItemPicker((prev) => !prev);
+                              if (!showPurchasedItemPicker && availablePurchasedItems.length === 0) {
+                                loadAvailablePurchasedItems();
+                              }
+                            }}
+                            className="px-3 py-2 text-xs font-bold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+                          >
+                            + Attach Purchased Item
+                          </button>
+                        </div>
+                      </div>
+
+                      {showPurchasedItemPicker && (
+                        <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4">
+                          <div className="flex flex-col gap-3">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">Start Date</label>
+                                <input
+                                  type="date"
+                                  value={purchasedItemStartDate}
+                                  onChange={(e) => setPurchasedItemStartDate(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">End Date</label>
+                                <input
+                                  type="date"
+                                  value={purchasedItemEndDate}
+                                  onChange={(e) => setPurchasedItemEndDate(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                />
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">Category</label>
+                                <select
+                                  value={purchasedItemCategoryFilter}
+                                  onChange={(e) => setPurchasedItemCategoryFilter(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                >
+                                  {purchasedItemCategoryOptions.map((category) => (
+                                    <option key={category} value={category}>
+                                      {category}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">Billable</label>
+                                <select
+                                  value={purchasedItemBillableFilter}
+                                  onChange={(e) => setPurchasedItemBillableFilter(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                >
+                                  <option value="All">All</option>
+                                  <option value="Billable">Billable</option>
+                                  <option value="Not Billable">Not Billable</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-xs font-bold text-gray-600 mb-1">Invoiced</label>
+                                <select
+                                  value={purchasedItemInvoicedFilter}
+                                  onChange={(e) => setPurchasedItemInvoicedFilter(e.target.value)}
+                                  className="w-full rounded-lg border border-gray-300 p-2 bg-white"
+                                >
+                                  <option value="All">All</option>
+                                  <option value="Invoiced">Invoiced</option>
+                                  <option value="Not Invoiced">Not Invoiced</option>
+                                </select>
+                              </div>
+
+                              <div className="flex items-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={loadAvailablePurchasedItems}
+                                  disabled={loadingAvailablePurchasedItems}
+                                  className="flex-1 rounded-lg bg-white border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100 transition disabled:opacity-60"
+                                >
+                                  {loadingAvailablePurchasedItems ? "Loading..." : "Load Items"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={attachPurchasedItemsToJob}
+                                  disabled={!selectedPurchasedItemIds.length}
+                                  className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700 transition disabled:opacity-50"
+                                >
+                                  Attach {selectedPurchasedItemIds.length || ""}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
+                              {loadingAvailablePurchasedItems ? (
+                                <div className="rounded-xl border border-dashed border-blue-200 bg-white p-5 text-center text-sm text-gray-600">
+                                  Loading unassigned purchased items...
+                                </div>
+                              ) : filteredAvailablePurchasedItems.length ? (
+                                filteredAvailablePurchasedItems.map((item) => renderAvailablePurchasedItemPickerRow(item))
+                              ) : (
+                                <div className="rounded-xl border border-dashed border-blue-200 bg-white p-5 text-center">
+                                  <p className="font-semibold text-gray-700">
+                                    {availablePurchasedItems.length
+                                      ? "No purchased items match these filters."
+                                      : "No unassigned purchased items found."}
+                                  </p>
+                                  <p className="mt-1 text-sm text-gray-500">
+                                    Adjust the date range or filters to search more receipt items.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="mt-6 space-y-3">
+                        {!purchasedItems.length ? (
+                          <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                            <p className="text-gray-700 font-medium">No purchased materials yet.</p>
+                            <p className="text-sm text-gray-500 mt-1">
+                              Purchased items from vendor receipts will appear here when tied to this job.
+                            </p>
+                          </div>
+                        ) : (
+                          purchasedItems.map((item) => renderPurchasedMaterialCard(item))
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white shadow-lg rounded-xl p-6">
+                    <div>
+                      <h4 className="text-lg font-bold text-gray-800">Plan vs Actual</h4>
+                      <p className="text-gray-600 mt-1 text-sm">
+                        Compare the original plan against actual recorded cost.
+                      </p>
+                    </div>
+
+                    <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Planned Labor
+                        </p>
+                        <p className="mt-1 text-lg font-bold text-gray-800">
+                          {moneyFromCents(plannedTotalLaborCents)}
+                        </p>
+                        <p className="mt-1 text-sm text-gray-600">
+                          {moneyFromCents(plannedStopLaborCents)} stops • {moneyFromCents(plannedTaskLaborCents)} tasks
+                        </p>
+                      </div>
+
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Planned Materials
+                        </p>
+                        <p className="mt-1 text-lg font-bold text-gray-800">
+                          {moneyFromCents(plannedMaterialCostCents)}
+                        </p>
+                        <p className="mt-1 text-sm text-gray-600">
+                          {moneyFromCents(plannedMaterialPriceCents)} planned billable
+                        </p>
+                      </div>
+
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                          Profit Movement
+                        </p>
+                        <p
+                          className={[
+                            "mt-1 text-lg font-bold",
+                            actualProfitCents < projectedProfitCents ? "text-red-700" : "text-green-700",
+                          ].join(" ")}
+                        >
+                          {moneyFromCents(actualProfitCents - projectedProfitCents)}
+                        </p>
+                        <p className="mt-1 text-sm text-gray-600">
+                          Actual profit minus projected profit
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )
+            )}
+            {activeTab === "History" && (
+              <div className="space-y-6">
+                <div className="bg-white shadow-lg rounded-xl p-6">
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                    <div>
+                      <h3 className="text-xl font-bold text-gray-800">History</h3>
+                      <p className="text-gray-600 mt-1">
+                        Change orders and job updates for this work order.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={openChangeOrderModal}
+                      className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+                    >
+                      New Change Order
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
+                    <StatCard
+                      title="History Events"
+                      value={String(jobHistory.length)}
+                      subtitle="Tracked job changes"
+                    />
+                    <StatCard
+                      title="Change Orders"
+                      value={String(changeOrders.length)}
+                      subtitle={`${openChangeOrders.length} open`}
+                      tone="amber"
+                    />
+                    <StatCard
+                      title="Price Impact"
+                      value={moneyFromCents(changeOrders.reduce((total, order) => total + cents(order.priceImpactCents), 0))}
+                      subtitle="All change orders"
+                      tone="blue"
+                    />
+                    <StatCard
+                      title="Cost Impact"
+                      value={moneyFromCents(
+                        changeOrders.reduce(
+                          (total, order) => total + cents(order.laborCostImpactCents) + cents(order.materialCostImpactCents),
+                          0
+                        )
+                      )}
+                      subtitle="Labor plus materials"
+                      tone="red"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+                  <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-gray-800">Change Orders</h4>
+                        <p className="text-gray-600 mt-1 text-sm">
+                          Requests that change scope, price, labor, materials, or schedule.
                         </p>
                       </div>
                     </div>
 
-                    <button
-                      onClick={handleAddShoppingListItem}
-                      disabled={!canSaveShoppingItem}
-                      className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      Add Material
-                    </button>
+                    <div className="mt-6 space-y-3">
+                      {changeOrdersLoading ? (
+                        <div className="text-gray-500">Loading change orders…</div>
+                      ) : !changeOrders.length ? (
+                        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                          <p className="text-gray-700 font-medium">No change orders yet.</p>
+                          <button
+                            type="button"
+                            onClick={openChangeOrderModal}
+                            className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+                          >
+                            Create Change Order
+                          </button>
+                        </div>
+                      ) : (
+                        changeOrders.map((order) => renderChangeOrderCard(order))
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="xl:col-span-3 bg-white shadow-lg rounded-xl p-6">
+                    <div>
+                      <h4 className="text-lg font-bold text-gray-800">Job Timeline</h4>
+                      <p className="text-gray-600 mt-1 text-sm">
+                        Who changed what and when.
+                      </p>
+                    </div>
+
+                    <div className="mt-6 space-y-3">
+                      {jobHistoryLoading ? (
+                        <div className="text-gray-500">Loading history…</div>
+                      ) : !jobHistory.length ? (
+                        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                          <p className="text-gray-700 font-medium">No history events recorded yet.</p>
+                        </div>
+                      ) : (
+                        jobHistory.map((event) => renderHistoryEventCard(event))
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>
             )}
-          </div>
-          )
-        )}
-
-        {activeTab === "Planned" && (
-          sectionLoading.workOffers ? (
-            <SectionSkeleton title="Loading work offers" rows={4} />
-          ) : (
-          <div className="space-y-4">
-            <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Work Offers</h3>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Offers and internal board posts connected to this job.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    onClick={openCreateWorkOfferModal}
-                    className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                  >
-                    Create Work Offer
-                  </button>
-
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-700">
-                    {workOffers.length} total
-                  </span>
-
-                  <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-bold text-green-700">
-                    {workOffers.filter((offer) => offer.status === "Accepted" || offer.status === "accepted").length} accepted
-                  </span>
-
-                  <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
-                    {workOffers.filter((offer) => !offer.status || ["Pending", "pending", "Open", "open", "Posted", "posted", "Sent", "sent", "Viewed", "viewed", "Draft", "draft"].includes(offer.status)).length} open
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-4">
-                <StatCard
-                  title="Offers"
-                  value={String(workOffers.length)}
-                  subtitle="Total offers for this job"
-                />
-
-                <StatCard
-                  title="Accepted"
-                  value={String(
-                    workOffers.filter((offer) => offer.status === "Accepted" || offer.status === "accepted").length
-                  )}
-                  subtitle="Accepted by technician"
-                  tone="green"
-                />
-
-                <StatCard
-                  title="Board Posts"
-                  value={String(workOffers.filter((offer) => offer.postedToBoard || offer.isBoardPost).length)}
-                  subtitle="Posted internally"
-                  tone="amber"
-                />
-
-                <StatCard
-                  title="Self-Schedule"
-                  value={String(workOffers.filter((offer) => getOfferCanSelfSchedule(offer)).length)}
-                  subtitle="Tech can schedule"
-                  tone="blue"
-                />
-              </div>
-
-              <div className="mt-3 border-t border-slate-200 pt-3">
-                <div className="space-y-2">
-                  {!workOffers.length ? (
-                    <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-                      <p className="text-sm font-medium text-slate-700">No work offers yet.</p>
-                      <p className="mt-0.5 text-xs text-slate-500">
-                        Create an offer to send this work to a technician or post it to the internal board.
-                      </p>
-                    </div>
-                  ) : (
-                    visibleWorkOffers.map((offer) => renderWorkOfferCard(offer))
-                  )}
-                </div>
-
-                {hiddenWorkOfferCount > 0 && (
-                  <div className="pt-2 text-center">
-                    <button
-                      type="button"
-                      onClick={() => setShowAllWorkOffers((prev) => !prev)}
-                      className="text-sm font-semibold text-blue-700 hover:text-blue-900"
-                    >
-                      {showAllWorkOffers
-                        ? "Show first 5 work offers"
-                        : `Show ${hiddenWorkOfferCount} more work offer${hiddenWorkOfferCount === 1 ? "" : "s"}`}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-          )
-        )}
-
-        {activeTab === "Actual" && (
-          sectionLoading.actual ? (
-            <SectionSkeleton title="Loading service stops" rows={3} />
-          ) : (
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Service Stops</h3>
-                <p className="mt-0.5 text-xs text-slate-500">
-                  {serviceStops.length} recorded for this job
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={markJobAsFinished}
-                  className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
-                >
-                  Mark Job as Finished
-                </button>
-                <Link
-                  to={`/company/serviceStops/createNew/${jobId}`}
-                  className="inline-flex items-center justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
-                >
-                  Schedule Service Stop
-                </Link>
-              </div>
-            </div>
-
-            <div className="mt-3 space-y-2">
-              {!serviceStops.length ? (
-                <div className="rounded-md border border-dashed border-slate-300 p-4 text-center">
-                  <p className="text-sm font-medium text-slate-700">No service stops yet.</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    Schedule a stop to record actual work for this job.
-                  </p>
-                </div>
-              ) : (
-                visibleActualServiceStops.map((stop) => renderServiceStopCard(stop))
-              )}
-
-              {hiddenActualServiceStopCount > 0 && (
-                <div className="pt-1 text-center">
-                  <button
-                    type="button"
-                    onClick={() => setShowAllActualServiceStops((prev) => !prev)}
-                    className="text-sm font-semibold text-blue-700 hover:text-blue-900"
-                  >
-                    {showAllActualServiceStops
-                      ? "Show first 5 service stops"
-                      : `Show ${hiddenActualServiceStopCount} more service stop${hiddenActualServiceStopCount === 1 ? "" : "s"}`}
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-          )
-        )}
-
-
-        {activeTab === "Actual" && (
-          sectionLoading.actual ? (
-            <SectionSkeleton title="Loading actual work" rows={4} />
-          ) : (
-          <div className="space-y-6">
-            <div className="bg-white shadow-lg rounded-xl p-6">
-              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-800">Actual Work</h3>
-                  <p className="text-gray-600 mt-1">
-                    Actual labor and purchased material cost connected to this job.
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
-                    {actualPayLineItems.length} payroll line(s)
-                  </span>
-
-                  <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
-                    {serviceStops.length} service stop(s)
-                  </span>
-
-                  <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
-                    {purchasedItems.length} purchased item(s)
-                  </span>
-                </div>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-                <StatCard
-                  title="Customer Price"
-                  value={moneyFromCents(job.rate)}
-                  subtitle="Saved job rate"
-                  tone="blue"
-                />
-
-                <StatCard
-                  title="Actual Labor"
-                  value={moneyFromCents(actualLaborTotalCents)}
-                  subtitle={`${moneyFromCents(actualPayrollTotalCents)} payroll • ${moneyFromCents(scheduledStopLaborEstimateCents)} stop labor`}
-                  tone="amber"
-                />
-
-                <StatCard
-                  title="Actual Materials"
-                  value={moneyFromCents(actualPurchasedMaterialCostCents)}
-                  subtitle="Purchased material cost"
-                  tone="amber"
-                />
-
-                <StatCard
-                  title="Actual Profit"
-                  value={moneyFromCents(actualProfitCents)}
-                  subtitle="Customer price minus actual labor and materials"
-                  tone={actualProfitCents < 0 ? "red" : "green"}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
-              <div className="bg-white shadow-lg rounded-xl p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-gray-800">Actual Payroll</h4>
-                    <p className="text-gray-600 mt-1 text-sm">
-                      Payroll line items created from service stops, tasks, or adjustments. Stops without payroll lines are estimated in the labor total.
-                    </p>
-                  </div>
-
-                  <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
-                    {moneyFromCents(actualPayrollTotalCents)}
-                  </span>
-                </div>
-
-                <div className="mt-6 space-y-3">
-                  {!actualPayLineItems.length ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                      <p className="text-gray-700 font-medium">Payroll line items not connected yet.</p>
-                      <p className="text-sm text-gray-500 mt-1">
-                        This tab is ready, but the exact web payroll line item path still needs to be confirmed.
-                      </p>
-                    </div>
-                  ) : (
-                    actualPayLineItems.map((line) => renderActualPayrollLineCard(line))
-                  )}
-                </div>
-              </div>
-
-              <div className="bg-white shadow-lg rounded-xl p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-gray-800">Purchased Materials</h4>
-                    <p className="text-gray-600 mt-1 text-sm">
-                      Actual vendor receipt items attached to this job.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center justify-end gap-2">
-                    <span className="px-3 py-1 text-xs font-bold rounded-full bg-gray-100 text-gray-700">
-                      {moneyFromCents(actualPurchasedMaterialCostCents)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowPurchasedItemPicker((prev) => !prev);
-                        if (!showPurchasedItemPicker && availablePurchasedItems.length === 0) {
-                          loadAvailablePurchasedItems();
-                        }
-                      }}
-                      className="px-3 py-2 text-xs font-bold rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
-                    >
-                      + Attach Purchased Item
-                    </button>
-                  </div>
-                </div>
-
-                {showPurchasedItemPicker && (
-                  <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-4">
-                    <div className="flex flex-col gap-3">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
-                        <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-1">Start Date</label>
-                          <input
-                            type="date"
-                            value={purchasedItemStartDate}
-                            onChange={(e) => setPurchasedItemStartDate(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-1">End Date</label>
-                          <input
-                            type="date"
-                            value={purchasedItemEndDate}
-                            onChange={(e) => setPurchasedItemEndDate(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 bg-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-1">Category</label>
-                          <select
-                            value={purchasedItemCategoryFilter}
-                            onChange={(e) => setPurchasedItemCategoryFilter(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 bg-white"
-                          >
-                            {purchasedItemCategoryOptions.map((category) => (
-                              <option key={category} value={category}>
-                                {category}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-1">Billable</label>
-                          <select
-                            value={purchasedItemBillableFilter}
-                            onChange={(e) => setPurchasedItemBillableFilter(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 bg-white"
-                          >
-                            <option value="All">All</option>
-                            <option value="Billable">Billable</option>
-                            <option value="Not Billable">Not Billable</option>
-                          </select>
-                        </div>
-
-                        <div>
-                          <label className="block text-xs font-bold text-gray-600 mb-1">Invoiced</label>
-                          <select
-                            value={purchasedItemInvoicedFilter}
-                            onChange={(e) => setPurchasedItemInvoicedFilter(e.target.value)}
-                            className="w-full rounded-lg border border-gray-300 p-2 bg-white"
-                          >
-                            <option value="All">All</option>
-                            <option value="Invoiced">Invoiced</option>
-                            <option value="Not Invoiced">Not Invoiced</option>
-                          </select>
-                        </div>
-
-                        <div className="flex items-end gap-2">
-                          <button
-                            type="button"
-                            onClick={loadAvailablePurchasedItems}
-                            disabled={loadingAvailablePurchasedItems}
-                            className="flex-1 rounded-lg bg-white border border-blue-200 px-3 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100 transition disabled:opacity-60"
-                          >
-                            {loadingAvailablePurchasedItems ? "Loading..." : "Load Items"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={attachPurchasedItemsToJob}
-                            disabled={!selectedPurchasedItemIds.length}
-                            className="flex-1 rounded-lg bg-blue-600 px-3 py-2 text-sm font-bold text-white hover:bg-blue-700 transition disabled:opacity-50"
-                          >
-                            Attach {selectedPurchasedItemIds.length || ""}
-                          </button>
-                        </div>
+            {activeTab === "Billing" && (
+              <div className="space-y-6">
+                <div className="bg-white shadow-lg rounded-xl p-6">
+                  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-xl font-bold text-gray-800">Billing</h3>
+                        <button
+                          type="button"
+                          onClick={() => setShowBillingLifecycleHelp(true)}
+                          aria-label="Open billing lifecycle guidance"
+                          title="Billing lifecycle guidance"
+                          className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
+                        >
+                          i
+                        </button>
                       </div>
-
-                      <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
-                        {loadingAvailablePurchasedItems ? (
-                          <div className="rounded-xl border border-dashed border-blue-200 bg-white p-5 text-center text-sm text-gray-600">
-                            Loading unassigned purchased items...
-                          </div>
-                        ) : filteredAvailablePurchasedItems.length ? (
-                          filteredAvailablePurchasedItems.map((item) => renderAvailablePurchasedItemPickerRow(item))
-                        ) : (
-                          <div className="rounded-xl border border-dashed border-blue-200 bg-white p-5 text-center">
-                            <p className="font-semibold text-gray-700">
-                              {availablePurchasedItems.length
-                                ? "No purchased items match these filters."
-                                : "No unassigned purchased items found."}
-                            </p>
-                            <p className="mt-1 text-sm text-gray-500">
-                              Adjust the date range or filters to search more receipt items.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                <div className="mt-6 space-y-3">
-                  {!purchasedItems.length ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                      <p className="text-gray-700 font-medium">No purchased materials yet.</p>
-                      <p className="text-sm text-gray-500 mt-1">
-                        Purchased items from vendor receipts will appear here when tied to this job.
+                      <p className="text-gray-600 mt-1">
+                        Estimate, acceptance, invoicing, and payment lifecycle
                       </p>
                     </div>
-                  ) : (
-                    purchasedItems.map((item) => renderPurchasedMaterialCard(item))
-                  )}
-                </div>
-              </div>
-            </div>
 
-            <div className="bg-white shadow-lg rounded-xl p-6">
-              <div>
-                <h4 className="text-lg font-bold text-gray-800">Plan vs Actual</h4>
-                <p className="text-gray-600 mt-1 text-sm">
-                  Compare the original plan against actual recorded cost.
-                </p>
-              </div>
-
-              <div className="mt-6 grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    Planned Labor
-                  </p>
-                  <p className="mt-1 text-lg font-bold text-gray-800">
-                    {moneyFromCents(plannedTotalLaborCents)}
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600">
-                    {moneyFromCents(plannedStopLaborCents)} stops • {moneyFromCents(plannedTaskLaborCents)} tasks
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    Planned Materials
-                  </p>
-                  <p className="mt-1 text-lg font-bold text-gray-800">
-                    {moneyFromCents(plannedMaterialCostCents)}
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600">
-                    {moneyFromCents(plannedMaterialPriceCents)} planned billable
-                  </p>
-                </div>
-
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-                    Profit Movement
-                  </p>
-                  <p
-                    className={[
-                      "mt-1 text-lg font-bold",
-                      actualProfitCents < projectedProfitCents ? "text-red-700" : "text-green-700",
-                    ].join(" ")}
-                  >
-                    {moneyFromCents(actualProfitCents - projectedProfitCents)}
-                  </p>
-                  <p className="mt-1 text-sm text-gray-600">
-                    Actual profit minus projected profit
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-          )
-        )}
-        {activeTab === "History" && (
-          <div className="space-y-6">
-            <div className="bg-white shadow-lg rounded-xl p-6">
-              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                <div>
-                  <h3 className="text-xl font-bold text-gray-800">History</h3>
-                  <p className="text-gray-600 mt-1">
-                    Change orders and job updates for this work order.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={openChangeOrderModal}
-                  className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-                >
-                  New Change Order
-                </button>
-              </div>
-
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-4">
-                <StatCard
-                  title="History Events"
-                  value={String(jobHistory.length)}
-                  subtitle="Tracked job changes"
-                />
-                <StatCard
-                  title="Change Orders"
-                  value={String(changeOrders.length)}
-                  subtitle={`${openChangeOrders.length} open`}
-                  tone="amber"
-                />
-                <StatCard
-                  title="Price Impact"
-                  value={moneyFromCents(changeOrders.reduce((total, order) => total + cents(order.priceImpactCents), 0))}
-                  subtitle="All change orders"
-                  tone="blue"
-                />
-                <StatCard
-                  title="Cost Impact"
-                  value={moneyFromCents(
-                    changeOrders.reduce(
-                      (total, order) => total + cents(order.laborCostImpactCents) + cents(order.materialCostImpactCents),
-                      0
-                    )
-                  )}
-                  subtitle="Labor plus materials"
-                  tone="red"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-              <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-gray-800">Change Orders</h4>
-                    <p className="text-gray-600 mt-1 text-sm">
-                      Requests that change scope, price, labor, materials, or schedule.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="mt-6 space-y-3">
-                  {changeOrdersLoading ? (
-                    <div className="text-gray-500">Loading change orders…</div>
-                  ) : !changeOrders.length ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                      <p className="text-gray-700 font-medium">No change orders yet.</p>
+                    <div className="flex flex-wrap gap-2">
                       <button
-                        type="button"
-                        onClick={openChangeOrderModal}
-                        className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+                        onClick={openCreateContractModal}
+                        className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
                       >
-                        Create Change Order
+                        New Service Agreement
+                      </button>
+
+                      <button
+                        onClick={handleSendEstimate}
+                        disabled={sendingEstimateEmail || (!salesWorkflowEnabled && !selectedContract)}
+                        className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:opacity-50"
+                      >
+                        {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
+                      </button>
+                      <button
+                        onClick={handleMarkEstimateAccepted}
+                        disabled={!salesWorkflowEnabled && !selectedContract}
+                        className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
+                      >
+                        Mark Accepted
+                      </button>
+                      <button
+                        onClick={handleMarkAsInvoiced}
+                        disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
+                        className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                      >
+                        {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
                       </button>
                     </div>
-                  ) : (
-                    changeOrders.map((order) => renderChangeOrderCard(order))
-                  )}
-                </div>
-              </div>
 
-              <div className="xl:col-span-3 bg-white shadow-lg rounded-xl p-6">
-                <div>
-                  <h4 className="text-lg font-bold text-gray-800">Job Timeline</h4>
-                  <p className="text-gray-600 mt-1 text-sm">
-                    Who changed what and when.
-                  </p>
-                </div>
 
-                <div className="mt-6 space-y-3">
-                  {jobHistoryLoading ? (
-                    <div className="text-gray-500">Loading history…</div>
-                  ) : !jobHistory.length ? (
-                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                      <p className="text-gray-700 font-medium">No history events recorded yet.</p>
-                    </div>
-                  ) : (
-                    jobHistory.map((event) => renderHistoryEventCard(event))
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-        {activeTab === "Billing" && (
-          <div className="space-y-6">
-            <div className="bg-white shadow-lg rounded-xl p-6">
-              <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-xl font-bold text-gray-800">Billing</h3>
-                    <button
-                      type="button"
-                      onClick={() => setShowBillingLifecycleHelp(true)}
-                      aria-label="Open billing lifecycle guidance"
-                      title="Billing lifecycle guidance"
-                      className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-sm font-bold text-blue-700 transition hover:bg-blue-100"
-                    >
-                      i
-                    </button>
                   </div>
-                  <p className="text-gray-600 mt-1">
-                    Estimate, acceptance, invoicing, and payment lifecycle
-                  </p>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-	                  <button
-	                    onClick={openCreateContractModal}
-	                    className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-	                  >
-	                    New Service Agreement
-	                  </button>
-
-                  <button
-                    onClick={handleSendEstimate}
-                    disabled={sendingEstimateEmail || (!salesWorkflowEnabled && !selectedContract)}
-                    className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
-                  </button>
-	                  <button
-	                    onClick={handleMarkEstimateAccepted}
-	                    disabled={!salesWorkflowEnabled && !selectedContract}
-	                    className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
-	                  >
-                    Mark Accepted
-                  </button>
-                  <button
-                    onClick={handleMarkAsInvoiced}
-                    disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
-                    className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
-                  </button>
-                </div>
-
-
-              </div>
-              <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-5">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                  <div>
-                    <h4 className="text-lg font-bold text-gray-800">Billing Lifecycle</h4>
-                    <p className="text-sm text-gray-600 mt-1">
-                      Job billing and operation status should move together as the job progresses.
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.billingStatus)}`}>
-                      {job.billingStatus || "—"}
-                    </span>
-
-                    <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.operationStatus)}`}>
-                      {job.operationStatus || "—"}
-                    </span>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
-	                  <button
-	                    type="button"
-	                    onClick={openCreateContractModal}
-	                    className="px-4 py-3 text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-	                  >
-	                    Create Agreement Draft
-	                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSendEstimate}
-                    disabled={sendingEstimateEmail || (!salesWorkflowEnabled && !selectedContract)}
-                    className="px-4 py-3 text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
-                  </button>
-
-	                  <button
-	                    type="button"
-	                    onClick={handleMarkEstimateAccepted}
-	                    disabled={!salesWorkflowEnabled && !selectedContract}
-	                    className="px-4 py-3 text-sm font-semibold text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
-	                  >
-                    Mark Accepted
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleMarkAsInvoiced}
-                    disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
-                    className="px-4 py-3 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
-                  </button>
-                </div>
-              </div>
-              <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <StatCard
-                  title="Customer Price"
-                  value={moneyFromCents(job.rate)}
-                  subtitle="Saved job rate"
-                  tone="blue"
-                />
-
-                <StatCard
-                  title="Material Cost"
-                  value={moneyFromCents(actualPurchasedMaterialCostCents)}
-                  subtitle={`${purchasedItems.length} purchased material item(s)`}
-                  tone="red"
-                />
-
-                <StatCard
-                  title="Labor Cost"
-                  value={moneyFromCents(actualLaborTotalCents)}
-                  subtitle={`${moneyFromCents(actualPayrollTotalCents)} payroll • ${moneyFromCents(scheduledStopLaborEstimateCents)} stop labor`}
-                  tone="red"
-                />
-
-                <StatCard
-                  title="Profit"
-                  value={moneyFromCents(actualProfitCents)}
-                  subtitle={`${actualMarginPercent}% margin`}
-                  tone={actualProfitCents < 0 ? "red" : "green"}
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-	              <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
-	                <div className="flex items-start justify-between gap-3">
-	                  <div>
-	                    <h4 className="text-lg font-bold text-gray-800">Service Agreements</h4>
-	                    <p className="text-gray-600 mt-1 text-sm">Drafts and sent agreements tied to this job</p>
-	                  </div>
-	                </div>
-
-	                <div className="mt-6 space-y-3">
-	                  {salesAgreementsLoading ? (
-	                    <div className="text-gray-500">Loading service agreements…</div>
-	                  ) : !jobSalesAgreements.length ? (
-	                    <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-	                      <p className="text-gray-700 font-medium">No service agreements yet.</p>
-	                      <p className="text-sm text-gray-500 mt-1">
-	                        Create a draft agreement to start the billing lifecycle for this job.
-	                      </p>
-	                      <button
-	                        onClick={openCreateContractModal}
-	                        className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
-	                      >
-	                        Create Agreement Draft
-	                      </button>
-	                    </div>
-	                  ) : (
-	                    jobSalesAgreements.map((agreement, index) => {
-	                      const active = selectedSalesAgreement?.id === agreement.id;
-	                      return (
-		                        <div
-		                          key={agreement.id}
-		                          role="button"
-		                          tabIndex={0}
-		                          onClick={() => {
-		                            setSelectedSalesAgreementId(agreement.id);
-		                            setLinkedSalesAgreement(agreement);
-		                          }}
-		                          onKeyDown={(e) => {
-		                            if (e.key === "Enter" || e.key === " ") {
-		                              e.preventDefault();
-		                              setSelectedSalesAgreementId(agreement.id);
-		                              setLinkedSalesAgreement(agreement);
-		                            }
-		                          }}
-		                          className={[
-		                            "w-full cursor-pointer text-left p-4 rounded-xl border transition",
-		                            active
-	                              ? "border-blue-300 bg-blue-50 shadow-sm"
-	                              : "border-gray-200 bg-gray-50 hover:bg-white",
-                          ].join(" ")}
-                        >
-                          <div className="flex items-start justify-between gap-3">
-	                            <div>
-	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-	                                Agreement {agreement.version || jobSalesAgreements.length - index}
-	                              </p>
-	                              <p className="mt-1 text-base font-bold text-gray-800">
-	                                {formatCurrency((Number(agreement.totalAmountCents ?? agreement.rateAmountCents ?? 0) / 100) || 0)}
-	                              </p>
-	                              <p className="mt-1 text-sm text-gray-600">
-	                                Sent: {formatDateTimeValue(agreement.sentAt || agreement.emailDelivery?.lastSentAt)}
-	                              </p>
-	                              <p className="mt-1 text-sm text-gray-600">
-	                                Accept By: {formatDateValue(agreement.expiresAt)}
-	                              </p>
-	                            </div>
-
-	                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(agreement.status)}`}>
-	                              {formatStatusLabel(agreement.status) || "—"}
-	                            </span>
-	                          </div>
-
-	                          <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
-	                            <div className="mt-4 flex flex-wrap gap-2">
-	                              <Link
-	                                to={`/company/sales/agreements/${agreement.id}`}
-	                                onClick={(e) => e.stopPropagation()}
-	                                className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
-	                              >
-	                                Open Agreement
-	                              </Link>
-	                            </div>
-	                            <div>
-	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</p>
-	                              <p className="mt-1 text-gray-800">
-	                                {agreement.customerName || customer.firstName || "—"}
-	                              </p>
-	                            </div>
-	                            <div>
-	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted</p>
-	                              <p className="mt-1 text-gray-800">
-	                                {agreement.status === SalesAgreementStatus.accepted ? "Yes" : "No"}
-	                              </p>
-	                            </div>
-	                          </div>
-		                        </div>
-	                      );
-	                    })
-	                  )}
-
-	                  {contractsLoading ? (
-	                    <div className="pt-4 text-sm text-gray-500">Loading legacy contracts…</div>
-	                  ) : contracts.length ? (
-	                    <div className="pt-4 border-t border-gray-200 space-y-3">
-	                      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-	                        Legacy Contracts
-	                      </p>
-	                      {contracts.map((contract, index) => (
-	                        <div key={contract.id} className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-	                          <div className="flex items-start justify-between gap-3">
-	                            <div>
-	                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-	                                Legacy Version {contract.version || contracts.length - index}
-	                              </p>
-	                              <p className="mt-1 text-base font-bold text-gray-800">
-	                                {formatCurrency((Number(contract.rate || 0) / 100) || 0)}
-	                              </p>
-	                              <p className="mt-1 text-sm text-gray-600">
-	                                Sent: {formatDateTimeValue(contract.dateSent)}
-	                              </p>
-	                            </div>
-	                            <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(contract.status)}`}>
-	                              {formatStatusLabel(contract.status) || "—"}
-	                            </span>
-	                          </div>
-
-	                          <div className="mt-4 flex flex-wrap gap-2">
-	                            <button
-	                              type="button"
-	                              onClick={() => {
-	                                setSelectedContractId(contract.id);
-	                                openContractModal(contract);
-	                              }}
-	                              className="px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition"
-	                            >
-	                              Edit Legacy
-	                            </button>
-	                            <Link
-	                              to={`/company/contract/detail/${contract.id}`}
-	                              className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
-	                            >
-	                              Open Legacy
-	                            </Link>
-	                          </div>
-	                        </div>
-	                      ))}
-	                    </div>
-	                  ) : null}
-	                </div>
-	              </div>
-
-              <div className="xl:col-span-3 space-y-6">
-                <div className="bg-white shadow-lg rounded-xl p-6">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-	                      <h4 className="text-lg font-bold text-gray-800">Agreement Snapshot</h4>
-	                      <p className="text-gray-600 mt-1 text-sm">
-	                        Snapshot of the selected service agreement
-	                      </p>
-	                    </div>
-	                    <div>
-	                      {billingRecordDisplay.detailUrl && (
-	                        <Link
-	                          to={billingRecordDisplay.detailUrl}
-	                          className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition"
-	                        >
-	                          {billingRecordDisplay.detailLabel}
-	                        </Link>
-	                      )}
-	                    </div>
-	                    {selectedBillingRecord && (
-	                      <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(billingRecordDisplay.status)}`}>
-	                        {formatStatusLabel(billingRecordDisplay.status) || "—"}
-	                      </span>
-	                    )}
-	                  </div>
-
-	                  {!selectedBillingRecord ? (
-	                    <div className="mt-6 text-gray-500">Select or create a service agreement to see its snapshot.</div>
-	                  ) : (
-	                    <>
-	                      <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sender</p>
-	                          <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.sender}</p>
-	                        </div>
-
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
-	                          <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.receiver}</p>
-	                        </div>
-
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Sent</p>
-	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.sentAt)}</p>
-	                        </div>
-
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted On</p>
-	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.acceptedAt)}</p>
-	                        </div>
-
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Date To Accept</p>
-	                          <p className="mt-1 text-gray-800 font-semibold">{formatDateValue(billingRecordDisplay.acceptBy)}</p>
-	                        </div>
-
-	                        <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Estimate</p>
-	                          <p className="mt-1 text-gray-800 font-bold text-lg">
-	                            {formatCurrency((billingRecordDisplay.totalAmountCents / 100) || 0)}
-	                          </p>
-	                        </div>
+                  <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-5">
+                    <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-gray-800">Billing Lifecycle</h4>
+                        <p className="text-sm text-gray-600 mt-1">
+                          Job billing and operation status should move together as the job progresses.
+                        </p>
                       </div>
 
-                      <div className="mt-6">
-	                        <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Scope / Terms</h5>
+                      <div className="flex flex-wrap gap-2">
+                        <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.billingStatus)}`}>
+                          {job.billingStatus || "—"}
+                        </span>
 
-	                        {!normalizedSelectedTerms.length ? (
-	                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
-	                            No terms added to this agreement.
-	                          </div>
-                        ) : (
-                          <div className="mt-3 space-y-3">
-                            {normalizedSelectedTerms.map((term) => (
-                              <div
-                                key={term.id}
-                                className="p-4 rounded-xl bg-gray-50 border border-gray-200"
-                              >
-                                <div className="flex items-start justify-between gap-3">
-                                  <div>
-                                    <p className="font-semibold text-gray-800">{term.title}</p>
-                                    <p className="mt-1 text-sm text-gray-600 whitespace-pre-wrap">
-                                      {term.description || "—"}
-                                    </p>
-                                  </div>
+                        <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(job.operationStatus)}`}>
+                          {job.operationStatus || "—"}
+                        </span>
+                      </div>
+                    </div>
 
-                                  {term.value !== "" && term.value !== null && term.value !== undefined && (
-                                    <div className="text-sm font-semibold text-gray-700">
-                                      {typeof term.value === "number"
-                                        ? formatCurrency((Number(term.value) / 100) || 0)
-                                        : String(term.value)}
-                                    </div>
-                                  )}
+                    <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <button
+                        type="button"
+                        onClick={openCreateContractModal}
+                        className="px-4 py-3 text-sm font-semibold text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+                      >
+                        Create Agreement Draft
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleSendEstimate}
+                        disabled={sendingEstimateEmail || (!salesWorkflowEnabled && !selectedContract)}
+                        className="px-4 py-3 text-sm font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition disabled:opacity-50"
+                      >
+                        {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleMarkEstimateAccepted}
+                        disabled={!salesWorkflowEnabled && !selectedContract}
+                        className="px-4 py-3 text-sm font-semibold text-green-700 bg-green-50 border border-green-200 rounded-xl hover:bg-green-100 transition disabled:opacity-50"
+                      >
+                        Mark Accepted
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={handleMarkAsInvoiced}
+                        disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
+                        className="px-4 py-3 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                      >
+                        {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
+                      </button>
+                    </div>
+                  </div>
+                  <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    <StatCard
+                      title="Customer Price"
+                      value={moneyFromCents(job.rate)}
+                      subtitle="Saved job rate"
+                      tone="blue"
+                    />
+
+                    <StatCard
+                      title="Material Cost"
+                      value={moneyFromCents(actualPurchasedMaterialCostCents)}
+                      subtitle={`${purchasedItems.length} purchased material item(s)`}
+                      tone="red"
+                    />
+
+                    <StatCard
+                      title="Labor Cost"
+                      value={moneyFromCents(actualLaborTotalCents)}
+                      subtitle={`${moneyFromCents(actualPayrollTotalCents)} payroll • ${moneyFromCents(scheduledStopLaborEstimateCents)} stop labor`}
+                      tone="red"
+                    />
+
+                    <StatCard
+                      title="Profit"
+                      value={moneyFromCents(actualProfitCents)}
+                      subtitle={`${actualMarginPercent}% margin`}
+                      tone={actualProfitCents < 0 ? "red" : "green"}
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+                  <div className="xl:col-span-2 bg-white shadow-lg rounded-xl p-6">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-gray-800">Service Agreements</h4>
+                        <p className="text-gray-600 mt-1 text-sm">Drafts and sent agreements tied to this job</p>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 space-y-3">
+                      {salesAgreementsLoading ? (
+                        <div className="text-gray-500">Loading service agreements…</div>
+                      ) : !jobSalesAgreements.length ? (
+                        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+                          <p className="text-gray-700 font-medium">No service agreements yet.</p>
+                          <p className="text-sm text-gray-500 mt-1">
+                            Create a draft agreement to start the billing lifecycle for this job.
+                          </p>
+                          <button
+                            onClick={openCreateContractModal}
+                            className="mt-4 px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-xl hover:bg-amber-100 transition"
+                          >
+                            Create Agreement Draft
+                          </button>
+                        </div>
+                      ) : (
+                        jobSalesAgreements.map((agreement, index) => {
+                          const active = selectedSalesAgreement?.id === agreement.id;
+                          return (
+                            <div
+                              key={agreement.id}
+                              role="button"
+                              tabIndex={0}
+                              onClick={() => {
+                                setSelectedSalesAgreementId(agreement.id);
+                                setLinkedSalesAgreement(agreement);
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  setSelectedSalesAgreementId(agreement.id);
+                                  setLinkedSalesAgreement(agreement);
+                                }
+                              }}
+                              className={[
+                                "w-full cursor-pointer text-left p-4 rounded-xl border transition",
+                                active
+                                  ? "border-blue-300 bg-blue-50 shadow-sm"
+                                  : "border-gray-200 bg-gray-50 hover:bg-white",
+                              ].join(" ")}
+                            >
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    Agreement {agreement.version || jobSalesAgreements.length - index}
+                                  </p>
+                                  <p className="mt-1 text-base font-bold text-gray-800">
+                                    {formatCurrency((Number(agreement.totalAmountCents ?? agreement.rateAmountCents ?? 0) / 100) || 0)}
+                                  </p>
+                                  <p className="mt-1 text-sm text-gray-600">
+                                    Sent: {formatDateTimeValue(agreement.sentAt || agreement.emailDelivery?.lastSentAt)}
+                                  </p>
+                                  <p className="mt-1 text-sm text-gray-600">
+                                    Accept By: {formatDateValue(agreement.expiresAt)}
+                                  </p>
+                                </div>
+
+                                <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(agreement.status)}`}>
+                                  {formatStatusLabel(agreement.status) || "—"}
+                                </span>
+                              </div>
+
+                              <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                <div className="mt-4 flex flex-wrap gap-2">
+                                  <Link
+                                    to={`/company/sales/agreements/${agreement.id}`}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+                                  >
+                                    Open Agreement
+                                  </Link>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</p>
+                                  <p className="mt-1 text-gray-800">
+                                    {agreement.customerName || customer.firstName || "—"}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted</p>
+                                  <p className="mt-1 text-gray-800">
+                                    {agreement.status === SalesAgreementStatus.accepted ? "Yes" : "No"}
+                                  </p>
                                 </div>
                               </div>
-                            ))}
-                          </div>
+                            </div>
+                          );
+                        })
+                      )}
+
+                      {contractsLoading ? (
+                        <div className="pt-4 text-sm text-gray-500">Loading legacy contracts…</div>
+                      ) : contracts.length ? (
+                        <div className="pt-4 border-t border-gray-200 space-y-3">
+                          <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">
+                            Legacy Contracts
+                          </p>
+                          {contracts.map((contract, index) => (
+                            <div key={contract.id} className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
+                                    Legacy Version {contract.version || contracts.length - index}
+                                  </p>
+                                  <p className="mt-1 text-base font-bold text-gray-800">
+                                    {formatCurrency((Number(contract.rate || 0) / 100) || 0)}
+                                  </p>
+                                  <p className="mt-1 text-sm text-gray-600">
+                                    Sent: {formatDateTimeValue(contract.dateSent)}
+                                  </p>
+                                </div>
+                                <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(contract.status)}`}>
+                                  {formatStatusLabel(contract.status) || "—"}
+                                </span>
+                              </div>
+
+                              <div className="mt-4 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedContractId(contract.id);
+                                    openContractModal(contract);
+                                  }}
+                                  className="px-3 py-2 text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition"
+                                >
+                                  Edit Legacy
+                                </button>
+                                <Link
+                                  to={`/company/contract/detail/${contract.id}`}
+                                  className="px-3 py-2 text-xs font-semibold text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-100 transition"
+                                >
+                                  Open Legacy
+                                </Link>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+
+                  <div className="xl:col-span-3 space-y-6">
+                    <div className="bg-white shadow-lg rounded-xl p-6">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <h4 className="text-lg font-bold text-gray-800">Agreement Snapshot</h4>
+                          <p className="text-gray-600 mt-1 text-sm">
+                            Snapshot of the selected service agreement
+                          </p>
+                        </div>
+                        <div>
+                          {billingRecordDisplay.detailUrl && (
+                            <Link
+                              to={billingRecordDisplay.detailUrl}
+                              className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-xl hover:bg-gray-100 transition"
+                            >
+                              {billingRecordDisplay.detailLabel}
+                            </Link>
+                          )}
+                        </div>
+                        {selectedBillingRecord && (
+                          <span className={`px-3 py-1 text-xs font-bold rounded-full ${getStatusClass(billingRecordDisplay.status)}`}>
+                            {formatStatusLabel(billingRecordDisplay.status) || "—"}
+                          </span>
                         )}
                       </div>
 
-                      <div className="mt-6">
-                        <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Estimate Snapshot</h5>
+                      {!selectedBillingRecord ? (
+                        <div className="mt-6 text-gray-500">Select or create a service agreement to see its snapshot.</div>
+                      ) : (
+                        <>
+                          <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Sender</p>
+                              <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.sender}</p>
+                            </div>
 
-	                        {!billingSnapshotItems.length ? (
-	                          <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
-	                            No line items found.
-	                          </div>
-                        ) : (
-                          <div className="mt-3 overflow-x-auto rounded-xl border border-gray-200">
-                            <table className="min-w-full bg-white">
-                              <thead className="bg-gray-100">
-                                <tr>
-                                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                                    Type
-                                  </th>
-                                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                                    Name
-                                  </th>
-                                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                                    Description
-                                  </th>
-                                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                                    Qty
-                                  </th>
-                                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
-                                    Amount
-                                  </th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-gray-200">
-	                                {billingSnapshotItems.map((item) => (
-                                  <tr key={item.id}>
-                                    <td className="p-4 text-sm text-gray-700">{item.type || "—"}</td>
-                                    <td className="p-4 text-sm font-medium text-gray-800">{item.name || "—"}</td>
-                                    <td className="p-4 text-sm text-gray-700">{item.description || "—"}</td>
-                                    <td className="p-4 text-sm text-gray-700">{item.quantity || 1}</td>
-                                    <td className="p-4 text-sm font-semibold text-gray-800">{item.displayAmount}</td>
-                                  </tr>
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
+                              <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.receiver}</p>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Sent</p>
+                              <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.sentAt)}</p>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Accepted On</p>
+                              <p className="mt-1 text-gray-800 font-semibold">{formatDateTimeValue(billingRecordDisplay.acceptedAt)}</p>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Date To Accept</p>
+                              <p className="mt-1 text-gray-800 font-semibold">{formatDateValue(billingRecordDisplay.acceptBy)}</p>
+                            </div>
+
+                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Total Estimate</p>
+                              <p className="mt-1 text-gray-800 font-bold text-lg">
+                                {formatCurrency((billingRecordDisplay.totalAmountCents / 100) || 0)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-6">
+                            <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Scope / Terms</h5>
+
+                            {!normalizedSelectedTerms.length ? (
+                              <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
+                                No terms added to this agreement.
+                              </div>
+                            ) : (
+                              <div className="mt-3 space-y-3">
+                                {normalizedSelectedTerms.map((term) => (
+                                  <div
+                                    key={term.id}
+                                    className="p-4 rounded-xl bg-gray-50 border border-gray-200"
+                                  >
+                                    <div className="flex items-start justify-between gap-3">
+                                      <div>
+                                        <p className="font-semibold text-gray-800">{term.title}</p>
+                                        <p className="mt-1 text-sm text-gray-600 whitespace-pre-wrap">
+                                          {term.description || "—"}
+                                        </p>
+                                      </div>
+
+                                      {term.value !== "" && term.value !== null && term.value !== undefined && (
+                                        <div className="text-sm font-semibold text-gray-700">
+                                          {typeof term.value === "number"
+                                            ? formatCurrency((Number(term.value) / 100) || 0)
+                                            : String(term.value)}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </div>
                                 ))}
-                              </tbody>
-                            </table>
+                              </div>
+                            )}
                           </div>
-                        )}
-                      </div>
 
-	                      <div className="mt-6 p-4 rounded-xl bg-gray-50 border border-gray-200">
-	                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
-	                        <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">
-	                          {billingRecordDisplay.notes}
-	                        </p>
-	                      </div>
-                    </>
-                  )}
+                          <div className="mt-6">
+                            <h5 className="text-sm font-bold text-gray-800 uppercase tracking-wider">Estimate Snapshot</h5>
+
+                            {!billingSnapshotItems.length ? (
+                              <div className="mt-3 p-4 rounded-xl bg-gray-50 border border-gray-200 text-gray-500">
+                                No line items found.
+                              </div>
+                            ) : (
+                              <div className="mt-3 overflow-x-auto rounded-xl border border-gray-200">
+                                <table className="min-w-full bg-white">
+                                  <thead className="bg-gray-100">
+                                    <tr>
+                                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                                        Type
+                                      </th>
+                                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                                        Name
+                                      </th>
+                                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                                        Description
+                                      </th>
+                                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                                        Qty
+                                      </th>
+                                      <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                                        Amount
+                                      </th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-200">
+                                    {billingSnapshotItems.map((item) => (
+                                      <tr key={item.id}>
+                                        <td className="p-4 text-sm text-gray-700">{item.type || "—"}</td>
+                                        <td className="p-4 text-sm font-medium text-gray-800">{item.name || "—"}</td>
+                                        <td className="p-4 text-sm text-gray-700">{item.description || "—"}</td>
+                                        <td className="p-4 text-sm text-gray-700">{item.quantity || 1}</td>
+                                        <td className="p-4 text-sm font-semibold text-gray-800">{item.displayAmount}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="mt-6 p-4 rounded-xl bg-gray-50 border border-gray-200">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Notes</p>
+                            <p className="mt-2 text-sm text-gray-700 whitespace-pre-wrap">
+                              {billingRecordDisplay.notes}
+                            </p>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
+            )}
 
-      </div>
+          </div>
         </section>
         <div className="flex justify-center pb-2">
           <button
@@ -8130,12 +8423,13 @@ const JobDetailView = () => {
           </button>
         </div>
       </div>
-      {edit && can("26") && (
+      {edit && can("24") && (
         <button
-          onClick={deleteJob}
-          className="w-full px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
+          onClick={cancelJob}
+          disabled={expiringJob}
+          className="w-full px-4 py-2 text-sm font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-xl shadow-sm hover:bg-rose-100 transition disabled:cursor-not-allowed disabled:opacity-60"
         >
-          Delete
+          {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
         </button>
       )}
       {showCreateTemplateModal && (
@@ -8858,10 +9152,10 @@ const JobDetailView = () => {
           <div className="w-full max-w-3xl rounded-2xl bg-white shadow-2xl border border-gray-200 max-h-[90vh] overflow-y-auto">
             <div className="p-6 border-b border-gray-200 flex items-start justify-between gap-3">
               <div>
-	                <h3 className="text-xl font-bold text-gray-800">Service Agreement Details</h3>
-	                <p className="mt-1 text-sm text-gray-600">
-	                  Review and edit the service agreement before sending
-	                </p>
+                <h3 className="text-xl font-bold text-gray-800">Service Agreement Details</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                  Review and edit the service agreement before sending
+                </p>
               </div>
             </div>
 
@@ -8880,17 +9174,17 @@ const JobDetailView = () => {
                   <label className="block text-sm font-semibold text-gray-500 mb-2">
                     Status
                   </label>
-	                  <select
-	                    value={normalizeSalesAgreementStatus(draftContractData.status)}
-	                    onChange={(e) => handleDraftContractDataChange("status", e.target.value)}
-	                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
-	                  >
-	                    {Object.values(SalesAgreementStatus).map((status) => (
-	                      <option key={status} value={status}>
-	                        {formatStatusLabel(status)}
-	                      </option>
-	                    ))}
-	                  </select>
+                  <select
+                    value={normalizeSalesAgreementStatus(draftContractData.status)}
+                    onChange={(e) => handleDraftContractDataChange("status", e.target.value)}
+                    className="w-full p-3 border border-gray-300 rounded-lg bg-white"
+                  >
+                    {Object.values(SalesAgreementStatus).map((status) => (
+                      <option key={status} value={status}>
+                        {formatStatusLabel(status)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -9011,13 +9305,13 @@ const JobDetailView = () => {
               >
                 Cancel
               </button>
-	              <button
-	                type="button"
-	                onClick={createDraftServiceAgreement}
-	                className="px-4 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100 transition"
-	              >
-	                Confirm & Create Agreement
-	              </button>
+              <button
+                type="button"
+                onClick={createDraftServiceAgreement}
+                className="px-4 py-2 rounded-xl border border-amber-200 bg-amber-50 text-amber-800 font-semibold hover:bg-amber-100 transition"
+              >
+                Confirm & Create Agreement
+              </button>
             </div>
           </div>
         </div>

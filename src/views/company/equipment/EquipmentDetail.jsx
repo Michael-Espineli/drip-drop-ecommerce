@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useRef, useMemo } from "react";
+import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
 import { Equipment, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from "../../../utils/models/Equipment";
 import { MaintenanceHistory } from "../../../utils/models/MaintenanceHistory";
@@ -139,6 +139,16 @@ const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFreque
 };
 
 const CUSTOM_CATALOG_VALUE = "__custom__";
+const DEFAULT_MAINTENANCE_NAME = "Clean";
+
+const todayDateInputValue = () => format(new Date(), "yyyy-MM-dd");
+
+const dateInputToLocalDate = (value) => {
+  if (!value) return null;
+  const [year, month, day] = value.split("-").map(Number);
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day);
+};
 
 const companyUserDisplayName = (user = {}) =>
   user.userName || user.name || user.fullName || user.displayName || user.email || "";
@@ -199,8 +209,8 @@ const EquipmentDetail = () => {
   const [companyUsers, setCompanyUsers] = useState([]);
 
   // Maintenance modal fields
-  const [maintenanceName, setMaintenanceName] = useState("");
-  const [maintenanceDate, setMaintenanceDate] = useState(new Date());
+  const [maintenanceName, setMaintenanceName] = useState(DEFAULT_MAINTENANCE_NAME);
+  const [maintenanceDate, setMaintenanceDate] = useState(todayDateInputValue);
   const [maintenancePerformedBy, setMaintenancePerformedBy] = useState("Company");
   const [maintenanceCompanyUserId, setMaintenanceCompanyUserId] = useState("");
   const [maintenanceCustomerName, setMaintenanceCustomerName] = useState("");
@@ -209,7 +219,7 @@ const EquipmentDetail = () => {
 
   // Repair modal fields
   const [repairName, setRepairName] = useState("");
-  const [repairDate, setRepairDate] = useState(new Date());
+  const [repairDate, setRepairDate] = useState(todayDateInputValue);
   const [repairPerformedBy, setRepairPerformedBy] = useState("Company");
   const [repairCompanyUserId, setRepairCompanyUserId] = useState("");
   const [repairCustomerName, setRepairCustomerName] = useState("");
@@ -225,12 +235,29 @@ const EquipmentDetail = () => {
   const [catalogMakeId, setCatalogMakeId] = useState(CUSTOM_CATALOG_VALUE);
   const [catalogEquipmentId, setCatalogEquipmentId] = useState(CUSTOM_CATALOG_VALUE);
 
+  const openMaintenanceModal = useCallback(() => {
+    setMaintenanceName(DEFAULT_MAINTENANCE_NAME);
+    setMaintenanceDate(todayDateInputValue());
+    setMaintenancePerformedBy("Company");
+    setMaintenanceCompanyUserId((current) => current || companyUsers?.[0]?.id || "");
+    setMaintenanceCustomerName(equipment?.customerName || "");
+    setMaintenanceNotes("");
+    setShowServiceHistoryModal(true);
+  }, [companyUsers, equipment?.customerName]);
+
+  const handleMaintenancePerformedByChange = (value) => {
+    setMaintenancePerformedBy(value);
+    if (value === "Customer") {
+      setMaintenanceCustomerName(equipment?.customerName || "");
+    }
+  };
+
   useEffect(() => {
     const action = location.state?.equipmentAction;
     if (!action) return;
 
     if (action === "recordMaintenance") {
-      setShowServiceHistoryModal(true);
+      openMaintenanceModal();
     } else if (action === "recordRepair") {
       setShowRepairHistoryModal(true);
     } else if (action === "editMakeModel") {
@@ -238,7 +265,7 @@ const EquipmentDetail = () => {
     }
 
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location.pathname, location.state, navigate]);
+  }, [location.pathname, location.state, navigate, openMaintenanceModal]);
 
   // -----------------------------
   // Load company users list
@@ -706,6 +733,12 @@ const EquipmentDetail = () => {
     if (!requirePermission("64", "update equipment")) return;
 
     try {
+      const maintenanceDateValue = dateInputToLocalDate(maintenanceDate);
+      if (!maintenanceDateValue) {
+        toast.error("Choose a maintenance date");
+        return;
+      }
+
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
       const serviceId = "com_equ_sh_" + uuidv4();
@@ -721,7 +754,7 @@ const EquipmentDetail = () => {
         id: serviceId,
         name: (maintenanceName || "").trim(),
         type: "Maintenance",
-        date: maintenanceDate,
+        date: maintenanceDateValue,
         performedBy,
         addedBy: "Manual",
         description: maintenanceNotes,
@@ -734,30 +767,30 @@ const EquipmentDetail = () => {
       await setDoc(serviceHistoryDoc, newMaintenanceRecord);
 
       // ✅ compute next based on maintenance date + current schedule
-      const next = computeNextServiceDate(maintenanceDate, serviceFrequency, serviceFrequencyEvery);
+      const next = computeNextServiceDate(maintenanceDateValue, serviceFrequency, serviceFrequencyEvery);
 
       await updateDoc(docRef, {
-        lastServiceDate: maintenanceDate,
+        lastServiceDate: maintenanceDateValue,
         nextServiceDate: next,
       });
 
       setEquipment((prev) => ({
         ...prev,
-        lastServiceDate: maintenanceDate,
+        lastServiceDate: maintenanceDateValue,
         nextServiceDate: next,
       }));
 
       toast.success("Maintenance Record saved");
       // keep edit-form in sync too
-      setLastServiceDate(maintenanceDate);
+      setLastServiceDate(maintenanceDateValue);
       setNextServiceDate(next);
 
       setShowServiceHistoryModal(false);
-      setMaintenanceName("");
-      setMaintenanceDate(new Date());
+      setMaintenanceName(DEFAULT_MAINTENANCE_NAME);
+      setMaintenanceDate(todayDateInputValue());
       setMaintenancePerformedBy("Company");
       setMaintenanceCompanyUserId(companyUsers?.[0]?.id || "");
-      setMaintenanceCustomerName("");
+      setMaintenanceCustomerName(equipment?.customerName || "");
       setMaintenanceNotes("");
     } catch (error) {
 
@@ -770,6 +803,12 @@ const EquipmentDetail = () => {
     if (!requirePermission("64", "update equipment")) return;
 
     try {
+      const repairDateValue = dateInputToLocalDate(repairDate);
+      if (!repairDateValue) {
+        toast.error("Choose a repair date");
+        return;
+      }
+
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
       const serviceId = "com_equ_sh_" + uuidv4();
@@ -808,7 +847,7 @@ const EquipmentDetail = () => {
         id: serviceId,
         name: (repairName || "").trim(),
         type: "Repair",
-        date: repairDate,
+        date: repairDateValue,
         performedBy,
         addedBy: "Manual",
         description: repairNotes,
@@ -822,7 +861,7 @@ const EquipmentDetail = () => {
 
       setShowRepairHistoryModal(false);
       setRepairName("");
-      setRepairDate(new Date());
+      setRepairDate(todayDateInputValue());
       setRepairPerformedBy("Company");
       setRepairCompanyUserId(companyUsers?.[0]?.id || "");
       setRepairCustomerName("");
@@ -1014,7 +1053,7 @@ const EquipmentDetail = () => {
                   label="Record Maintenance"
                   icon={WrenchScrewdriverIcon}
                   tone="green"
-                  onClick={() => setShowServiceHistoryModal(true)}
+                  onClick={openMaintenanceModal}
                 />
                 <DetailActionButton
                   label="Record Repair"
@@ -1295,8 +1334,10 @@ const EquipmentDetail = () => {
                 <Field label="Date Installed">
                   <DatePicker
                     showIcon
-                    selected={dateInstalled ? format(dateInstalled, "yyyy-MM-dd") : ""}
+                    selected={dateInstalled || null}
                     onChange={(e) => setDateInstalled(e)}
+                    dateFormat="MM/dd/yyyy"
+                    isClearable
                     className={inputBase}
                     icon={
                       <svg
@@ -1366,8 +1407,10 @@ const EquipmentDetail = () => {
                     <Field label="Last Service Date">
                       <DatePicker
                         showIcon
-                        selected={lastServiceDate ? format(lastServiceDate, "yyyy-MM-dd") : ""}
+                        selected={lastServiceDate || null}
                         onChange={(e) => setLastServiceDate(e)}
+                        dateFormat="MM/dd/yyyy"
+                        isClearable
                         className={inputBase}
                         icon={
                           <svg
@@ -1461,7 +1504,7 @@ const EquipmentDetail = () => {
               </div>
               {can("64") && (
                 <button
-                  onClick={() => setShowServiceHistoryModal(true)}
+                  onClick={openMaintenanceModal}
                   className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
                   type="button"
                 >
@@ -1709,14 +1752,14 @@ const EquipmentDetail = () => {
             <Field label="Date">
               <input
                 type="date"
-                value={format(maintenanceDate, "yyyy-MM-dd")}
-                onChange={(e) => setMaintenanceDate(new Date(e.target.value))}
+                value={maintenanceDate}
+                onChange={(e) => setMaintenanceDate(e.target.value)}
                 className={inputBase}
               />
             </Field>
 
             <Field label="Performed By">
-              <select value={maintenancePerformedBy} onChange={(e) => setMaintenancePerformedBy(e.target.value)} className={inputBase}>
+              <select value={maintenancePerformedBy} onChange={(e) => handleMaintenancePerformedByChange(e.target.value)} className={inputBase}>
                 <option value="Company">Company</option>
                 <option value="Customer">Customer</option>
               </select>
@@ -1783,8 +1826,8 @@ const EquipmentDetail = () => {
             <Field label="Date">
               <input
                 type="date"
-                value={format(repairDate, "yyyy-MM-dd")}
-                onChange={(e) => setRepairDate(new Date(e.target.value))}
+                value={repairDate}
+                onChange={(e) => setRepairDate(e.target.value)}
                 className={inputBase}
               />
             </Field>

@@ -4,6 +4,23 @@ import { format } from 'date-fns';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+const startOfLocalDayMillis = (date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0, 0).getTime();
+
+const endOfLocalDayMillis = (date) =>
+    new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999).getTime();
+
+const defaultHistoryRange = () => {
+    const today = new Date();
+    const start = new Date(today);
+    start.setMonth(start.getMonth() - 2);
+
+    return {
+        start: startOfLocalDayMillis(start),
+        end: endOfLocalDayMillis(today),
+    };
+};
+
 const parseAmount = (value) => {
     if (typeof value === 'number') return Number.isFinite(value) ? value : null;
     if (typeof value !== 'string') return null;
@@ -26,6 +43,7 @@ const measurementName = (item, fallback) => {
 const eventGroupStyles = {
     serviceStop: { dot: 'bg-blue-600', rail: '#2563eb', chip: 'bg-blue-50 text-blue-700 border-blue-100' },
     workOrder: { dot: 'bg-violet-500', rail: '#8b5cf6', chip: 'bg-violet-50 text-violet-700 border-violet-100' },
+    expiredJob: { dot: 'bg-rose-500', rail: '#f43f5e', chip: 'bg-rose-50 text-rose-700 border-rose-100' },
     equipmentMaintenance: { dot: 'bg-amber-500', rail: '#f59e0b', chip: 'bg-amber-50 text-amber-700 border-amber-100' },
     equipmentRepair: { dot: 'bg-red-500', rail: '#ef4444', chip: 'bg-red-50 text-red-700 border-red-100' },
     equipmentReading: { dot: 'bg-cyan-500', rail: '#06b6d4', chip: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
@@ -248,31 +266,56 @@ const EventRail = ({ events, rangeStart, rangeEnd }) => {
     );
 };
 
-const CustomerTimelineGraph = ({ timeline }) => {
+const CustomerTimelineGraph = ({ timeline, defaultRange, onRangeChange }) => {
+    const baseDefaultRange = useMemo(() => {
+        const fallback = defaultHistoryRange();
+        const start = Number.isFinite(defaultRange?.start) ? defaultRange.start : fallback.start;
+        const end = Number.isFinite(defaultRange?.end) ? defaultRange.end : fallback.end;
+
+        return {
+            start,
+            end: Math.min(end, endOfLocalDayMillis(new Date())),
+        };
+    }, [defaultRange?.end, defaultRange?.start]);
+
     const fullRange = useMemo(() => {
         const ranges = timeline.map(getDateValue).filter(Number.isFinite);
-        const fallback = Date.now();
+        const fallback = baseDefaultRange.end;
         return {
             start: ranges.length ? Math.min(...ranges) : fallback,
             end: ranges.length ? Math.max(...ranges) : fallback,
         };
-    }, [timeline]);
+    }, [baseDefaultRange.end, timeline]);
 
     const [rangeInputs, setRangeInputs] = useState({
-        start: toDateInputValue(fullRange.start),
-        end: toDateInputValue(fullRange.end),
+        start: toDateInputValue(baseDefaultRange.start),
+        end: toDateInputValue(baseDefaultRange.end),
     });
 
     useEffect(() => {
         setRangeInputs({
-            start: toDateInputValue(fullRange.start),
-            end: toDateInputValue(fullRange.end),
+            start: toDateInputValue(baseDefaultRange.start),
+            end: toDateInputValue(baseDefaultRange.end),
         });
-    }, [fullRange.start, fullRange.end]);
+    }, [baseDefaultRange.end, baseDefaultRange.start]);
 
-    const selectedRangeStart = parseDateInputValue(rangeInputs.start) ?? fullRange.start;
-    const selectedRangeEnd = parseDateInputValue(rangeInputs.end, true) ?? fullRange.end;
+    const todayEnd = endOfLocalDayMillis(new Date());
+    const allRangeStart = Math.min(fullRange.start, baseDefaultRange.start);
+    const allRangeEnd = Math.min(Math.max(fullRange.end, baseDefaultRange.end), todayEnd);
+    const inputMin = toDateInputValue(allRangeStart);
+    const inputMax = toDateInputValue(todayEnd);
+    const selectedRangeStart = parseDateInputValue(rangeInputs.start) ?? baseDefaultRange.start;
+    const selectedRangeEnd = parseDateInputValue(rangeInputs.end, true) ?? baseDefaultRange.end;
     const hasInvalidRange = selectedRangeStart > selectedRangeEnd;
+
+    useEffect(() => {
+        if (typeof onRangeChange !== 'function') return;
+        onRangeChange({
+            start: selectedRangeStart,
+            end: selectedRangeEnd,
+            invalid: hasInvalidRange,
+        });
+    }, [hasInvalidRange, onRangeChange, selectedRangeEnd, selectedRangeStart]);
 
     const {
         chemistryEvents,
@@ -312,8 +355,8 @@ const CustomerTimelineGraph = ({ timeline }) => {
     };
 
     const applyQuickRange = (days) => {
-        const nextEnd = fullRange.end;
-        const nextStart = Math.max(fullRange.start, nextEnd - (days * DAY_MS));
+        const nextEnd = todayEnd;
+        const nextStart = nextEnd - (days * DAY_MS);
         setRangeInputs({
             start: toDateInputValue(nextStart),
             end: toDateInputValue(nextEnd),
@@ -322,8 +365,8 @@ const CustomerTimelineGraph = ({ timeline }) => {
 
     const resetRange = () => {
         setRangeInputs({
-            start: toDateInputValue(fullRange.start),
-            end: toDateInputValue(fullRange.end),
+            start: toDateInputValue(allRangeStart),
+            end: toDateInputValue(allRangeEnd),
         });
     };
 
@@ -331,7 +374,7 @@ const CustomerTimelineGraph = ({ timeline }) => {
     const equipmentCount = markerEvents.filter((event) => event.type === 'equipmentRepair').length;
     const equipmentReadingCount = markerEvents.filter((event) => event.type === 'equipmentReading').length;
     const waterCount = markerEvents.filter((event) => event.type === 'waterFill' || event.type === 'waterEmpty').length;
-    const serviceCount = markerEvents.filter((event) => event.type === 'serviceStop' || event.type === 'workOrder').length;
+    const serviceCount = markerEvents.filter((event) => event.type === 'serviceStop' || event.type === 'workOrder' || event.type === 'expiredJob').length;
     const billingCount = markerEvents.filter((event) => ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'].includes(event.type)).length;
 
     const summaryCards = [
@@ -361,8 +404,8 @@ const CustomerTimelineGraph = ({ timeline }) => {
                             <input
                                 type="date"
                                 value={rangeInputs.start}
-                                min={toDateInputValue(fullRange.start)}
-                                max={rangeInputs.end || toDateInputValue(fullRange.end)}
+                                min={inputMin}
+                                max={rangeInputs.end || inputMax}
                                 onChange={handleRangeInputChange('start')}
                                 className="mt-1 block h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
                             />
@@ -372,8 +415,8 @@ const CustomerTimelineGraph = ({ timeline }) => {
                             <input
                                 type="date"
                                 value={rangeInputs.end}
-                                min={rangeInputs.start || toDateInputValue(fullRange.start)}
-                                max={toDateInputValue(fullRange.end)}
+                                min={rangeInputs.start || inputMin}
+                                max={inputMax}
                                 onChange={handleRangeInputChange('end')}
                                 className="mt-1 block h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm font-semibold text-slate-800 shadow-sm focus:border-cyan-500 focus:outline-none focus:ring-2 focus:ring-cyan-100"
                             />

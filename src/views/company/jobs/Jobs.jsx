@@ -647,8 +647,8 @@ const Jobs = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="mx-auto">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
                     <div>
                         <h2 className="text-3xl font-bold text-gray-800">Jobs</h2>
@@ -715,7 +715,7 @@ const Jobs = () => {
                     />
                 </div>
 
-                <div className="bg-white shadow-lg rounded-xl p-6">
+                <div className="rounded-lg bg-white p-6 shadow-lg">
                     <div className="mb-4 flex flex-wrap gap-2">
                         <button
                             type="button"

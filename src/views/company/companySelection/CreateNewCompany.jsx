@@ -8,6 +8,9 @@ import { Context } from '../../../context/AuthContext';
 import { BuildingOffice2Icon, PhoneIcon, EnvelopeIcon, GlobeAltIcon, MapPinIcon, LinkIcon, ClipboardDocumentIcon } from '@heroicons/react/24/outline';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import Select from 'react-select';
+import useFeatureFlagDocument from '../../../hooks/useFeatureFlagDocument';
+import { APP_LIVE_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
+import AppLaunchCountdown from '../../components/AppLaunchCountdown';
 
 const availableServices = [
     { value: 'pool_cleaning', label: 'Pool Cleaning' },
@@ -20,6 +23,12 @@ const availableServices = [
 const CreateNewCompany = () => {
     const { user,setRecentlySelectedCompany, dataBaseUser } = useContext(Context);
     const navigate = useNavigate();
+    const {
+        loaded: appLaunchLoaded,
+        enabled: appIsLive,
+        releaseDate: appReleaseDate,
+    } = useFeatureFlagDocument(APP_LIVE_FEATURE_FLAG_ID);
+    const companyCreationOpen = appLaunchLoaded && appIsLive;
 
     const [formData, setFormData] = useState({
         name: '',
@@ -62,6 +71,11 @@ const CreateNewCompany = () => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!companyCreationOpen) {
+            setError('Company creation is not open yet.');
+            return;
+        }
+
         if (!formData.name || !formData.address) {
             setError('Company Name and Address are required.');
             return;
@@ -100,7 +114,11 @@ const CreateNewCompany = () => {
             }
             
         } catch (err) {
-            setError('Failed to create company. Please try again.');
+            if (err.code === 'functions/failed-precondition') {
+                setError('Company creation is not open yet.');
+            } else {
+                setError('Failed to create company. Please try again.');
+            }
             console.error("Function call error:", err);
         } finally {
             setLoading(false);
@@ -110,6 +128,21 @@ const CreateNewCompany = () => {
     const inputIconClasses = "absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-gray-400";
     const inputClasses = "w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm";
     const secondaryButtonClasses = "p-2 border border-gray-300 rounded-md text-gray-700 bg-gray-50 hover:bg-gray-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500";
+
+    if (!companyCreationOpen) {
+        return (
+            <div className="flex min-h-screen items-center justify-center bg-gray-50 px-4 py-12 sm:px-6 lg:px-8">
+                <div className="w-full max-w-2xl">
+                    <AppLaunchCountdown
+                        loading={!appLaunchLoaded}
+                        releaseDate={appReleaseDate}
+                        title="Company creation opens soon"
+                        body="New company setup is paused until Drip Drop goes live. You can still select an existing company or redeem an invite."
+                    />
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center py-12 px-4 sm:px-6 lg:px-8">

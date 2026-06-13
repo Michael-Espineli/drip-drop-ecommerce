@@ -809,6 +809,17 @@ export default function LeadDetail() {
         const basePath = `/company/jobs/createNew/${lead.customerId}`;
         return linkedServiceLocationId ? `${basePath}/${linkedServiceLocationId}` : basePath;
     };
+    const buildServiceStopSchedulerPath = (category = 'serviceAgreementEstimate') => {
+        const params = new URLSearchParams({
+            leadId: lead.id,
+            category,
+        });
+
+        if (lead.customerId) params.set('customerId', lead.customerId);
+        if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
+
+        return `/company/serviceStops/createNew?${params.toString()}`;
+    };
 
     const handleCreateJobFromLead = () => {
         if (!lead.customerId) {
@@ -817,6 +828,28 @@ export default function LeadDetail() {
         }
 
         navigate(buildCreateJobPath(), {
+            state: {
+                leadContext: {
+                    id: lead.id,
+                    source: lead.source || '',
+                    status: lead.status || '',
+                    serviceName: lead.serviceName || '',
+                    serviceDescription: lead.serviceDescription || '',
+                    customerId: lead.customerId || '',
+                    customerName: lead.customerName || '',
+                    serviceLocationId: linkedServiceLocationId,
+                },
+            },
+        });
+    };
+
+    const handleScheduleEstimateVisitFromLead = () => {
+        if (!lead.customerId) {
+            toast.error('Create a customer before scheduling a service stop from this lead.');
+            return;
+        }
+
+        navigate(buildServiceStopSchedulerPath('serviceAgreementEstimate'), {
             state: {
                 leadContext: {
                     id: lead.id,
@@ -847,7 +880,7 @@ export default function LeadDetail() {
         }
 
         if (customerId) {
-            if (!can("22") && !can("612")) return null;
+            if (!can("22") && !can("242") && !can("612")) return null;
 
             return (
                 <>
@@ -857,6 +890,14 @@ export default function LeadDetail() {
                             className="w-full py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium"
                         >
                             Create Job
+                        </button>
+                    )}
+                    {can("242") && (
+                        <button
+                            onClick={handleScheduleEstimateVisitFromLead}
+                            className="w-full py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
+                        >
+                            Schedule Service Estimate
                         </button>
                     )}
                     {can("612") && (

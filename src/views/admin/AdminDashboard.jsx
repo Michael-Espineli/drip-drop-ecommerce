@@ -13,6 +13,8 @@ import { Link } from 'react-router-dom';
 import {
   query,
   collection,
+  doc,
+  getDoc,
   getDocs,
   limit,
   orderBy,
@@ -26,6 +28,7 @@ import {
   CONTACT_MESSAGES_COLLECTION,
   PRODUCT_FEEDBACK_COLLECTION,
 } from '../../utils/adminInbox';
+import { APP_LIVE_FEATURE_FLAG_ID } from '../../utils/models/FeatureFlag';
 
 const functions = getFunctions();
 
@@ -73,6 +76,8 @@ const AdminDashboard = () => {
     universalEquipmentTypes: 0,
     featureFlags: 0,
     enabledFeatureFlags: 0,
+    appLaunchEnabled: false,
+    appLaunchReleaseDate: null,
     productFeedback: 0,
     newProductFeedback: 0,
   });
@@ -111,6 +116,7 @@ const AdminDashboard = () => {
           reachOutMessages,
           newReachOutMessages,
           reachOutSnapshot,
+          appLaunchSnapshot,
         ] = await Promise.all([
           readCount(query(collection(db, 'companies'))),
           readCount(query(collection(db, 'companies'), where('status', '==', 'active'))),
@@ -131,7 +137,9 @@ const AdminDashboard = () => {
             orderBy('createdAt', 'desc'),
             limit(3)
           )),
+          getDoc(doc(db, 'featureFlags', APP_LIVE_FEATURE_FLAG_ID)),
         ]);
+        const appLaunchFlag = appLaunchSnapshot.exists() ? appLaunchSnapshot.data() : null;
 
         setCompanyCount(companiesAll);
         setActiveCompanyCount(companiesActive);
@@ -142,6 +150,8 @@ const AdminDashboard = () => {
           universalEquipmentTypes,
           featureFlags,
           enabledFeatureFlags,
+          appLaunchEnabled: Boolean(appLaunchFlag?.enabled),
+          appLaunchReleaseDate: appLaunchFlag?.releaseDate || null,
           productFeedback,
           newProductFeedback,
         });
@@ -230,6 +240,17 @@ const AdminDashboard = () => {
       accent: ADMIN_YELLOW,
     },
     {
+      title: 'App Launch',
+      value: developmentStats.appLaunchEnabled ? 'Live' : 'Closed',
+      label: developmentStats.appLaunchEnabled ? 'company creation open' : 'countdown mode',
+      hint: developmentStats.appLaunchReleaseDate
+        ? `Release ${formatDate(developmentStats.appLaunchReleaseDate)}`
+        : 'No release date set',
+      to: '/admin/feature-flags',
+      icon: FaFlag,
+      accent: developmentStats.appLaunchEnabled ? '#86efac' : '#fbbf24',
+    },
+    {
       title: 'Feature Flags',
       value: developmentStats.enabledFeatureFlags,
       label: 'enabled flags',
@@ -291,7 +312,7 @@ const AdminDashboard = () => {
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-300">{title}</p>
           <p className="mt-3 text-3xl font-extrabold" style={{ color: accent }}>
-            {formatCount(value)}
+            {typeof value === 'number' ? formatCount(value) : value}
           </p>
           <p className="mt-1 text-sm text-slate-400">{label}</p>
         </div>
@@ -476,7 +497,7 @@ const AdminDashboard = () => {
           </Link>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-4">
           {developmentCards.map((item) => (
             <MetricCard key={item.title} {...item} />
           ))}

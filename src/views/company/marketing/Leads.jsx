@@ -6,6 +6,7 @@ import { ClipLoader } from 'react-spinners';
 import { subDays, startOfDay } from 'date-fns';
 import toast from 'react-hot-toast';
 import { ClipboardDocumentIcon } from '@heroicons/react/24/outline';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 // StatCard component for displaying header stats
 const StatCard = ({ title, count, icon, color }) => (
@@ -37,6 +38,7 @@ export default function Leads() {
     const [statusFilter, setStatusFilter] = useState('All');
     const [sourceFilter, setSourceFilter] = useState('All');
     const { recentlySelectedCompany } = useContext(Context);
+    const { can } = useCompanyPermissions();
     const db = getFirestore();
     const navigate = useNavigate();
     const publicLeadFormUrl = useMemo(() => (
@@ -178,6 +180,30 @@ export default function Leads() {
         return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">Unlinked</span>;
     };
 
+    const buildLeadServiceStopSchedulerPath = (lead) => {
+        const params = new URLSearchParams({
+            leadId: lead.id,
+            category: 'serviceAgreementEstimate',
+        });
+        const linkedServiceLocationId = lead.serviceLocationId || lead.companyServiceLocationId || '';
+
+        if (lead.customerId) params.set('customerId', lead.customerId);
+        if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
+
+        return `/company/serviceStops/createNew?${params.toString()}`;
+    };
+
+    const handleScheduleLeadVisit = (event, lead) => {
+        event.stopPropagation();
+
+        if (!lead.customerId) {
+            toast.error('Convert or link the lead to a customer before scheduling a service stop.');
+            return;
+        }
+
+        navigate(buildLeadServiceStopSchedulerPath(lead));
+    };
+
     return (
         <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
             <div className="sm:flex sm:items-center sm:justify-between mb-6">
@@ -286,6 +312,7 @@ export default function Leads() {
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
                                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer Link</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
@@ -303,6 +330,18 @@ export default function Leads() {
                                         <td className="px-6 py-4 whitespace-nowrap">{renderStatus(lead.status)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead)}</td>
                                         <td className="px-6 py-4 whitespace-nowrap">{renderLinkStatus(lead)}</td>
+                                        <td className="px-6 py-4 whitespace-nowrap">
+                                            {can("242") && (
+                                                <button
+                                                    type="button"
+                                                    onClick={(event) => handleScheduleLeadVisit(event, lead)}
+                                                    className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    disabled={!lead.customerId}
+                                                >
+                                                    Schedule Visit
+                                                </button>
+                                            )}
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>

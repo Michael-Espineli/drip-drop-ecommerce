@@ -4,6 +4,73 @@ import { db, functions } from "./config";
 import { getCallableAuthPayload } from "./callableAuth";
 import { normalizeEmail } from "./email";
 
+const normalizeInviteStatus = (value) => String(value || "").trim().toLowerCase();
+
+const decodeSafely = (value) => {
+    const text = String(value || "").trim();
+    if (!text) return "";
+
+    try {
+        return decodeURIComponent(text).trim();
+    } catch (error) {
+        return text;
+    }
+};
+
+const cleanInviteId = (value) => {
+    const text = decodeSafely(value).replace(/^\/+|\/+$/g, "");
+    if (!text || /[/?#]/.test(text)) return "";
+    return text;
+};
+
+export const extractCompanyInviteId = (value) => {
+    const text = decodeSafely(value);
+    if (!text) return "";
+
+    const baseUrl = typeof window === "undefined" ? "https://dripdrop-poolapp.com" : window.location.origin;
+
+    try {
+        const parsedUrl = new URL(text, baseUrl);
+        const queryInviteId = parsedUrl.searchParams.get("inviteId") || parsedUrl.searchParams.get("id");
+        if (queryInviteId) {
+            return extractCompanyInviteId(queryInviteId);
+        }
+
+        const companyInviteMatch = parsedUrl.pathname.match(/\/company\/invite\/([^/?#]+)/i);
+        if (companyInviteMatch?.[1]) {
+            return cleanInviteId(companyInviteMatch[1]);
+        }
+    } catch (error) {
+        // Fall through to path and raw-code parsing.
+    }
+
+    const pathMatch = text.match(/(?:^|\/)company\/invite\/([^/?#]+)/i);
+    if (pathMatch?.[1]) {
+        return cleanInviteId(pathMatch[1]);
+    }
+
+    return cleanInviteId(text);
+};
+
+export const buildCompanyInvitePath = (inviteId) => {
+    const cleanId = extractCompanyInviteId(inviteId);
+    return cleanId ? `/company/invite/${encodeURIComponent(cleanId)}` : "";
+};
+
+export const buildCompanyInviteUrl = (baseUrl, inviteId) => {
+    const cleanBaseUrl = String(baseUrl || "").trim().replace(/\/+$/, "");
+    const cleanInviteId = extractCompanyInviteId(inviteId);
+
+    if (!cleanBaseUrl || !cleanInviteId) return "";
+    return `${cleanBaseUrl}${buildCompanyInvitePath(cleanInviteId)}`;
+};
+
+export const isCompanyAccessInactive = (invite = {}) => {
+    const accessStatus = normalizeInviteStatus(invite.companyUserStatus || invite.userAccessStatus || invite.accessStatus || invite.status);
+    if (invite.accessActive === false) return true;
+    return ["inactive", "past", "revoked"].includes(accessStatus);
+};
+
 /**
  * Accepts a company invitation and performs all necessary database operations in a single batch.
  * @param {object} invite The invitation object from Firestore.
@@ -51,4 +118,26 @@ export const declineInvite = async (invite) => {
     }
     const inviteRef = doc(db, "invites", invite.id);
     await updateDoc(inviteRef, { status: 'rejected' });
+};
+
+export const createCompanyUserInvite = async (payload) => {
+    const authPayload = await getCallableAuthPayload();
+    const callable = httpsCallable(functions, "createCompanyUserInvite");
+    const result = await callable({
+        ...payload,
+        ...authPayload,
+        auth: authPayload,
+    });
+    return result.data || {};
+};
+
+export const manageCompanyUserInvite = async (payload) => {
+    const authPayload = await getCallableAuthPayload();
+    const callable = httpsCallable(functions, "manageCompanyUserInvite");
+    const result = await callable({
+        ...payload,
+        ...authPayload,
+        auth: authPayload,
+    });
+    return result.data || {};
 };

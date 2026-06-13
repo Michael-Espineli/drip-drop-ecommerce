@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
@@ -21,17 +21,126 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 
+const SERVICE_STOP_CATEGORY_OPTIONS = [
+    {
+        id: "jobVisit",
+        label: "Job",
+        helper: "Work connected to a job or work order.",
+        useCase: SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+        category: "Job",
+        sourceId: "system_job_service_stop",
+        fallbackType: "Job Visit",
+        fallbackImage: "briefcase",
+    },
+    {
+        id: "jobEstimate",
+        label: "Job Estimate",
+        helper: "Fact finding for requested work before quoting.",
+        useCase: SERVICE_STOP_TYPE_USE_CASES.jobEstimate,
+        category: "Job Estimate",
+        sourceId: "system_job_estimate_service_stop",
+        fallbackType: "Job Estimate",
+        fallbackImage: "doc.text.magnifyingglass",
+    },
+    {
+        id: "serviceAgreementEstimate",
+        label: "Service Agreement Estimate",
+        helper: "Survey a location before recurring service.",
+        useCase: SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate,
+        category: "Service Agreement Estimate",
+        sourceId: "system_service_agreement_estimate_service_stop",
+        fallbackType: "Service Agreement Estimate",
+        fallbackImage: "list.clipboard",
+    },
+    {
+        id: "customerRelationship",
+        label: "Customer Relationship",
+        helper: "Open-ended customer visit, follow-up, or correction.",
+        useCase: SERVICE_STOP_TYPE_USE_CASES.customerRelationship,
+        category: "Customer Relationship",
+        sourceId: "system_customer_relationship_service_stop",
+        fallbackType: "Customer Relationship",
+        fallbackImage: "person.wave.2",
+    },
+];
+
+const normalizeCategory = (value = "") =>
+    String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "")
+        .replace(/[_/-]/g, "");
+
+const categoryOptionForParam = (value, hasJob = false) => {
+    const normalized = normalizeCategory(value);
+    const matched = SERVICE_STOP_CATEGORY_OPTIONS.find((option) => (
+        normalizeCategory(option.id) === normalized ||
+        normalizeCategory(option.label) === normalized ||
+        normalizeCategory(option.category) === normalized ||
+        normalizeCategory(option.useCase) === normalized
+    ));
+
+    if (matched) {
+        if (hasJob && !["jobVisit", "jobEstimate"].includes(matched.id)) {
+            return SERVICE_STOP_CATEGORY_OPTIONS[0];
+        }
+
+        return matched;
+    }
+
+    return hasJob ? SERVICE_STOP_CATEGORY_OPTIONS[0] : SERVICE_STOP_CATEGORY_OPTIONS[2];
+};
+
+const serviceStopTypeMatchesCategory = (type, categoryOption) => {
+    const typeValues = [
+        type?.category,
+        type?.serviceStopCategory,
+        type?.serviceStopTypeCategory,
+        type?.useCase,
+        type?.serviceStopTypeUseCase,
+        type?.serviceStopTypeUseCaseRawValue,
+        type?.typeUseCase,
+        type?.id,
+    ].map(normalizeCategory).filter(Boolean);
+    const categoryValues = [
+        categoryOption.category,
+        categoryOption.label,
+        categoryOption.id,
+        categoryOption.useCase,
+        categoryOption.sourceId,
+    ].map(normalizeCategory).filter(Boolean);
+
+    return typeValues.some((value) => categoryValues.includes(value));
+};
+
+const addressLine = (address = {}) => [
+    address.streetAddress,
+    address.city,
+    address.state,
+    address.zip || address.zipCode,
+].filter(Boolean).join(", ");
+
 const CreateNewServiceStop = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     const { jobId } = useParams();
-    const plannedStopId = new URLSearchParams(location.search).get("plannedStopId") || "";
+    const searchParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+    const plannedStopId = searchParams.get("plannedStopId") || "";
+    const queryCustomerId = searchParams.get("customerId") || "";
+    const queryServiceLocationId = searchParams.get("serviceLocationId") || "";
+    const queryLeadId = searchParams.get("leadId") || "";
+    const queryCategory = searchParams.get("category") || "";
+    const isJobScheduler = Boolean(jobId);
 
     const [activeTab, setActiveTab] = useState('site-info');
     const [job, setJob] = useState(null);
+    const [customerList, setCustomerList] = useState([]);
+    const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [serviceLocation, setServiceLocation] = useState(null);
+    const [serviceLocationList, setServiceLocationList] = useState([]);
+    const [leadContext, setLeadContext] = useState(null);
     const [userList, setUserList] = useState([]);
     const [selectedUser, setSelectedUser] = useState(null);
     const [serviceDate, setServiceDate] = useState(new Date());
@@ -47,7 +156,7 @@ const CreateNewServiceStop = () => {
     const [taskEstimatedTime, setTaskEstimatedTime] = useState("");
     const [addingTask, setAddingTask] = useState(false);
     const [applyingTaskGroup, setApplyingTaskGroup] = useState(false);
-    const [estimatedDuration, setEstimatedDuration] = useState(0);
+    const [estimatedDuration, setEstimatedDuration] = useState(60);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
     const [selectedPlannedStop, setSelectedPlannedStop] = useState(null);
     const [paySettings, setPaySettings] = useState(null);
@@ -55,6 +164,7 @@ const CreateNewServiceStop = () => {
     const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
     const [workTypeMappings, setWorkTypeMappings] = useState([]);
     const [technicianRates, setTechnicianRates] = useState([]);
+    const [selectedCategory, setSelectedCategory] = useState(() => categoryOptionForParam(queryCategory, Boolean(jobId)));
     const [selectedManualServiceStopType, setSelectedManualServiceStopType] = useState(null);
     const [selectedPayWorkType, setSelectedPayWorkType] = useState(null);
 
@@ -78,7 +188,7 @@ const CreateNewServiceStop = () => {
         );
     }, [companyServiceStopTypes]);
 
-    const serviceStopTypeOptions = useMemo(
+    const allServiceStopTypeOptions = useMemo(
         () =>
             companyServiceStopTypes
                 .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
@@ -91,23 +201,29 @@ const CreateNewServiceStop = () => {
         [companyServiceStopTypes]
     );
 
-    const defaultJobServiceStopType = {
-        id: "system_job_service_stop",
-        name: "Job Visit",
-        imageName: "briefcase",
+    const serviceStopTypeOptions = useMemo(() => {
+        return allServiceStopTypeOptions.filter((type) => serviceStopTypeMatchesCategory(type, selectedCategory));
+    }, [allServiceStopTypeOptions, selectedCategory]);
+
+    const categoryFallbackServiceStopType = useMemo(() => ({
+        id: selectedCategory.sourceId,
+        name: selectedCategory.fallbackType,
+        imageName: selectedCategory.fallbackImage,
+        category: selectedCategory.category,
         defaultWorkTypeIds: [],
-        value: "system_job_service_stop",
-        label: "Job Visit",
-    };
+        value: selectedCategory.sourceId,
+        label: selectedCategory.fallbackType,
+    }), [selectedCategory]);
 
     const selectedServiceStopType = useMemo(() => {
         if (selectedPlannedStop) return getPlannedStopType(selectedPlannedStop);
-        return selectedManualServiceStopType || serviceStopTypeOptions[0] || defaultJobServiceStopType;
+        return selectedManualServiceStopType || serviceStopTypeOptions[0] || categoryFallbackServiceStopType;
     }, [
         selectedPlannedStop,
         getPlannedStopType,
         selectedManualServiceStopType,
         serviceStopTypeOptions,
+        categoryFallbackServiceStopType,
     ]);
 
     const workTypeOptions = useMemo(
@@ -130,7 +246,7 @@ const CreateNewServiceStop = () => {
             companyId: recentlySelectedCompany,
             settings: paySettings,
             serviceStopType: selectedServiceStopType,
-            serviceStopUseCaseSourceId: "system_job_service_stop",
+            serviceStopUseCaseSourceId: selectedCategory.sourceId,
             serviceStopWorkTypeIds: selectedPayWorkType?.id ? [selectedPayWorkType.id] : null,
             tasks: selectedTasks,
             worker: selectedUser,
@@ -143,6 +259,7 @@ const CreateNewServiceStop = () => {
         recentlySelectedCompany,
         paySettings,
         selectedServiceStopType,
+        selectedCategory,
         selectedPayWorkType,
         selectedTasks,
         selectedUser,
@@ -186,68 +303,17 @@ const CreateNewServiceStop = () => {
     ]);
 
     useEffect(() => {
-        const fetchData = async () => {
-            if (jobId && recentlySelectedCompany) {
-                // Fetch Job Details
-                const jobRef = doc(db, "companies", recentlySelectedCompany, 'workOrders', jobId);
-                const jobSnap = await getDoc(jobRef);
-                if (jobSnap.exists()) {
-                    const jobData = jobSnap.data();
-                    setJob(jobData);
-                    setDescription(jobData.description);
+        setSelectedCategory(categoryOptionForParam(queryCategory, Boolean(jobId)));
+        setSelectedManualServiceStopType(null);
+    }, [queryCategory, jobId]);
 
-                    // Fetch Service Location
-                    const locRef = doc(db, "companies", recentlySelectedCompany, 'serviceLocations', jobData.serviceLocationId);
-                    const locSnap = await getDoc(locRef);
-                    if (locSnap.exists()) setServiceLocation(locSnap.data());
+    useEffect(() => {
+        const fetchSharedData = async () => {
+            if (!recentlySelectedCompany) return;
 
-                    // Fetch Tasks
-                    const tasksQuery = query(collection(db, "companies", recentlySelectedCompany, 'workOrders', jobId, 'tasks'));
-                    const tasksSnapshot = await getDocs(tasksQuery);
-                    const tasks = tasksSnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
-                    setTaskList(tasks);
-
-                    const plannedStopsSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, 'workOrders', jobId, 'plannedServiceStops'));
-                    const plannedStops = plannedStopsSnapshot.docs
-                        .map(doc => ({ ...doc.data(), id: doc.data().id || doc.id }))
-                        .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
-                    setPlannedServiceStops(plannedStops);
-
-                    const preferredPlannedStop = plannedStops.find((stop) => stop.id === plannedStopId) || null;
-                    if (preferredPlannedStop) {
-                        setSelectedPlannedStop(preferredPlannedStop);
-                        setDescription(preferredPlannedStop.description || jobData.description || "");
-
-                        const taskIds = Array.isArray(preferredPlannedStop.taskIds) ? preferredPlannedStop.taskIds : [];
-                        setSelectedTasks(taskIds.length ? tasks.filter((task) => taskIds.includes(task.id)) : tasks);
-                    }
-                } else {
-                    console.log("No such job document!");
-                }
-
-                // Fetch Users
-                const usersQuery = query(collection(db, "companies", recentlySelectedCompany, 'companyUsers'));
-                const usersSnapshot = await getDocs(usersQuery);
-                setUserList(usersSnapshot.docs.map(doc => {
-                    const data = doc.data();
-                    const label =
-                        data.userName ||
-                        data.displayName ||
-                        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
-                        data.name ||
-                        "Unnamed User";
-
-                    return {
-                        ...data,
-                        id: data.id || doc.id,
-                        userId: data.userId || data.id || doc.id,
-                        userName: data.userName || label,
-                        value: data.id || doc.id,
-                        label,
-                    };
-                }));
-
+            try {
                 const [
+                    usersSnapshot,
                     paySettingsSnap,
                     serviceStopTypesSnap,
                     workTypesSnap,
@@ -257,6 +323,7 @@ const CreateNewServiceStop = () => {
                     legacyTaskGroupsSnap,
                     taskGroupsSnap,
                 ] = await Promise.all([
+                    getDocs(collection(db, "companies", recentlySelectedCompany, 'companyUsers')),
                     getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "companyServiceStopTypes")),
                     getDocs(collection(db, "companies", recentlySelectedCompany, "companyWorkTypes")),
@@ -267,11 +334,30 @@ const CreateNewServiceStop = () => {
                     getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
                 ]);
 
+                setUserList(usersSnapshot.docs.map(docSnap => {
+                    const data = docSnap.data();
+                    const label =
+                        data.userName ||
+                        data.displayName ||
+                        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
+                        data.name ||
+                        "Unnamed User";
+
+                    return {
+                        ...data,
+                        id: data.id || docSnap.id,
+                        userId: data.userId || data.id || docSnap.id,
+                        userName: data.userName || label,
+                        value: data.userId || data.id || docSnap.id,
+                        label,
+                    };
+                }));
+
                 setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
-                setCompanyServiceStopTypes(serviceStopTypesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-                setCompanyWorkTypes(workTypesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-                setWorkTypeMappings(mappingsSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-                setTechnicianRates(ratesSnap.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+                setCompanyServiceStopTypes(serviceStopTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
+                setCompanyWorkTypes(workTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
+                setWorkTypeMappings(mappingsSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
+                setTechnicianRates(ratesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTaskTypeList(
                     taskTypesSnap.docs.map((docSnap) => {
                         const data = docSnap.data();
@@ -314,24 +400,188 @@ const CreateNewServiceStop = () => {
                         };
                     }),
                 ]);
+            } catch (error) {
+                console.error("Failed to load service stop scheduler settings:", error);
+                toast.error("Failed to load scheduler settings.");
             }
         };
-        fetchData();
+
+        fetchSharedData();
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        const fetchJobData = async () => {
+            if (!jobId || !recentlySelectedCompany) return;
+
+            try {
+                const jobRef = doc(db, "companies", recentlySelectedCompany, 'workOrders', jobId);
+                const jobSnap = await getDoc(jobRef);
+                if (!jobSnap.exists()) {
+                    console.log("No such job document!");
+                    return;
+                }
+
+                const jobData = { id: jobSnap.id, ...jobSnap.data() };
+                setJob(jobData);
+                setSelectedCustomer({
+                    id: jobData.customerId,
+                    value: jobData.customerId,
+                    label: jobData.customerName || "Customer",
+                    firstName: jobData.customerName || "",
+                    lastName: "",
+                });
+                setDescription(jobData.description || "");
+
+                const locRef = doc(db, "companies", recentlySelectedCompany, 'serviceLocations', jobData.serviceLocationId);
+                const locSnap = await getDoc(locRef);
+                if (locSnap.exists()) setServiceLocation({ id: locSnap.id, ...locSnap.data() });
+
+                const tasksQuery = query(collection(db, "companies", recentlySelectedCompany, 'workOrders', jobId, 'tasks'));
+                const tasksSnapshot = await getDocs(tasksQuery);
+                const tasks = tasksSnapshot.docs.map(docSnap => ({ ...docSnap.data(), id: docSnap.id }));
+                setTaskList(tasks);
+
+                const plannedStopsSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, 'workOrders', jobId, 'plannedServiceStops'));
+                const plannedStops = plannedStopsSnapshot.docs
+                    .map(docSnap => ({ ...docSnap.data(), id: docSnap.data().id || docSnap.id }))
+                    .sort((a, b) => Number(a.sortOrder || 0) - Number(b.sortOrder || 0));
+                setPlannedServiceStops(plannedStops);
+
+                const preferredPlannedStop = plannedStops.find((stop) => stop.id === plannedStopId) || null;
+                if (preferredPlannedStop) {
+                    setSelectedPlannedStop(preferredPlannedStop);
+                    setDescription(preferredPlannedStop.description || jobData.description || "");
+
+                    const taskIds = Array.isArray(preferredPlannedStop.taskIds) ? preferredPlannedStop.taskIds : [];
+                    setSelectedTasks(taskIds.length ? tasks.filter((task) => taskIds.includes(task.id)) : tasks);
+                }
+            } catch (error) {
+                console.error("Failed to load job service stop data:", error);
+                toast.error("Failed to load job details.");
+            }
+        };
+
+        fetchJobData();
     }, [jobId, recentlySelectedCompany, plannedStopId]);
 
     useEffect(() => {
+        const fetchStandaloneContext = async () => {
+            if (jobId || !recentlySelectedCompany) return;
+
+            try {
+                setJob(null);
+                setTaskList([]);
+                setSelectedTasks([]);
+                setPlannedServiceStops([]);
+                setSelectedPlannedStop(null);
+
+                let nextLead = null;
+                if (queryLeadId) {
+                    const leadSnap = await getDoc(doc(db, "homeownerServiceRequests", queryLeadId));
+                    if (leadSnap.exists()) {
+                        nextLead = { id: leadSnap.id, ...leadSnap.data() };
+                        setLeadContext(nextLead);
+                        setDescription(nextLead.serviceDescription || "");
+                        setSelectedCategory(categoryOptionForParam(queryCategory || "serviceAgreementEstimate", false));
+                    }
+                } else {
+                    setLeadContext(null);
+                }
+
+                const customersSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "customers"));
+                const customers = customersSnapshot.docs
+                    .map((docSnap) => {
+                        const data = docSnap.data();
+                        const label =
+                            data.displayName ||
+                            data.customerName ||
+                            `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
+                            data.company ||
+                            "Unnamed Customer";
+
+                        return {
+                            ...data,
+                            id: data.id || docSnap.id,
+                            value: data.id || docSnap.id,
+                            label,
+                        };
+                    })
+                    .sort((a, b) => a.label.localeCompare(b.label));
+
+                setCustomerList(customers);
+
+                const preferredCustomerId = queryCustomerId || nextLead?.customerId || "";
+                const preferredCustomer = customers.find((customer) => customer.id === preferredCustomerId) || null;
+                setSelectedCustomer(preferredCustomer);
+            } catch (error) {
+                console.error("Failed to load standalone service stop context:", error);
+                toast.error("Failed to load customer context.");
+            }
+        };
+
+        fetchStandaloneContext();
+    }, [jobId, recentlySelectedCompany, queryCustomerId, queryLeadId, queryCategory]);
+
+    useEffect(() => {
+        const fetchServiceLocationsForCustomer = async () => {
+            if (jobId || !recentlySelectedCompany || !selectedCustomer?.id) {
+                if (!jobId) {
+                    setServiceLocationList([]);
+                    setServiceLocation(null);
+                }
+                return;
+            }
+
+            try {
+                const locationsSnapshot = await getDocs(query(
+                    collection(db, "companies", recentlySelectedCompany, "serviceLocations"),
+                    where("customerId", "==", selectedCustomer.id)
+                ));
+                const locations = locationsSnapshot.docs
+                    .map((docSnap) => {
+                        const data = docSnap.data();
+                        const label = data.nickName || data.name || addressLine(data.address) || "Service Location";
+                        return {
+                            ...data,
+                            id: data.id || docSnap.id,
+                            value: data.id || docSnap.id,
+                            label,
+                        };
+                    })
+                    .sort((a, b) => a.label.localeCompare(b.label));
+
+                setServiceLocationList(locations);
+
+                const preferredLocationId = queryServiceLocationId || leadContext?.serviceLocationId || leadContext?.companyServiceLocationId || "";
+                const preferredLocation = locations.find((item) => item.id === preferredLocationId) || locations[0] || null;
+                setServiceLocation(preferredLocation);
+            } catch (error) {
+                console.error("Failed to load service locations:", error);
+                toast.error("Failed to load service locations.");
+            }
+        };
+
+        fetchServiceLocationsForCustomer();
+    }, [
+        jobId,
+        recentlySelectedCompany,
+        selectedCustomer?.id,
+        queryServiceLocationId,
+        leadContext?.serviceLocationId,
+        leadContext?.companyServiceLocationId,
+    ]);
+
+    useEffect(() => {
         const duration = selectedTasks.reduce((acc, task) => acc + (task.estimatedTime || 0), 0);
-        setEstimatedDuration(duration);
+        if (selectedTasks.length) {
+            setEstimatedDuration(duration);
+        }
     }, [selectedTasks]);
 
     useEffect(() => {
         if (selectedManualServiceStopType || selectedPlannedStop || !serviceStopTypeOptions.length) return;
 
-        const suggestedType =
-            serviceStopTypeOptions.find((type) => {
-                const name = String(type.name || "").toLowerCase();
-                return name === "job visit" || name === "service call" || name.includes("job");
-            }) || serviceStopTypeOptions[0];
+        const suggestedType = serviceStopTypeOptions[0];
 
         setSelectedManualServiceStopType(suggestedType);
     }, [selectedManualServiceStopType, selectedPlannedStop, serviceStopTypeOptions]);
@@ -380,6 +630,32 @@ const CreateNewServiceStop = () => {
         ...overrides,
     });
 
+    const addLocalTasks = (tasksToAdd, { selectAfterSave = true } = {}) => {
+        const savedTasks = tasksToAdd.map((task) => {
+            const id = task.id || `comp_ss_tas_${uuidv4()}`;
+            return buildJobTaskPayload({
+                ...task,
+                id,
+                status: task.status || "Unassigned",
+            });
+        });
+
+        if (!savedTasks.length) return [];
+
+        setTaskList((prev) => [...prev, ...savedTasks]);
+        if (selectAfterSave) {
+            setSelectedTasks((prev) => {
+                const existingIds = new Set(prev.map((task) => task.id));
+                return [
+                    ...prev,
+                    ...savedTasks.filter((task) => !existingIds.has(task.id)),
+                ];
+            });
+        }
+
+        return savedTasks;
+    };
+
     const saveJobTasks = async (tasksToSave, { selectAfterSave = true } = {}) => {
         const savedTasks = [];
 
@@ -410,15 +686,15 @@ const CreateNewServiceStop = () => {
 
     const addInlineTask = async () => {
         try {
-            if (!recentlySelectedCompany || !jobId) return;
+            if (!recentlySelectedCompany) return;
             if (!taskDescription.trim()) return toast.error("Add a task description.");
             if (!selectedTaskType?.value && !selectedTaskType?.name) return toast.error("Pick a task type.");
 
             setAddingTask(true);
 
-            const savedTasks = await saveJobTasks([
+            const tasksToAdd = [
                 {
-                    id: `comp_wo_tas_${uuidv4()}`,
+                    id: jobId ? `comp_wo_tas_${uuidv4()}` : `comp_ss_tas_${uuidv4()}`,
                     name: taskDescription.trim(),
                     description: taskDescription.trim(),
                     typeId: selectedTaskType.id || "",
@@ -427,7 +703,11 @@ const CreateNewServiceStop = () => {
                     estimatedTime: Number(taskEstimatedTime || 0),
                     status: "Unassigned",
                 },
-            ]);
+            ];
+
+            const savedTasks = jobId
+                ? await saveJobTasks(tasksToAdd)
+                : addLocalTasks(tasksToAdd);
 
             if (savedTasks.length) {
                 toast.success("Task added and selected.");
@@ -467,7 +747,7 @@ const CreateNewServiceStop = () => {
 
     const applyTaskGroupToJob = async (taskGroup) => {
         setSelectedTaskGroup(taskGroup || null);
-        if (!taskGroup || !recentlySelectedCompany || !jobId) return;
+        if (!taskGroup || !recentlySelectedCompany) return;
 
         try {
             setApplyingTaskGroup(true);
@@ -480,7 +760,7 @@ const CreateNewServiceStop = () => {
 
             const tasksToSave = groupTasks.map((task) => ({
                 ...task,
-                id: `comp_wo_tas_${uuidv4()}`,
+                id: jobId ? `comp_wo_tas_${uuidv4()}` : `comp_ss_tas_${uuidv4()}`,
                 status: "Unassigned",
                 workerId: "",
                 workerType: "Not Assigned",
@@ -491,7 +771,9 @@ const CreateNewServiceStop = () => {
                 },
             }));
 
-            const savedTasks = await saveJobTasks(tasksToSave);
+            const savedTasks = jobId
+                ? await saveJobTasks(tasksToSave)
+                : addLocalTasks(tasksToSave);
             toast.success(`${savedTasks.length} task${savedTasks.length === 1 ? "" : "s"} added and selected.`);
         } catch (error) {
             console.error("Error applying task group from service stop:", error);
@@ -504,8 +786,26 @@ const CreateNewServiceStop = () => {
     const createServiceStop = async () => {
         if (!requirePermission("242", "create service stops")) return;
 
-        if (!selectedUser || selectedTasks.length === 0) {
-            alert("Please select a technician and at least one task.");
+        const activeCustomer = job
+            ? {
+                id: job.customerId,
+                label: job.customerName,
+            }
+            : selectedCustomer;
+        const activeServiceLocation = serviceLocation;
+
+        if (!selectedUser) {
+            alert("Please select a technician.");
+            return;
+        }
+
+        if (!activeCustomer?.id || !activeServiceLocation?.id) {
+            alert("Please select a customer and service location.");
+            return;
+        }
+
+        if (jobId && selectedCategory.id === "jobVisit" && selectedTasks.length === 0) {
+            alert("Please select at least one task for the job stop.");
             return;
         }
 
@@ -526,7 +826,7 @@ const CreateNewServiceStop = () => {
             `[][] serviceStopCount: ${serviceStopCount}`
         );
         const updatedRecurringServiceStopCount = serviceStopCount + 1;
-        await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
+        await setDoc(ref, { increment: updatedRecurringServiceStopCount }, { merge: true });
 
         console.log("");
         console.log(
@@ -541,9 +841,9 @@ const CreateNewServiceStop = () => {
             companyServiceStopTypes,
             selectedType: selectedServiceStopType,
             selectedTypeId: selectedPlannedStop?.serviceStopTypeId || selectedPlannedStop?.typeId || "",
-            fallbackName: selectedPlannedStop?.serviceStopTypeName || selectedPlannedStop?.type || "Job Visit",
+            fallbackName: selectedPlannedStop?.serviceStopTypeName || selectedPlannedStop?.type || selectedCategory.fallbackType,
             fallbackImage: selectedPlannedStop?.serviceStopTypeImage || "",
-            useCase: SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+            useCase: selectedCategory.useCase,
             context: "CreateNewServiceStop.createServiceStop",
         });
 
@@ -563,11 +863,11 @@ const CreateNewServiceStop = () => {
 
         const newServiceStop = {
             id: serviceStopId,
-            address: serviceLocation.address,
+            address: activeServiceLocation.address || leadContext?.serviceLocationAddress || {},
             companyId: recentlySelectedCompany,
             companyName: recentlySelectedCompanyName,
-            customerId: job.customerId,
-            customerName: job.customerName,
+            customerId: activeCustomer.id,
+            customerName: activeCustomer.label || activeCustomer.customerName || activeCustomer.displayName || "",
             dateCreated: Timestamp.now(),
             serviceDate: Timestamp.fromDate(serviceDate),
             description,
@@ -576,9 +876,9 @@ const CreateNewServiceStop = () => {
             billingStatus: 'Not Invoiced',
             isInvoiced: false,
             contractedCompanyId: "",
-            jobId,
-            jobName: "",
-            serviceLocationId: serviceLocation.id,
+            jobId: jobId || "",
+            jobName: job?.description || job?.internalId || leadContext?.serviceName || "",
+            serviceLocationId: activeServiceLocation.id,
             tech: selectedUser.userName,
             techId: selectedUser.userId,
             internalId: internalId,
@@ -588,8 +888,8 @@ const CreateNewServiceStop = () => {
             laborContractId: "",
             endTime: null,
             startTime: null,
-            includeDosages: true,
-            includeReadings: true,
+            includeDosages: selectedCategory.id === "serviceAgreementEstimate" || selectedCategory.id === "jobVisit",
+            includeReadings: selectedCategory.id === "serviceAgreementEstimate" || selectedCategory.id === "jobVisit",
             estimatedPayCents: selectedPaySummary.totalAmountCents,
             estimatedPayLines: selectedPaySummary.lines,
             payWorkTypeId,
@@ -605,6 +905,9 @@ const CreateNewServiceStop = () => {
             typeImage: resolvedTypeFields.typeImage,
             category: resolvedTypeFields.category,
             serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+            leadId: leadContext?.id || queryLeadId || "",
+            source: jobId ? "CreateNewServiceStopJob" : "CreateNewServiceStopStandalone",
+            serviceNotes: "",
             duration: estimatedDuration || 15
 
 
@@ -630,7 +933,7 @@ const CreateNewServiceStop = () => {
                     internalId,
                 },
                 jobId: {
-                    id: jobId,
+                    id: jobId || "",
                     internalId: job?.internalId || "",
                 },
                 recurringServiceStopId: {
@@ -640,25 +943,27 @@ const CreateNewServiceStop = () => {
                 jobTaskId: task.id,
                 workTypeId: task.workTypeId || payWorkTypeId,
                 workTypeName: task.workTypeName || payWorkTypeName,
-                workOrderTaskId: task.id,
+                workOrderTaskId: jobId ? task.id : "",
             });
             rate += Number(task.rate || task.contractedRate || 0)
-            const workOrderTaskRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId, 'tasks', task.id);
-            await updateDoc(workOrderTaskRef, {
-                status: 'Scheduled',
-                workerId: selectedUser.userId,
-                workerName: selectedUser.userName,
-                serviceStopId: {
-                    id: serviceStopId,
-                    internalId,
-                },
-                serviceStopIdString: serviceStopId,
-            });
+            if (jobId) {
+                const workOrderTaskRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId, 'tasks', task.id);
+                await updateDoc(workOrderTaskRef, {
+                    status: 'Scheduled',
+                    workerId: selectedUser.userId,
+                    workerName: selectedUser.userName,
+                    serviceStopId: {
+                        id: serviceStopId,
+                        internalId,
+                    },
+                    serviceStopIdString: serviceStopId,
+                });
+            }
         }
         await updateDoc(serviceStopRef, { rate: rate });
 
         //Update Job to have ids
-        if (jobId !== "") {
+        if (jobId && job) {
 
             const jobRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId);
             const jobUpdates = {
@@ -672,7 +977,17 @@ const CreateNewServiceStop = () => {
 
             await updateDoc(jobRef, jobUpdates);
         }
-        navigate(`/company/jobs/detail/${jobId}`, {
+
+        if (leadContext?.id || queryLeadId) {
+            await updateDoc(doc(db, "homeownerServiceRequests", leadContext?.id || queryLeadId), {
+                serviceEstimateServiceStopId: serviceStopId,
+                initialEstimateServiceStopId: serviceStopId,
+            }).catch((error) => {
+                console.warn("Unable to update lead with service stop id.", error);
+            });
+        }
+
+        navigate(jobId ? `/company/jobs/detail/${jobId}` : `/company/serviceStops/detail/${serviceStopId}`, {
             state: {
                 scheduledServiceStopId: serviceStopId,
                 scheduledServiceStopInternalId: internalId,
@@ -680,12 +995,89 @@ const CreateNewServiceStop = () => {
         });
     };
 
+    const handleCategoryChange = (categoryOption) => {
+        setSelectedCategory(categoryOption);
+        setSelectedManualServiceStopType(null);
+        setSelectedPlannedStop(null);
+    };
+
+    const handleCustomerChange = (customerOption) => {
+        setSelectedCustomer(customerOption || null);
+        setServiceLocation(null);
+    };
+
+    const activeCustomer = job
+        ? {
+            id: job.customerId,
+            label: job.customerName,
+        }
+        : selectedCustomer;
+    const requiresTasksForSchedule = Boolean(jobId && selectedCategory.id === "jobVisit");
+    const categoryOptionsForScheduler = isJobScheduler
+        ? SERVICE_STOP_CATEGORY_OPTIONS.filter((option) => ["jobVisit", "jobEstimate"].includes(option.id))
+        : SERVICE_STOP_CATEGORY_OPTIONS;
+
+    const canSchedule = Boolean(
+        selectedUser &&
+        activeCustomer?.id &&
+        serviceLocation?.id &&
+        (!requiresTasksForSchedule || selectedTasks.length > 0)
+    );
+
+    const cancelPath = jobId ? `/company/jobs/detail/${jobId}` : "/company/serviceStops";
+
     const renderTabContent = () => {
         switch (activeTab) {
-            case 'site-info': return <SiteInfoTab job={job} location={serviceLocation} description={description} setDescription={setDescription} plannedServiceStops={plannedServiceStops} selectedPlannedStop={selectedPlannedStop} setSelectedPlannedStop={setSelectedPlannedStop} taskList={taskList} setSelectedTasks={setSelectedTasks} selectedPlannedStopPayRange={selectedPlannedStopPayRange} moneyFromCents={moneyFromCents} serviceStopTypeOptions={serviceStopTypeOptions} selectedServiceStopType={selectedServiceStopType} selectedManualServiceStopType={selectedManualServiceStopType} setSelectedManualServiceStopType={setSelectedManualServiceStopType} />;
-            case 'assign-tech': return <AssignTechTab users={userList} selectedUser={selectedUser} setSelectedUser={setSelectedUser} date={serviceDate} setDate={setServiceDate} workTypeOptions={workTypeOptions} selectedPayWorkType={selectedPayWorkType} setSelectedPayWorkType={setSelectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
+            case 'site-info': return (
+                <SiteInfoTab
+                    isJobScheduler={isJobScheduler}
+                    job={job}
+                    location={serviceLocation}
+                    description={description}
+                    setDescription={setDescription}
+                    plannedServiceStops={plannedServiceStops}
+                    selectedPlannedStop={selectedPlannedStop}
+                    setSelectedPlannedStop={setSelectedPlannedStop}
+                    taskList={taskList}
+                    setSelectedTasks={setSelectedTasks}
+                    selectedPlannedStopPayRange={selectedPlannedStopPayRange}
+                    moneyFromCents={moneyFromCents}
+                    categoryOptions={categoryOptionsForScheduler}
+                    selectedCategory={selectedCategory}
+                    setSelectedCategory={handleCategoryChange}
+                    customerOptions={customerList}
+                    selectedCustomer={selectedCustomer}
+                    setSelectedCustomer={handleCustomerChange}
+                    serviceLocationOptions={serviceLocationList}
+                    selectedServiceLocation={serviceLocation}
+                    setSelectedServiceLocation={setServiceLocation}
+                    leadContext={leadContext}
+                    serviceStopTypeOptions={serviceStopTypeOptions}
+                    selectedServiceStopType={selectedServiceStopType}
+                    selectedManualServiceStopType={selectedManualServiceStopType}
+                    setSelectedManualServiceStopType={setSelectedManualServiceStopType}
+                />
+            );
+            case 'assign-tech': return (
+                <AssignTechTab
+                    users={userList}
+                    selectedUser={selectedUser}
+                    setSelectedUser={setSelectedUser}
+                    date={serviceDate}
+                    setDate={setServiceDate}
+                    estimatedDuration={estimatedDuration}
+                    setEstimatedDuration={setEstimatedDuration}
+                    workTypeOptions={workTypeOptions}
+                    selectedPayWorkType={selectedPayWorkType}
+                    setSelectedPayWorkType={setSelectedPayWorkType}
+                    selectedPaySummary={selectedPaySummary}
+                    moneyFromCents={moneyFromCents}
+                />
+            );
             case 'select-tasks': return (
                 <TasksTab
+                    isJobScheduler={isJobScheduler}
+                    requiresTasksForSchedule={requiresTasksForSchedule}
                     tasks={taskList}
                     selectedTasks={selectedTasks}
                     toggleTask={toggleTaskSelection}
@@ -707,7 +1099,24 @@ const CreateNewServiceStop = () => {
                     applyingTaskGroup={applyingTaskGroup}
                 />
             );
-            case 'review': return <ReviewTab job={job} location={serviceLocation} tech={selectedUser?.userName} date={serviceDate} tasks={selectedTasks} duration={estimatedDuration} selectedServiceStopType={selectedServiceStopType} selectedPayWorkType={selectedPayWorkType} selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />;
+            case 'review': return (
+                <ReviewTab
+                    isJobScheduler={isJobScheduler}
+                    job={job}
+                    customer={activeCustomer}
+                    location={serviceLocation}
+                    selectedCategory={selectedCategory}
+                    description={description}
+                    tech={selectedUser?.userName}
+                    date={serviceDate}
+                    tasks={selectedTasks}
+                    duration={estimatedDuration}
+                    selectedServiceStopType={selectedServiceStopType}
+                    selectedPayWorkType={selectedPayWorkType}
+                    selectedPaySummary={selectedPaySummary}
+                    moneyFromCents={moneyFromCents}
+                />
+            );
             default: return null;
         }
     };
@@ -719,8 +1128,14 @@ const CreateNewServiceStop = () => {
                 <TabNavigation activeTab={activeTab} setActiveTab={setActiveTab} />
                 <div className="py-6">{renderTabContent()}</div>
                 <div className="flex justify-between items-center pt-4 border-t">
-                    <button onClick={() => navigate(`/company/jobs/detail/${jobId}`)} className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">Cancel</button>
-                    <button onClick={createServiceStop} className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition" disabled={!selectedUser || selectedTasks.length === 0}>Schedule Service Stop</button>
+                    <button onClick={() => navigate(cancelPath)} className="py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition">Cancel</button>
+                    <button
+                        onClick={createServiceStop}
+                        className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:opacity-50"
+                        disabled={!canSchedule}
+                    >
+                        Schedule Service Stop
+                    </button>
                 </div>
             </div>
         </div>
@@ -731,7 +1146,7 @@ const TabNavigation = ({ activeTab, setActiveTab }) => (
     <div className="border-b border-gray-200">
         <nav className="-mb-px flex space-x-8" aria-label="Tabs">
             {[
-                { id: 'site-info', name: 'Site & Job Info' },
+                { id: 'site-info', name: 'Site & Stop Info' },
                 { id: 'assign-tech', name: 'Assign Tech & Date' },
                 { id: 'select-tasks', name: 'Select Tasks' },
                 { id: 'review', name: 'Review & Schedule' },
@@ -745,6 +1160,7 @@ const TabNavigation = ({ activeTab, setActiveTab }) => (
 );
 
 const SiteInfoTab = ({
+    isJobScheduler,
     job,
     location,
     description,
@@ -756,6 +1172,16 @@ const SiteInfoTab = ({
     setSelectedTasks,
     selectedPlannedStopPayRange,
     moneyFromCents,
+    categoryOptions,
+    selectedCategory,
+    setSelectedCategory,
+    customerOptions,
+    selectedCustomer,
+    setSelectedCustomer,
+    serviceLocationOptions,
+    selectedServiceLocation,
+    setSelectedServiceLocation,
+    leadContext,
     serviceStopTypeOptions,
     selectedServiceStopType,
     selectedManualServiceStopType,
@@ -776,6 +1202,12 @@ const SiteInfoTab = ({
         if (option.description) setDescription(option.description);
     };
 
+    const locationAddress = location?.address
+        ? addressLine(location.address)
+        : addressLine(leadContext?.serviceLocationAddress || {});
+    const serviceLocationName = location?.nickName || location?.name || leadContext?.serviceLocationName || "Service Location";
+    const leadCustomerName = leadContext?.customerName || leadContext?.homeownerName || leadContext?.name || "";
+
     const rangeLabel =
         selectedPlannedStopPayRange &&
             selectedPlannedStopPayRange.minAmountCents !== selectedPlannedStopPayRange.maxAmountCents
@@ -792,8 +1224,96 @@ const SiteInfoTab = ({
 
     return (
     <div className="space-y-4">
-        <InfoCard title="Job Details" data={job ? { Job: job.internalId || "Job", Customer: job.customerName, Type: job.type } : {}} />
-        <InfoCard title="Service Location" data={location ? { Name: location.nickName, Address: `${location.address.streetAddress}, ${location.address.city}` } : {}} />
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div className="mb-3">
+                <h3 className="text-base font-bold text-gray-900">Service Stop Category</h3>
+                <p className="mt-1 text-sm text-gray-600">
+                    {selectedCategory.helper}
+                </p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {categoryOptions.map((option) => {
+                    const selected = selectedCategory.id === option.id;
+                    return (
+                        <button
+                            key={option.id}
+                            type="button"
+                            onClick={() => setSelectedCategory(option)}
+                            className={[
+                                "rounded-lg border p-4 text-left transition",
+                                selected
+                                    ? "border-blue-500 bg-blue-50 ring-2 ring-blue-100"
+                                    : "border-gray-200 bg-white hover:border-blue-200 hover:bg-blue-50/40",
+                            ].join(" ")}
+                        >
+                            <span className="block text-sm font-bold text-gray-900">{option.label}</span>
+                            <span className="mt-1 block text-xs text-gray-600">{option.helper}</span>
+                        </button>
+                    );
+                })}
+            </div>
+        </div>
+
+        {leadContext && (
+            <InfoCard
+                title="Lead Context"
+                data={{
+                    Lead: leadContext.serviceName || leadContext.title || "Service request",
+                    Customer: leadCustomerName,
+                    Status: leadContext.status,
+                    Source: leadContext.source || (leadContext.publicLead ? "Public" : ""),
+                }}
+            />
+        )}
+
+        {!isJobScheduler && (
+            <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Customer
+                    </label>
+                    <Select
+                        options={customerOptions}
+                        value={selectedCustomer}
+                        onChange={setSelectedCustomer}
+                        placeholder="Select customer"
+                        isClearable
+                        styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
+                    />
+                    <p className="mt-2 text-xs text-gray-500">
+                        Standalone service stops still need a customer account before they can be scheduled.
+                    </p>
+                </div>
+
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                        Service Location
+                    </label>
+                    <Select
+                        options={serviceLocationOptions}
+                        value={selectedServiceLocation}
+                        onChange={setSelectedServiceLocation}
+                        placeholder={selectedCustomer ? "Select service location" : "Select a customer first"}
+                        isClearable
+                        isDisabled={!selectedCustomer}
+                        styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
+                    />
+                    <p className="mt-2 text-xs text-gray-500">
+                        The location sets the address and lets the field app collect visit information in the right place.
+                    </p>
+                </div>
+            </div>
+        )}
+
+        {isJobScheduler && (
+            <InfoCard title="Job Details" data={job ? { Job: job.internalId || "Job", Customer: job.customerName, Type: job.type } : {}} />
+        )}
+
+        <InfoCard
+            title="Service Location"
+            data={location ? { Name: serviceLocationName, Address: locationAddress } : {}}
+        />
+
         <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
             <label className="block text-sm font-semibold text-gray-700 mb-1">
                 Service Stop Type
@@ -815,43 +1335,45 @@ const SiteInfoTab = ({
                 </p>
             )}
         </div>
-        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-            <label className="block text-sm font-semibold text-gray-700 mb-1">
-                Planned Service Stop
-            </label>
-            <Select
-                options={plannedStopOptions}
-                value={selectedPlannedStop ? { ...selectedPlannedStop, value: selectedPlannedStop.id, label: selectedPlannedStop.name || selectedPlannedStop.serviceStopTypeName || "Planned Service Stop" } : null}
-                onChange={handlePlannedStopChange}
-                placeholder="Optional: schedule from planned stop"
-                isClearable
-                styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
-            />
+        {isJobScheduler && plannedServiceStops.length > 0 && (
+            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                    Planned Service Stop
+                </label>
+                <Select
+                    options={plannedStopOptions}
+                    value={selectedPlannedStop ? { ...selectedPlannedStop, value: selectedPlannedStop.id, label: selectedPlannedStop.name || selectedPlannedStop.serviceStopTypeName || "Planned Service Stop" } : null}
+                    onChange={handlePlannedStopChange}
+                    placeholder="Optional: schedule from planned stop"
+                    isClearable
+                    styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
+                />
 
-            {selectedPlannedStop && (
-                <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-                    <div className="rounded-lg bg-white border border-gray-200 p-3">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</p>
-                        <p className="mt-1 font-semibold text-gray-800">
-                            {selectedPlannedStop.serviceStopTypeName || "Service Stop"}
-                        </p>
+                {selectedPlannedStop && (
+                    <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</p>
+                            <p className="mt-1 font-semibold text-gray-800">
+                                {selectedPlannedStop.serviceStopTypeName || "Service Stop"}
+                            </p>
+                        </div>
+                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Pay Range</p>
+                            <p className="mt-1 font-semibold text-gray-800">{rangeLabel}</p>
+                        </div>
+                        <div className="rounded-lg bg-white border border-gray-200 p-3">
+                            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Cost Planning</p>
+                            <p className="mt-1 font-semibold text-gray-800">
+                                {moneyFromCents(selectedPlannedStopPayRange?.maxAmountCents || 0)}
+                            </p>
+                            <p className="mt-1 text-xs text-gray-500">Uses highest eligible tech pay</p>
+                        </div>
                     </div>
-                    <div className="rounded-lg bg-white border border-gray-200 p-3">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Pay Range</p>
-                        <p className="mt-1 font-semibold text-gray-800">{rangeLabel}</p>
-                    </div>
-                    <div className="rounded-lg bg-white border border-gray-200 p-3">
-                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Cost Planning</p>
-                        <p className="mt-1 font-semibold text-gray-800">
-                            {moneyFromCents(selectedPlannedStopPayRange?.maxAmountCents || 0)}
-                        </p>
-                        <p className="mt-1 text-xs text-gray-500">Uses highest eligible tech pay</p>
-                    </div>
-                </div>
-            )}
-        </div>
+                )}
+            </div>
+        )}
         <div>
-            <label className="block text-sm font-medium text-gray-700">Description Override</label>
+            <label className="block text-sm font-medium text-gray-700">Planned Work / Visit Notes</label>
             <textarea value={description} onChange={(e) => setDescription(e.target.value)} className="mt-1 w-full p-2 border border-gray-300 rounded-lg" rows="3" />
         </div>
     </div>
@@ -861,7 +1383,12 @@ const SiteInfoTab = ({
 const InfoCard = ({ title, data }) => (
     <div className="p-4 border rounded-lg">
         <h4 className="font-bold text-lg mb-2">{title}</h4>
-        {Object.entries(data).map(([key, value]) => <p key={key}><strong>{key}:</strong> {value}</p>)}
+        {Object.entries(data || {})
+            .filter(([, value]) => value !== undefined && value !== null && value !== "")
+            .map(([key, value]) => <p key={key}><strong>{key}:</strong> {value}</p>)}
+        {!Object.entries(data || {}).some(([, value]) => value !== undefined && value !== null && value !== "") && (
+            <p className="text-sm text-gray-500">Not selected yet.</p>
+        )}
     </div>
 );
 
@@ -916,13 +1443,15 @@ const AssignTechTab = ({
     setSelectedUser,
     date,
     setDate,
+    estimatedDuration,
+    setEstimatedDuration,
     workTypeOptions,
     selectedPayWorkType,
     setSelectedPayWorkType,
     selectedPaySummary,
     moneyFromCents,
 }) => (
-    <div className="grid md:grid-cols-3 gap-6">
+    <div className="grid md:grid-cols-4 gap-6">
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Assign Technician</label>
             <Select options={users} value={selectedUser} onChange={setSelectedUser} placeholder="Select a technician..." styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }} />
@@ -930,6 +1459,18 @@ const AssignTechTab = ({
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Service Date</label>
             <DatePicker selected={date} onChange={setDate} className="w-full p-2 border border-gray-300 rounded-lg" />
+        </div>
+        <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Estimated Duration</label>
+            <input
+                type="number"
+                min="0"
+                step="5"
+                value={estimatedDuration}
+                onChange={(event) => setEstimatedDuration(Number(event.target.value || 0))}
+                className="w-full rounded-lg border border-gray-300 p-2"
+            />
+            <p className="mt-1 text-xs text-gray-500">Minutes scheduled for the field visit.</p>
         </div>
         <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Pay Work Type Override</label>
@@ -950,6 +1491,8 @@ const AssignTechTab = ({
 );
 
 const TasksTab = ({
+    isJobScheduler,
+    requiresTasksForSchedule,
     tasks,
     selectedTasks,
     toggleTask,
@@ -978,9 +1521,15 @@ const TasksTab = ({
         <div className="space-y-4">
             <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                    <h3 className="text-xl font-semibold">Select Tasks for this Stop</h3>
+                    <h3 className="text-xl font-semibold">
+                        {isJobScheduler ? "Select Job Tasks for this Stop" : "Tasks for this Stop"}
+                    </h3>
                     <p className="mt-1 text-sm text-gray-600">
-                        Add tasks here without leaving the service stop workflow.
+                        {isJobScheduler && requiresTasksForSchedule
+                            ? "Select or add the job tasks that should be scheduled on this visit."
+                            : isJobScheduler
+                                ? "Tasks are optional for job estimate visits. Add them only when the estimate needs checklist-level detail."
+                            : "Tasks are optional for standalone visits. Add them when you want checklist-level detail."}
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2 text-xs font-semibold">
@@ -1007,7 +1556,7 @@ const TasksTab = ({
                     styles={{ control: (p) => ({ ...p, padding: '0.25rem' }) }}
                 />
                 <p className="mt-2 text-xs text-gray-500">
-                    Selecting a task group adds those tasks to the job and selects them for this service stop.
+                    Selecting a task group adds those tasks and selects them for this service stop.
                 </p>
             </div>
 
@@ -1015,7 +1564,9 @@ const TasksTab = ({
                 <div className="mb-3 flex items-center justify-between gap-3">
                     <div>
                         <h4 className="font-semibold text-gray-800">Add New Task</h4>
-                        <p className="text-xs text-gray-500">Saved to the job and selected for this stop.</p>
+                        <p className="text-xs text-gray-500">
+                            {isJobScheduler ? "Saved to the job and selected for this stop." : "Saved directly on this service stop when scheduled."}
+                        </p>
                     </div>
                 </div>
 
@@ -1068,7 +1619,9 @@ const TasksTab = ({
             <div className="overflow-hidden rounded-lg border border-gray-200">
                 <div className="flex items-center justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
                     <div>
-                        <p className="text-sm font-semibold text-gray-800">Job Tasks</p>
+                        <p className="text-sm font-semibold text-gray-800">
+                            {isJobScheduler ? "Job Tasks" : "Service Stop Tasks"}
+                        </p>
                         <p className="text-xs text-gray-500">Click a row to include it on this service stop.</p>
                     </div>
                     <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-gray-600">
@@ -1119,7 +1672,11 @@ const TasksTab = ({
                             {!tasks.length && (
                                 <tr>
                                     <td colSpan={5} className="p-6 text-center text-sm text-gray-500">
-                                        No tasks on this job yet. Add one above or select a task group.
+                                        {isJobScheduler && requiresTasksForSchedule
+                                            ? "No tasks on this job yet. Add one above or select a task group."
+                                            : isJobScheduler
+                                                ? "No tasks selected. Job estimate service stops can be scheduled without tasks."
+                                            : "No tasks added yet. Standalone service stops can be scheduled without tasks."}
                                     </td>
                                 </tr>
                             )}
@@ -1143,27 +1700,54 @@ const TasksTab = ({
     );
 };
 
-const ReviewTab = ({ job, location, tech, date, tasks, duration, selectedServiceStopType, selectedPayWorkType, selectedPaySummary, moneyFromCents }) => (
-    <div className="space-y-4">
-        <h3 className="text-xl font-semibold">Review & Confirm</h3>
-        <div className="p-4 border rounded-lg space-y-2">
-            <p><strong>Job:</strong> {job?.internalId} for {job?.customerName}</p>
-            <p><strong>Location:</strong> {location?.nickName} at {location?.address.streetAddress}</p>
-            <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>
-            <p><strong>Service Date:</strong> {date.toLocaleDateString()}</p>
-            <p><strong>Service Stop Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || "Job Visit"}</p>
-            <p><strong>Pay Work Type Override:</strong> {selectedPayWorkType?.label || "Using service stop type defaults"}</p>
-            <p><strong>Total Duration:</strong> {duration} minutes</p>
-            <p><strong>Expected Pay:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
-            <div>
-                <h4 className="font-bold mt-2">Selected Tasks:</h4>
-                <ul className="list-disc list-inside pl-4">
-                    {tasks.map(t => <li key={t.id}>{t.name}</li>)}
-                </ul>
+const ReviewTab = ({
+    isJobScheduler,
+    job,
+    customer,
+    location,
+    selectedCategory,
+    description,
+    tech,
+    date,
+    tasks,
+    duration,
+    selectedServiceStopType,
+    selectedPayWorkType,
+    selectedPaySummary,
+    moneyFromCents,
+}) => {
+    const locationAddress = addressLine(location?.address || {});
+    const customerName = customer?.label || customer?.customerName || customer?.displayName || job?.customerName || "Not selected";
+
+    return (
+        <div className="space-y-4">
+            <h3 className="text-xl font-semibold">Review & Confirm</h3>
+            <div className="p-4 border rounded-lg space-y-2">
+                <p><strong>Category:</strong> {selectedCategory?.label || "Service Stop"}</p>
+                {isJobScheduler && <p><strong>Job:</strong> {job?.internalId || "Job"} for {job?.customerName}</p>}
+                <p><strong>Customer:</strong> {customerName}</p>
+                <p><strong>Location:</strong> {location?.nickName || location?.name || "Service Location"}{locationAddress ? ` at ${locationAddress}` : ""}</p>
+                <p><strong>Technician:</strong> {tech || 'Not Assigned'}</p>
+                <p><strong>Service Date:</strong> {date.toLocaleDateString()}</p>
+                <p><strong>Service Stop Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || selectedCategory?.fallbackType || "Service Stop"}</p>
+                <p><strong>Pay Work Type Override:</strong> {selectedPayWorkType?.label || "Using service stop type defaults"}</p>
+                <p><strong>Total Duration:</strong> {duration} minutes</p>
+                <p><strong>Expected Pay:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
+                {description && <p><strong>Planned Work:</strong> {description}</p>}
+                <div>
+                    <h4 className="font-bold mt-2">Selected Tasks:</h4>
+                    {tasks.length ? (
+                        <ul className="list-disc list-inside pl-4">
+                            {tasks.map(t => <li key={t.id}>{t.name || t.description || "Task"}</li>)}
+                        </ul>
+                    ) : (
+                        <p className="text-sm text-gray-500">No tasks selected.</p>
+                    )}
+                </div>
             </div>
+            <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
         </div>
-        <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
-    </div>
-);
+    );
+};
 
 export default CreateNewServiceStop;

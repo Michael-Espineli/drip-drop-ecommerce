@@ -220,7 +220,7 @@ const RepairRequests = () => {
     const renderRequestTable = (requests) => {
         if (requests.length === 0) {
             return (
-                <div className="rounded-2xl border border-dashed border-gray-300 p-10 text-center">
+                <div className="rounded-lg border border-dashed border-gray-300 p-10 text-center">
                     <p className="text-lg font-bold text-gray-800">No repair requests found.</p>
                     <p className="mt-1 text-sm text-gray-500">
                         Try changing the filters or date range.
@@ -230,7 +230,7 @@ const RepairRequests = () => {
         }
 
         return (
-            <div className="overflow-x-auto rounded-2xl border border-gray-200">
+            <div className="overflow-x-auto rounded-lg border border-gray-200">
                 <table className="min-w-full bg-white">
                     <thead className="bg-gray-50">
                         <tr>
@@ -315,8 +315,8 @@ const RepairRequests = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="mx-auto max-w-7xl">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
                 <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <h2 className="text-3xl font-bold text-gray-900">
@@ -352,7 +352,7 @@ const RepairRequests = () => {
                     )}
                 </div>
 
-                <div className="rounded-2xl bg-white shadow-lg border border-gray-100">
+                <div className="rounded-lg bg-white shadow-lg border border-gray-100">
                     <div className="border-b border-gray-200 px-6 pt-5">
                         <nav className="-mb-px flex gap-8">
                             <button

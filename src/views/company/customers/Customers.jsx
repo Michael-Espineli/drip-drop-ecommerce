@@ -115,7 +115,7 @@ const getUpgradeState = (customerLimit, activeCount) => {
 };
 
 const UpgradeBanner = ({ remaining, onUpgrade }) => (
-    <div className={`p-4 mb-6 rounded-2xl shadow-lg ${remaining <= 0 ? 'bg-red-100 border-red-500' : 'bg-yellow-100 border-yellow-500'} border-l-4`}>
+    <div className={`p-4 mb-6 rounded-lg shadow-lg ${remaining <= 0 ? 'bg-red-100 border-red-500' : 'bg-yellow-100 border-yellow-500'} border-l-4`}>
         <div className="flex items-center justify-between">
             <div>
                 <p className={`font-bold ${remaining <= 0 ? 'text-red-800' : 'text-yellow-800'}`}>
@@ -144,6 +144,7 @@ export default function Customers() {
     const [statusFilter, setStatusFilter] = useState('active');
     const [selectedTags, setSelectedTags] = useState([]);
     const [tagFilterInput, setTagFilterInput] = useState('');
+    const [showFilters, setShowFilters] = useState(false);
     const [loading, setLoading] = useState(true);
     const [upgradeState, setUpgradeState] = useState({ isUnlimited: false, remaining: Infinity });
     const [primaryCustomerId, setPrimaryCustomerId] = useState('');
@@ -228,6 +229,17 @@ export default function Customers() {
     const selectedDuplicateCustomerOption = useMemo(
         () => mergeCustomerOptions.find((option) => option.value === duplicateCustomerId) || null,
         [mergeCustomerOptions, duplicateCustomerId]
+    );
+    const mergeMovementHighlights = useMemo(() => {
+        if (!mergePreview?.targets?.length) return [];
+
+        return ['Service locations', 'Bodies of water', 'Equipment', 'Service stops', 'Jobs']
+            .map((label) => mergePreview.targets.find((target) => target.label === label))
+            .filter(Boolean);
+    }, [mergePreview]);
+    const activeFilterCount = useMemo(
+        () => (statusFilter !== 'active' ? 1 : 0) + selectedTags.length,
+        [selectedTags.length, statusFilter]
     );
     const canMergeCustomers = can("14") && can("16");
 
@@ -371,7 +383,7 @@ export default function Customers() {
         const primaryName = getCustomerDuplicateDisplayName(selectedPrimaryCustomer);
         const duplicateName = getCustomerDuplicateDisplayName(selectedDuplicateCustomer);
         const confirmed = window.confirm(
-            `Merge ${duplicateName} into ${primaryName}?\n\nThe duplicate customer record will be removed after its linked records are moved.`
+            `Merge ${duplicateName} into ${primaryName}?\n\nService locations, bodies of water, equipment, history, billing, and other linked records from the duplicate will move to the customer you keep. The duplicate customer record will be removed after the move.`
         );
         if (!confirmed) return;
 
@@ -496,8 +508,8 @@ export default function Customers() {
         }
     };
     return (
-        <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
-            <div className="mx-auto">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
                 {/* Header */}
                 <div className="flex justify-between items-center mb-6">
                     <div>
@@ -529,13 +541,13 @@ export default function Customers() {
                     <UpgradeBanner remaining={upgradeState.remaining} onUpgrade={handleUpgradeClick} />
                 )}
 
-                {canMergeCustomers && (
-                    <div className="mb-6 border border-slate-200 bg-white p-5 shadow-sm">
+                {canMergeCustomers && duplicateSuggestions.length > 0 && (
+                    <div className="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div>
                                 <h2 className="text-lg font-bold text-slate-950">Merge Duplicate Customers</h2>
                                 <p className="mt-1 text-sm text-slate-600">
-                                    Choose the customer to keep, then choose the duplicate whose linked records should move over.
+                                    Choose the customer to keep, then choose the duplicate whose service locations, bodies of water, equipment, and linked records should move over.
                                 </p>
                             </div>
                             {duplicateSuggestions.length > 0 && (
@@ -648,6 +660,16 @@ export default function Customers() {
                                 <p className="font-semibold">
                                     Preview: {mergePreview.totalReferences} linked record(s) and {mergePreview.contacts} contact(s) will move.
                                 </p>
+                                {mergeMovementHighlights.length > 0 && (
+                                    <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                        {mergeMovementHighlights.map((target) => (
+                                            <div key={target.label} className="rounded-md border border-blue-200 bg-white px-3 py-2">
+                                                <p className="text-xs font-semibold uppercase tracking-wide text-blue-500">{target.label}</p>
+                                                <p className="mt-1 text-lg font-bold text-blue-950">{target.count}</p>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                                 {mergePreview.targets.length > 0 && (
                                     <p className="mt-1 text-xs text-blue-800">
                                         {mergePreview.targets.map((target) => `${target.label}: ${target.count}`).join(' | ')}
@@ -659,7 +681,7 @@ export default function Customers() {
                 )}
 
                 {/* Main Content */}
-                <div className="bg-white p-6 rounded-2xl shadow-lg">
+                <div className="rounded-lg bg-white p-6 shadow-lg">
                     <div className="mb-4 space-y-4">
                         <input
                             type="text"
@@ -669,27 +691,13 @@ export default function Customers() {
                             className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                         />
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                            <div className="inline-flex w-full rounded-lg border border-slate-200 bg-slate-50 p-1 sm:w-auto">
-                                {[
-                                    { value: 'all', label: 'All' },
-                                    { value: 'active', label: 'Active' },
-                                    { value: 'inactive', label: 'Inactive' },
-                                ].map((option) => (
-                                    <button
-                                        key={option.value}
-                                        type="button"
-                                        onClick={() => setStatusFilter(option.value)}
-                                        className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold transition sm:flex-none ${
-                                            statusFilter === option.value
-                                                ? 'bg-white text-slate-900 shadow-sm'
-                                                : 'text-slate-500 hover:text-slate-800'
-                                        }`}
-                                    >
-                                        {option.label}
-                                    </button>
-                                ))}
-                            </div>
-
+                            <button
+                                type="button"
+                                onClick={() => setShowFilters((current) => !current)}
+                                className="inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto"
+                            >
+                                {showFilters ? 'Hide Filters' : `Show Filters${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}`}
+                            </button>
                             <div className="text-sm text-slate-500">
                                 Showing {filteredCustomers.length} of {visibleCustomers.length} visible customers
                             </div>
@@ -701,73 +709,98 @@ export default function Customers() {
                             </div>
                         )}
 
-                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                            <label className="block text-sm font-semibold text-slate-700" htmlFor="customer-tag-filter">
-                                Filter by tag
-                            </label>
-                            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
-                                <input
-                                    id="customer-tag-filter"
-                                    list="customer-tag-options"
-                                    value={tagFilterInput}
-                                    onChange={(event) => setTagFilterInput(event.target.value)}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter') {
-                                            event.preventDefault();
-                                            addTagFilter();
-                                        }
-                                    }}
-                                    placeholder="Type a tag, e.g. R1"
-                                    className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                                />
-                                <datalist id="customer-tag-options">
-                                    {availableTags.map((tag) => (
-                                        <option key={tag} value={tag} />
-                                    ))}
-                                </datalist>
-                                <button
-                                    type="button"
-                                    onClick={addTagFilter}
-                                    className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
-                                >
-                                    Add Filter
-                                </button>
-                            </div>
-
-                            <div className="mt-3 flex flex-wrap gap-2">
-                                {availableTags.length > 0 && (
-                                    <span className="py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                        Tags
-                                    </span>
-                                )}
-                                {availableTags.map((tag) => {
-                                    const selected = selectedTags.includes(tag);
-                                    return (
+                        {showFilters && (
+                            <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                <div className="inline-flex w-full rounded-lg border border-slate-200 bg-white p-1 sm:w-auto">
+                                    {[
+                                        { value: 'all', label: 'All' },
+                                        { value: 'active', label: 'Active' },
+                                        { value: 'inactive', label: 'Inactive' },
+                                    ].map((option) => (
                                         <button
-                                            key={tag}
+                                            key={option.value}
                                             type="button"
-                                            onClick={() => toggleTagFilter(tag)}
-                                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                                selected
-                                                    ? 'border-blue-600 bg-blue-600 text-white'
-                                                    : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50'
+                                            onClick={() => setStatusFilter(option.value)}
+                                            className={`flex-1 rounded-md px-3 py-2 text-sm font-semibold transition sm:flex-none ${
+                                                statusFilter === option.value
+                                                    ? 'bg-slate-900 text-white shadow-sm'
+                                                    : 'text-slate-500 hover:text-slate-800'
                                             }`}
                                         >
-                                            {tag}
+                                            {option.label}
                                         </button>
-                                    );
-                                })}
-                                {selectedTags.length > 0 && (
-                                    <button
-                                        type="button"
-                                        onClick={() => setSelectedTags([])}
-                                        className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
-                                    >
-                                        Clear tags
-                                    </button>
-                                )}
+                                    ))}
+                                </div>
+
+                                <div>
+                                    <label className="block text-sm font-semibold text-slate-700" htmlFor="customer-tag-filter">
+                                        Filter by tag
+                                    </label>
+                                    <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                                        <input
+                                            id="customer-tag-filter"
+                                            list="customer-tag-options"
+                                            value={tagFilterInput}
+                                            onChange={(event) => setTagFilterInput(event.target.value)}
+                                            onKeyDown={(event) => {
+                                                if (event.key === 'Enter') {
+                                                    event.preventDefault();
+                                                    addTagFilter();
+                                                }
+                                            }}
+                                            placeholder="Type a tag, e.g. R1"
+                                            className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                                        />
+                                        <datalist id="customer-tag-options">
+                                            {availableTags.map((tag) => (
+                                                <option key={tag} value={tag} />
+                                            ))}
+                                        </datalist>
+                                        <button
+                                            type="button"
+                                            onClick={addTagFilter}
+                                            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                                        >
+                                            Add Filter
+                                        </button>
+                                    </div>
+
+                                    <div className="mt-3 flex flex-wrap gap-2">
+                                        {availableTags.length > 0 && (
+                                            <span className="py-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                                Tags
+                                            </span>
+                                        )}
+                                        {availableTags.map((tag) => {
+                                            const selected = selectedTags.includes(tag);
+                                            return (
+                                                <button
+                                                    key={tag}
+                                                    type="button"
+                                                    onClick={() => toggleTagFilter(tag)}
+                                                    className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+                                                        selected
+                                                            ? 'border-blue-600 bg-blue-600 text-white'
+                                                            : 'border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-blue-50'
+                                                    }`}
+                                                >
+                                                    {tag}
+                                                </button>
+                                            );
+                                        })}
+                                        {selectedTags.length > 0 && (
+                                            <button
+                                                type="button"
+                                                onClick={() => setSelectedTags([])}
+                                                className="rounded-full border border-slate-200 bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200"
+                                            >
+                                                Clear tags
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
-                        </div>
+                        )}
                     </div>
 
                     {loading ? (
