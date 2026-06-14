@@ -24,6 +24,8 @@ const DEFAULT_SERVICE_STOP_REPORT_TEMPLATE_ID = "d-a987a065df0e43378dafd14c1b7ee
 const DEFAULT_JOB_ESTIMATE_TEMPLATE_ID = "d-566087cd96864db0a07167e8a080cc12";
 const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c52";
 const APP_LIVE_FEATURE_FLAG_ID = "feature_flag_000";
+const BASE_TECHNICIAN_RATE_ID = "base_technician_default";
+const BASE_TECHNICIAN_RATE_COPY_PLAN_ID = "base_technician_default_copy";
 
 const isCompanyCreationEnabled = async () => {
   const flagDoc = await getFirestore()
@@ -37,6 +39,65 @@ const isCompanyCreationEnabled = async () => {
 const getCompanyDisplayName = (company = {}, fallback = "") => (
   String(company.name || company.companyName || company.displayName || company.businessName || fallback || "").trim()
 );
+
+const technicianRateCopyKey = (rate = {}) => [
+  String(rate.payBasis || "").trim(),
+  String(rate.workTypeId || "").trim(),
+].join("__");
+
+const isCopyableBaseTechnicianRate = (rate = {}) => {
+  const normalizedStatus = String(rate.status || "active").trim().toLowerCase();
+  return !["archived", "deleted", "expired", "inactive"].includes(normalizedStatus);
+};
+
+const copyBaseTechnicianRatesToCompanyUser = async ({ firestore, companyId, technicianId, batch, now, actorUserId }) => {
+  if (!firestore || !companyId || !technicianId || technicianId === BASE_TECHNICIAN_RATE_ID) return 0;
+
+  const ratesRef = firestore.collection("companies").doc(companyId).collection("technicianRates");
+  const [baseRatesSnap, existingRatesSnap] = await Promise.all([
+    ratesRef.where("technicianId", "==", BASE_TECHNICIAN_RATE_ID).get(),
+    ratesRef.where("technicianId", "==", technicianId).get(),
+  ]);
+  const existingKeys = new Set(
+    existingRatesSnap.docs
+      .map((rateDoc) => technicianRateCopyKey(rateDoc.data() || {}))
+      .filter(Boolean)
+  );
+
+  let copiedCount = 0;
+  baseRatesSnap.docs.forEach((rateDoc) => {
+    const baseRate = rateDoc.data() || {};
+    if (!isCopyableBaseTechnicianRate(baseRate)) return;
+
+    const copyKey = technicianRateCopyKey(baseRate);
+    if (!copyKey || existingKeys.has(copyKey)) return;
+
+    const rateId = `comp_tech_rate_${uuidv4()}`;
+    const copiedRate = removeUndefinedDeep({
+      ...baseRate,
+      id: rateId,
+      companyId,
+      technicianId,
+      technicianName: null,
+      isBaseTechnicianRate: false,
+      rateTemplate: null,
+      copiedFromBaseTechnicianRate: true,
+      baseTechnicianRateId: baseRate.id || rateDoc.id,
+      sourceTechnicianId: BASE_TECHNICIAN_RATE_ID,
+      ratePlanId: BASE_TECHNICIAN_RATE_COPY_PLAN_ID,
+      createdAt: now,
+      createdByUserId: actorUserId || baseRate.updatedByUserId || baseRate.createdByUserId || "",
+      updatedAt: now,
+      updatedByUserId: actorUserId || "",
+    });
+
+    batch.set(ratesRef.doc(rateId), copiedRate, { merge: true });
+    existingKeys.add(copyKey);
+    copiedCount += 1;
+  });
+
+  return copiedCount;
+};
 
 const defaultServiceStopCategoryEmailSettings = (companyName = "your pool company") => ({
   "Route": {
@@ -4959,6 +5020,15 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       accessActive: true,
     });
 
+    const baseTechnicianRatesCopied = await copyBaseTechnicianRatesToCompanyUser({
+      firestore: db,
+      companyId: invite.companyId,
+      technicianId: userId,
+      batch,
+      now,
+      actorUserId: authUserId,
+    });
+
     await batch.commit();
 
     return {
@@ -4966,6 +5036,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       inviteId: inviteId,
       userId: userId,
       companyId: invite.companyId,
+      baseTechnicianRatesCopied,
       account: "Successfully Accepted"
     };
   } catch (error) {
@@ -4979,6 +5050,39 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
     };
   }
 });
+
+exports.populateBaseTechnicianRatesOnCompanyUserCreate = functions1.firestore
+  .document("companies/{companyId}/companyUsers/{companyUserId}")
+  .onCreate(async (snap, context) => {
+    const firestore = getFirestore();
+    const companyId = context.params.companyId;
+    const companyUserId = context.params.companyUserId;
+    const companyUser = snap.data() || {};
+    const technicianId = companyUser.userId || companyUser.id || companyUserId;
+
+    if (!companyId || !technicianId || technicianId === BASE_TECHNICIAN_RATE_ID) {
+      return null;
+    }
+
+    const batch = firestore.batch();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const copiedCount = await copyBaseTechnicianRatesToCompanyUser({
+      firestore,
+      companyId,
+      technicianId,
+      batch,
+      now,
+      actorUserId: companyUser.createdByUserId || companyUser.updatedByUserId || "",
+    });
+
+    if (copiedCount === 0) {
+      return { copiedCount: 0 };
+    }
+
+    await batch.commit();
+    console.log(`Copied ${copiedCount} base technician rate(s) for company user ${technicianId} in company ${companyId}.`);
+    return { copiedCount };
+  });
 
 exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, context) => {
   try {
@@ -5505,72 +5609,49 @@ exports.makeUpdatesToRecurringRoutes = functions.https.onCall(async (data, conte
 });
 
 
-exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context) => {
-  const db = getFirestore();
-
-  // Optional: require auth
-  // if (!context.auth) {
-  //   throw new functions.https.HttpsError("unauthenticated", "Must be signed in.");
-  // }
-
-  const receivedData = data?.data ?? data; // supports either {data:{...}} or {...}
-  const companyId = receivedData?.companyId;
-  const stopId = receivedData?.stopId;
-
-  if (!companyId || !stopId) {
-    throw new functions.https.HttpsError(
-      "invalid-argument",
-      "Missing companyId or stopId."
-    );
-  }
-
-  console.log("companyId", companyId);
-  console.log("stopId", stopId);
-
-  // ---- Customize these to your schema ----
+async function deleteRecurringServiceStopCascade({
+  db,
+  companyId,
+  stopId,
+  includePastServiceStops = true
+}) {
   const SERVICE_STOPS_COL = `companies/${companyId}/serviceStops`;
   const RECURRING_STOPS_COL = `companies/${companyId}/recurringServiceStop`;
-
-  // Field on each generated stop that links back to the recurring template
   const LINK_FIELD = "recurringServiceStopId";
-
-  // Date field on the generated stops (Firestore Timestamp recommended)
   const DATE_FIELD = "serviceDate";
-  // ---------------------------------------
 
-  // "Today" (start of day) so we only delete future stops
-  const now = new Date();
-  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const todayTs = Timestamp.fromDate(startOfToday);
-
-  // 1) Query all future service stops tied to this recurring stop
-  // NOTE: If you store date as milliseconds number, use a number compare instead of Timestamp.
-  const stopsQuery = db
+  let stopsQuery = db
     .collection(SERVICE_STOPS_COL)
-    .where(LINK_FIELD, "==", stopId)
-    .where(DATE_FIELD, ">=", todayTs);
+    .where(LINK_FIELD, "==", stopId);
+
+  if (!includePastServiceStops) {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const todayTs = Timestamp.fromDate(startOfToday);
+    stopsQuery = stopsQuery.where(DATE_FIELD, ">=", todayTs);
+  }
 
   let totalDeleted = 0;
 
-  // Helper: delete in batches of 500
   async function deleteQueryInBatches() {
     while (true) {
       const snap = await stopsQuery.limit(500).get();
       if (snap.empty) break;
 
-      const batch = db.batch();
-      snap.docs.forEach((doc) => batch.delete(doc.ref));
-      await batch.commit();
+      if (typeof db.recursiveDelete === "function") {
+        await Promise.all(snap.docs.map((doc) => db.recursiveDelete(doc.ref)));
+      } else {
+        const batch = db.batch();
+        snap.docs.forEach((doc) => batch.delete(doc.ref));
+        await batch.commit();
+      }
 
       totalDeleted += snap.size;
     }
   }
 
-  // 2) Delete the generated service stops
   await deleteQueryInBatches();
 
-  // 3) Get the recurring template doc before deleting it.
-  // We need this data for removeRSSFromRecurringRoute.
   const recurringRef = db.collection(RECURRING_STOPS_COL).doc(stopId);
   const recurringSnap = await recurringRef.get();
 
@@ -5586,14 +5667,117 @@ exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context
     ...recurringSnap.data(),
   };
 
-  // 4) Remove RSS from recurring routes before deleting the template.
   await removeRSSFromRecurringRoute({ db, companyId, rss });
 
-  // 5) Delete the recurring template doc.
-  await recurringRef.delete();
+  if (typeof db.recursiveDelete === "function") {
+    await db.recursiveDelete(recurringRef);
+  } else {
+    await recurringRef.delete();
+  }
+
   return {
     success: true,
+    recurringServiceStopId: stopId,
     count: totalDeleted,
+  };
+}
+
+exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context) => {
+  const db = getFirestore();
+  const receivedData = data?.data ?? data;
+  const companyId = receivedData?.companyId;
+  const stopId = receivedData?.stopId;
+  const includePastServiceStops = receivedData?.includePastServiceStops !== false;
+
+  if (!companyId || !stopId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Missing companyId or stopId."
+    );
+  }
+
+  return deleteRecurringServiceStopCascade({
+    db,
+    companyId,
+    stopId,
+    includePastServiceStops
+  });
+});
+
+exports.deleteRecurringRoute = functions.https.onCall(async (data, context) => {
+  const db = getFirestore();
+  const receivedData = data?.data ?? data;
+  const companyId = receivedData?.companyId;
+  const routeId = receivedData?.routeId;
+  const includePastServiceStops = receivedData?.includePastServiceStops !== false;
+
+  if (!companyId || !routeId) {
+    throw new functions.https.HttpsError(
+      "invalid-argument",
+      "Missing companyId or routeId."
+    );
+  }
+
+  const routeRef = db
+    .collection("companies")
+    .doc(companyId)
+    .collection("recurringRoutes")
+    .doc(routeId);
+  const routeSnap = await routeRef.get();
+
+  if (!routeSnap.exists) {
+    throw new functions.https.HttpsError(
+      "not-found",
+      "Recurring route was not found."
+    );
+  }
+
+  const routeData = routeSnap.data() || {};
+  const routeOrder = Array.isArray(routeData.order) ? routeData.order : [];
+  const routeRssIds = Array.isArray(routeData.rssIds) ? routeData.rssIds : [];
+  const recurringServiceStopIds = [
+    ...new Set([
+      ...routeOrder.map((item) => item?.recurringServiceStopId),
+      ...routeRssIds
+    ].filter((id) => typeof id === "string" && id.trim().length > 0))
+  ];
+  const deletedRecurringServiceStops = [];
+  const missingRecurringServiceStops = [];
+  let deletedServiceStopCount = 0;
+
+  for (const stopId of recurringServiceStopIds) {
+    try {
+      const result = await deleteRecurringServiceStopCascade({
+        db,
+        companyId,
+        stopId,
+        includePastServiceStops
+      });
+
+      deletedRecurringServiceStops.push(stopId);
+      deletedServiceStopCount += result.count || 0;
+    } catch (error) {
+      if (error?.code === "not-found") {
+        missingRecurringServiceStops.push(stopId);
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  if (typeof db.recursiveDelete === "function") {
+    await db.recursiveDelete(routeRef);
+  } else {
+    await routeRef.delete();
+  }
+
+  return {
+    success: true,
+    routeId,
+    deletedRecurringServiceStops,
+    missingRecurringServiceStops,
+    deletedServiceStopCount
   };
 });
 
@@ -5810,6 +5994,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       typeId: serviceStopTypeFields.typeId,
       typeImage: serviceStopTypeFields.typeImage,
       category: serviceStopTypeFields.category,
+      serviceStopTypeUseCaseRawValue: rss.serviceStopTypeUseCaseRawValue,
       customerName: rss.customerName,
       customerId: rss.customerId,
       address: rss.address,
@@ -5824,6 +6009,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
 
       frequency: rss.frequency,
       day: rss.day,
+      daysOfWeek: rss.daysOfWeek,
       description: rss.description,
 
       lastCreated: toFirestoreTimestamp(rss.lastCreated),
@@ -5834,18 +6020,150 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       laborContractId: rss.laborContractId ?? null,
       contractedCompanyId: rss.contractedCompanyId ?? null,
       mainCompanyId: rss.mainCompanyId ?? null,
+      salesAgreementId: rss.salesAgreementId,
+      salesBillingSubscriptionId: rss.salesBillingSubscriptionId,
 
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
   }
 
-  function buildServiceStopPatch(rss) {
-    return removeUndefinedValues({
+  const dayIndexes = {
+    Sunday: 0,
+    Monday: 1,
+    Tuesday: 2,
+    Wednesday: 3,
+    Thursday: 4,
+    Friday: 5,
+    Saturday: 6
+  };
+
+  function parseDate(value) {
+    if (!value) return null;
+    if (typeof value.toDate === "function") return value.toDate();
+    if (value instanceof Date) return value;
+    if (typeof value === "number") return new Date(value);
+
+    if (typeof value === "object") {
+      if (typeof value._seconds === "number") {
+        return new Date(value._seconds * 1000);
+      }
+
+      if (typeof value.seconds === "number") {
+        return new Date(value.seconds * 1000);
+      }
+    }
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+
+  function dateForDayOnOrAfter(date, targetDayIndex) {
+    const workingDate = parseDate(date) || new Date();
+    workingDate.setHours(0, 0, 0, 0);
+    const daysUntilTarget = (targetDayIndex - workingDate.getDay() + 7) % 7;
+    workingDate.setDate(workingDate.getDate() + daysUntilTarget);
+    return workingDate;
+  }
+
+  function normalizeFrequencyKey(value) {
+    return String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+  }
+
+  function normalizeDaysOfWeek(value) {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (typeof value === "string") {
+      return value
+        .split(",")
+        .map((day) => day.trim())
+        .filter(Boolean);
+    }
+    return [];
+  }
+
+  function labelizeFrequency(value) {
+    if (!value) return "Not set";
+    return String(value)
+      .replace(/([A-Z])/g, " $1")
+      .replace(/[_-]/g, " ")
+      .trim()
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  function buildServiceFrequencyLabel({ serviceCadence, serviceCadenceCount, serviceDaysOfWeek }) {
+    const key = normalizeFrequencyKey(serviceCadence);
+    const dayText = serviceDaysOfWeek.length ? ` on ${serviceDaysOfWeek.join(", ")}` : "";
+
+    if (key === "twiceweekly") return `Twice Weekly${dayText}`;
+    if (key === "threetimesweekly" || key === "tripleweekly") return `Three Times Weekly${dayText}`;
+    if (key === "biweekly" || key === "everyotherweek") return `Every Other Week${dayText}`;
+    if (Number(serviceCadenceCount || 1) > 1 && !["custom", "onetime"].includes(key)) {
+      return `${serviceCadenceCount}x ${labelizeFrequency(serviceCadence)}${dayText}`;
+    }
+    return `${labelizeFrequency(serviceCadence)}${dayText}`;
+  }
+
+  function serviceScheduleUpdateFromRSS(rss) {
+    const frequencyKey = normalizeFrequencyKey(rss.frequency);
+    let serviceCadence = "weekly";
+    let serviceCadenceCount = 1;
+
+    if (frequencyKey.includes("daily")) serviceCadence = "daily";
+    if (frequencyKey.includes("biweekly") || frequencyKey.includes("everyotherweek") || frequencyKey.includes("every2weeks")) serviceCadence = "biweekly";
+    if (frequencyKey.includes("monthly") || frequencyKey.includes("every4weeks")) serviceCadence = "monthly";
+    if (frequencyKey.includes("twiceweekly") || frequencyKey.includes("2xweekly") || frequencyKey.includes("twoperweek")) {
+      serviceCadence = "twiceWeekly";
+      serviceCadenceCount = 2;
+    }
+    if (frequencyKey.includes("threetimesweekly") || frequencyKey.includes("tripleweekly") || frequencyKey.includes("3xweekly") || frequencyKey.includes("threeperweek")) {
+      serviceCadence = "threeTimesWeekly";
+      serviceCadenceCount = 3;
+    }
+    if (frequencyKey.includes("custom")) serviceCadence = "custom";
+
+    const serviceDaysOfWeek = normalizeDaysOfWeek(rss.daysOfWeek || rss.day);
+    return {
+      serviceCadence,
+      serviceCadenceCount,
+      serviceDaysOfWeek,
+      serviceFrequencyLabel: buildServiceFrequencyLabel({
+        serviceCadence,
+        serviceCadenceCount,
+        serviceDaysOfWeek
+      }),
+      operationsSetupStatus: "recurringServiceStopCreated",
+      operationsSetupUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+  }
+
+  function buildServiceStopPatch(rss, previousRSS, serviceStop) {
+    const serviceStopTypeFields = normalizeRecurringServiceStopTypeFields(
+      rss,
+      "buildServiceStopPatch"
+    );
+    const patch = removeUndefinedValues({
       tech: rss.tech,
       techId: rss.techId,
       description: rss.description,
+      type: serviceStopTypeFields.type,
+      typeId: serviceStopTypeFields.typeId,
+      typeImage: serviceStopTypeFields.typeImage,
+      category: serviceStopTypeFields.category,
+      serviceStopTypeUseCaseRawValue: rss.serviceStopTypeUseCaseRawValue,
       updatedAt: admin.firestore.FieldValue.serverTimestamp()
     });
+    const targetDayIndex = dayIndexes[rss.day];
+    const dayChanged = previousRSS?.day !== rss.day;
+    const isFinished = String(serviceStop?.operationStatus || "").toLowerCase() === "finished";
+
+    if (dayChanged && targetDayIndex !== undefined && !isFinished) {
+      patch.serviceDate = admin.firestore.Timestamp.fromDate(
+        dateForDayOnOrAfter(serviceStop?.serviceDate, targetDayIndex)
+      );
+    }
+
+    return patch;
   }
 
   async function commitInBatches(writeOperations) {
@@ -5891,7 +6209,7 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     const normalizedRecurringServiceStop =
       normalizeRecurringServiceStopForFirestore(recurringServiceStop);
 
-    const serviceStopPatch = buildServiceStopPatch(recurringServiceStop);
+    const syncRoute = receivedData.syncRoute !== false;
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);
@@ -5904,6 +6222,23 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       .get();
 
     const writeOperations = [];
+    const serviceScheduleUpdate = serviceScheduleUpdateFromRSS({
+      ...previousRSS,
+      ...normalizedRecurringServiceStop
+    });
+    let linkedAgreementId = recurringServiceStop.salesAgreementId || previousRSS.salesAgreementId || "";
+    let linkedBillingSubscriptionId = recurringServiceStop.salesBillingSubscriptionId || previousRSS.salesBillingSubscriptionId || "";
+
+    if (!linkedAgreementId) {
+      const linkedAgreementsSnap = await db.collection("salesAgreements")
+        .where("companyId", "==", companyId)
+        .where("recurringServiceStopId", "==", recurringServiceStop.id)
+        .limit(1)
+        .get();
+      const linkedAgreementDoc = linkedAgreementsSnap.docs[0];
+      linkedAgreementId = linkedAgreementDoc?.id || "";
+      linkedBillingSubscriptionId = linkedBillingSubscriptionId || linkedAgreementDoc?.data()?.billingSubscriptionId || "";
+    }
 
     writeOperations.push({
       type: "set",
@@ -5916,18 +6251,51 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
       writeOperations.push({
         type: "update",
         ref: serviceStopDoc.ref,
-        data: serviceStopPatch
+        data: buildServiceStopPatch(
+          recurringServiceStop,
+          previousRSS,
+          serviceStopDoc.data() || {}
+        )
       });
     });
 
+    if (linkedAgreementId) {
+      writeOperations.push({
+        type: "set",
+        ref: db.collection("salesAgreements").doc(linkedAgreementId),
+        data: {
+          ...serviceScheduleUpdate,
+          recurringServiceStopId: recurringServiceStop.id
+        },
+        options: { merge: true }
+      });
+    }
+
+    if (linkedBillingSubscriptionId) {
+      writeOperations.push({
+        type: "set",
+        ref: db.collection("salesBillingSubscriptions").doc(linkedBillingSubscriptionId),
+        data: {
+          ...serviceScheduleUpdate,
+          recurringServiceStopId: recurringServiceStop.id
+        },
+        options: { merge: true }
+      });
+    }
+
     const committedWrites = await commitInBatches(writeOperations);
 
-    const recurringRouteResult = await updateRecurringRouteOrderForRSS({
-      db,
-      companyId,
-      previousRSS,
-      updatedRSS: recurringServiceStop
-    });
+    const recurringRouteResult = syncRoute
+      ? await updateRecurringRouteOrderForRSS({
+        db,
+        companyId,
+        previousRSS,
+        updatedRSS: recurringServiceStop
+      })
+      : {
+        skipped: true,
+        reason: "Route sync skipped by caller."
+      };
 
     return {
       success: true,

@@ -20,6 +20,7 @@ Recommended template data:
   "zip": "93720",
   "billingAmount": "$175.00",
   "billingFrequency": "Monthly",
+  "serviceFrequency": "Weekly",
   "billingStartDate": "July 1, 2026",
   "paymentTerms": "Due on receipt",
   "autopayStatus": "Optional",
@@ -386,6 +387,12 @@ Recommended template data:
                                         <tr class="summary-row">
                                             <td class="summary-label">Amount</td>
                                             <td class="summary-value">{{billingAmount}}</td>
+                                        </tr>
+                                        {{/if}}
+                                        {{#if serviceFrequency}}
+                                        <tr class="summary-row">
+                                            <td class="summary-label">Service Frequency</td>
+                                            <td class="summary-value">{{serviceFrequency}}</td>
                                         </tr>
                                         {{/if}}
                                         {{#if billingFrequency}}

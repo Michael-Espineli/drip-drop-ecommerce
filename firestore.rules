@@ -34,6 +34,35 @@ service cloud.firestore {
         && get(userAccessPath(companyId)).data.roleName in ["Owner", "Admin", "Manager"];
     }
 
+    function companyRolePath(companyId) {
+      return /databases/$(database)/documents/companies/$(companyId)/roles/$(get(userAccessPath(companyId)).data.roleId);
+    }
+
+    function hasCompanyRolePermission(companyId, permissionId) {
+      return hasCompanyAccess(companyId)
+        && get(userAccessPath(companyId)).data.roleId is string
+        && exists(companyRolePath(companyId))
+        && (
+          !(get(companyRolePath(companyId)).data.permissionIdList is list)
+          || permissionId in get(companyRolePath(companyId)).data.permissionIdList
+        );
+    }
+
+    function canReadCompanyUserPerformanceReviews(companyId) {
+      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "260");
+    }
+
+    function canWriteCompanyUserPerformanceReviews(companyId) {
+      return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "264");
+    }
+
+    function canReadOwnVisiblePerformanceReview(companyId, companyUserId) {
+      return hasCompanyAccess(companyId)
+        && resource.data.companyUserId == companyUserId
+        && resource.data.technicianUserId == request.auth.uid
+        && resource.data.visibleToTechnician == true;
+    }
+
     function isPersonalOrCompanyData(data) {
       return signedIn()
         && (
@@ -212,6 +241,22 @@ service cloud.firestore {
       match /{document=**} {
         allow read, write: if hasCompanyAccess(companyId);
       }
+    }
+
+    match /companyUserPerformanceReviews/{companyId}/companyUsers/{companyUserId}/reviews/{reviewId} {
+      allow read: if canReadCompanyUserPerformanceReviews(companyId)
+        || canReadOwnVisiblePerformanceReview(companyId, companyUserId);
+      allow create: if canWriteCompanyUserPerformanceReviews(companyId)
+        && request.resource.data.companyId == companyId
+        && request.resource.data.companyUserId == companyUserId;
+      allow update: if canWriteCompanyUserPerformanceReviews(companyId)
+        && resource.data.companyId == companyId
+        && resource.data.companyUserId == companyUserId
+        && request.resource.data.companyId == resource.data.companyId
+        && request.resource.data.companyUserId == resource.data.companyUserId;
+      allow delete: if canWriteCompanyUserPerformanceReviews(companyId)
+        && resource.data.companyId == companyId
+        && resource.data.companyUserId == companyUserId;
     }
 
     match /invites/{inviteId} {

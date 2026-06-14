@@ -284,10 +284,46 @@ const cadenceToStripeInterval = (cadence = '', rateType = '') => {
   const rateKey = normalizeStatus(rateType);
 
   if (cadenceKey.includes('week') || rateKey.includes('week')) return 'week';
-  if (cadenceKey.includes('year') || rateKey.includes('year')) return 'year';
+  if (cadenceKey.includes('year') || cadenceKey.includes('annual') || rateKey.includes('year') || rateKey.includes('annual')) return 'year';
   if (cadenceKey.includes('day') || rateKey.includes('day')) return 'day';
   return 'month';
 };
+
+const billingFrequencyForAgreement = (agreement = {}) => (
+  agreement.billingFrequency ||
+  agreement.billingCadence ||
+  agreement.invoiceFrequency ||
+  agreement.serviceCadence ||
+  agreement.rateType ||
+  'monthly'
+);
+
+const billingFrequencyCountForAgreement = (agreement = {}) => Math.max(Number(
+  agreement.billingFrequencyCount ||
+  agreement.billingCadenceCount ||
+  agreement.invoiceFrequencyCount ||
+  agreement.serviceCadenceCount ||
+  1
+), 1);
+
+const billingIntervalCountForAgreement = (agreement = {}) => {
+  const frequencyKey = normalizeStatus(billingFrequencyForAgreement(agreement));
+  if (frequencyKey === 'biweekly') return 2;
+  if (frequencyKey === 'quarterly') return 3;
+  return billingFrequencyCountForAgreement(agreement);
+};
+
+const serviceFrequencyForAgreement = (agreement = {}) => (
+  agreement.serviceCadence ||
+  agreement.serviceFrequency ||
+  ''
+);
+
+const serviceFrequencyCountForAgreement = (agreement = {}) => Math.max(Number(
+  agreement.serviceCadenceCount ||
+  agreement.serviceFrequencyCount ||
+  1
+), 1);
 
 const copyLineItemsForBilling = (lineItems = []) => (
   Array.isArray(lineItems)
@@ -314,6 +350,10 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
   const lineItems = copyLineItemsForBilling(agreement.lineItems);
   const amountCents = Number(agreement.totalAmountCents || agreement.rateAmountCents || 0);
   const canStartStripeCheckout = Boolean(stripeConnectedAccountId) && amountCents > 0;
+  const billingFrequency = billingFrequencyForAgreement(agreement);
+  const billingFrequencyCount = billingFrequencyCountForAgreement(agreement);
+  const serviceCadence = serviceFrequencyForAgreement(agreement);
+  const serviceCadenceCount = serviceFrequencyCountForAgreement(agreement);
 
   return {
     id: agreement.billingSubscriptionId || `sbs_${agreement.id}`,
@@ -343,9 +383,14 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     autopayEnabled: false,
     amountCents,
     currency: agreement.currency || 'usd',
-    interval: cadenceToStripeInterval(agreement.serviceCadence, agreement.rateType),
-    intervalCount: Math.max(Number(agreement.serviceCadenceCount || 1), 1),
-    serviceCadence: agreement.serviceCadence || '',
+    interval: cadenceToStripeInterval(billingFrequency, agreement.rateType),
+    intervalCount: billingIntervalCountForAgreement(agreement),
+    billingFrequency,
+    billingFrequencyCount,
+    serviceCadence,
+    serviceCadenceCount,
+    serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
+    serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
     rateType: agreement.rateType || '',
     paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
     invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || 'email',
@@ -362,6 +407,12 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
       termsTemplateId: agreement.termsTemplateId || '',
       termsTemplateName: agreement.termsTemplateName || '',
       revisionNumber: String(agreement.revisionNumber || 0),
+      billingFrequency,
+      billingFrequencyCount: String(billingFrequencyCount),
+      serviceCadence,
+      serviceCadenceCount: String(serviceCadenceCount),
+      serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
+      serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
       acceptedAt: admin.firestore.FieldValue.serverTimestamp(),
     },
     checkoutSessionId: '',
@@ -690,7 +741,12 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       currency: subscriptionDraft.currency,
       interval: subscriptionDraft.interval,
       intervalCount: subscriptionDraft.intervalCount,
+      billingFrequency: subscriptionDraft.billingFrequency,
+      billingFrequencyCount: subscriptionDraft.billingFrequencyCount,
       serviceCadence: subscriptionDraft.serviceCadence,
+      serviceCadenceCount: subscriptionDraft.serviceCadenceCount,
+      serviceDaysOfWeek: subscriptionDraft.serviceDaysOfWeek,
+      serviceFrequencyLabel: subscriptionDraft.serviceFrequencyLabel,
       rateType: subscriptionDraft.rateType,
       paymentTerms: subscriptionDraft.paymentTerms,
       invoiceDeliveryMethod: subscriptionDraft.invoiceDeliveryMethod,

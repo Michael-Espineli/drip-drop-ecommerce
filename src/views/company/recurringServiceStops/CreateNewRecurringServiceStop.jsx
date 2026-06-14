@@ -7,6 +7,7 @@ import { db } from '../../../utils/config';
 import { Context } from "../../../context/AuthContext";
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 import { salesCollectionNames } from '../../../utils/models/Sales';
+import { recurringFrequencyToAgreementService } from '../../../utils/sales/agreementCadence';
 import Select from 'react-select';
 import DatePicker from "react-datepicker";
 import { v4 as uuidv4 } from 'uuid';
@@ -16,6 +17,7 @@ import {
     debugServiceStopTypeWrite,
     resolveServiceStopTypeFields,
     SERVICE_STOP_TYPE_USE_CASES,
+    serviceStopTypeMatchesUseCase,
     suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { addRecurringServiceStopToPlannedRoute } from '../../../utils/recurringRouteSync';
@@ -32,6 +34,8 @@ const firestoreValueToDate = (value) => {
 const cadenceToFrequencyOption = (cadence = "") => {
     const normalized = String(cadence).toLowerCase();
     if (normalized.includes("day")) return { value: "Daily", label: "Daily" };
+    if (normalized.includes("twice")) return { value: "Twice Weekly", label: "Twice Weekly" };
+    if (normalized.includes("three") || normalized.includes("triple")) return { value: "Three Times Weekly", label: "Three Times Weekly" };
     if (normalized.includes("bi") || normalized.includes("2 week")) return { value: "Bi-Weekly", label: "Bi-Weekly" };
     if (normalized.includes("month")) return { value: "Monthly", label: "Monthly" };
     return { value: "Weekly", label: "Weekly" };
@@ -79,6 +83,8 @@ const CreateNewRecurringServiceStop = () => {
     const frequencyOptions = [
         { value: "Daily", label: "Daily" },
         { value: "Weekly", label: "Weekly" },
+        { value: "Twice Weekly", label: "Twice Weekly" },
+        { value: "Three Times Weekly", label: "Three Times Weekly" },
         { value: "Bi-Weekly", label: "Bi-Weekly" },
         { value: "Monthly", label: "Monthly" },
     ];
@@ -87,6 +93,7 @@ const CreateNewRecurringServiceStop = () => {
         () =>
             companyServiceStopTypes
                 .filter((type) => type.isActive !== false && type.active !== false && type.status !== "Inactive")
+                .filter((type) => serviceStopTypeMatchesUseCase(type, SERVICE_STOP_TYPE_USE_CASES.recurringRoute))
                 .map((type) => ({
                     ...type,
                     value: type.id,
@@ -138,6 +145,7 @@ const CreateNewRecurringServiceStop = () => {
                 // raw strings (like Swift .rawValue)
                 frequency: recurringServiceStop.frequency,
                 day: recurringServiceStop.day,
+                daysOfWeek: recurringServiceStop.daysOfWeek ?? recurringServiceStop.day ?? "",
 
                 description: recurringServiceStop.description ?? "",
                 lastCreated: ms(recurringServiceStop.lastCreated ?? new Date()),
@@ -149,6 +157,8 @@ const CreateNewRecurringServiceStop = () => {
                 laborContractId: recurringServiceStop.laborContractId ?? "",
                 contractedCompanyId: recurringServiceStop.contractedCompanyId ?? "",
                 mainCompanyId: recurringServiceStop.mainCompanyId ?? "",
+                salesAgreementId: recurringServiceStop.salesAgreementId ?? "",
+                salesBillingSubscriptionId: recurringServiceStop.salesBillingSubscriptionId ?? "",
             },
         };
 
@@ -202,8 +212,8 @@ const CreateNewRecurringServiceStop = () => {
                         if (agreement.companyId === recentlySelectedCompany) {
                             preselectedCustomerId = preselectedCustomerId || agreement.customerId || '';
                             descriptionParts.push(`Service agreement: ${agreement.title || "linked agreement"}`);
-                            if (agreement.serviceCadence || agreement.rateType) {
-                                setFrequency(cadenceToFrequencyOption(agreement.serviceCadence || agreement.rateType));
+                            if (agreement.serviceCadence) {
+                                setFrequency(cadenceToFrequencyOption(agreement.serviceCadence));
                             }
                             const agreementStartDate = firestoreValueToDate(agreement.startDate);
                             if (agreementStartDate) setStartDate(agreementStartDate);
@@ -220,8 +230,8 @@ const CreateNewRecurringServiceStop = () => {
                             if (!descriptionParts.length) {
                                 descriptionParts.push("Billing subscription: linked subscription");
                             }
-                            if (subscription.serviceCadence || subscription.interval) {
-                                setFrequency(cadenceToFrequencyOption(subscription.serviceCadence || subscription.interval));
+                            if (subscription.serviceCadence) {
+                                setFrequency(cadenceToFrequencyOption(subscription.serviceCadence));
                             }
                             const subscriptionStartDate = firestoreValueToDate(subscription.currentPeriodStart);
                             if (subscriptionStartDate) setStartDate(subscriptionStartDate);
@@ -346,6 +356,7 @@ const CreateNewRecurringServiceStop = () => {
 
             frequency: frequency.value ?? "Weekly",
             day: dayOfWeek.value,
+            daysOfWeek: dayOfWeek.value,
             description,
             lastCreated: new Date(),
             serviceLocationId: serviceLocation.id,
@@ -353,7 +364,9 @@ const CreateNewRecurringServiceStop = () => {
             otherCompany: false,
             laborContractId: "",
             contractedCompanyId: "",
-            mainCompanyId: ""
+            mainCompanyId: "",
+            salesAgreementId: agreementId,
+            salesBillingSubscriptionId: billingSubscriptionId,
         };
 
 
@@ -373,6 +386,11 @@ const CreateNewRecurringServiceStop = () => {
                 operationsSetupUpdatedAt: serverTimestamp(),
                 updatedAt: serverTimestamp(),
             };
+            const serviceScheduleUpdate = recurringFrequencyToAgreementService({
+                frequency: newRSSData.frequency,
+                daysOfWeek: newRSSData.daysOfWeek,
+                day: newRSSData.day,
+            });
             const setupWrites = [];
 
             if (agreementId || billingSubscriptionId) {
@@ -386,6 +404,7 @@ const CreateNewRecurringServiceStop = () => {
             if (agreementId) {
                 setupWrites.push(updateDoc(doc(db, salesCollectionNames.agreements, agreementId), {
                     ...setupUpdate,
+                    ...serviceScheduleUpdate,
                     billingFlowNextAction: "monitorBilling",
                     billingFlowUpdatedAt: serverTimestamp(),
                 }));
@@ -394,6 +413,7 @@ const CreateNewRecurringServiceStop = () => {
             if (billingSubscriptionId) {
                 setupWrites.push(updateDoc(doc(db, salesCollectionNames.billingSubscriptions, billingSubscriptionId), {
                     ...setupUpdate,
+                    ...serviceScheduleUpdate,
                     nextAction: "monitorBilling",
                 }));
             }

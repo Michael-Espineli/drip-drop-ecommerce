@@ -30,7 +30,7 @@ const reportCategories = [
 const reportCatalog = [
   { value: "readings", label: "Readings Summary", status: "Ready", source: "stopData readings", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
-  { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by technician", category: "performance" },
+  { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
   { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
   { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll", category: "operations" },
@@ -42,6 +42,11 @@ const reportCatalog = [
 ];
 
 const fixedGroupingReportTypes = new Set(["readingHealth", "readingPerformance"]);
+
+const readingPerformanceViewOptions = [
+  { value: "users", label: "Users" },
+  { value: "customers", label: "Customers" },
+];
 
 const groupOptions = [
   { value: "company", label: "Company" },
@@ -330,6 +335,29 @@ const groupKey = (item, groupBy, fallbackName = "Company") => {
   }
 
   return { id: "company", name: fallbackName };
+};
+
+const workerDisplayName = (record = {}, fallback = "-") =>
+  record.userName ||
+  record.techName ||
+  record.technicianName ||
+  record.tech ||
+  record.workerName ||
+  record.companyUserName ||
+  record.adminName ||
+  record.workerId ||
+  record.techId ||
+  record.technicianId ||
+  record.userId ||
+  fallback;
+
+const assignedRssWorkerName = (recurringStop = {}, serviceStop = {}) => {
+  const assignedName = workerDisplayName(recurringStop, "");
+  if (assignedName) return assignedName;
+  if (recurringStop.techId || recurringStop.userId || recurringStop.technicianId) {
+    return recurringStop.techId || recurringStop.userId || recurringStop.technicianId;
+  }
+  return serviceStop.recurringServiceStopId || recurringStop.id ? "Unassigned" : "";
 };
 
 const ensureGroup = (groups, group) => {
@@ -1032,11 +1060,64 @@ const buildReadingPerformanceReport = ({
   readingTemplates,
   bodiesOfWater,
   customersById = new Map(),
+  serviceStops = [],
+  recurringServiceStops = [],
   readingPerformanceStandards,
+  readingPerformanceView = "users",
   mode,
 }) => {
   const standards = activeReadingPerformanceStandards(readingPerformanceStandards, readingTemplates);
   const bodiesById = new Map((bodiesOfWater || []).map((body) => [body.id, body]));
+  const performanceView = readingPerformanceView === "customers" ? "customers" : "users";
+  const serviceStopsById = new Map();
+  const recurringStopsById = new Map();
+
+  const indexRecord = (map, record, fields) => {
+    fields.forEach((field) => {
+      const value = record?.[field];
+      if (value) map.set(String(value), record);
+    });
+  };
+
+  serviceStops.forEach((serviceStop) => {
+    indexRecord(serviceStopsById, serviceStop, ["id", "serviceStopId", "internalId"]);
+  });
+  recurringServiceStops.forEach((recurringStop) => {
+    indexRecord(recurringStopsById, recurringStop, ["id", "recurringServiceStopId", "rssId", "internalId"]);
+  });
+
+  const serviceStopForStopData = (stop) => (
+    serviceStopsById.get(String(stop.serviceStopId || "")) ||
+    serviceStopsById.get(String(stop.id || "")) ||
+    {}
+  );
+  const recurringStopFor = (stop, serviceStop) => (
+    recurringStopsById.get(String(stop.recurringServiceStopId || "")) ||
+    recurringStopsById.get(String(serviceStop.recurringServiceStopId || "")) ||
+    recurringStopsById.get(String(stop.rssId || "")) ||
+    recurringStopsById.get(String(serviceStop.rssId || "")) ||
+    {}
+  );
+  const customerGroupForStop = (stop, serviceStop) => {
+    const bodyOfWaterId = stop.bodyOfWaterId || serviceStop.bodyOfWaterId || "";
+    const bodyOfWater = bodiesById.get(bodyOfWaterId) || {};
+    const customerId = stop.customerId || serviceStop.customerId || bodyOfWater.customerId || stop.internalCustomerId || "no-customer";
+    const customer = customerId ? customersById.get(customerId) : null;
+    return {
+      id: customerId,
+      name:
+        customerDisplayName(customer) ||
+        stop.customerName ||
+        serviceStop.customerName ||
+        bodyOfWater.customerName ||
+        customerId ||
+        "No Customer",
+    };
+  };
+  const groupForStop = (stop, serviceStop) =>
+    performanceView === "customers"
+      ? customerGroupForStop(stop, serviceStop)
+      : groupKey({ ...serviceStop, ...stop }, "user");
   const groups = new Map();
   const overallFailingStopIds = new Set();
   const overallStandardSummaries = new Map(
@@ -1081,32 +1162,28 @@ const buildReadingPerformanceReport = ({
     summary.lastValue = row.value;
   };
 
-  const buildFailureRow = (stop, reading, standard, readingValue, stopIndex, failureIndex) => {
-    const bodyOfWaterId = reading.bodyOfWaterId || stop.bodyOfWaterId || "unknown";
+  const buildFailureRow = (stop, serviceStop, recurringStop, reading, standard, readingValue, stopIndex, failureIndex) => {
+    const bodyOfWaterId = reading.bodyOfWaterId || stop.bodyOfWaterId || serviceStop.bodyOfWaterId || "unknown";
     const bodyOfWater = bodiesById.get(bodyOfWaterId) || {};
-    const customerId = stop.customerId || reading.customerId || bodyOfWater.customerId || stop.internalCustomerId || "";
+    const customerId = stop.customerId || reading.customerId || serviceStop.customerId || bodyOfWater.customerId || stop.internalCustomerId || "";
     const customer = customerId ? customersById.get(customerId) : null;
     const readingDate = dateFromValue(stop.date);
     const poolName =
       bodyOfWater.name ||
       bodyOfWater.nickName ||
       stop.bodyOfWaterName ||
+      serviceStop.bodyOfWaterName ||
       stop.poolName ||
       "Unknown Pool";
     const customerName =
       customerDisplayName(customer) ||
       bodyOfWater.customerName ||
       stop.customerName ||
+      serviceStop.customerName ||
       customerId ||
       "-";
-    const workerName =
-      stop.userName ||
-      stop.techName ||
-      stop.technicianName ||
-      stop.tech ||
-      stop.workerName ||
-      stop.companyUserName ||
-      "-";
+    const workerName = workerDisplayName(stop, workerDisplayName(serviceStop, "-"));
+    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop);
     const value = [
       readingValue.toLocaleString(undefined, { maximumFractionDigits: 2 }),
       reading.UOM || reading.uom || standard.unit,
@@ -1124,24 +1201,30 @@ const buildReadingPerformanceReport = ({
       value,
       rule: `${readingOperatorLabel(standard.operator)} ${standard.thresholdLabel}`,
       serviceStop: stop.serviceStopId || stop.id || "-",
+      assignedRssTech: assignedRssTech || "-",
       status: "Failing to meet standards",
     };
   };
 
   stopData.forEach((stop, stopIndex) => {
     const stopKey = String(stop.id || stop.serviceStopId || `stop-${stopIndex}`);
-    const group = ensureGroup(groups, groupKey(stop, "user"));
+    const serviceStop = serviceStopForStopData(stop);
+    const recurringStop = recurringStopFor(stop, serviceStop);
+    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop);
+    const group = ensureGroup(groups, groupForStop(stop, serviceStop));
     if (!group.performance) {
       group.performance = {
         totalStops: 0,
         failingStopIds: new Set(),
         totalFailingReadings: 0,
+        assignedRssTechs: new Set(),
         standards: makeStandardSummaries(),
         detailRows: [],
       };
     }
 
     group.performance.totalStops += 1;
+    if (assignedRssTech) group.performance.assignedRssTechs.add(assignedRssTech);
     const readings = Array.isArray(stop.readings) ? stop.readings : [];
     const failedStandardsForStop = new Set();
 
@@ -1165,7 +1248,7 @@ const buildReadingPerformanceReport = ({
       totalFailingReadings += failures.length;
 
       failures.forEach(({ reading, value }, failureIndex) => {
-        const row = buildFailureRow(stop, reading, standard, value, stopIndex, failureIndex);
+        const row = buildFailureRow(stop, serviceStop, recurringStop, reading, standard, value, stopIndex, failureIndex);
         group.performance.detailRows.push(row);
         updateLatest(groupSummary, row);
         updateLatest(overallSummary, row);
@@ -1186,11 +1269,13 @@ const buildReadingPerformanceReport = ({
         totalStops: 0,
         failingStopIds: new Set(),
         totalFailingReadings: 0,
+        assignedRssTechs: new Set(),
         standards: makeStandardSummaries(),
         detailRows: [],
       };
       const failingStops = performance.failingStopIds.size;
       const latestDetail = [...performance.detailRows].sort((a, b) => b.sortTime - a.sortTime)[0];
+      const assignedRssTechs = [...performance.assignedRssTechs].sort().join(", ") || "-";
       const anyStandardRow = {
         id: `${group.id}-any-standard`,
         standard: "Any standard",
@@ -1199,6 +1284,7 @@ const buildReadingPerformanceReport = ({
         failingReadings: performance.totalFailingReadings,
         latestFail: latestDetail?.date || "-",
         lastCustomer: latestDetail?.customer || "-",
+        assignedRssTechs,
         lastValue: "-",
       };
       const standardRows = standards.map((standard) => {
@@ -1211,6 +1297,7 @@ const buildReadingPerformanceReport = ({
           failingReadings: summary?.failingReadings || 0,
           latestFail: summary?.latestFail || "-",
           lastCustomer: summary?.lastCustomer || "-",
+          assignedRssTechs,
           lastValue: summary?.lastValue || "-",
         };
       });
@@ -1226,17 +1313,21 @@ const buildReadingPerformanceReport = ({
         summary: {
           id: group.id,
           user: group.name,
+          customer: group.name,
           serviceStops: performance.totalStops,
           failingStops,
           userFailingRate: percentString(failingStops, performance.totalStops),
+          customerFailingRate: percentString(failingStops, performance.totalStops),
           companyFailingShare: percentString(failingStops, totalCompanyFailingStops),
           failingReadings: performance.totalFailingReadings,
+          assignedRssTechs,
           latestFail: latestDetail?.date || "-",
         },
         metrics: {
           "Service Stops": performance.totalStops,
           "Not Good Standing": `${failingStops.toLocaleString()} (${percentString(failingStops, performance.totalStops)})`,
           "Company Failing Share": percentString(failingStops, totalCompanyFailingStops),
+          ...(performanceView === "customers" ? { "Assigned RSS Techs": assignedRssTechs } : {}),
           "Failing Readings": performance.totalFailingReadings,
         },
         rows: mode === "summary" ? [anyStandardRow, ...standardRows] : detailRows,
@@ -1260,9 +1351,22 @@ const buildReadingPerformanceReport = ({
       lastCustomer: summary.lastCustomer || "-",
       lastValue: summary.lastValue || "-",
     }));
+  const summaryEntityKey = performanceView === "customers" ? "customer" : "user";
+  const summaryEntityLabel = performanceView === "customers" ? "Customer" : "User";
+  const summaryFailingRateKey = performanceView === "customers" ? "customerFailingRate" : "userFailingRate";
+  const summaryColumns = [
+    { key: summaryEntityKey, label: summaryEntityLabel },
+    { key: "serviceStops", label: "Service Stops", align: "right" },
+    { key: "failingStops", label: "Failing Stops", align: "right" },
+    { key: summaryFailingRateKey, label: `% of ${summaryEntityLabel} Stops`, align: "right" },
+    { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
+    { key: "failingReadings", label: "Failing Readings", align: "right" },
+    ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
+    { key: "latestFail", label: "Latest Fail" },
+  ];
 
   return {
-    title: "Reading Performance Report",
+    title: performanceView === "customers" ? "Reading Performance by Customer Report" : "Reading Performance Report",
     stats: [
       numberMetric("Service Stops", stopData.length),
       numberMetric("Not Good Standing", overallFailingStopIds.size),
@@ -1282,6 +1386,7 @@ const buildReadingPerformanceReport = ({
           { key: "failingStops", label: "Failing Stops", align: "right" },
           { key: "failingRate", label: "% of Stops", align: "right" },
           { key: "failingReadings", label: "Failing Readings", align: "right" },
+          ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
           { key: "latestFail", label: "Latest Fail" },
           { key: "lastCustomer", label: "Last Customer" },
           { key: "lastValue", label: "Last Value", align: "right" },
@@ -1290,6 +1395,8 @@ const buildReadingPerformanceReport = ({
           { key: "date", label: "Date" },
           { key: "customer", label: "Customer" },
           { key: "pool", label: "Pool" },
+          { key: "worker", label: "Technician" },
+          ...(performanceView === "customers" ? [{ key: "assignedRssTech", label: "RSS Tech" }] : []),
           { key: "standard", label: "Standard" },
           { key: "value", label: "Value", align: "right" },
           { key: "rule", label: "Rule" },
@@ -1298,16 +1405,8 @@ const buildReadingPerformanceReport = ({
         ],
     summarySections: [
       {
-        title: "User Summary",
-        columns: [
-          { key: "user", label: "User" },
-          { key: "serviceStops", label: "Service Stops", align: "right" },
-          { key: "failingStops", label: "Failing Stops", align: "right" },
-          { key: "userFailingRate", label: "% of User Stops", align: "right" },
-          { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
-          { key: "failingReadings", label: "Failing Readings", align: "right" },
-          { key: "latestFail", label: "Latest Fail" },
-        ],
+        title: `${summaryEntityLabel} Summary`,
+        columns: summaryColumns,
         rows: userSummaryRows,
       },
       {
@@ -2245,6 +2344,7 @@ const Reports = () => {
     threshold: "",
   });
   const [readingPerformanceStandards, setReadingPerformanceStandards] = useState([]);
+  const [readingPerformanceView, setReadingPerformanceView] = useState("users");
   const [quickDateRange, setQuickDateRange] = useState("thisMonth");
   const [dateRange, setDateRange] = useState(defaultDateRange);
   const [reportData, setReportData] = useState(null);
@@ -2476,6 +2576,8 @@ const Reports = () => {
       const needsUsers = reportType === "users";
       const needsFleet = reportType === "vehicle";
       const needsBodiesOfWater = ["readingHealth", "readingPerformance"].includes(reportType);
+      const needsServiceStops = ["users", "readingPerformance"].includes(reportType);
+      const needsRecurringServiceStops = reportType === "readingPerformance";
 
       const [
         purchasesRaw,
@@ -2483,6 +2585,7 @@ const Reports = () => {
         jobsRaw,
         payrollLinesRaw,
         serviceStopsRaw,
+        recurringServiceStopsRaw,
         usersRaw,
         vehiclesRaw,
         activeRoutesRaw,
@@ -2492,7 +2595,8 @@ const Reports = () => {
         needsPurchases ? getDatabaseItems(recentlySelectedCompany) : Promise.resolve([]),
         needsJobs ? getCollection(recentlySelectedCompany, "workOrders") : Promise.resolve([]),
         needsPayroll ? getCollection(recentlySelectedCompany, "technicianPayLineItems") : Promise.resolve([]),
-        needsUsers ? getCollection(recentlySelectedCompany, "serviceStops") : Promise.resolve([]),
+        needsServiceStops ? getCollection(recentlySelectedCompany, "serviceStops") : Promise.resolve([]),
+        needsRecurringServiceStops ? getCollection(recentlySelectedCompany, "recurringServiceStop") : Promise.resolve([]),
         needsUsers ? getCollection(recentlySelectedCompany, "companyUsers") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "vehicals") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "activeRoutes") : Promise.resolve([]),
@@ -2512,7 +2616,13 @@ const Reports = () => {
         ...tagFilterContext,
       });
       const serviceStops = filterRecordsByCustomerTags({
-        records: serviceStopsRaw.filter((item) => inRange(item, startDate, endDate, ["serviceDate", "date", "createdAt"])),
+        records: serviceStopsRaw.filter((item) =>
+          reportType === "readingPerformance" ? true : inRange(item, startDate, endDate, ["serviceDate", "date", "createdAt"])
+        ),
+        ...tagFilterContext,
+      });
+      const recurringServiceStops = filterRecordsByCustomerTags({
+        records: recurringServiceStopsRaw,
         ...tagFilterContext,
       });
       const bodiesOfWater = filterRecordsByCustomerTags({
@@ -2528,6 +2638,7 @@ const Reports = () => {
         dosageTemplates,
         readingHealthFilters,
         readingPerformanceStandards,
+        readingPerformanceView,
         bodiesOfWater,
         customersById,
         purchases,
@@ -2535,6 +2646,7 @@ const Reports = () => {
         jobs,
         payrollLines,
         serviceStops,
+        recurringServiceStops,
         users: usersRaw,
         vehicles: vehiclesRaw,
         activeRoutes,
@@ -2664,6 +2776,24 @@ const Reports = () => {
                         />
                       </div>
                     </div>
+                  </div>
+                ) : null}
+
+                {reportType === "readingPerformance" ? (
+                  <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <label className="block text-sm font-semibold text-slate-700">Performance View</label>
+                    <select
+                      value={readingPerformanceView}
+                      onChange={(event) => {
+                        setReadingPerformanceView(event.target.value);
+                        setReportData(null);
+                      }}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                    >
+                      {readingPerformanceViewOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
                   </div>
                 ) : null}
 

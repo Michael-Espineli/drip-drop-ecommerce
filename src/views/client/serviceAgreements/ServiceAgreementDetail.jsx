@@ -17,6 +17,10 @@ import {
   SalesAgreementStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
+import {
+  formatBillingFrequency,
+  formatServiceFrequency,
+} from '../../../utils/sales/agreementCadence';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -351,9 +355,10 @@ const ServiceAgreementDetail = () => {
               </div>
             </div>
 
-            <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+            <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-5">
               <Field label="Total" value={formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)} />
-              <Field label="Cadence" value={labelize(agreement.serviceCadence || agreement.rateType)} />
+              <Field label="Service Frequency" value={formatServiceFrequency(agreement)} />
+              <Field label="Billing Frequency" value={formatBillingFrequency(agreement)} />
               <Field label="Payment Terms" value={labelize(agreement.paymentTerms)} />
               <Field label="Start Date" value={formatDate(agreement.startDate)} />
             </dl>

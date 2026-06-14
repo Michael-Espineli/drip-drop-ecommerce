@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   query,
   collection,
@@ -10,6 +10,7 @@ import {
   getDoc,
   updateDoc,
   setDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../../../utils/config";
@@ -19,6 +20,8 @@ import { format } from "date-fns";
 import toast from "react-hot-toast";
 import { Description } from "@headlessui/react";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
+import { salesCollectionNames } from "../../../utils/models/Sales";
+import { recurringFrequencyToAgreementService } from "../../../utils/sales/agreementCadence";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
@@ -43,9 +46,12 @@ const RecurringServiceStopDetails = () => {
   const { recentlySelectedCompany } = useContext(Context);
   const { recurringServiceStopId } = useParams();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
 
   const [loading, setLoading] = useState(true);
-  const [edit, setEdit] = useState(false);
+  const [edit, setEdit] = useState(() => (
+    searchParams.get("edit") === "1" || searchParams.get("edit") === "true"
+  ));
 
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -98,11 +104,13 @@ const RecurringServiceStopDetails = () => {
     otherCompany: "",
     laborContractId: "",
     contractedCompanyId: "",
+    salesAgreementId: "",
+    salesBillingSubscriptionId: "",
   });
 
   const frequencyOptions = useMemo(
     () =>
-      ["Weekly", "Biweekly", "Monthly", "Every 2 Weeks", "Every 4 Weeks", "Custom"].map((v) => ({
+      ["Weekly", "Twice Weekly", "Three Times Weekly", "Biweekly", "Monthly", "Every 2 Weeks", "Every 4 Weeks", "Custom"].map((v) => ({
         value: v,
         label: v,
       })),
@@ -203,6 +211,8 @@ const RecurringServiceStopDetails = () => {
           otherCompany: rssData.otherCompany,
           laborContractId: rssData.laborContractId,
           contractedCompanyId: rssData.contractedCompanyId,
+          salesAgreementId: rssData.salesAgreementId || "",
+          salesBillingSubscriptionId: rssData.salesBillingSubscriptionId || "",
         }));
 
         let tasks = [];
@@ -313,13 +323,14 @@ const RecurringServiceStopDetails = () => {
   const deleteRSS = async (e) => {
     e.preventDefault();
     try {
-      const ok = window.confirm("Delete this recurring service stop? This cannot be undone.");
+      const ok = window.confirm("Delete this recurring service stop and all linked service stops? This cannot be undone.");
       if (!ok) return;
 
       const callable = httpsCallable(functions, "deleteRecurringServiceStop");
       await callable({
         stopId: recurringServiceStopId,
         companyId: recentlySelectedCompany,
+        includePastServiceStops: true,
       });
       await removeRecurringServiceStopFromPlannedRoutes({
         db,
@@ -371,14 +382,69 @@ const RecurringServiceStopDetails = () => {
       );
 
       const frequency = selectedFrequency?.value || recurringServiceStop.frequency || "";
-      const daysOfWeek = (selectedDays || []).map((d) => d.value).join(",");
+      const selectedDayValues = (selectedDays || []).map((d) => d.value).filter(Boolean);
+      const daysOfWeek = selectedDayValues.join(",");
+      const day = selectedDayValues[0] || recurringServiceStop.day || "";
+      const serviceScheduleUpdate = recurringFrequencyToAgreementService({
+        frequency,
+        daysOfWeek,
+        day,
+      });
 
-      await updateDoc(rssRef, { frequency, daysOfWeek });
+      await updateDoc(rssRef, {
+        frequency,
+        daysOfWeek,
+        day,
+        ...serviceScheduleUpdate,
+        updatedAt: serverTimestamp(),
+      });
+
+      let linkedAgreementId = recurringServiceStop.salesAgreementId || "";
+      let linkedBillingSubscriptionId = recurringServiceStop.salesBillingSubscriptionId || "";
+
+      if (!linkedAgreementId) {
+        const linkedAgreementsSnap = await getDocs(query(
+          collection(db, salesCollectionNames.agreements),
+          where("companyId", "==", recentlySelectedCompany),
+          where("recurringServiceStopId", "==", recurringServiceStopId),
+          limit(1)
+        ));
+        const linkedAgreementDoc = linkedAgreementsSnap.docs[0];
+        linkedAgreementId = linkedAgreementDoc?.id || "";
+        linkedBillingSubscriptionId = linkedBillingSubscriptionId || linkedAgreementDoc?.data()?.billingSubscriptionId || "";
+      }
+
+      const linkedWrites = [];
+      if (linkedAgreementId) {
+        linkedWrites.push(updateDoc(doc(db, salesCollectionNames.agreements, linkedAgreementId), {
+          ...serviceScheduleUpdate,
+          recurringServiceStopId,
+          operationsSetupStatus: "recurringServiceStopCreated",
+          operationsSetupUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }));
+      }
+
+      if (linkedBillingSubscriptionId) {
+        linkedWrites.push(updateDoc(doc(db, salesCollectionNames.billingSubscriptions, linkedBillingSubscriptionId), {
+          ...serviceScheduleUpdate,
+          recurringServiceStopId,
+          operationsSetupStatus: "recurringServiceStopCreated",
+          operationsSetupUpdatedAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        }));
+      }
+
+      if (linkedWrites.length) await Promise.all(linkedWrites);
 
       setRecurringServiceStop((prev) => ({
         ...prev,
         frequency,
         daysOfWeek,
+        day,
+        ...serviceScheduleUpdate,
+        salesAgreementId: linkedAgreementId || prev.salesAgreementId,
+        salesBillingSubscriptionId: linkedBillingSubscriptionId || prev.salesBillingSubscriptionId,
       }));
 
       toast.success("Saved");

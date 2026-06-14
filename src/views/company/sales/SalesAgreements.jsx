@@ -1,14 +1,16 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import {
   FaArrowLeft,
   FaCheckCircle,
   FaEnvelope,
   FaFileSignature,
   FaPlus,
+  FaRoute,
   FaSearch,
 } from 'react-icons/fa';
+import toast from 'react-hot-toast';
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
 import { SalesAgreementStatus, salesCollectionNames } from '../../../utils/models/Sales';
@@ -18,6 +20,7 @@ import {
   buildRecurringRoutingIndex,
   getAgreementBillingType,
 } from '../../../utils/sales/agreementRouting';
+import { generateServiceAgreementsFromRoutes } from '../../../utils/sales/routeAgreementGeneration';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
@@ -112,7 +115,16 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
 );
 
 const SalesAgreements = ({ routingQueueOnly = false }) => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    currentUser,
+    user,
+    currentuser,
+    dataBaseUser,
+  } = useContext(Context);
+  const activeUser = currentUser || user || currentuser || {};
+  const activeUserId = activeUser?.uid || activeUser?.id || dataBaseUser?.id || '';
   const [agreements, setAgreements] = useState([]);
   const [recurringStops, setRecurringStops] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -122,6 +134,7 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
     routingQueueOnly ? AgreementBillingType.recurring : AgreementBillingType.all
   );
   const [error, setError] = useState('');
+  const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
 
   const navigate = useNavigate();
   useEffect(() => {
@@ -235,6 +248,61 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
   const statusOptions = ['all', ...Object.values(SalesAgreementStatus)];
   const billingTypeOptions = [AgreementBillingType.all, AgreementBillingType.recurring, AgreementBillingType.oneTime];
 
+  const handleGenerateFromRoutes = async () => {
+    if (!recentlySelectedCompany) {
+      toast.error('Select a company first.');
+      return;
+    }
+
+    setGeneratingFromRoutes(true);
+
+    try {
+      const routesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'));
+      const routes = routesSnapshot.docs.map((routeDoc) => ({ id: routeDoc.id, ...routeDoc.data() }));
+
+      if (routes.length === 0) {
+        toast.error('No planned routes found to generate from.');
+        return;
+      }
+
+      const result = await generateServiceAgreementsFromRoutes({
+        db,
+        companyId: recentlySelectedCompany,
+        companyName: selectedCompanyName,
+        routes,
+        createdByUserId: activeUserId,
+      });
+
+      if (result.createdCount > 0) {
+        const skippedText = result.skippedExistingCount
+          ? ` ${result.skippedExistingCount} stop(s) already had agreements.`
+          : '';
+        toast.success(`Created ${result.createdCount} route-based agreement draft(s).${skippedText}`);
+        setSearchTerm('');
+        setStatusFilter(SalesAgreementStatus.draft);
+        setBillingTypeFilter(AgreementBillingType.recurring);
+        return;
+      }
+
+      if (result.skippedExistingCount > 0) {
+        toast('All routed recurring stops already have service agreements.');
+        return;
+      }
+
+      if (result.skippedIncompleteCount > 0 || result.missingStopCount > 0) {
+        toast.error('No drafts created. Some route stops are missing customer, location, or recurring stop data.');
+        return;
+      }
+
+      toast.error('No recurring service stops found on planned routes.');
+    } catch (generationError) {
+      console.error('Unable to generate service agreements from routes', generationError);
+      toast.error('Failed to generate service agreements from routes.');
+    } finally {
+      setGeneratingFromRoutes(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
@@ -293,6 +361,17 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
                 >
                   Needs Routing
                 </Link>
+              )}
+              {!routingQueueOnly && (
+                <button
+                  type="button"
+                  onClick={handleGenerateFromRoutes}
+                  disabled={generatingFromRoutes}
+                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  <FaRoute className="text-xs" />
+                  {generatingFromRoutes ? 'Generating...' : 'Generate From Routes'}
+                </button>
               )}
               <Link
                 to="/company/sales/agreements/new"

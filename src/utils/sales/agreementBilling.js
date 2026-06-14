@@ -6,20 +6,16 @@ import {
   SalesBillingSubscriptionStatus,
   salesCollectionNames,
 } from '../models/Sales';
+import {
+  billingFrequencyForAgreement,
+  billingFrequencyCountForAgreement,
+  billingFrequencyToStripeInterval,
+  billingIntervalCountForAgreement,
+  serviceFrequencyCountForAgreement,
+  serviceFrequencyForAgreement,
+} from './agreementCadence';
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
-
-const cadenceToStripeInterval = (cadence = '', rateType = '') => {
-  const cadenceKey = normalizeStatus(cadence);
-  const rateKey = normalizeStatus(rateType);
-
-  if (cadenceKey.includes('week') || rateKey.includes('week')) return 'week';
-  if (cadenceKey.includes('year') || rateKey.includes('year')) return 'year';
-  if (cadenceKey.includes('day') || rateKey.includes('day')) return 'day';
-  return 'month';
-};
-
-const recurringIntervalCount = (agreement = {}) => Math.max(Number(agreement.serviceCadenceCount || 1), 1);
 
 const copyLineItemsForBilling = (lineItems = []) => (
   Array.isArray(lineItems)
@@ -44,6 +40,10 @@ const copyLineItemsForBilling = (lineItems = []) => (
 
 export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = {}) => {
   const lineItems = copyLineItemsForBilling(agreement.lineItems);
+  const billingFrequency = billingFrequencyForAgreement(agreement);
+  const billingFrequencyCount = billingFrequencyCountForAgreement(agreement);
+  const serviceCadence = serviceFrequencyForAgreement(agreement);
+  const serviceCadenceCount = serviceFrequencyCountForAgreement(agreement);
   const missingStripePriceItemIds = lineItems
     .filter((item) => !item.stripePriceId)
     .map((item) => item.id || item.catalogItemId || item.name)
@@ -81,9 +81,19 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     autopayEnabled: false,
     amountCents: Number(agreement.totalAmountCents || agreement.rateAmountCents || 0),
     currency: agreement.currency || 'usd',
-    interval: cadenceToStripeInterval(agreement.serviceCadence, agreement.rateType),
-    intervalCount: recurringIntervalCount(agreement),
-    serviceCadence: agreement.serviceCadence || '',
+    interval: billingFrequencyToStripeInterval(billingFrequency, agreement.rateType),
+    intervalCount: billingIntervalCountForAgreement(agreement),
+    billingFrequency,
+    billingFrequencyCount,
+    serviceCadence,
+    serviceCadenceCount,
+    serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
+    serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+    recurringServiceStopId: agreement.recurringServiceStopId || '',
+    recurringRouteId: agreement.recurringRouteId || '',
+    recurringRouteName: agreement.recurringRouteName || '',
+    operationsSetupStatus: agreement.operationsSetupStatus || '',
+    operationsSetupReason: agreement.operationsSetupReason || '',
     rateType: agreement.rateType || '',
     paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
     invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || 'email',
@@ -101,6 +111,17 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
       termsTemplateName: agreement.termsTemplateName || '',
       revisionNumber: String(agreement.revisionNumber || 0),
       acceptedAt: agreement.acceptedAt || null,
+      billingFrequency,
+      billingFrequencyCount: String(billingFrequencyCount),
+      serviceCadence,
+      serviceCadenceCount: String(serviceCadenceCount),
+      serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
+      serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+      recurringServiceStopId: agreement.recurringServiceStopId || '',
+      recurringRouteId: agreement.recurringRouteId || '',
+      recurringRouteName: agreement.recurringRouteName || '',
+      operationsSetupStatus: agreement.operationsSetupStatus || '',
+      operationsSetupReason: agreement.operationsSetupReason || '',
     },
     checkoutSessionId: '',
     checkoutUrl: '',
@@ -187,7 +208,17 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       currency: subscription.currency,
       interval: subscription.interval,
       intervalCount: subscription.intervalCount,
+      billingFrequency: subscription.billingFrequency,
+      billingFrequencyCount: subscription.billingFrequencyCount,
       serviceCadence: subscription.serviceCadence,
+      serviceCadenceCount: subscription.serviceCadenceCount,
+      serviceDaysOfWeek: subscription.serviceDaysOfWeek,
+      serviceFrequencyLabel: subscription.serviceFrequencyLabel,
+      recurringServiceStopId: subscription.recurringServiceStopId,
+      recurringRouteId: subscription.recurringRouteId,
+      recurringRouteName: subscription.recurringRouteName,
+      operationsSetupStatus: subscription.operationsSetupStatus,
+      operationsSetupReason: subscription.operationsSetupReason,
       rateType: subscription.rateType,
       paymentTerms: subscription.paymentTerms,
       invoiceDeliveryMethod: subscription.invoiceDeliveryMethod,

@@ -24,6 +24,12 @@ import { buildTermsContent, getTermDescription } from '../../../utils/models/Ter
 import { salesCatalogCollection, saveSalesModel } from '../../../utils/sales/salesFirestore';
 import { getTerms, listenTermsTemplates } from '../../../utils/terms/termsTemplateFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import {
+  billingFrequencyOptions,
+  formatBillingFrequency,
+  formatServiceFrequency,
+  serviceFrequencyOptions,
+} from '../../../utils/sales/agreementCadence';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -181,8 +187,10 @@ const CreateSalesAgreement = () => {
     email: '',
     serviceLocationIds: [],
     termsTemplateId: '',
-    serviceCadence: 'monthly',
+    serviceCadence: 'weekly',
     serviceCadenceCount: '1',
+    billingFrequency: 'monthly',
+    billingFrequencyCount: '1',
     rateType: 'perMonth',
     paymentTerms: 'dueOnReceipt',
     invoiceDeliveryMethod: SalesInvoiceDeliveryMethod.email,
@@ -532,6 +540,9 @@ const CreateSalesAgreement = () => {
         rateType: form.rateType,
         serviceCadence: form.serviceCadence,
         serviceCadenceCount: Number(form.serviceCadenceCount || 1),
+        serviceFrequencyLabel: formatServiceFrequency(form),
+        billingFrequency: form.billingFrequency,
+        billingFrequencyCount: Number(form.billingFrequencyCount || 1),
         paymentTerms: form.paymentTerms,
         invoiceDeliveryMethod: form.invoiceDeliveryMethod,
         startDate: dateFromInput(form.startDate),
@@ -710,54 +721,90 @@ const CreateSalesAgreement = () => {
                   />
                 </div>
 
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <div>
-                    <label htmlFor="serviceCadence" className="block text-sm font-semibold text-slate-700">
-                      Cadence
-                    </label>
-                    <select
-                      id="serviceCadence"
-                      value={form.serviceCadence}
-                      onChange={(event) => handleFieldChange('serviceCadence', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="weekly">Weekly</option>
-                      <option value="twiceWeekly">Twice Weekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="oneTime">One Time</option>
-                      <option value="custom">Custom</option>
-                    </select>
-                  </div>
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Service Schedule</h3>
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label htmlFor="serviceCadence" className="block text-sm font-semibold text-slate-700">
+                        Service Frequency
+                      </label>
+                      <select
+                        id="serviceCadence"
+                        value={form.serviceCadence}
+                        onChange={(event) => handleFieldChange('serviceCadence', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        {serviceFrequencyOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
 
-                  <div>
-                    <label htmlFor="serviceCadenceCount" className="block text-sm font-semibold text-slate-700">
-                      Cadence Count
-                    </label>
-                    <input
-                      id="serviceCadenceCount"
-                      type="number"
-                      min="1"
-                      value={form.serviceCadenceCount}
-                      onChange={(event) => handleFieldChange('serviceCadenceCount', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    />
+                    <div>
+                      <label htmlFor="serviceCadenceCount" className="block text-sm font-semibold text-slate-700">
+                        Service Count
+                      </label>
+                      <input
+                        id="serviceCadenceCount"
+                        type="number"
+                        min="1"
+                        value={form.serviceCadenceCount}
+                        onChange={(event) => handleFieldChange('serviceCadenceCount', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
                   </div>
+                </div>
 
-                  <div>
-                    <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">
-                      Rate Type
-                    </label>
-                    <select
-                      id="rateType"
-                      value={form.rateType}
-                      onChange={(event) => handleFieldChange('rateType', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      <option value="perMonth">Per Month</option>
-                      <option value="perVisit">Per Visit</option>
-                      <option value="oneTime">One Time</option>
-                      <option value="custom">Custom</option>
-                    </select>
+                <div>
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Billing Schedule</h3>
+                  <div className="mt-3 grid gap-4 sm:grid-cols-3">
+                    <div>
+                      <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">
+                        Billing Frequency
+                      </label>
+                      <select
+                        id="billingFrequency"
+                        value={form.billingFrequency}
+                        onChange={(event) => handleFieldChange('billingFrequency', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        {billingFrequencyOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label htmlFor="billingFrequencyCount" className="block text-sm font-semibold text-slate-700">
+                        Billing Count
+                      </label>
+                      <input
+                        id="billingFrequencyCount"
+                        type="number"
+                        min="1"
+                        value={form.billingFrequencyCount}
+                        onChange={(event) => handleFieldChange('billingFrequencyCount', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">
+                        Rate Type
+                      </label>
+                      <select
+                        id="rateType"
+                        value={form.rateType}
+                        onChange={(event) => handleFieldChange('rateType', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="perMonth">Per Month</option>
+                        <option value="perVisit">Per Visit</option>
+                        <option value="oneTime">One Time</option>
+                        <option value="custom">Custom</option>
+                      </select>
+                    </div>
                   </div>
                 </div>
 
@@ -960,6 +1007,14 @@ const CreateSalesAgreement = () => {
                 <div className="flex items-center justify-between gap-3">
                   <dt className="text-slate-500">Line Items</dt>
                   <dd className="font-semibold text-slate-900">{lineItems.length}</dd>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-slate-500">Service Frequency</dt>
+                  <dd className="font-semibold text-slate-900">{formatServiceFrequency(form)}</dd>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <dt className="text-slate-500">Billing Frequency</dt>
+                  <dd className="font-semibold text-slate-900">{formatBillingFrequency(form)}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
                   <dt className="text-slate-500">Subtotal</dt>

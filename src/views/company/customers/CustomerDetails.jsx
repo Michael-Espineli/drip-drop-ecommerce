@@ -1,9 +1,10 @@
 
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { ClipboardDocumentIcon, EnvelopeIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { v4 as uuidv4 } from 'uuid';
+import { ClipboardDocumentIcon, EnvelopeIcon, PencilSquareIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -18,6 +19,7 @@ import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import CustomerTimelineGraph from './CustomerTimelineGraph';
 import { salesCollectionNames } from '../../../utils/models/Sales';
 import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
+import AddressAutocomplete from '../../components/AddressAutocomplete';
 import {
     customerMatchesRoleTagAccess,
     getRoleCustomerTagAccess,
@@ -327,15 +329,43 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
                 <div className="lg:col-span-2 space-y-8">
                     <InfoCard
                         title="Contact Information"
-                        actions={can("14") &&
-                            <button
-                                onClick={() => setIsEditing(!isEditing)}
-                                className="text-sm font-semibold text-blue-600 hover:text-blue-800"
-                                type="button"
-                            >
-                                {isEditing ? 'Cancel' : 'Edit'}
-                            </button>
-                        }
+                        actions={can("14") && (
+                            isEditing ? (
+                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                    {can("16") && (
+                                        <button
+                                            onClick={onDeleteCustomer}
+                                            className="rounded-md border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-semibold text-rose-700 shadow-sm hover:bg-rose-100"
+                                            type="button"
+                                        >
+                                            Delete
+                                        </button>
+                                    )}
+                                    <button
+                                        onClick={() => setIsEditing(false)}
+                                        className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
+                                        type="button"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={handleSave}
+                                        className="rounded-md border border-transparent bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-blue-700"
+                                        type="button"
+                                    >
+                                        Save
+                                    </button>
+                                </div>
+                            ) : (
+                                <button
+                                    onClick={() => setIsEditing(true)}
+                                    className="text-sm font-semibold text-blue-600 hover:text-blue-800"
+                                    type="button"
+                                >
+                                    Edit
+                                </button>
+                            )
+                        )}
                     >
                         {isEditing ? (
                             <div className="space-y-4">
@@ -449,23 +479,6 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
                             </div>
                         )}
                     </InfoCard>
-                    {isEditing && (
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                            {can("16") ? (
-                                <button
-                                    onClick={onDeleteCustomer}
-                                    className="px-4 py-2 text-sm font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-md shadow-sm hover:bg-rose-100"
-                                    type="button"
-                                >
-                                    Delete Customer
-                                </button>
-                            ) : <span />}
-                            <div className="flex justify-end space-x-4">
-                                <button onClick={() => setIsEditing(false)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50" type="button">Cancel</button>
-                                <button onClick={handleSave} className="px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700" type="button">Save Changes</button>
-                            </div>
-                        </div>
-                    )}
                 </div>
             </div>
             <SalesActivitySection customer={customer} />
@@ -486,9 +499,12 @@ const ServiceLocationsTab = ({ customer }) => {
         city: '',
         state: '',
         zip: '',
+        latitude: 0,
+        longitude: 0,
         gateCode: '',
         estimatedTime: '',
         notes: '',
+        mainContactId: '',
         mainContactName: '',
         mainContactEmail: '',
         mainContactPhoneNumber: '',
@@ -497,6 +513,10 @@ const ServiceLocationsTab = ({ customer }) => {
         isActive: true,
     });
     const [cleanupLinkedRecords, setCleanupLinkedRecords] = useState(false);
+    const [customerContacts, setCustomerContacts] = useState([]);
+    const [contactsLoading, setContactsLoading] = useState(false);
+    const [contactMode, setContactMode] = useState('new');
+    const [selectedContactId, setSelectedContactId] = useState('');
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
 
@@ -522,6 +542,68 @@ const ServiceLocationsTab = ({ customer }) => {
         }
     }, [customer.id, recentlySelectedCompany, db]);
 
+    const getDefaultNewContact = () => ({
+        id: "com_cus_con_" + uuidv4(),
+        name: customer.displayAsCompany
+            ? (customer.company || customer.companyName || '')
+            : [customer.firstName, customer.lastName].filter(Boolean).join(' '),
+        email: customer.email || '',
+        phoneNumber: customer.phoneNumber || customer.phone || '',
+        notes: '',
+    });
+
+    const populateContactFields = (contact = {}) => {
+        setLocationForm((prev) => ({
+            ...prev,
+            mainContactId: contact.id || prev.mainContactId || "com_cus_con_" + uuidv4(),
+            mainContactName: contact.name || '',
+            mainContactEmail: contact.email || '',
+            mainContactPhoneNumber: contact.phoneNumber || contact.phone || '',
+            mainContactNotes: contact.notes || '',
+        }));
+    };
+
+    const loadCustomerContacts = async (preferredContact = {}) => {
+        if (!recentlySelectedCompany || !customer.id) return;
+
+        setContactsLoading(true);
+        try {
+            const contactsSnap = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'contacts'));
+            const contacts = contactsSnap.docs.map((contactDoc) => ({ id: contactDoc.id, ...contactDoc.data() }));
+            setCustomerContacts(contacts);
+
+            const preferredId = preferredContact?.id;
+            const preferredHasDetails = Boolean(
+                preferredContact?.id ||
+                preferredContact?.name ||
+                preferredContact?.email ||
+                preferredContact?.phoneNumber ||
+                preferredContact?.phone ||
+                preferredContact?.notes
+            );
+            const matchedContact = contacts.find((contact) => contact.id === preferredId);
+
+            if (matchedContact) {
+                setContactMode('existing');
+                setSelectedContactId(matchedContact.id);
+                populateContactFields(matchedContact);
+            } else if (!preferredHasDetails && contacts.length > 0) {
+                setContactMode('existing');
+                setSelectedContactId(contacts[0].id);
+                populateContactFields(contacts[0]);
+            } else {
+                setContactMode('new');
+                setSelectedContactId('');
+                populateContactFields(preferredHasDetails ? preferredContact : getDefaultNewContact());
+            }
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to load customer contacts.');
+        } finally {
+            setContactsLoading(false);
+        }
+    };
+
     const startEditLocation = () => {
         if (!selectedLocation) return;
         setLocationForm({
@@ -530,9 +612,12 @@ const ServiceLocationsTab = ({ customer }) => {
             city: selectedLocation.address?.city || '',
             state: selectedLocation.address?.state || '',
             zip: selectedLocation.address?.zip || selectedLocation.address?.zipCode || '',
+            latitude: selectedLocation.address?.latitude || 0,
+            longitude: selectedLocation.address?.longitude || 0,
             gateCode: selectedLocation.gateCode || '',
             estimatedTime: selectedLocation.estimatedTime ?? '',
             notes: selectedLocation.notes || '',
+            mainContactId: selectedLocation.mainContact?.id || "com_cus_con_" + uuidv4(),
             mainContactName: selectedLocation.mainContact?.name || '',
             mainContactEmail: selectedLocation.mainContact?.email || '',
             mainContactPhoneNumber: selectedLocation.mainContact?.phoneNumber || '',
@@ -542,6 +627,7 @@ const ServiceLocationsTab = ({ customer }) => {
         });
         setCleanupLinkedRecords(false);
         setEditingLocation(true);
+        loadCustomerContacts(selectedLocation.mainContact || {});
     };
 
     const updateSelectedLocationState = (updatedLocation) => {
@@ -557,6 +643,44 @@ const ServiceLocationsTab = ({ customer }) => {
             ...prev,
             [name]: type === 'checkbox' ? checked : value,
         }));
+    };
+
+    const handleLocationAddressSelect = (place) => {
+        if (!place) return;
+        setLocationForm((prev) => ({
+            ...prev,
+            streetAddress: place.streetAddress || prev.streetAddress,
+            city: place.city || prev.city,
+            state: place.state || prev.state,
+            zip: place.zipCode || place.zip || prev.zip,
+            latitude: place.latitude ?? prev.latitude ?? 0,
+            longitude: place.longitude ?? prev.longitude ?? 0,
+        }));
+    };
+
+    const handleContactModeChange = (nextMode) => {
+        setContactMode(nextMode);
+
+        if (nextMode === 'existing') {
+            const nextContact = customerContacts.find((contact) => contact.id === selectedContactId) || customerContacts[0];
+            if (nextContact) {
+                setSelectedContactId(nextContact.id);
+                populateContactFields(nextContact);
+            }
+            return;
+        }
+
+        setSelectedContactId('');
+        populateContactFields(getDefaultNewContact());
+    };
+
+    const handleSelectedContactChange = (event) => {
+        const nextContactId = event.target.value;
+        setSelectedContactId(nextContactId);
+        const nextContact = customerContacts.find((contact) => contact.id === nextContactId);
+        if (nextContact) {
+            populateContactFields(nextContact);
+        }
     };
 
     const locationRelatedCollections = [
@@ -616,14 +740,27 @@ const ServiceLocationsTab = ({ customer }) => {
                 city: locationForm.city,
                 state: locationForm.state,
                 zip: locationForm.zip,
+                latitude: locationForm.latitude,
+                longitude: locationForm.longitude,
             });
-            const normalizedMainContact = normalizeContact({
-                ...(selectedLocation.mainContact || {}),
-                name: locationForm.mainContactName,
-                email: locationForm.mainContactEmail,
-                phoneNumber: locationForm.mainContactPhoneNumber,
-                notes: locationForm.mainContactNotes,
-            });
+            const selectedContact = customerContacts.find((contact) => contact.id === selectedContactId);
+            let normalizedMainContact = normalizeContact(
+                contactMode === 'existing' && selectedContact
+                    ? selectedContact
+                    : {
+                        id: locationForm.mainContactId || "com_cus_con_" + uuidv4(),
+                        name: locationForm.mainContactName,
+                        email: locationForm.mainContactEmail,
+                        phoneNumber: locationForm.mainContactPhoneNumber,
+                        notes: locationForm.mainContactNotes,
+                    }
+            );
+            if (!normalizedMainContact.id) {
+                normalizedMainContact = {
+                    ...normalizedMainContact,
+                    id: "com_cus_con_" + uuidv4(),
+                };
+            }
             const normalizedLocation = normalizeServiceLocationForFirestore({
                 ...selectedLocation,
                 nickName: locationForm.nickName,
@@ -656,10 +793,22 @@ const ServiceLocationsTab = ({ customer }) => {
                 }
             );
 
+            await setDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'contacts', normalizedMainContact.id),
+                normalizedMainContact,
+                { merge: true }
+            );
+
             if (updatedLocation.isActive === false && cleanupLinkedRecords) {
                 await deactivateLocationRelations(selectedLocation.id);
             }
 
+            setCustomerContacts((currentContacts) => {
+                const exists = currentContacts.some((contact) => contact.id === normalizedMainContact.id);
+                return exists
+                    ? currentContacts.map((contact) => contact.id === normalizedMainContact.id ? normalizedMainContact : contact)
+                    : [...currentContacts, normalizedMainContact];
+            });
             updateSelectedLocationState(updatedLocation);
             setEditingLocation(false);
             setCleanupLinkedRecords(false);
@@ -771,6 +920,17 @@ const ServiceLocationsTab = ({ customer }) => {
                                         <input name="estimatedTime" type="number" value={locationForm.estimatedTime} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
                                     </label>
                                     <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
+                                        Address Search
+                                        <AddressAutocomplete
+                                            initialValue={locationForm.streetAddress}
+                                            placeholder="Search service address"
+                                            onAddressSelect={handleLocationAddressSelect}
+                                            onInputChange={(value) => setLocationForm((prev) => ({ ...prev, streetAddress: value }))}
+                                            customClasses="w-full rounded-lg border border-slate-300 py-2 pl-10 pr-3 font-normal text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            iconClasses="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-slate-400"
+                                        />
+                                    </label>
+                                    <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
                                         Street Address
                                         <input name="streetAddress" value={locationForm.streetAddress} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
                                     </label>
@@ -817,22 +977,83 @@ const ServiceLocationsTab = ({ customer }) => {
                                 </div>
 
                                 <div className="grid gap-3 sm:grid-cols-2">
-                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
-                                        Contact Name
-                                        <input name="mainContactName" value={locationForm.mainContactName} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
-                                    </label>
-                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
-                                        Contact Email
-                                        <input name="mainContactEmail" value={locationForm.mainContactEmail} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
-                                    </label>
-                                    <label className="space-y-1 text-sm font-semibold text-slate-700">
-                                        Contact Phone
-                                        <input name="mainContactPhoneNumber" value={locationForm.mainContactPhoneNumber} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
-                                    </label>
-                                    <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
-                                        Contact Notes
-                                        <textarea name="mainContactNotes" value={locationForm.mainContactNotes} onChange={handleLocationFormChange} rows="2" className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
-                                    </label>
+                                    <div className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 sm:col-span-2">
+                                        <div className="flex flex-wrap items-center justify-between gap-3">
+                                            <p className="text-sm font-semibold text-slate-800">Main Contact</p>
+                                            {contactsLoading && <span className="text-xs font-medium text-slate-500">Loading contacts...</span>}
+                                        </div>
+                                        <div className="flex flex-wrap gap-4">
+                                            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                                <input
+                                                    type="radio"
+                                                    checked={contactMode === 'existing'}
+                                                    onChange={() => handleContactModeChange('existing')}
+                                                    disabled={customerContacts.length === 0}
+                                                    className="h-4 w-4 border-slate-300 text-blue-600"
+                                                />
+                                                Select existing contact
+                                            </label>
+                                            <label className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                                <input
+                                                    type="radio"
+                                                    checked={contactMode === 'new'}
+                                                    onChange={() => handleContactModeChange('new')}
+                                                    className="h-4 w-4 border-slate-300 text-blue-600"
+                                                />
+                                                Create new contact
+                                            </label>
+                                        </div>
+
+                                        {contactMode === 'existing' && customerContacts.length > 0 ? (
+                                            <div className="space-y-2">
+                                                <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                                    Customer Contact
+                                                    <select
+                                                        value={selectedContactId}
+                                                        onChange={handleSelectedContactChange}
+                                                        className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal"
+                                                    >
+                                                        {customerContacts.map((contact) => (
+                                                            <option key={contact.id} value={contact.id}>
+                                                                {contact.name || 'Unnamed Contact'}{contact.phoneNumber ? ` - ${contact.phoneNumber}` : ''}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                </label>
+                                                <div className="grid gap-2 rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600 sm:grid-cols-2">
+                                                    <span>{locationForm.mainContactEmail || 'No email saved'}</span>
+                                                    <span>{locationForm.mainContactPhoneNumber || 'No phone saved'}</span>
+                                                    {locationForm.mainContactNotes && (
+                                                        <span className="sm:col-span-2">{locationForm.mainContactNotes}</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        ) : (
+                                            <div className="grid gap-3 sm:grid-cols-2">
+                                                {customerContacts.length === 0 && !contactsLoading && (
+                                                    <p className="text-xs font-medium text-slate-500 sm:col-span-2">
+                                                        No saved customer contacts found. Add one here and it will be saved to this customer.
+                                                    </p>
+                                                )}
+                                                <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                                    Contact Name
+                                                    <input name="mainContactName" value={locationForm.mainContactName} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal" />
+                                                </label>
+                                                <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                                    Contact Email
+                                                    <input name="mainContactEmail" value={locationForm.mainContactEmail} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal" />
+                                                </label>
+                                                <label className="space-y-1 text-sm font-semibold text-slate-700">
+                                                    Contact Phone
+                                                    <input name="mainContactPhoneNumber" value={locationForm.mainContactPhoneNumber} onChange={handleLocationFormChange} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal" />
+                                                </label>
+                                                <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
+                                                    Contact Notes
+                                                    <textarea name="mainContactNotes" value={locationForm.mainContactNotes} onChange={handleLocationFormChange} rows="2" className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-normal" />
+                                                </label>
+                                            </div>
+                                        )}
+                                    </div>
                                     <label className="space-y-1 text-sm font-semibold text-slate-700 sm:col-span-2">
                                         Location Notes
                                         <textarea name="notes" value={locationForm.notes} onChange={handleLocationFormChange} rows="3" className="w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" />
@@ -1509,13 +1730,46 @@ const RecurringTab = ({ customer }) => {
     const { recentlySelectedCompany } = useContext(Context);
     const db = getFirestore();
 
+    const getRecurringStopAddress = (stop) => {
+        const address = stop.address || {};
+        return [
+            address.streetAddress || stop.streetAddress,
+            address.city || stop.city,
+            address.state || stop.state,
+            address.zip || stop.zip,
+        ].filter(Boolean).join(', ') || 'No address';
+    };
+
+    const getRecurringStopStatus = (stop) => {
+        const endMillis = toMillis(stop.endDate);
+
+        if (!stop.noEndDate && endMillis && endMillis < Date.now()) {
+            return { label: 'Ended', tone: 'slate' };
+        }
+
+        if (!stop.noEndDate && endMillis) {
+            return { label: `Ends ${formatDateValue(stop.endDate)}`, tone: 'amber' };
+        }
+
+        return { label: 'Active', tone: 'emerald' };
+    };
+
     useEffect(() => {
         const fetchRecurring = async () => {
             setLoading(true);
             try {
                 const stopQ = query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop'), where("customerId", "==", customer.id));
                 const stopSnap = await getDocs(stopQ);
-                setRecurringStops(stopSnap.docs.map(d => ({ id: d.id, ...d.data() })));
+                const stops = stopSnap.docs
+                    .map(d => ({ id: d.id, ...d.data() }))
+                    .sort((left, right) => (
+                        String(left.internalId || left.id || '').localeCompare(
+                            String(right.internalId || right.id || ''),
+                            undefined,
+                            { numeric: true, sensitivity: 'base' }
+                        )
+                    ));
+                setRecurringStops(stops);
             } catch (e) {
                 toast.error("Could not fetch recurring items.");
             } finally {
@@ -1530,12 +1784,49 @@ const RecurringTab = ({ customer }) => {
     return (
         <InfoCard title="Recurring Service Stops" actions={<Link to={`/company/recurring-service-stops/create/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
             {loading ? <ClipLoader size={20} /> : (
-                <ul className="divide-y divide-gray-200">
-                    {recurringStops.map(rs => (
-                        <li key={rs.id} className="py-2 flex justify-between">
-                            <span>{rs.frequency || '—'}</span> <span>{formatRecurringDays(rs)}</span>
+                <ul className="space-y-3">
+                    {recurringStops.map(rs => {
+                        const status = getRecurringStopStatus(rs);
+                        return (
+                        <li key={rs.id}>
+                            <Link
+                                to={`/company/recurringServiceStop/details/${rs.id}?edit=1`}
+                                className="group block rounded-lg border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            >
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <p className="text-sm font-bold text-slate-900">{rs.internalId || 'RSS'}</p>
+                                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                                        </div>
+                                        <p className="mt-1 truncate text-sm text-slate-700">
+                                            {rs.type || 'Recurring service stop'}
+                                        </p>
+                                        <p className="mt-1 text-xs text-slate-500">
+                                            {getRecurringStopAddress(rs)}
+                                        </p>
+                                    </div>
+
+                                    <div className="shrink-0 text-left sm:text-right">
+                                        <p className="text-sm font-semibold text-slate-900">{rs.frequency || '—'}</p>
+                                        <p className="mt-1 text-xs text-slate-500">{formatRecurringDays(rs)}</p>
+                                    </div>
+                                </div>
+
+                                <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <p className="text-xs text-slate-500">
+                                        <span className="font-semibold text-slate-600">Tech:</span> {rs.tech || 'Unassigned'}
+                                        {rs.startDate ? ` • Starts ${formatDateValue(rs.startDate)}` : ''}
+                                    </p>
+                                    <span className="inline-flex items-center gap-1 self-start rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition group-hover:bg-blue-700 sm:self-auto">
+                                        <PencilSquareIcon className="h-4 w-4" />
+                                        Edit RSS
+                                    </span>
+                                </div>
+                            </Link>
                         </li>
-                    ))}
+                        );
+                    })}
                     {recurringStops.length === 0 && <p className="text-gray-500">None found.</p>}
                 </ul>
             )}

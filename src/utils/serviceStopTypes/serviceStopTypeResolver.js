@@ -66,6 +66,8 @@ const normalize = (value) =>
         .replace(/[/_-]/g, "")
         .replace(/&/g, "and");
 
+export const normalizeServiceStopTypeBucket = normalize;
+
 const isActiveType = (type) =>
     type &&
     type.isActive !== false &&
@@ -76,6 +78,56 @@ const imageNameForType = (type) =>
     type?.imageName || type?.typeImage || type?.image || "";
 
 const isCommercialTypeName = (value) => normalize(value).includes("commercial");
+
+export const serviceStopTypeMatchesUseCase = (type = {}, useCase = SERVICE_STOP_TYPE_USE_CASES.unknown) => {
+    const normalizedUseCase = FALLBACKS[useCase] ? useCase : SERVICE_STOP_TYPE_USE_CASES.unknown;
+    const fallback = FALLBACKS[normalizedUseCase];
+    if (!fallback || normalizedUseCase === SERVICE_STOP_TYPE_USE_CASES.unknown) return true;
+
+    const acceptedValues = new Set([
+        normalizedUseCase,
+        fallback.category,
+        fallback.typeId,
+        ...(CANDIDATE_NAMES[normalizedUseCase] || []),
+    ].map(normalize).filter(Boolean));
+
+    if (normalizedUseCase === SERVICE_STOP_TYPE_USE_CASES.recurringRoute) {
+        [
+            "route",
+            "routes",
+            "recurringroute",
+            "recurringroutes",
+            "routebucket",
+            "weeklyroute",
+            "standardroute",
+            "poolroute",
+            "recurringservicestop",
+        ].forEach((value) => acceptedValues.add(normalize(value)));
+    }
+
+    const typeValues = [
+        type.category,
+        type.serviceStopCategory,
+        type.serviceStopTypeCategory,
+        type.useCase,
+        type.serviceStopTypeUseCase,
+        type.serviceStopTypeUseCaseRawValue,
+        type.typeUseCase,
+        type.stopPayBucketId,
+        type.serviceStopBucketId,
+        type.stopPayBucketLabel,
+        type.serviceStopBucketLabel,
+        type.stopPayCategory,
+        type.serviceStopBucket,
+        type.bucketId,
+        type.bucketLabel,
+        type.sourceId,
+        type.id,
+        type.name,
+    ].map(normalize).filter(Boolean);
+
+    return typeValues.some((value) => acceptedValues.has(value));
+};
 
 const shouldSkipCandidateMatch = ({ type, candidateValue, useCase }) => {
     if (useCase !== SERVICE_STOP_TYPE_USE_CASES.recurringRoute) return false;

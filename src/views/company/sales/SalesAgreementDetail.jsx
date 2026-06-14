@@ -1,6 +1,18 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { deleteDoc, doc, getDoc, increment, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  increment,
+  onSnapshot,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+  writeBatch,
+} from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -27,6 +39,13 @@ import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
 import { AgreementBillingType, getAgreementBillingType } from '../../../utils/sales/agreementRouting';
+import {
+  billingFrequencyForAgreement,
+  billingFrequencyOptions,
+  formatBillingFrequency,
+  formatServiceFrequency,
+  serviceFrequencyOptions,
+} from '../../../utils/sales/agreementCadence';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -83,6 +102,11 @@ const labelize = (value) => {
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
+const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
+  !subscription?.stripeSubscriptionId ||
+  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+);
+
 const statusTone = {
   draft: 'bg-slate-50 text-slate-700 border-slate-200',
   sent: 'bg-sky-50 text-sky-700 border-sky-200',
@@ -133,6 +157,8 @@ const createEditDraft = (agreement) => ({
   expiresAt: toInputDate(agreement?.expiresAt),
   serviceCadence: agreement?.serviceCadence || 'monthly',
   serviceCadenceCount: String(agreement?.serviceCadenceCount || 1),
+  billingFrequency: billingFrequencyForAgreement(agreement),
+  billingFrequencyCount: String(agreement?.billingFrequencyCount || agreement?.billingCadenceCount || agreement?.invoiceFrequencyCount || 1),
   rateType: agreement?.rateType || 'perMonth',
   paymentTerms: agreement?.paymentTerms || 'dueOnReceipt',
   terms: agreement?.terms || '',
@@ -353,14 +379,21 @@ const SalesAgreementDetail = () => {
     || billingSubscription?.recurringServiceStopId
     || billingSubscription?.agreementSnapshot?.recurringServiceStopId
     || '';
+  const recurringRouteId = agreement?.recurringRouteId
+    || billingSubscription?.recurringRouteId
+    || billingSubscription?.agreementSnapshot?.recurringRouteId
+    || '';
+  const recurringRouteName = agreement?.recurringRouteName
+    || billingSubscription?.recurringRouteName
+    || billingSubscription?.agreementSnapshot?.recurringRouteName
+    || '';
   const recurringSetupStatus = agreement?.operationsSetupStatus
     || billingSubscription?.operationsSetupStatus
     || billingSubscription?.agreementSnapshot?.operationsSetupStatus
     || 'needsRecurringServiceStop';
   const hasRecurringRouteSetup = Boolean(
     recurringServiceStopId ||
-    agreement?.recurringRouteId ||
-    billingSubscription?.recurringRouteId
+    recurringRouteId
   );
   const recurringSetupQuery = new URLSearchParams({
     agreementId: agreement?.id || agreementId || '',
@@ -557,6 +590,9 @@ const SalesAgreementDetail = () => {
         expiresAt: dateFromInput(editDraft.expiresAt),
         serviceCadence: editDraft.serviceCadence,
         serviceCadenceCount: Math.max(Number(editDraft.serviceCadenceCount) || 1, 1),
+        serviceFrequencyLabel: formatServiceFrequency(editDraft),
+        billingFrequency: editDraft.billingFrequency,
+        billingFrequencyCount: Math.max(Number(editDraft.billingFrequencyCount) || 1, 1),
         rateType: editDraft.rateType,
         paymentTerms: editDraft.paymentTerms,
         terms: editDraft.terms.trim(),
@@ -597,8 +633,41 @@ const SalesAgreementDetail = () => {
     setDeleting(true);
 
     try {
-      await deleteDoc(doc(db, salesCollectionNames.agreements, agreement.id));
-      toast.success('Service agreement deleted.');
+      const subscriptionsToDelete = new Map();
+      if (billingSubscription?.id) subscriptionsToDelete.set(billingSubscription.id, billingSubscription);
+
+      if (agreement.billingSubscriptionId && !subscriptionsToDelete.has(agreement.billingSubscriptionId)) {
+        const subscriptionSnap = await getDoc(doc(db, salesCollectionNames.billingSubscriptions, agreement.billingSubscriptionId));
+        if (subscriptionSnap.exists()) {
+          subscriptionsToDelete.set(subscriptionSnap.id, { id: subscriptionSnap.id, ...subscriptionSnap.data() });
+        }
+      }
+
+      const linkedSubscriptionsSnapshot = await getDocs(query(
+        collection(db, salesCollectionNames.billingSubscriptions),
+        where('agreementId', '==', agreement.id)
+      ));
+      linkedSubscriptionsSnapshot.docs.forEach((subscriptionDoc) => {
+        subscriptionsToDelete.set(subscriptionDoc.id, { id: subscriptionDoc.id, ...subscriptionDoc.data() });
+      });
+
+      const liveStripeSubscription = [...subscriptionsToDelete.values()].find(
+        (subscriptionRecord) => !canDeleteBillingSubscriptionRecord(subscriptionRecord)
+      );
+      if (liveStripeSubscription) {
+        toast.error('Cancel the active Stripe billing subscription before deleting this agreement.');
+        return;
+      }
+
+      const deleteBatch = writeBatch(db);
+      [...subscriptionsToDelete.keys()].forEach((subscriptionId) => {
+        deleteBatch.delete(doc(db, salesCollectionNames.billingSubscriptions, subscriptionId));
+      });
+      deleteBatch.delete(doc(db, salesCollectionNames.agreements, agreement.id));
+      await deleteBatch.commit();
+      toast.success(subscriptionsToDelete.size
+        ? 'Service agreement and billing subscription deleted.'
+        : 'Service agreement deleted.');
       navigate('/company/sales/agreements');
     } catch (deleteError) {
       console.error('Unable to delete service agreement', deleteError);
@@ -632,6 +701,10 @@ const SalesAgreementDetail = () => {
             email: agreement.email || '',
             totalAmountCents: String(totalAmountCents || 0),
             serviceCadence: agreement.serviceCadence || '',
+            serviceCadenceCount: String(agreement.serviceCadenceCount || 1),
+            serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+            billingFrequency: billingFrequencyForAgreement(agreement),
+            billingFrequencyCount: String(agreement.billingFrequencyCount || 1),
             rateType: agreement.rateType || '',
             termsTemplateId: agreement.termsTemplateId || '',
             termsTemplateName: agreement.termsTemplateName || '',
@@ -779,18 +852,6 @@ const SalesAgreementDetail = () => {
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  setConfirmingDelete(true);
-                  setDeleteConfirmation('');
-                }}
-                disabled={!agreement || companyMismatch || deleting}
-                className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaTrash className="text-xs" />
-                Delete Agreement
-              </button>
-              <button
-                type="button"
                 onClick={() => setConfirmingAcceptance(true)}
                 disabled={!canMarkAccepted}
                 className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
@@ -845,8 +906,8 @@ const SalesAgreementDetail = () => {
             Loading service agreement...
           </div>
         ) : agreement && !companyMismatch ? (
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-            <main className="space-y-6">
+          <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+            <main className="space-y-6 lg:order-2">
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Customer Snapshot</h2>
                 <dl className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -894,6 +955,74 @@ const SalesAgreementDetail = () => {
                   )}
                 </div>
               </section>
+
+              {isRecurringAgreement && (
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <FaRoute className="text-slate-400" />
+                      <h2 className="text-lg font-bold text-slate-950">Operations Setup</h2>
+                    </div>
+                    {!hasRecurringRouteSetup && (
+                      <Link
+                        to={recurringSetupUrl}
+                        aria-disabled={!canScheduleRecurringRoute}
+                        onClick={(event) => {
+                          if (!canScheduleRecurringRoute) event.preventDefault();
+                        }}
+                        className={`inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition sm:w-auto ${
+                          canScheduleRecurringRoute
+                            ? 'bg-slate-950 text-white hover:bg-slate-800'
+                            : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                        }`}
+                      >
+                        <FaRoute className="text-xs" />
+                        Schedule Route
+                      </Link>
+                    )}
+                  </div>
+
+                  <dl className="mt-4 grid gap-3 text-sm md:grid-cols-4">
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <dt className="text-slate-500">Setup Status</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">{labelize(recurringSetupStatus)}</dd>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <dt className="text-slate-500">Recurring Stop</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">
+                        {recurringServiceStopId ? (
+                          <Link
+                            to={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
+                            className="text-blue-700 hover:text-blue-900"
+                          >
+                            Open Recurring Stop
+                          </Link>
+                        ) : 'Not created'}
+                      </dd>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <dt className="text-slate-500">Route</dt>
+                      <dd className="mt-1 font-semibold text-slate-900">
+                        {recurringRouteId ? (
+                          <Link to="/company/route-management" className="text-blue-700 hover:text-blue-900">
+                            {recurringRouteName || 'Open Route Management'}
+                          </Link>
+                        ) : 'Not assigned'}
+                      </dd>
+                    </div>
+                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                      <dt className="text-slate-500">Service Location</dt>
+                      <dd className="mt-1 break-all font-semibold text-slate-900">{firstServiceLocationId || 'Not set'}</dd>
+                    </div>
+                  </dl>
+
+                  {!isAccepted && !hasRecurringRouteSetup && (
+                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                      Accept the recurring service agreement before scheduling its route.
+                    </div>
+                  )}
+                </section>
+              )}
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center gap-2">
@@ -949,7 +1078,7 @@ const SalesAgreementDetail = () => {
               </section>
             </main>
 
-            <aside className="space-y-6">
+            <aside className="space-y-6 lg:order-1">
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Send Readiness</h2>
                 <div className="mt-4 space-y-3">
@@ -967,8 +1096,12 @@ const SalesAgreementDetail = () => {
                 <h2 className="text-lg font-bold text-slate-950">Billing Summary</h2>
                 <dl className="mt-4 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Cadence</dt>
-                    <dd className="font-semibold text-slate-900">{labelize(agreement.serviceCadence)}</dd>
+                    <dt className="text-slate-500">Service Frequency</dt>
+                    <dd className="font-semibold text-slate-900">{formatServiceFrequency(agreement)}</dd>
+                  </div>
+                  <div className="flex items-center justify-between gap-3">
+                    <dt className="text-slate-500">Billing Frequency</dt>
+                    <dd className="font-semibold text-slate-900">{formatBillingFrequency(agreement)}</dd>
                   </div>
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">Rate Type</dt>
@@ -1083,62 +1216,6 @@ const SalesAgreementDetail = () => {
                   </Link>
                 )}
               </section>
-
-              {isRecurringAgreement && (
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <h2 className="text-lg font-bold text-slate-950">Operations Setup</h2>
-                    <FaRoute className="text-slate-400" />
-                  </div>
-                  <dl className="mt-4 space-y-3 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Setup Status</dt>
-                      <dd className="font-semibold text-slate-900">{labelize(recurringSetupStatus)}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Recurring Stop</dt>
-                      <dd className="font-semibold text-slate-900">
-                        {recurringServiceStopId ? (
-                          <Link
-                            to={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
-                            className="text-blue-700 hover:text-blue-900"
-                          >
-                            Open Recurring Stop
-                          </Link>
-                        ) : 'Not created'}
-                      </dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Service Location</dt>
-                      <dd className="break-all font-semibold text-slate-900">{firstServiceLocationId || 'Not set'}</dd>
-                    </div>
-                  </dl>
-
-                  {!isAccepted && (
-                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                      Accept the recurring service agreement before scheduling its route.
-                    </div>
-                  )}
-
-                  {!hasRecurringRouteSetup && (
-                    <Link
-                      to={recurringSetupUrl}
-                      aria-disabled={!canScheduleRecurringRoute}
-                      onClick={(event) => {
-                        if (!canScheduleRecurringRoute) event.preventDefault();
-                      }}
-                      className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
-                        canScheduleRecurringRoute
-                          ? 'bg-slate-950 text-white hover:bg-slate-800'
-                          : 'cursor-not-allowed bg-slate-300 text-slate-500'
-                      }`}
-                    >
-                      <FaRoute className="text-xs" />
-                      Schedule Route
-                    </Link>
-                  )}
-                </section>
-              )}
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
@@ -1351,11 +1428,11 @@ const SalesAgreementDetail = () => {
               </section>
 
               <section>
-                <h3 className="text-base font-bold text-slate-950">Billing</h3>
-                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <h3 className="text-base font-bold text-slate-950">Service & Billing</h3>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
                   <div>
                     <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCadence">
-                      Cadence
+                      Service Frequency
                     </label>
                     <select
                       id="agreementCadence"
@@ -1363,17 +1440,15 @@ const SalesAgreementDetail = () => {
                       onChange={(event) => updateEditField('serviceCadence', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="weekly">Weekly</option>
-                      <option value="biweekly">Biweekly</option>
-                      <option value="monthly">Monthly</option>
-                      <option value="quarterly">Quarterly</option>
-                      <option value="oneTime">One Time</option>
+                      {serviceFrequencyOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
 
                   <div>
                     <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCadenceCount">
-                      Cadence Count
+                      Service Count
                     </label>
                     <input
                       id="agreementCadenceCount"
@@ -1381,6 +1456,36 @@ const SalesAgreementDetail = () => {
                       min="1"
                       value={editDraft.serviceCadenceCount}
                       onChange={(event) => updateEditField('serviceCadenceCount', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementBillingFrequency">
+                      Billing Frequency
+                    </label>
+                    <select
+                      id="agreementBillingFrequency"
+                      value={editDraft.billingFrequency}
+                      onChange={(event) => updateEditField('billingFrequency', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {billingFrequencyOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementBillingFrequencyCount">
+                      Billing Count
+                    </label>
+                    <input
+                      id="agreementBillingFrequencyCount"
+                      type="number"
+                      min="1"
+                      value={editDraft.billingFrequencyCount}
+                      onChange={(event) => updateEditField('billingFrequencyCount', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     />
                   </div>
@@ -1521,6 +1626,19 @@ const SalesAgreementDetail = () => {
             <div className="sticky bottom-0 flex flex-col gap-2 border-t border-slate-200 bg-white p-5 sm:flex-row sm:justify-end">
               <button
                 type="button"
+                onClick={() => {
+                  closeEditor();
+                  setConfirmingDelete(true);
+                  setDeleteConfirmation('');
+                }}
+                disabled={!agreement || companyMismatch || deleting || savingEdit}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50 sm:mr-auto"
+              >
+                <FaTrash className="text-xs" />
+                Delete Agreement
+              </button>
+              <button
+                type="button"
                 onClick={closeEditor}
                 disabled={savingEdit}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
@@ -1640,7 +1758,8 @@ const SalesAgreementDetail = () => {
           <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
             <h2 className="text-xl font-bold text-slate-950">Delete Service Agreement</h2>
             <p className="mt-2 text-sm text-slate-600">
-              This permanently removes the agreement snapshot. It will not automatically clean up job, invoice, or customer references.
+              This permanently removes the agreement snapshot and any linked billing subscription records.
+              Active Stripe subscriptions must be canceled before deleting.
             </p>
             <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="deleteAgreementConfirmation">
               Type DELETE to confirm

@@ -95,6 +95,7 @@ exports.deleteUser = callableGeneral.deleteUser;
 exports.acceptTechInvite = callableGeneral.acceptTechInvite;
 exports.createCompanyUserInvite = callableGeneral.createCompanyUserInvite;
 exports.manageCompanyUserInvite = callableGeneral.manageCompanyUserInvite;
+exports.populateBaseTechnicianRatesOnCompanyUserCreate = callableGeneral.populateBaseTechnicianRatesOnCompanyUserCreate;
 exports.migrateLegacyVendorsToCanonical = callableGeneral.migrateLegacyVendorsToCanonical;
 exports.acceptLinkedInvite = callableGeneral.acceptLinkedInvite;
 exports.createCustomerAccountInvite = callableGeneral.createCustomerAccountInvite;

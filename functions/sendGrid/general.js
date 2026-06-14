@@ -707,6 +707,75 @@ const buildAgreementTerms = (agreement) => {
     return [];
 };
 
+const normalizeFrequencyKey = (value) => String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+
+const normalizeDaysOfWeek = (value) => {
+    if (!value) return [];
+    if (Array.isArray(value)) return value.filter(Boolean);
+    if (typeof value === "string") {
+        return value
+            .split(",")
+            .map((day) => day.trim())
+            .filter(Boolean);
+    }
+    return [];
+};
+
+const billingFrequencyForAgreement = (agreement = {}) => (
+    agreement.billingFrequency ||
+    agreement.billingCadence ||
+    agreement.invoiceFrequency ||
+    agreement.serviceCadence ||
+    agreement.rateType ||
+    "monthly"
+);
+
+const billingFrequencyCountForAgreement = (agreement = {}) => Math.max(Number(
+    agreement.billingFrequencyCount ||
+    agreement.billingCadenceCount ||
+    agreement.invoiceFrequencyCount ||
+    agreement.serviceCadenceCount ||
+    1
+), 1);
+
+const formatBillingFrequency = (agreement = {}) => {
+    const frequency = billingFrequencyForAgreement(agreement);
+    const count = billingFrequencyCountForAgreement(agreement);
+    const key = normalizeFrequencyKey(frequency);
+
+    if (key === "biweekly") return "Biweekly";
+    if (key === "quarterly") return "Quarterly";
+    if (key === "annually" || key === "annual") return "Annually";
+    if (count > 1 && !["custom", "onetime"].includes(key)) return `Every ${count} ${labelize(frequency).toLowerCase()}`;
+    return labelize(frequency);
+};
+
+const serviceFrequencyForAgreement = (agreement = {}) => (
+    agreement.serviceCadence ||
+    agreement.serviceFrequency ||
+    ""
+);
+
+const serviceFrequencyCountForAgreement = (agreement = {}) => Math.max(Number(
+    agreement.serviceCadenceCount ||
+    agreement.serviceFrequencyCount ||
+    1
+), 1);
+
+const formatServiceFrequency = (agreement = {}) => {
+    const frequency = serviceFrequencyForAgreement(agreement);
+    const count = serviceFrequencyCountForAgreement(agreement);
+    const key = normalizeFrequencyKey(frequency);
+    const days = normalizeDaysOfWeek(agreement.serviceDaysOfWeek || agreement.daysOfWeek || agreement.serviceDays || agreement.day);
+    const dayText = days.length ? ` on ${days.join(", ")}` : "";
+
+    if (key === "twiceweekly") return `Twice Weekly${dayText}`;
+    if (key === "threetimesweekly" || key === "tripleweekly") return `Three Times Weekly${dayText}`;
+    if (key === "biweekly" || key === "everyotherweek") return `Every Other Week${dayText}`;
+    if (count > 1 && !["custom", "onetime"].includes(key)) return `${count}x ${labelize(frequency)}${dayText}`;
+    return `${labelize(frequency || "notSet")}${dayText}`;
+};
+
 const buildServiceAgreementTemplateData = ({
     agreement,
     companyData,
@@ -736,7 +805,8 @@ const buildServiceAgreementTemplateData = ({
         state: location.state || "",
         zip: location.zip || "",
         billingAmount: formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents),
-        billingFrequency: labelize(agreement.serviceCadence || agreement.rateType),
+        billingFrequency: formatBillingFrequency(agreement),
+        serviceFrequency: formatServiceFrequency(agreement),
         billingStartDate: formatDate(agreement.startDate),
         paymentTerms: labelize(agreement.paymentTerms || "dueOnReceipt"),
         autopayStatus: "Optional",

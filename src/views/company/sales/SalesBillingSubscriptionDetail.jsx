@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { doc, onSnapshot, serverTimestamp, Timestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot, serverTimestamp, Timestamp, updateDoc, writeBatch } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
@@ -15,6 +15,7 @@ import {
   FaSave,
   FaSyncAlt,
   FaTimes,
+  FaTrash,
   FaUndo,
   FaUpload,
 } from 'react-icons/fa';
@@ -28,6 +29,10 @@ import {
   salesCollectionNames,
 } from '../../../utils/models/Sales';
 import {
+  formatBillingFrequency,
+  formatServiceFrequency,
+} from '../../../utils/sales/agreementCadence';
+import {
   createManualSubscriptionInvoice,
   getSubscriptionBillingPeriodPreview,
 } from '../../../utils/sales/manualBilling';
@@ -38,6 +43,11 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 });
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
+  !subscription?.stripeSubscriptionId ||
+  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+);
 
 const labelize = (value) => {
   if (!value) return 'Unknown';
@@ -153,7 +163,10 @@ const createDraft = (subscription) => ({
   currency: subscription?.currency || 'usd',
   interval: subscription?.interval || 'month',
   intervalCount: String(subscription?.intervalCount || 1),
+  billingFrequency: subscription?.billingFrequency || '',
+  billingFrequencyCount: String(subscription?.billingFrequencyCount || subscription?.intervalCount || 1),
   serviceCadence: subscription?.serviceCadence || '',
+  serviceCadenceCount: String(subscription?.serviceCadenceCount || 1),
   rateType: subscription?.rateType || '',
   paymentTerms: subscription?.paymentTerms || 'dueOnReceipt',
   invoiceDeliveryMethod: subscription?.invoiceDeliveryMethod || SalesInvoiceDeliveryMethod.email,
@@ -182,6 +195,9 @@ const SalesBillingSubscriptionDetail = () => {
   const [startingCheckout, setStartingCheckout] = useState(false);
   const [stripeAction, setStripeAction] = useState('');
   const [creatingManualInvoice, setCreatingManualInvoice] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!billingSubscriptionId) {
@@ -275,6 +291,13 @@ const SalesBillingSubscriptionDetail = () => {
     !['canceled'].includes(statusKey) &&
     !stripeAction
   );
+  const canDeleteSubscription = Boolean(
+    subscription &&
+    editing &&
+    !companyMismatch &&
+    !deleting &&
+    canDeleteBillingSubscriptionRecord(subscription)
+  );
   const firstServiceLocationId = Array.isArray(subscription?.serviceLocationIds)
     ? subscription.serviceLocationIds.find(Boolean) || ''
     : '';
@@ -342,7 +365,10 @@ const SalesBillingSubscriptionDetail = () => {
         currency: draft.currency.trim().toLowerCase() || 'usd',
         interval: draft.interval,
         intervalCount,
+        billingFrequency: draft.billingFrequency.trim(),
+        billingFrequencyCount: Math.max(Number(draft.billingFrequencyCount || 1), 1),
         serviceCadence: draft.serviceCadence.trim(),
+        serviceCadenceCount: Math.max(Number(draft.serviceCadenceCount || 1), 1),
         rateType: draft.rateType.trim(),
         paymentTerms: draft.paymentTerms,
         invoiceDeliveryMethod: draft.invoiceDeliveryMethod,
@@ -480,6 +506,46 @@ const SalesBillingSubscriptionDetail = () => {
     successMessage: 'Stripe subscription pricing updated.',
   });
 
+  const deleteBillingSubscription = async () => {
+    if (!subscription || deleteConfirmation.trim().toUpperCase() !== 'DELETE' || deleting) return;
+
+    if (!canDeleteBillingSubscriptionRecord(subscription)) {
+      toast.error('Cancel the active Stripe billing subscription before deleting this billing record.');
+      return;
+    }
+
+    setDeleting(true);
+
+    try {
+      const deleteBatch = writeBatch(db);
+      deleteBatch.delete(doc(db, salesCollectionNames.billingSubscriptions, subscription.id));
+      if (subscription.agreementId) {
+        const agreementRef = doc(db, salesCollectionNames.agreements, subscription.agreementId);
+        const agreementSnap = await getDoc(agreementRef);
+        if (agreementSnap.exists()) {
+          deleteBatch.update(agreementRef, {
+            billingSubscriptionId: '',
+            billingFlowStatus: 'notStarted',
+            billingFlowNextAction: 'createBillingSubscription',
+            billingFlowUpdatedAt: serverTimestamp(),
+            autopayStatus: 'unavailable',
+            customerCanPayImmediately: false,
+            updatedAt: serverTimestamp(),
+          });
+        }
+      }
+      await deleteBatch.commit();
+
+      toast.success('Billing subscription deleted.');
+      navigate('/company/sales/subscriptions');
+    } catch (deleteError) {
+      console.error('Unable to delete billing subscription', deleteError);
+      toast.error(deleteError.message || 'Failed to delete billing subscription.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   if (loading) {
     return <div className="min-h-screen bg-slate-50 p-6 text-sm text-slate-500">Loading billing subscription...</div>;
   }
@@ -547,14 +613,29 @@ const SalesBillingSubscriptionDetail = () => {
                   Edit
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={cancelEditing}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                >
-                  <FaTimes className="text-xs" />
-                  Cancel
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setConfirmingDelete(true);
+                      setDeleteConfirmation('');
+                    }}
+                    disabled={!canDeleteSubscription}
+                    title={canDeleteSubscription ? 'Delete billing subscription' : 'Cancel active Stripe billing before deleting'}
+                    className="inline-flex items-center gap-2 rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FaTrash className="text-xs" />
+                    Delete
+                  </button>
+                  <button
+                    type="button"
+                    onClick={cancelEditing}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <FaTimes className="text-xs" />
+                    Cancel
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -639,7 +720,10 @@ const SalesBillingSubscriptionDetail = () => {
                       options={['day', 'week', 'month', 'year']}
                     />
                     <TextInput label="Interval Count" value={draft.intervalCount} onChange={(value) => updateDraft('intervalCount', value)} type="number" min="1" step="1" />
+                    <TextInput label="Billing Frequency" value={draft.billingFrequency} onChange={(value) => updateDraft('billingFrequency', value)} />
+                    <TextInput label="Billing Count" value={draft.billingFrequencyCount} onChange={(value) => updateDraft('billingFrequencyCount', value)} type="number" min="1" step="1" />
                     <TextInput label="Service Cadence" value={draft.serviceCadence} onChange={(value) => updateDraft('serviceCadence', value)} />
+                    <TextInput label="Service Count" value={draft.serviceCadenceCount} onChange={(value) => updateDraft('serviceCadenceCount', value)} type="number" min="1" step="1" />
                     <TextInput label="Rate Type" value={draft.rateType} onChange={(value) => updateDraft('rateType', value)} />
                     <SelectInput
                       label="Payment Terms"
@@ -690,7 +774,8 @@ const SalesBillingSubscriptionDetail = () => {
                     <Field label="Manual Invoicing" value={manualBillingAllowed ? 'Enabled' : 'Disabled'} />
                     <Field label="Receipts" value={receiptWorkflowLabel} />
                     <Field label="Amount" value={formatCurrency(subscription.amountCents)} />
-                    <Field label="Cadence" value={`Every ${subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}${subscription.interval || 'month'}`} />
+                    <Field label="Billing Frequency" value={formatBillingFrequency(subscription) || `Every ${subscription.intervalCount > 1 ? `${subscription.intervalCount} ` : ''}${subscription.interval || 'month'}`} />
+                    <Field label="Service Frequency" value={formatServiceFrequency(subscription)} />
                     <Field label="Payment Terms" value={labelize(subscription.paymentTerms)} />
                     <Field label="Invoice Delivery" value={labelize(subscription.invoiceDeliveryMethod)} />
                     <Field label="Next Action" value={labelize(subscription.nextAction)} />
@@ -889,6 +974,48 @@ const SalesBillingSubscriptionDetail = () => {
           </div>
         )}
       </div>
+
+      {confirmingDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+            <h2 className="text-xl font-bold text-slate-950">Delete Billing Subscription</h2>
+            <p className="mt-2 text-sm text-slate-600">
+              This permanently removes the billing subscription record and clears the linked service agreement billing reference.
+              Active Stripe subscriptions must be canceled before deleting.
+            </p>
+            <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="deleteBillingSubscriptionConfirmation">
+              Type DELETE to confirm
+            </label>
+            <input
+              id="deleteBillingSubscriptionConfirmation"
+              value={deleteConfirmation}
+              onChange={(event) => setDeleteConfirmation(event.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-100"
+            />
+            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmingDelete(false);
+                  setDeleteConfirmation('');
+                }}
+                disabled={deleting}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={deleteBillingSubscription}
+                disabled={deleteConfirmation.trim().toUpperCase() !== 'DELETE' || deleting}
+                className="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-rose-300"
+              >
+                {deleting ? 'Deleting...' : 'Delete Billing Subscription'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
