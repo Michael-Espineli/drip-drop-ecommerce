@@ -39,6 +39,7 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 const statusTone = {
   active: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  superseded: 'bg-violet-50 text-violet-700 border-violet-200',
   paid: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   posted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   sent: 'bg-sky-50 text-sky-700 border-sky-200',

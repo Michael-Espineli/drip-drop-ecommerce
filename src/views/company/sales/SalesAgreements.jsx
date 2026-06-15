@@ -9,6 +9,9 @@ import {
   FaPlus,
   FaRoute,
   FaSearch,
+  FaSort,
+  FaSortAmountDown,
+  FaSortAmountUp,
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import { Context } from '../../../context/AuthContext';
@@ -62,11 +65,77 @@ const labelize = (value) => {
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
+const sortDirectionLabels = {
+  asc: 'Ascending',
+  desc: 'Descending',
+};
+
+const agreementSortOptions = [
+  { value: 'updated', label: 'Updated' },
+  { value: 'customer', label: 'Customer' },
+  { value: 'amount', label: 'Amount' },
+  { value: 'agreement', label: 'Agreement' },
+  { value: 'sent', label: 'Sent Date' },
+  { value: 'status', label: 'Status' },
+];
+
+const defaultSortDirectionForKey = (sortKey) => (
+  ['agreement', 'customer', 'status'].includes(sortKey) ? 'asc' : 'desc'
+);
+
+const agreementAmountCents = (agreement = {}) => (
+  Number(agreement.totalAmountCents || agreement.rateAmountCents || 0) || 0
+);
+
+const sortText = (value) => String(value || '').trim().toLowerCase();
+
+const compareAgreementValues = (left = {}, right = {}, sortKey = 'updated') => {
+  if (sortKey === 'amount') {
+    return agreementAmountCents(left) - agreementAmountCents(right);
+  }
+
+  if (sortKey === 'sent') {
+    return toMillis(left.sentAt) - toMillis(right.sentAt);
+  }
+
+  if (sortKey === 'updated') {
+    return toMillis(left.updatedAt || left.createdAt) - toMillis(right.updatedAt || right.createdAt);
+  }
+
+  if (sortKey === 'status') {
+    return sortText(left.status || SalesAgreementStatus.draft).localeCompare(sortText(right.status || SalesAgreementStatus.draft));
+  }
+
+  if (sortKey === 'agreement') {
+    return sortText(left.title || 'Service Agreement').localeCompare(sortText(right.title || 'Service Agreement'));
+  }
+
+  return sortText(left.customerName || 'Customer').localeCompare(sortText(right.customerName || 'Customer'));
+};
+
+const sortAgreements = (agreements = [], sortKey = 'updated', sortDirection = 'desc') => {
+  const directionMultiplier = sortDirection === 'asc' ? 1 : -1;
+
+  return [...agreements].sort((left, right) => {
+    const primary = compareAgreementValues(left, right, sortKey);
+    if (primary !== 0) return primary * directionMultiplier;
+
+    const customerTieBreak = sortText(left.customerName || 'Customer').localeCompare(sortText(right.customerName || 'Customer'));
+    if (customerTieBreak !== 0) return customerTieBreak;
+
+    const titleTieBreak = sortText(left.title || 'Service Agreement').localeCompare(sortText(right.title || 'Service Agreement'));
+    if (titleTieBreak !== 0) return titleTieBreak;
+
+    return toMillis(right.updatedAt || right.createdAt) - toMillis(left.updatedAt || left.createdAt);
+  });
+};
+
 const statusTone = {
   draft: 'bg-slate-50 text-slate-700 border-slate-200',
   sent: 'bg-sky-50 text-sky-700 border-sky-200',
   revised: 'bg-amber-50 text-amber-700 border-amber-200',
   accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  superseded: 'bg-violet-50 text-violet-700 border-violet-200',
   rejected: 'bg-rose-50 text-rose-700 border-rose-200',
   expired: 'bg-slate-100 text-slate-500 border-slate-200',
   canceled: 'bg-slate-100 text-slate-500 border-slate-200',
@@ -99,6 +168,49 @@ const BillingTypeBadge = ({ agreement }) => {
   );
 };
 
+const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onSort }) => {
+  const active = activeSortKey === sortKey;
+  const Icon = active
+    ? (sortDirection === 'asc' ? FaSortAmountUp : FaSortAmountDown)
+    : FaSort;
+
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(sortKey)}
+      className={`inline-flex items-center gap-1.5 text-left font-semibold uppercase tracking-wide transition ${active ? 'text-blue-700' : 'text-slate-500 hover:text-slate-700'}`}
+      aria-label={`Sort by ${children}`}
+    >
+      {children}
+      <Icon className="text-[0.65rem]" />
+    </button>
+  );
+};
+
+const normalizeAgreementTypeOptions = (agreementTypes = AgreementBillingType.recurring) => {
+  const values = (Array.isArray(agreementTypes) ? agreementTypes : [agreementTypes])
+    .filter(Boolean);
+
+  if (values.includes(AgreementBillingType.all)) return [AgreementBillingType.all];
+
+  const validTypes = values.filter((type) => (
+    type === AgreementBillingType.recurring ||
+    type === AgreementBillingType.oneTime
+  ));
+
+  return [...new Set(validTypes.length > 0 ? validTypes : [AgreementBillingType.recurring])];
+};
+
+const firstAllowedBillingType = (allowedTypes = [], preferredType = AgreementBillingType.recurring) => {
+  if (allowedTypes.includes(AgreementBillingType.all)) {
+    if (preferredType === AgreementBillingType.all) return AgreementBillingType.all;
+    return preferredType === AgreementBillingType.oneTime ? AgreementBillingType.oneTime : AgreementBillingType.recurring;
+  }
+
+  if (allowedTypes.includes(preferredType)) return preferredType;
+  return allowedTypes[0] || AgreementBillingType.recurring;
+};
+
 const StatTile = ({ icon: Icon, label, value, helper }) => (
   <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
@@ -114,7 +226,11 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
   </div>
 );
 
-const SalesAgreements = ({ routingQueueOnly = false }) => {
+const SalesAgreements = ({
+  routingQueueOnly = false,
+  agreementTypes = AgreementBillingType.recurring,
+  defaultAgreementType = AgreementBillingType.recurring,
+}) => {
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
@@ -130,13 +246,20 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [billingTypeFilter, setBillingTypeFilter] = useState(
-    routingQueueOnly ? AgreementBillingType.recurring : AgreementBillingType.all
-  );
+  const [sortKey, setSortKey] = useState('updated');
+  const [sortDirection, setSortDirection] = useState('desc');
   const [error, setError] = useState('');
   const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
 
   const navigate = useNavigate();
+  const allowedBillingTypes = useMemo(() => (
+    routingQueueOnly ? [AgreementBillingType.recurring] : normalizeAgreementTypeOptions(agreementTypes)
+  ), [agreementTypes, routingQueueOnly]);
+  const initialBillingTypeFilter = useMemo(() => (
+    firstAllowedBillingType(allowedBillingTypes, defaultAgreementType)
+  ), [allowedBillingTypes, defaultAgreementType]);
+  const [billingTypeFilter, setBillingTypeFilter] = useState(initialBillingTypeFilter);
+
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setAgreements([]);
@@ -187,6 +310,10 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
   }, [recentlySelectedCompany, routingQueueOnly]);
 
   useEffect(() => {
+    setBillingTypeFilter(initialBillingTypeFilter);
+  }, [initialBillingTypeFilter]);
+
+  useEffect(() => {
     if (!routingQueueOnly) return;
     setStatusFilter(SalesAgreementStatus.accepted);
     setBillingTypeFilter(AgreementBillingType.recurring);
@@ -197,10 +324,17 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
     [recurringStops]
   );
 
+  const typeScopedAgreements = useMemo(() => (
+    agreements.filter((agreement) => {
+      if (allowedBillingTypes.includes(AgreementBillingType.all)) return true;
+      return allowedBillingTypes.includes(getAgreementBillingType(agreement));
+    })
+  ), [agreements, allowedBillingTypes]);
+
   const filteredAgreements = useMemo(() => {
     const normalizedSearch = searchTerm.trim().toLowerCase();
 
-    return agreements.filter((agreement) => {
+    const matches = typeScopedAgreements.filter((agreement) => {
       if (routingQueueOnly && !agreementNeedsRecurringRouting(agreement, recurringRoutingIndex)) return false;
 
       const matchesStatus = statusFilter === 'all' || normalizeStatus(agreement.status) === normalizeStatus(statusFilter);
@@ -225,28 +359,54 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
         .filter(Boolean)
         .some((value) => String(value).toLowerCase().includes(normalizedSearch));
     });
-  }, [agreements, billingTypeFilter, recurringRoutingIndex, routingQueueOnly, searchTerm, statusFilter]);
+
+    return sortAgreements(matches, sortKey, sortDirection);
+  }, [billingTypeFilter, recurringRoutingIndex, routingQueueOnly, searchTerm, sortDirection, sortKey, statusFilter, typeScopedAgreements]);
 
   const summary = useMemo(() => {
-    const sentCount = agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent).length;
-    const acceptedCount = agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted).length;
-    const needsRoutingCount = agreements.filter((agreement) => agreementNeedsRecurringRouting(agreement, recurringRoutingIndex)).length;
-    const totalAmountCents = agreements.reduce(
+    const draftCount = typeScopedAgreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.draft).length;
+    const sentCount = typeScopedAgreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent).length;
+    const acceptedCount = typeScopedAgreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted).length;
+    const needsRoutingCount = typeScopedAgreements.filter((agreement) => agreementNeedsRecurringRouting(agreement, recurringRoutingIndex)).length;
+    const totalAmountCents = typeScopedAgreements.reduce(
       (total, agreement) => total + (Number(agreement.totalAmountCents || agreement.rateAmountCents) || 0),
       0
     );
 
     return {
+      draftCount,
       sentCount,
       acceptedCount,
       needsRoutingCount,
       totalAmountCents,
     };
-  }, [agreements, recurringRoutingIndex]);
+  }, [recurringRoutingIndex, typeScopedAgreements]);
 
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
   const statusOptions = ['all', ...Object.values(SalesAgreementStatus)];
-  const billingTypeOptions = [AgreementBillingType.all, AgreementBillingType.recurring, AgreementBillingType.oneTime];
+  const billingTypeOptions = useMemo(() => {
+    if (allowedBillingTypes.includes(AgreementBillingType.all)) {
+      return [AgreementBillingType.all, AgreementBillingType.recurring, AgreementBillingType.oneTime];
+    }
+
+    return allowedBillingTypes.length > 1
+      ? [AgreementBillingType.all, ...allowedBillingTypes]
+      : allowedBillingTypes;
+  }, [allowedBillingTypes]);
+
+  const handleSortKeyChange = (nextSortKey) => {
+    setSortKey(nextSortKey);
+    setSortDirection(defaultSortDirectionForKey(nextSortKey));
+  };
+
+  const handleHeaderSort = (nextSortKey) => {
+    if (sortKey === nextSortKey) {
+      setSortDirection((currentDirection) => (currentDirection === 'asc' ? 'desc' : 'asc'));
+      return;
+    }
+
+    handleSortKeyChange(nextSortKey);
+  };
 
   const handleGenerateFromRoutes = async () => {
     if (!recentlySelectedCompany) {
@@ -390,13 +550,16 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
           </div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section className={`grid gap-4 sm:grid-cols-2 ${routingQueueOnly ? 'lg:grid-cols-4' : 'lg:grid-cols-5'}`}>
           <StatTile
             icon={FaFileSignature}
             label={routingQueueOnly ? 'Need Routing' : 'Agreements'}
-            value={routingQueueOnly ? filteredAgreements.length : agreements.length}
-            helper={routingQueueOnly ? 'Accepted recurring agreements' : 'All statuses'}
+            value={routingQueueOnly ? filteredAgreements.length : typeScopedAgreements.length}
+            helper={routingQueueOnly ? 'Accepted recurring agreements' : 'Current type scope'}
           />
+          {!routingQueueOnly && (
+            <StatTile icon={FaFileSignature} label="Draft" value={summary.draftCount} helper="Ready to review" />
+          )}
           <StatTile icon={FaEnvelope} label="Sent" value={summary.sentCount} helper="Waiting on customer" />
           <StatTile icon={FaCheckCircle} label="Accepted" value={summary.acceptedCount} helper="Ready for billing" />
           <StatTile
@@ -408,7 +571,7 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
         </section>
 
         <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_190px_190px]">
+          <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(0,1fr)_180px_160px_170px_130px]">
             <div className="relative">
               <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
@@ -432,7 +595,7 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
             <select
               value={billingTypeFilter}
               onChange={(event) => setBillingTypeFilter(event.target.value)}
-              disabled={routingQueueOnly}
+              disabled={routingQueueOnly || billingTypeOptions.length <= 1}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               {billingTypeOptions.map((billingType) => (
@@ -441,6 +604,25 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
                 </option>
               ))}
             </select>
+            <select
+              value={sortKey}
+              onChange={(event) => handleSortKeyChange(event.target.value)}
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              aria-label="Sort service agreements"
+            >
+              {agreementSortOptions.map((option) => (
+                <option key={option.value} value={option.value}>Sort: {option.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => setSortDirection((currentDirection) => (currentDirection === 'asc' ? 'desc' : 'asc'))}
+              className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              aria-label={`Current sort direction: ${sortDirectionLabels[sortDirection]}`}
+            >
+              {sortDirection === 'asc' ? <FaSortAmountUp className="text-xs" /> : <FaSortAmountDown className="text-xs" />}
+              {sortDirectionLabels[sortDirection]}
+            </button>
           </div>
 
           <div className="overflow-x-auto">
@@ -459,13 +641,37 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
               <table className="min-w-full divide-y divide-slate-200 text-sm">
                 <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
                   <tr>
-                    <th className="px-5 py-3">Agreement</th>
-                    <th className="px-5 py-3">Customer</th>
-                    <th className="px-5 py-3">Amount</th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="agreement" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Agreement
+                      </SortHeaderButton>
+                    </th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="customer" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Customer
+                      </SortHeaderButton>
+                    </th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="amount" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Amount
+                      </SortHeaderButton>
+                    </th>
                     <th className="px-5 py-3">Type</th>
-                    <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3">Sent</th>
-                    <th className="px-5 py-3">Updated</th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="status" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Status
+                      </SortHeaderButton>
+                    </th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="sent" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Sent
+                      </SortHeaderButton>
+                    </th>
+                    <th className="px-5 py-3">
+                      <SortHeaderButton sortKey="updated" activeSortKey={sortKey} sortDirection={sortDirection} onSort={handleHeaderSort}>
+                        Updated
+                      </SortHeaderButton>
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -481,7 +687,7 @@ const SalesAgreements = ({ routingQueueOnly = false }) => {
                         <p className="mt-1 text-xs text-slate-500">{agreement.email || 'No email'}</p>
                       </td>
                       <td className="px-5 py-4 font-semibold text-slate-900">
-                        {formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)}
+                        {formatCurrency(agreementAmountCents(agreement))}
                       </td>
                       <td className="px-5 py-4">
                         <BillingTypeBadge agreement={agreement} />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { Equipment, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from "../../../utils/models/Equipment";
+import { Equipment, EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from "../../../utils/models/Equipment";
 import { MaintenanceHistory } from "../../../utils/models/MaintenanceHistory";
 import { RepairHistory } from "../../../utils/models/RepairHistory";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
@@ -28,6 +28,7 @@ import { format, addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
+  ArrowPathRoundedSquareIcon,
   BriefcaseIcon,
   PencilSquareIcon,
   WrenchScrewdriverIcon,
@@ -155,6 +156,22 @@ const companyUserDisplayName = (user = {}) =>
 
 const companyUserRecordId = (user = {}) => user.userId || user.id || "";
 
+const equipmentDisplayName = (equipment = {}) =>
+  [equipment.name, equipment.make, equipment.model].filter(Boolean).join(" ") || equipment.type || "Equipment";
+
+const buildEquipmentCreatePath = (equipment = {}) => {
+  let path = "/company/equipment/createNew";
+  if (!equipment.customerId) return path;
+
+  path += `/${equipment.customerId}`;
+  if (!equipment.serviceLocationId) return path;
+
+  path += `/${equipment.serviceLocationId}`;
+  if (!equipment.bodyOfWaterId) return path;
+
+  return `${path}/${equipment.bodyOfWaterId}`;
+};
+
 const EquipmentDetail = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -204,6 +221,10 @@ const EquipmentDetail = () => {
   const [showRepairHistoryModal, setShowRepairHistoryModal] = useState(false);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [showMakeModelModal, setShowMakeModelModal] = useState(false);
+  const [showReplaceModal, setShowReplaceModal] = useState(false);
+  const [replaceDate, setReplaceDate] = useState(todayDateInputValue);
+  const [addReplacementAfterSave, setAddReplacementAfterSave] = useState(true);
+  const [isReplacingEquipment, setIsReplacingEquipment] = useState(false);
 
   // Company Users
   const [companyUsers, setCompanyUsers] = useState([]);
@@ -717,6 +738,66 @@ const EquipmentDetail = () => {
     }
   };
 
+  const openReplaceModal = () => {
+    setReplaceDate(todayDateInputValue());
+    setAddReplacementAfterSave(true);
+    setShowReplaceModal(true);
+  };
+
+  const handleReplaceEquipment = async () => {
+    if (!requirePermission("64", "replace equipment")) return;
+
+    const dateUninstalled = dateInputToLocalDate(replaceDate);
+    if (!dateUninstalled) {
+      toast.error("Choose a date uninstalled");
+      return;
+    }
+
+    try {
+      setIsReplacingEquipment(true);
+      const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
+      const updates = {
+        isActive: false,
+        active: false,
+        dateUninstalled,
+        needsService: false,
+        nextServiceDate: null,
+        status: EQUIPMENT_STATUS.REPLACED,
+      };
+
+      await updateDoc(docRef, updates);
+
+      setEquipment((prev) => ({
+        ...prev,
+        ...updates,
+      }));
+      setIsActive(false);
+      setStatus(EQUIPMENT_STATUS.REPLACED);
+      setShowReplaceModal(false);
+      toast.success("Equipment marked as replaced");
+
+      if (addReplacementAfterSave) {
+        navigate(buildEquipmentCreatePath(equipment), {
+          state: {
+            replacementContext: {
+              replacesEquipmentId: equipmentId,
+              replacedEquipmentName: equipmentDisplayName(equipment),
+              dateUninstalled: dateUninstalled.toISOString(),
+              customerId: equipment?.customerId || "",
+              serviceLocationId: equipment?.serviceLocationId || "",
+              bodyOfWaterId: equipment?.bodyOfWaterId || "",
+            },
+          },
+        });
+      }
+    } catch (error) {
+      console.error("Error replacing equipment:", error);
+      toast.error("Failed to mark equipment as replaced");
+    } finally {
+      setIsReplacingEquipment(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!requirePermission("66", "delete equipment")) return;
 
@@ -1061,6 +1142,14 @@ const EquipmentDetail = () => {
                   tone="amber"
                   onClick={() => setShowRepairHistoryModal(true)}
                 />
+                {equipment?.isActive && (
+                  <DetailActionButton
+                    label="Replace Equipment"
+                    icon={ArrowPathRoundedSquareIcon}
+                    tone="amber"
+                    onClick={openReplaceModal}
+                  />
+                )}
               </>
             )}
 
@@ -1227,6 +1316,14 @@ const EquipmentDetail = () => {
                     {equipment?.dateInstalled ? format(equipment.dateInstalled, "PP") : "N/A"}
                   </p>
                 </div>
+                {!equipment?.isActive && (
+                  <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Date Uninstalled</p>
+                    <p className="mt-1 text-gray-800 font-semibold">
+                      {equipment?.dateUninstalled ? format(equipment.dateUninstalled, "PP") : "N/A"}
+                    </p>
+                  </div>
+                )}
                 {
                   equipment.needsService ? (<>
                     <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -1378,6 +1475,9 @@ const EquipmentDetail = () => {
 
                 <Field label="Status">
                   <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputBase}>
+                    {status === EQUIPMENT_STATUS.REPLACED && (
+                      <option value={EQUIPMENT_STATUS.REPLACED}>{EQUIPMENT_STATUS.REPLACED}</option>
+                    )}
                     {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
                       <option key={statusOption} value={statusOption}>
                         {statusOption}
@@ -1602,6 +1702,67 @@ const EquipmentDetail = () => {
           </div>
         </div>
       </div>
+
+      {showReplaceModal && (
+        <ModalShell
+          title="Replace Equipment"
+          onClose={() => setShowReplaceModal(false)}
+          footer={
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowReplaceModal(false)}
+                className="py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                type="button"
+                disabled={isReplacingEquipment}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleReplaceEquipment}
+                className="py-2 px-5 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition disabled:bg-gray-400"
+                type="button"
+                disabled={isReplacingEquipment}
+              >
+                {isReplacingEquipment
+                  ? "Saving..."
+                  : addReplacementAfterSave
+                    ? "Mark Replaced and Add New"
+                    : "Mark Replaced"}
+              </button>
+            </div>
+          }
+        >
+          <div className="space-y-4">
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              This will mark {equipmentDisplayName(equipment)} as inactive and set its status to Replaced.
+            </div>
+
+            <Field label="Date Uninstalled">
+              <input
+                type="date"
+                value={replaceDate}
+                onChange={(event) => setReplaceDate(event.target.value)}
+                className={inputBase}
+              />
+            </Field>
+
+            <label className="flex items-start gap-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <input
+                type="checkbox"
+                checked={addReplacementAfterSave}
+                onChange={(event) => setAddReplacementAfterSave(event.target.checked)}
+                className="mt-1 h-5 w-5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span>
+                <span className="block font-semibold text-gray-800">Add replacement equipment next</span>
+                <span className="mt-1 block text-sm text-gray-600">
+                  The new equipment form will open with this customer, service location, and body of water selected.
+                </span>
+              </span>
+            </label>
+          </div>
+        </ModalShell>
+      )}
 
       {/* -----------------------------
           Make / Model Modal

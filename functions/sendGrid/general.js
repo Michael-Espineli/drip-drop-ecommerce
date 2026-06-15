@@ -776,6 +776,19 @@ const formatServiceFrequency = (agreement = {}) => {
     return `${labelize(frequency || "notSet")}${dayText}`;
 };
 
+const chemicalBillingModeLabel = (agreement = {}) => {
+    const mode = normalizeFrequencyKey(agreement.chemicalBillingMode || agreement.chemicalBillingTreatment || agreement.chemicalBilling || "");
+    if (mode === "billallseparately" || mode === "billall" || mode === "separateall") return "Bill All Chemicals Separately";
+    if (mode === "mixed" || mode === "selected" || mode === "billselectedseparately") return "Mixed Chemical Billing";
+    return "Chemicals Included In Service";
+};
+
+const normalizeAgreementList = (value) => (
+    Array.isArray(value)
+        ? value.map((item) => String(item || "").trim()).filter(Boolean)
+        : String(value || "").split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
+);
+
 const buildServiceAgreementTemplateData = ({
     agreement,
     companyData,
@@ -786,6 +799,12 @@ const buildServiceAgreementTemplateData = ({
     const location = normalizeAgreementLocation(agreement);
     const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
     const terms = buildAgreementTerms(agreement);
+    const includedChemicalKeywords = normalizeAgreementList(agreement.includedChemicalKeywords);
+    const includedChemicalIds = normalizeAgreementList(agreement.includedChemicalIds);
+    const separatelyBilledChemicalKeywords = normalizeAgreementList(agreement.separatelyBilledChemicalKeywords);
+    const separatelyBilledChemicalIds = normalizeAgreementList(agreement.separatelyBilledChemicalIds);
+    const customerPurchasedChemicalKeywords = normalizeAgreementList(agreement.customerPurchasedChemicalKeywords);
+    const customerPurchasedChemicalIds = normalizeAgreementList(agreement.customerPurchasedChemicalIds);
 
     return {
         subject: `${companyName} Service Agreement`,
@@ -807,6 +826,18 @@ const buildServiceAgreementTemplateData = ({
         billingAmount: formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents),
         billingFrequency: formatBillingFrequency(agreement),
         serviceFrequency: formatServiceFrequency(agreement),
+        chemicalBillingMode: agreement.chemicalBillingMode || "includedAll",
+        chemicalBillingModeLabel: chemicalBillingModeLabel(agreement),
+        chemicalBillingNotes: agreement.chemicalBillingNotes || "",
+        includedChemicalKeywords,
+        includedChemicalIds,
+        separatelyBilledChemicalKeywords,
+        separatelyBilledChemicalIds,
+        customerPurchasedChemicalKeywords,
+        customerPurchasedChemicalIds,
+        includedChemicalsSummary: includedChemicalKeywords.join(", "),
+        separatelyBilledChemicalsSummary: separatelyBilledChemicalKeywords.join(", "),
+        customerPurchasedChemicalsSummary: customerPurchasedChemicalKeywords.join(", "),
         billingStartDate: formatDate(agreement.startDate),
         paymentTerms: labelize(agreement.paymentTerms || "dueOnReceipt"),
         autopayStatus: "Optional",

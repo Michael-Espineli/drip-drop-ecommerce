@@ -18,6 +18,7 @@ import toast from 'react-hot-toast';
 import {
   FaArrowLeft,
   FaCheckCircle,
+  FaCopy,
   FaCreditCard,
   FaEdit,
   FaEnvelope,
@@ -34,10 +35,18 @@ import {
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
 import { db, functions } from '../../../utils/config';
-import { salesCollectionNames, SalesAgreementStatus } from '../../../utils/models/Sales';
+import {
+  SalesAgreement,
+  SalesAgreementChemicalBillingMode,
+  SalesAgreementPnlChemicalCostMode,
+  SalesAgreementStatus,
+  SalesAutopayStatus,
+  salesCollectionNames,
+} from '../../../utils/models/Sales';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
+import { saveSalesModel } from '../../../utils/sales/salesFirestore';
 import { AgreementBillingType, getAgreementBillingType } from '../../../utils/sales/agreementRouting';
 import {
   billingFrequencyForAgreement,
@@ -46,6 +55,7 @@ import {
   formatServiceFrequency,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
+import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -107,15 +117,74 @@ const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
   normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
 );
 
+const renewalPreviousAgreementId = (agreement = {}) => (
+  agreement.supersedesAgreementId ||
+  agreement.previousAgreementId ||
+  agreement.renewalSourceAgreementId ||
+  ''
+);
+
+const agreementHistoryGroupId = (agreement = {}) => (
+  agreement.agreementHistoryGroupId ||
+  renewalPreviousAgreementId(agreement) ||
+  agreement.id ||
+  ''
+);
+
+const nextAgreementStartDate = (agreement = {}) => {
+  const endMillis = toMillis(agreement.endDate);
+  if (endMillis) {
+    const nextDate = new Date(endMillis);
+    nextDate.setDate(nextDate.getDate() + 1);
+    return nextDate;
+  }
+
+  return new Date();
+};
+
 const statusTone = {
   draft: 'bg-slate-50 text-slate-700 border-slate-200',
   sent: 'bg-sky-50 text-sky-700 border-sky-200',
   revised: 'bg-amber-50 text-amber-700 border-amber-200',
   accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  superseded: 'bg-violet-50 text-violet-700 border-violet-200',
   rejected: 'bg-rose-50 text-rose-700 border-rose-200',
   expired: 'bg-slate-100 text-slate-500 border-slate-200',
   canceled: 'bg-slate-100 text-slate-500 border-slate-200',
 };
+
+const pnlChemicalCostModeOptions = [
+  { value: SalesAgreementPnlChemicalCostMode.includeAll, label: 'Include Chemical Costs' },
+  { value: SalesAgreementPnlChemicalCostMode.excludeAll, label: 'Exclude Chemical Costs' },
+  { value: SalesAgreementPnlChemicalCostMode.excludeSelected, label: 'Exclude Selected Chemicals' },
+];
+
+const chemicalBillingModeOptions = [
+  { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
+  { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
+  { value: SalesAgreementChemicalBillingMode.mixed, label: 'Mixed Chemical Billing' },
+];
+
+const pnlChemicalCostModeLabel = (value) => (
+  pnlChemicalCostModeOptions.find((option) => option.value === value)?.label || pnlChemicalCostModeOptions[0].label
+);
+
+const normalizeCommaList = (value) => (
+  Array.from(new Set(
+    String(value || '')
+      .split(/[\n,]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+  ))
+);
+
+const listToInput = (value) => (
+  Array.isArray(value) ? value.join(', ') : String(value || '')
+);
+
+const listDisplay = (value) => (
+  Array.isArray(value) && value.length > 0 ? value.join(', ') : ''
+);
 
 const StatusBadge = ({ status }) => {
   const key = normalizeStatus(status);
@@ -161,6 +230,19 @@ const createEditDraft = (agreement) => ({
   billingFrequencyCount: String(agreement?.billingFrequencyCount || agreement?.billingCadenceCount || agreement?.invoiceFrequencyCount || 1),
   rateType: agreement?.rateType || 'perMonth',
   paymentTerms: agreement?.paymentTerms || 'dueOnReceipt',
+  pnlIncludeInReports: agreement?.pnlIncludeInReports !== false,
+  pnlChemicalCostMode: agreement?.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
+  pnlExcludedChemicalKeywords: listToInput(agreement?.pnlExcludedChemicalKeywords),
+  pnlExcludedChemicalIds: listToInput(agreement?.pnlExcludedChemicalIds),
+  pnlExcludeCustomerPurchasedChemicals: agreement?.pnlExcludeCustomerPurchasedChemicals !== false,
+  chemicalBillingMode: agreement?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
+  includedChemicalKeywords: listToInput(agreement?.includedChemicalKeywords),
+  includedChemicalIds: listToInput(agreement?.includedChemicalIds),
+  separatelyBilledChemicalKeywords: listToInput(agreement?.separatelyBilledChemicalKeywords),
+  separatelyBilledChemicalIds: listToInput(agreement?.separatelyBilledChemicalIds),
+  customerPurchasedChemicalKeywords: listToInput(agreement?.customerPurchasedChemicalKeywords),
+  customerPurchasedChemicalIds: listToInput(agreement?.customerPurchasedChemicalIds),
+  chemicalBillingNotes: agreement?.chemicalBillingNotes || '',
   terms: agreement?.terms || '',
   lineItems: (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []).map((item, index) => ({
     id: item.id || `line_${index}`,
@@ -222,6 +304,7 @@ const SalesAgreementDetail = () => {
   const [acceptanceNote, setAcceptanceNote] = useState('');
   const [markingAccepted, setMarkingAccepted] = useState(false);
   const [creatingBilling, setCreatingBilling] = useState(false);
+  const [creatingRenewal, setCreatingRenewal] = useState(false);
   const [startingStripeCheckout, setStartingStripeCheckout] = useState(false);
 
   useEffect(() => {
@@ -301,6 +384,7 @@ const SalesAgreementDetail = () => {
   const isAccepted = currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted);
   const hasAcceptanceAudit = Boolean(agreement?.acceptedAt || agreement?.acceptedByUserName || agreement?.acceptedSource);
   const acceptanceIsCurrent = isAccepted && hasAcceptanceAudit;
+  const supersedesAgreementId = renewalPreviousAgreementId(agreement || {});
   const actorName = [
     dataBaseUser?.firstName,
     dataBaseUser?.lastName,
@@ -354,7 +438,7 @@ const SalesAgreementDetail = () => {
     readinessItems.every((item) => item.ready) &&
     !sending &&
     normalizeStatus(agreement.status) !== normalizeStatus(SalesAgreementStatus.accepted) &&
-    normalizeStatus(agreement.status) !== normalizeStatus(SalesAgreementStatus.canceled)
+    !['canceled', 'rejected', 'expired', 'superseded'].includes(normalizeStatus(agreement.status))
   );
   const canMarkAccepted = Boolean(
     agreement &&
@@ -362,7 +446,13 @@ const SalesAgreementDetail = () => {
     !companyMismatch &&
     !markingAccepted &&
     currentStatusKey !== normalizeStatus(SalesAgreementStatus.accepted) &&
-    currentStatusKey !== normalizeStatus(SalesAgreementStatus.canceled)
+    !['canceled', 'rejected', 'expired', 'superseded'].includes(currentStatusKey)
+  );
+  const canCreateRenewal = Boolean(
+    agreement &&
+    user &&
+    !companyMismatch &&
+    !creatingRenewal
   );
   const hasBillingSubscription = Boolean(agreement?.billingSubscriptionId || billingSubscription?.id);
   const billingFlowStatus = billingSubscription?.stripeStatus || billingSubscription?.status || agreement?.billingFlowStatus || 'notStarted';
@@ -469,6 +559,115 @@ const SalesAgreementDetail = () => {
       await updateDoc(jobRef, updatePayload);
     } catch (syncError) {
       console.warn('Unable to sync linked job after agreement acceptance', syncError);
+    }
+  };
+
+  const createRenewalAgreement = async () => {
+    if (!canCreateRenewal) return;
+
+    setCreatingRenewal(true);
+
+    try {
+      const historyGroupId = agreementHistoryGroupId(agreement);
+      const siblingSnap = await getDocs(query(
+        collection(db, salesCollectionNames.agreements),
+        where('agreementHistoryGroupId', '==', historyGroupId)
+      ));
+      const maxSiblingVersion = siblingSnap.docs.reduce((maxVersion, siblingDoc) => {
+        const sibling = siblingDoc.data() || {};
+        return Math.max(maxVersion, Number(sibling.agreementVersion || 1));
+      }, Number(agreement.agreementVersion || 1));
+      const nextVersion = maxSiblingVersion + 1;
+      const baseTitle = agreement.title || `${agreement.customerName || 'Customer'} Service Agreement`;
+      const renewal = new SalesAgreement({
+        companyId: agreement.companyId || recentlySelectedCompany,
+        companyName: agreement.companyName || recentlySelectedCompanyName || '',
+        customerId: agreement.customerId || '',
+        customerUserId: agreement.customerUserId || null,
+        relationshipId: agreement.relationshipId || agreement.customerCompanyRelationshipId || '',
+        customerCompanyRelationshipId: agreement.customerCompanyRelationshipId || agreement.relationshipId || '',
+        customerName: agreement.customerName || '',
+        email: agreement.email || '',
+        serviceLocationIds: Array.isArray(agreement.serviceLocationIds) ? agreement.serviceLocationIds : [],
+        serviceLocationSnapshots: Array.isArray(agreement.serviceLocationSnapshots)
+          ? agreement.serviceLocationSnapshots.map((location) => ({ ...location }))
+          : [],
+        sourceType: agreement.sourceType || '',
+        sourceId: agreement.sourceId || '',
+        previousAgreementId: agreement.id,
+        supersedesAgreementId: agreement.id,
+        agreementHistoryGroupId: historyGroupId,
+        agreementVersion: nextVersion,
+        renewalSourceAgreementId: agreement.id,
+        recurringServiceStopId: agreement.recurringServiceStopId || '',
+        recurringRouteId: agreement.recurringRouteId || '',
+        recurringRouteName: agreement.recurringRouteName || '',
+        operationsSetupStatus: agreement.operationsSetupStatus || '',
+        operationsSetupReason: agreement.operationsSetupReason || '',
+        title: `${baseTitle} Renewal`,
+        description: [
+          agreement.description || '',
+          `Renewal draft created from ${baseTitle}.`,
+        ].filter(Boolean).join('\n\n'),
+        terms: agreement.terms || '',
+        termsTemplateId: agreement.termsTemplateId || '',
+        termsTemplateName: agreement.termsTemplateName || '',
+        termsTemplateDescription: agreement.termsTemplateDescription || '',
+        termsList: Array.isArray(agreement.termsList) ? [...agreement.termsList] : [],
+        lineItems: Array.isArray(agreement.lineItems)
+          ? agreement.lineItems.map((item) => ({ ...item }))
+          : [],
+        status: SalesAgreementStatus.draft,
+        billingCollectionMethod: agreement.billingCollectionMethod,
+        autopayStatus: SalesAutopayStatus.unavailable,
+        manualBillingEnabled: true,
+        customerCanPayImmediately: false,
+        rateAmountCents: Number(agreement.rateAmountCents || 0),
+        subtotalAmountCents: Number(agreement.subtotalAmountCents || 0),
+        taxAmountCents: Number(agreement.taxAmountCents || 0),
+        totalAmountCents: Number(agreement.totalAmountCents || agreement.rateAmountCents || 0),
+        rateType: agreement.rateType || 'perMonth',
+        serviceCadence: agreement.serviceCadence || '',
+        serviceCadenceCount: Math.max(Number(agreement.serviceCadenceCount || 1), 1),
+        serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? [...agreement.serviceDaysOfWeek] : [],
+        serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+        billingFrequency: billingFrequencyForAgreement(agreement),
+        billingFrequencyCount: Math.max(Number(agreement.billingFrequencyCount || 1), 1),
+        paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
+        invoiceDeliveryMethod: agreement.invoiceDeliveryMethod,
+        receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod,
+        receiptsEnabled: agreement.receiptsEnabled !== false,
+        pnlIncludeInReports: agreement.pnlIncludeInReports !== false,
+        pnlChemicalCostMode: agreement.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
+        pnlExcludedChemicalKeywords: Array.isArray(agreement.pnlExcludedChemicalKeywords) ? [...agreement.pnlExcludedChemicalKeywords] : normalizeCommaList(agreement.pnlExcludedChemicalKeywords),
+        pnlExcludedChemicalIds: Array.isArray(agreement.pnlExcludedChemicalIds) ? [...agreement.pnlExcludedChemicalIds] : normalizeCommaList(agreement.pnlExcludedChemicalIds),
+        pnlExcludeCustomerPurchasedChemicals: agreement.pnlExcludeCustomerPurchasedChemicals !== false,
+        chemicalBillingMode: agreement.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
+        includedChemicalKeywords: Array.isArray(agreement.includedChemicalKeywords) ? [...agreement.includedChemicalKeywords] : normalizeCommaList(agreement.includedChemicalKeywords),
+        includedChemicalIds: Array.isArray(agreement.includedChemicalIds) ? [...agreement.includedChemicalIds] : normalizeCommaList(agreement.includedChemicalIds),
+        separatelyBilledChemicalKeywords: Array.isArray(agreement.separatelyBilledChemicalKeywords) ? [...agreement.separatelyBilledChemicalKeywords] : normalizeCommaList(agreement.separatelyBilledChemicalKeywords),
+        separatelyBilledChemicalIds: Array.isArray(agreement.separatelyBilledChemicalIds) ? [...agreement.separatelyBilledChemicalIds] : normalizeCommaList(agreement.separatelyBilledChemicalIds),
+        customerPurchasedChemicalKeywords: Array.isArray(agreement.customerPurchasedChemicalKeywords) ? [...agreement.customerPurchasedChemicalKeywords] : normalizeCommaList(agreement.customerPurchasedChemicalKeywords),
+        customerPurchasedChemicalIds: Array.isArray(agreement.customerPurchasedChemicalIds) ? [...agreement.customerPurchasedChemicalIds] : normalizeCommaList(agreement.customerPurchasedChemicalIds),
+        chemicalBillingNotes: agreement.chemicalBillingNotes || '',
+        includedServices: Array.isArray(agreement.includedServices) ? [...agreement.includedServices] : [],
+        excludedServices: Array.isArray(agreement.excludedServices) ? [...agreement.excludedServices] : [],
+        startDate: nextAgreementStartDate(agreement),
+        endDate: null,
+        expiresAt: null,
+        atWill: agreement.atWill,
+        createdByUserId: user?.uid || dataBaseUser?.id || '',
+        emailDelivery: {},
+      });
+
+      await saveSalesModel(db, 'agreements', renewal);
+      toast.success('Renewal agreement draft created.');
+      navigate(`/company/sales/agreements/${renewal.id}`);
+    } catch (renewalError) {
+      console.error('Unable to create renewal agreement', renewalError);
+      toast.error(renewalError.message || 'Failed to create renewal agreement.');
+    } finally {
+      setCreatingRenewal(false);
     }
   };
 
@@ -580,6 +779,16 @@ const SalesAgreementDetail = () => {
       const nextStatus = previousStatusKey === normalizeStatus(SalesAgreementStatus.draft)
         ? SalesAgreementStatus.draft
         : SalesAgreementStatus.revised;
+      const chemicalBillingFields = {
+        chemicalBillingMode: editDraft.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
+        includedChemicalKeywords: normalizeCommaList(editDraft.includedChemicalKeywords),
+        includedChemicalIds: normalizeCommaList(editDraft.includedChemicalIds),
+        separatelyBilledChemicalKeywords: normalizeCommaList(editDraft.separatelyBilledChemicalKeywords),
+        separatelyBilledChemicalIds: normalizeCommaList(editDraft.separatelyBilledChemicalIds),
+        customerPurchasedChemicalKeywords: normalizeCommaList(editDraft.customerPurchasedChemicalKeywords),
+        customerPurchasedChemicalIds: normalizeCommaList(editDraft.customerPurchasedChemicalIds),
+        chemicalBillingNotes: editDraft.chemicalBillingNotes.trim(),
+      };
 
       await updateDoc(doc(db, salesCollectionNames.agreements, agreement.id), {
         title: editDraft.title.trim(),
@@ -595,6 +804,12 @@ const SalesAgreementDetail = () => {
         billingFrequencyCount: Math.max(Number(editDraft.billingFrequencyCount) || 1, 1),
         rateType: editDraft.rateType,
         paymentTerms: editDraft.paymentTerms,
+        pnlIncludeInReports: editDraft.pnlIncludeInReports !== false,
+        pnlChemicalCostMode: editDraft.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
+        pnlExcludedChemicalKeywords: normalizeCommaList(editDraft.pnlExcludedChemicalKeywords),
+        pnlExcludedChemicalIds: normalizeCommaList(editDraft.pnlExcludedChemicalIds),
+        pnlExcludeCustomerPurchasedChemicals: editDraft.pnlExcludeCustomerPurchasedChemicals !== false,
+        ...chemicalBillingFields,
         terms: editDraft.terms.trim(),
         termsList: [],
         lineItems: nextLineItems,
@@ -614,6 +829,21 @@ const SalesAgreementDetail = () => {
           ? 'Agreement edited after send or acceptance.'
           : 'Draft agreement edited.',
       });
+
+      if (billingSubscription?.id) {
+        await updateDoc(doc(db, salesCollectionNames.billingSubscriptions, billingSubscription.id), {
+          ...chemicalBillingFields,
+          'agreementSnapshot.chemicalBillingMode': chemicalBillingFields.chemicalBillingMode,
+          'agreementSnapshot.includedChemicalKeywords': chemicalBillingFields.includedChemicalKeywords,
+          'agreementSnapshot.includedChemicalIds': chemicalBillingFields.includedChemicalIds,
+          'agreementSnapshot.separatelyBilledChemicalKeywords': chemicalBillingFields.separatelyBilledChemicalKeywords,
+          'agreementSnapshot.separatelyBilledChemicalIds': chemicalBillingFields.separatelyBilledChemicalIds,
+          'agreementSnapshot.customerPurchasedChemicalKeywords': chemicalBillingFields.customerPurchasedChemicalKeywords,
+          'agreementSnapshot.customerPurchasedChemicalIds': chemicalBillingFields.customerPurchasedChemicalIds,
+          'agreementSnapshot.chemicalBillingNotes': chemicalBillingFields.chemicalBillingNotes,
+          updatedAt: serverTimestamp(),
+        });
+      }
 
       toast.success(nextStatus === SalesAgreementStatus.revised
         ? 'Service agreement updated and marked revised.'
@@ -709,6 +939,10 @@ const SalesAgreementDetail = () => {
             termsTemplateId: agreement.termsTemplateId || '',
             termsTemplateName: agreement.termsTemplateName || '',
             revisionNumber: String(agreement.revisionNumber || 0),
+            previousAgreementId: agreement.previousAgreementId || agreement.supersedesAgreementId || '',
+            supersedesAgreementId: agreement.supersedesAgreementId || agreement.previousAgreementId || '',
+            agreementHistoryGroupId: agreementHistoryGroupId(agreement),
+            agreementVersion: String(agreement.agreementVersion || 1),
           },
           statusChangedAt: serverTimestamp(),
           statusChangedByUserId: user?.uid || '',
@@ -841,6 +1075,15 @@ const SalesAgreementDetail = () => {
                 <FaArrowLeft className="text-xs" />
                 Agreements
               </Link>
+              <button
+                type="button"
+                onClick={createRenewalAgreement}
+                disabled={!canCreateRenewal}
+                className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaCopy className="text-xs" />
+                {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
+              </button>
               <button
                 type="button"
                 onClick={openEditor}
@@ -1111,6 +1354,82 @@ const SalesAgreementDetail = () => {
                     <dt className="text-slate-500">Payment Terms</dt>
                     <dd className="font-semibold text-slate-900">{labelize(agreement.paymentTerms)}</dd>
                   </div>
+                  <div className="space-y-2 border-t border-slate-200 pt-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Chemical Billing</dt>
+                      <dd className="text-right font-semibold text-slate-900">{chemicalBillingLabel(agreement)}</dd>
+                    </div>
+                    {listDisplay(agreement.separatelyBilledChemicalKeywords) && (
+                      <div>
+                        <dt className="text-slate-500">Billed Separately</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.separatelyBilledChemicalKeywords)}</dd>
+                      </div>
+                    )}
+                    {listDisplay(agreement.separatelyBilledChemicalIds) && (
+                      <div>
+                        <dt className="text-slate-500">Billed IDs</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.separatelyBilledChemicalIds)}</dd>
+                      </div>
+                    )}
+                    {listDisplay(agreement.includedChemicalKeywords) && (
+                      <div>
+                        <dt className="text-slate-500">Included Chemicals</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.includedChemicalKeywords)}</dd>
+                      </div>
+                    )}
+                    {listDisplay(agreement.includedChemicalIds) && (
+                      <div>
+                        <dt className="text-slate-500">Included IDs</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.includedChemicalIds)}</dd>
+                      </div>
+                    )}
+                    {listDisplay(agreement.customerPurchasedChemicalKeywords) && (
+                      <div>
+                        <dt className="text-slate-500">Customer Purchased</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.customerPurchasedChemicalKeywords)}</dd>
+                      </div>
+                    )}
+                    {listDisplay(agreement.customerPurchasedChemicalIds) && (
+                      <div>
+                        <dt className="text-slate-500">Customer Purchased IDs</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.customerPurchasedChemicalIds)}</dd>
+                      </div>
+                    )}
+                    {agreement.chemicalBillingNotes && (
+                      <div>
+                        <dt className="text-slate-500">Chemical Notes</dt>
+                        <dd className="mt-1 whitespace-pre-wrap font-semibold text-slate-900">{agreement.chemicalBillingNotes}</dd>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-2 border-t border-slate-200 pt-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">PNL Revenue</dt>
+                      <dd className="font-semibold text-slate-900">{agreement.pnlIncludeInReports === false ? 'Excluded' : 'Included'}</dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">PNL Chemicals</dt>
+                      <dd className="text-right font-semibold text-slate-900">
+                        {pnlChemicalCostModeLabel(agreement.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll)}
+                      </dd>
+                    </div>
+                    <div className="flex items-center justify-between gap-3">
+                      <dt className="text-slate-500">Customer Purchased</dt>
+                      <dd className="font-semibold text-slate-900">{agreement.pnlExcludeCustomerPurchasedChemicals === false ? 'Included' : 'Ignored'}</dd>
+                    </div>
+                    {(Array.isArray(agreement.pnlExcludedChemicalKeywords) && agreement.pnlExcludedChemicalKeywords.length > 0) && (
+                      <div>
+                        <dt className="text-slate-500">Excluded Keywords</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{agreement.pnlExcludedChemicalKeywords.join(', ')}</dd>
+                      </div>
+                    )}
+                    {(Array.isArray(agreement.pnlExcludedChemicalIds) && agreement.pnlExcludedChemicalIds.length > 0) && (
+                      <div>
+                        <dt className="text-slate-500">Excluded IDs</dt>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{agreement.pnlExcludedChemicalIds.join(', ')}</dd>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
                     <dt className="text-slate-500">Subtotal</dt>
                     <dd className="font-semibold text-slate-900">{formatCurrency(subtotalAmountCents)}</dd>
@@ -1119,6 +1438,34 @@ const SalesAgreementDetail = () => {
                     <dt className="text-slate-500">Total</dt>
                     <dd className="text-lg font-bold text-slate-950">{formatCurrency(totalAmountCents)}</dd>
                   </div>
+                  {(supersedesAgreementId || agreement.supersededByAgreementId || agreement.agreementHistoryGroupId) && (
+                    <div className="space-y-2 border-t border-slate-200 pt-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <dt className="text-slate-500">Agreement Version</dt>
+                        <dd className="font-semibold text-slate-900">v{agreement.agreementVersion || 1}</dd>
+                      </div>
+                      {supersedesAgreementId && (
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">Replaces</dt>
+                          <dd className="font-semibold">
+                            <Link to={`/company/sales/agreements/${supersedesAgreementId}`} className="text-blue-700 hover:text-blue-900">
+                              Previous Agreement
+                            </Link>
+                          </dd>
+                        </div>
+                      )}
+                      {agreement.supersededByAgreementId && (
+                        <div className="flex items-center justify-between gap-3">
+                          <dt className="text-slate-500">Replaced By</dt>
+                          <dd className="font-semibold">
+                            <Link to={`/company/sales/agreements/${agreement.supersededByAgreementId}`} className="text-blue-700 hover:text-blue-900">
+                              {agreement.supersededByAgreementTitle || 'New Agreement'}
+                            </Link>
+                          </dd>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </dl>
               </section>
 
@@ -1526,6 +1873,204 @@ const SalesAgreementDetail = () => {
               </section>
 
               <section>
+                <h3 className="text-base font-bold text-slate-950">Chemical Billing</h3>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingMode">
+                      Billing Treatment
+                    </label>
+                    <select
+                      id="agreementChemicalBillingMode"
+                      value={editDraft.chemicalBillingMode}
+                      onChange={(event) => updateEditField('chemicalBillingMode', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {chemicalBillingModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingNotes">
+                      Chemical Billing Notes
+                    </label>
+                    <input
+                      id="agreementChemicalBillingNotes"
+                      type="text"
+                      value={editDraft.chemicalBillingNotes}
+                      onChange={(event) => updateEditField('chemicalBillingNotes', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      placeholder="tabs supplied by customer, phosphate billed separately"
+                    />
+                  </div>
+
+                  {editDraft.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementSeparatelyBilledChemicalKeywords">
+                          Separately Billed Keywords
+                        </label>
+                        <input
+                          id="agreementSeparatelyBilledChemicalKeywords"
+                          type="text"
+                          value={editDraft.separatelyBilledChemicalKeywords}
+                          onChange={(event) => updateEditField('separatelyBilledChemicalKeywords', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="phosphate, salt, stabilizer"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementSeparatelyBilledChemicalIds">
+                          Separately Billed IDs
+                        </label>
+                        <input
+                          id="agreementSeparatelyBilledChemicalIds"
+                          type="text"
+                          value={editDraft.separatelyBilledChemicalIds}
+                          onChange={(event) => updateEditField('separatelyBilledChemicalIds', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="database item or dosage template ids"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {editDraft.chemicalBillingMode !== SalesAgreementChemicalBillingMode.includedAll && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementIncludedChemicalKeywords">
+                          Included Chemical Keywords
+                        </label>
+                        <input
+                          id="agreementIncludedChemicalKeywords"
+                          type="text"
+                          value={editDraft.includedChemicalKeywords}
+                          onChange={(event) => updateEditField('includedChemicalKeywords', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="chlorine, acid"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementIncludedChemicalIds">
+                          Included Chemical IDs
+                        </label>
+                        <input
+                          id="agreementIncludedChemicalIds"
+                          type="text"
+                          value={editDraft.includedChemicalIds}
+                          onChange={(event) => updateEditField('includedChemicalIds', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="database item or dosage template ids"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCustomerPurchasedChemicalKeywords">
+                      Customer-Purchased Keywords
+                    </label>
+                    <input
+                      id="agreementCustomerPurchasedChemicalKeywords"
+                      type="text"
+                      value={editDraft.customerPurchasedChemicalKeywords}
+                      onChange={(event) => updateEditField('customerPurchasedChemicalKeywords', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      placeholder="tabs, trichlor"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCustomerPurchasedChemicalIds">
+                      Customer-Purchased IDs
+                    </label>
+                    <input
+                      id="agreementCustomerPurchasedChemicalIds"
+                      type="text"
+                      value={editDraft.customerPurchasedChemicalIds}
+                      onChange={(event) => updateEditField('customerPurchasedChemicalIds', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      placeholder="database item or dosage template ids"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              <section>
+                <h3 className="text-base font-bold text-slate-950">PNL Treatment</h3>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlChemicalCostMode">
+                      Chemical Costs
+                    </label>
+                    <select
+                      id="agreementPnlChemicalCostMode"
+                      value={editDraft.pnlChemicalCostMode}
+                      onChange={(event) => updateEditField('pnlChemicalCostMode', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {pnlChemicalCostModeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <label className="flex items-start gap-3 font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.pnlIncludeInReports !== false}
+                        onChange={(event) => updateEditField('pnlIncludeInReports', event.target.checked)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Agreement revenue in PNL
+                    </label>
+                    <label className="flex items-start gap-3 font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={editDraft.pnlExcludeCustomerPurchasedChemicals !== false}
+                        onChange={(event) => updateEditField('pnlExcludeCustomerPurchasedChemicals', event.target.checked)}
+                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                      />
+                      Ignore customer-purchased chemicals
+                    </label>
+                  </div>
+
+                  {editDraft.pnlChemicalCostMode === SalesAgreementPnlChemicalCostMode.excludeSelected && (
+                    <>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlExcludedChemicalKeywords">
+                          Excluded Chemical Keywords
+                        </label>
+                        <input
+                          id="agreementPnlExcludedChemicalKeywords"
+                          type="text"
+                          value={editDraft.pnlExcludedChemicalKeywords}
+                          onChange={(event) => updateEditField('pnlExcludedChemicalKeywords', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="tabs, trichlor, acid"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlExcludedChemicalIds">
+                          Excluded Chemical IDs
+                        </label>
+                        <input
+                          id="agreementPnlExcludedChemicalIds"
+                          type="text"
+                          value={editDraft.pnlExcludedChemicalIds}
+                          onChange={(event) => updateEditField('pnlExcludedChemicalIds', event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="database item or dosage template ids"
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              </section>
+
+              <section>
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-base font-bold text-slate-950">Line Items</h3>
                   <button
@@ -1724,6 +2269,7 @@ const SalesAgreementDetail = () => {
 
             <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
               This will set the agreement status to accepted and record {actorName} as the person who marked it.
+              {supersedesAgreementId ? ' It will also end the previous agreement and mark it superseded.' : ''}
             </div>
 
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">

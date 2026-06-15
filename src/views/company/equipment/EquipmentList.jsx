@@ -4,6 +4,7 @@ import { db } from "../../../utils/config";
 import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
 import { Link, useNavigate } from "react-router-dom";
 import {
+  EQUIPMENT_STATUS_OPTIONS,
   Equipment,
   displayEquipmentStatus,
   normalizeEquipmentStatus,
@@ -15,6 +16,7 @@ import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
 import {
+  AdjustmentsHorizontalIcon,
   BriefcaseIcon,
   EllipsisVerticalIcon,
   PencilSquareIcon,
@@ -130,6 +132,27 @@ const companyUserDisplayName = (user = {}) =>
 
 const companyUserRecordId = (user = {}) => user.userId || user.id || "";
 
+const getEquipmentListMeta = (equipmentData = []) => ({
+  types: [...new Set(equipmentData.map((item) => item.type))].filter(Boolean),
+  topCounts: {
+    all: equipmentData.length,
+    maintenance: equipmentData.filter(isNeedsMaintenance).length,
+    repair: equipmentData.filter(isNeedsRepair).length,
+    nonOperational: equipmentData.filter(isNonOperational).length,
+  },
+});
+
+const getQuickStatusOption = (status) => {
+  const normalizedStatus = normalizeEquipmentStatus(status);
+  if (!normalizedStatus) return "";
+  if (normalizedStatus === "maintenance" || normalizedStatus === "needsservice") return "Needs Maintenance";
+  return (
+    EQUIPMENT_STATUS_OPTIONS.find(
+      (statusOption) => normalizeEquipmentStatus(statusOption) === normalizedStatus
+    ) || ""
+  );
+};
+
 const TopFilterButton = ({ label, count, active, onClick }) => (
   <button
     onClick={onClick}
@@ -154,13 +177,13 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
   </button>
 );
 
-const QuickActionMenuItem = ({ label, icon: Icon, tone = "blue", onClick }) => {
+const QuickActionMenuItem = ({ label, icon: Icon, tone = "black", onClick }) => {
   const toneClasses =
     tone === "amber"
       ? "text-amber-700 hover:bg-amber-50"
       : tone === "green"
         ? "text-green-700 hover:bg-green-50"
-        : "text-blue-700 hover:bg-blue-50";
+        : "text-gray-900 hover:bg-gray-50";
 
   return (
     <button
@@ -229,6 +252,7 @@ export default function EquipmentList() {
   const [quickModelId, setQuickModelId] = useState("");
   const [quickUniversalEquipmentId, setQuickUniversalEquipmentId] = useState("");
   const [quickManualPdfLink, setQuickManualPdfLink] = useState("");
+  const [quickStatus, setQuickStatus] = useState("");
 
   const [maintenanceName, setMaintenanceName] = useState(DEFAULT_MAINTENANCE_NAME);
   const [maintenanceDate, setMaintenanceDate] = useState(todayDateInputValue);
@@ -402,16 +426,6 @@ export default function EquipmentList() {
         if (cancelled) return;
 
         setEquipmentList(equipmentData);
-
-        const uniqueTypes = [...new Set(equipmentData.map((item) => item.type))].filter(Boolean);
-        setTypes(uniqueTypes);
-
-        setTopCounts({
-          all: equipmentData.length,
-          maintenance: equipmentData.filter(isNeedsMaintenance).length,
-          repair: equipmentData.filter(isNeedsRepair).length,
-          nonOperational: equipmentData.filter(isNonOperational).length,
-        });
       } catch (error) {
         console.error("Equipment Data Error!:", error);
         if (!cancelled) {
@@ -433,6 +447,12 @@ export default function EquipmentList() {
       cancelled = true;
     };
   }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    const { types: uniqueTypes, topCounts: nextTopCounts } = getEquipmentListMeta(equipmentList);
+    setTypes(uniqueTypes);
+    setTopCounts(nextTopCounts);
+  }, [equipmentList]);
 
   // -----------------------------
   // ✅ Unique customer count
@@ -535,13 +555,11 @@ export default function EquipmentList() {
   };
 
   const getStatusClass = (status, maintenanceFlag) => {
-    if (maintenanceFlag) return "bg-red-100 text-red-800";
     const s = normalizeEquipmentStatus(status);
-    if (s === "operational") return "bg-green-100 text-green-800";
+    if (maintenanceFlag) return "bg-yellow-100 text-yellow-800";
     if (s === "needsmaintenance" || s === "maintenance" || s === "needsservice") return "bg-yellow-100 text-yellow-800";
     if (s === "needsrepair") return "bg-orange-100 text-orange-800";
-    if (s === "nonoperational") return "bg-gray-200 text-gray-800";
-    return "bg-gray-100 text-gray-800";
+    return "border border-gray-200 bg-white text-black";
   };
 
   const getEquipmentDisplayName = (equipment) =>
@@ -596,6 +614,10 @@ export default function EquipmentList() {
       setCatalogTypeId(equipment.typeId || CUSTOM_CATALOG_VALUE);
       setCatalogMakeId(equipment.makeId || CUSTOM_CATALOG_VALUE);
       setCatalogEquipmentId(equipment.universalEquipmentId || equipment.modelId || CUSTOM_CATALOG_VALUE);
+    }
+
+    if (modalName === "status") {
+      setQuickStatus(getQuickStatusOption(equipment.status));
     }
 
     if (modalName === "maintenance") {
@@ -712,6 +734,30 @@ export default function EquipmentList() {
     } catch (error) {
       console.error("Error updating equipment make/model:", error);
       toast.error("Failed to update make and model");
+    }
+  };
+
+  const handleUpdateStatus = async () => {
+    if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
+
+    if (!quickStatus) {
+      toast.error("Choose a status");
+      return;
+    }
+
+    const updates = { status: quickStatus };
+
+    try {
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id),
+        updates
+      );
+      updateEquipmentInLists(selectedQuickEquipment.id, updates);
+      closeQuickModal();
+      toast.success("Status updated");
+    } catch (error) {
+      console.error("Error updating equipment status:", error);
+      toast.error("Failed to update status");
     }
   };
 
@@ -1166,6 +1212,11 @@ export default function EquipmentList() {
                     onClick={() => openQuickModal(openActionEquipment, "makeModel")}
                   />
                   <QuickActionMenuItem
+                    label="Update Status"
+                    icon={AdjustmentsHorizontalIcon}
+                    onClick={() => openQuickModal(openActionEquipment, "status")}
+                  />
+                  <QuickActionMenuItem
                     label="Record Maintenance"
                     icon={WrenchScrewdriverIcon}
                     tone="green"
@@ -1332,6 +1383,48 @@ export default function EquipmentList() {
                 </a>
               )}
             </div>
+          </ModalShell>
+        )}
+
+        {activeQuickModal === "status" && selectedQuickEquipment && (
+          <ModalShell
+            title="Update Status"
+            onClose={closeQuickModal}
+            footer={
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={closeQuickModal}
+                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleUpdateStatus}
+                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  type="button"
+                >
+                  Save
+                </button>
+              </div>
+            }
+          >
+            <Field label="Status">
+              <select
+                value={quickStatus}
+                onChange={(event) => setQuickStatus(event.target.value)}
+                className={inputBase}
+              >
+                <option value="" disabled>
+                  Select status
+                </option>
+                {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                  <option key={statusOption} value={statusOption}>
+                    {statusOption}
+                  </option>
+                ))}
+              </select>
+            </Field>
           </ModalShell>
         )}
 

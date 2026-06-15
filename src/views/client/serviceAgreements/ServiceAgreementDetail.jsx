@@ -21,6 +21,7 @@ import {
   formatBillingFrequency,
   formatServiceFrequency,
 } from '../../../utils/sales/agreementCadence';
+import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -73,6 +74,7 @@ const customerCanViewAgreement = (agreement = {}, user = {}) => {
 
 const statusTone = {
   accepted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  superseded: 'border-violet-200 bg-violet-50 text-violet-700',
   sent: 'border-sky-200 bg-sky-50 text-sky-700',
   revised: 'border-amber-200 bg-amber-50 text-amber-700',
   draft: 'border-slate-200 bg-slate-50 text-slate-700',
@@ -97,6 +99,17 @@ const Field = ({ label, value }) => (
     <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</dt>
     <dd className="mt-1 text-sm font-semibold text-slate-950">{value || 'Not set'}</dd>
   </div>
+);
+
+const listDisplay = (value) => (
+  Array.isArray(value) && value.length > 0 ? value.join(', ') : ''
+);
+
+const renewalPreviousAgreementId = (agreement = {}) => (
+  agreement.supersedesAgreementId ||
+  agreement.previousAgreementId ||
+  agreement.renewalSourceAgreementId ||
+  ''
 );
 
 const ServiceAgreementDetail = () => {
@@ -190,7 +203,8 @@ const ServiceAgreementDetail = () => {
 
   const statusKey = normalizeStatus(agreement?.status);
   const isAccepted = statusKey === normalizeStatus(SalesAgreementStatus.accepted);
-  const isClosed = ['canceled', 'rejected', 'expired'].includes(statusKey);
+  const isClosed = ['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey);
+  const supersedesAgreementId = renewalPreviousAgreementId(agreement || {});
   const isSignedIn = Boolean(userId);
   const redirectParam = encodeURIComponent(`/client/service-agreements/${agreementId}`);
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
@@ -402,6 +416,31 @@ const ServiceAgreementDetail = () => {
 
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 p-5">
+              <h2 className="text-lg font-bold text-slate-950">Chemical Billing</h2>
+            </div>
+
+            <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2">
+              <Field label="Treatment" value={chemicalBillingLabel(agreement)} />
+              {listDisplay(agreement.separatelyBilledChemicalKeywords) && (
+                <Field label="Billed Separately" value={listDisplay(agreement.separatelyBilledChemicalKeywords)} />
+              )}
+              {listDisplay(agreement.includedChemicalKeywords) && (
+                <Field label="Included Chemicals" value={listDisplay(agreement.includedChemicalKeywords)} />
+              )}
+              {listDisplay(agreement.customerPurchasedChemicalKeywords) && (
+                <Field label="Customer Purchased" value={listDisplay(agreement.customerPurchasedChemicalKeywords)} />
+              )}
+              {agreement.chemicalBillingNotes && (
+                <div className="sm:col-span-2">
+                  <dt className="text-xs font-bold uppercase tracking-wide text-slate-500">Notes</dt>
+                  <dd className="mt-1 whitespace-pre-wrap text-sm font-semibold text-slate-950">{agreement.chemicalBillingNotes}</dd>
+                </div>
+              )}
+            </dl>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 p-5">
               <h2 className="text-lg font-bold text-slate-950">Terms</h2>
               {agreement.termsTemplateName && (
                 <p className="mt-1 text-sm text-slate-500">{agreement.termsTemplateName}</p>
@@ -495,6 +534,7 @@ const ServiceAgreementDetail = () => {
                   />
                   <span className="text-slate-700">
                     I reviewed the agreement, pricing, and terms.
+                    {supersedesAgreementId ? ' I understand this agreement replaces my previous service agreement.' : ''}
                   </span>
                 </label>
 

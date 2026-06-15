@@ -6,6 +6,7 @@ import { AiOutlineCheckCircle, AiOutlineDashboard } from "react-icons/ai";
 import { GoTools } from "react-icons/go";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import { MURDOCK_POOL_SERVICE_ONLY_LABEL } from "./performanceHistoryImportUtils";
 
 const countCollections = [
   { key: "customers", label: "Customers", path: ["customers"] },
@@ -68,6 +69,16 @@ const buildChecklistSteps = (counts) => [
     status: counts.customers > 0 && counts.bodiesOfWater > 0 ? "active" : "planned",
     statusLabel: counts.customers > 0 && counts.bodiesOfWater > 0 ? "Ready" : "Waiting",
     detail: `${counts.serviceStops || 0} existing service history records`,
+  },
+  {
+    title: "Import performance history",
+    description: "Upload the compiled technician performance workbook, map technicians to company users, and keep imported history company-internal.",
+    path: "/company/migration/performance-history-import",
+    icon: FaRegFileAlt,
+    status: "active",
+    statusLabel: "Ready",
+    detail: "Murdock Pool Service technician history upload",
+    flagLabel: MURDOCK_POOL_SERVICE_ONLY_LABEL,
   },
   {
     title: "Final migration audit",
@@ -184,6 +195,11 @@ function MigrationDashboard() {
                       >
                         {step.statusLabel}
                       </span>
+                      {step.flagLabel && (
+                        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 ring-1 ring-inset ring-amber-200">
+                          {step.flagLabel}
+                        </span>
+                      )}
                     </div>
                     <h3 className="mt-1 text-base font-semibold text-slate-950">{step.title}</h3>
                     <p className="mt-1 text-sm leading-6 text-slate-600">{step.description}</p>

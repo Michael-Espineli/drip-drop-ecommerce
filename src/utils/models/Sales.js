@@ -15,9 +15,22 @@ export const SalesAgreementStatus = {
   sent: 'sent',
   revised: 'revised',
   accepted: 'accepted',
+  superseded: 'superseded',
   rejected: 'rejected',
   expired: 'expired',
   canceled: 'canceled',
+};
+
+export const SalesAgreementPnlChemicalCostMode = {
+  includeAll: 'includeAll',
+  excludeAll: 'excludeAll',
+  excludeSelected: 'excludeSelected',
+};
+
+export const SalesAgreementChemicalBillingMode = {
+  includedAll: 'includedAll',
+  billAllSeparately: 'billAllSeparately',
+  mixed: 'mixed',
 };
 
 export const SalesAgreementSourceType = {
@@ -126,6 +139,12 @@ export const SalesCatalogSourceType = {
   shoppingListItem: 'shoppingListItem',
   stripeProductPrice: 'stripeProductPrice',
 };
+
+const normalizeSalesList = (value) => (
+  Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
+);
 
 export class SalesCatalogItem {
   constructor({
@@ -269,6 +288,12 @@ export class SalesAgreement {
     lineItems = [],
     serviceLocationSnapshots = [],
     status = SalesAgreementStatus.draft,
+    previousAgreementId = '',
+    supersedesAgreementId = '',
+    supersededByAgreementId = '',
+    agreementHistoryGroupId = '',
+    agreementVersion = 1,
+    renewalSourceAgreementId = '',
     recurringServiceStopId = '',
     recurringRouteId = '',
     recurringRouteName = '',
@@ -297,12 +322,28 @@ export class SalesAgreement {
     invoiceDeliveryMethod = SalesInvoiceDeliveryMethod.email,
     receiptDeliveryMethod = SalesInvoiceDeliveryMethod.email,
     receiptsEnabled = true,
+    pnlIncludeInReports = true,
+    pnlChemicalCostMode = SalesAgreementPnlChemicalCostMode.includeAll,
+    pnlExcludedChemicalIds = [],
+    pnlExcludedChemicalKeywords = [],
+    pnlExcludeCustomerPurchasedChemicals = true,
+    chemicalBillingMode = SalesAgreementChemicalBillingMode.includedAll,
+    includedChemicalIds = [],
+    includedChemicalKeywords = [],
+    separatelyBilledChemicalIds = [],
+    separatelyBilledChemicalKeywords = [],
+    customerPurchasedChemicalIds = [],
+    customerPurchasedChemicalKeywords = [],
+    chemicalBillingNotes = '',
     includedServices = [],
     excludedServices = [],
     startDate = null,
     endDate = null,
     expiresAt = null,
     atWill = false,
+    activatedAt = null,
+    supersededAt = null,
+    supersededByAgreementTitle = '',
     createdByUserId = '',
     createdAt = null,
     updatedAt = null,
@@ -339,6 +380,12 @@ export class SalesAgreement {
     this.lineItems = lineItems;
     this.serviceLocationSnapshots = serviceLocationSnapshots;
     this.status = status;
+    this.previousAgreementId = previousAgreementId || supersedesAgreementId;
+    this.supersedesAgreementId = supersedesAgreementId || previousAgreementId;
+    this.supersededByAgreementId = supersededByAgreementId;
+    this.agreementHistoryGroupId = agreementHistoryGroupId || previousAgreementId || id;
+    this.agreementVersion = Math.max(Number(agreementVersion || 1), 1);
+    this.renewalSourceAgreementId = renewalSourceAgreementId || previousAgreementId || supersedesAgreementId;
     this.recurringServiceStopId = recurringServiceStopId;
     this.recurringRouteId = recurringRouteId;
     this.recurringRouteName = recurringRouteName;
@@ -367,12 +414,32 @@ export class SalesAgreement {
     this.invoiceDeliveryMethod = invoiceDeliveryMethod;
     this.receiptDeliveryMethod = receiptDeliveryMethod;
     this.receiptsEnabled = receiptsEnabled;
+    this.pnlIncludeInReports = pnlIncludeInReports !== false;
+    this.pnlChemicalCostMode = pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll;
+    this.pnlExcludedChemicalIds = Array.isArray(pnlExcludedChemicalIds)
+      ? normalizeSalesList(pnlExcludedChemicalIds)
+      : normalizeSalesList(pnlExcludedChemicalIds);
+    this.pnlExcludedChemicalKeywords = Array.isArray(pnlExcludedChemicalKeywords)
+      ? normalizeSalesList(pnlExcludedChemicalKeywords)
+      : normalizeSalesList(pnlExcludedChemicalKeywords);
+    this.pnlExcludeCustomerPurchasedChemicals = pnlExcludeCustomerPurchasedChemicals !== false;
+    this.chemicalBillingMode = chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
+    this.includedChemicalIds = normalizeSalesList(includedChemicalIds);
+    this.includedChemicalKeywords = normalizeSalesList(includedChemicalKeywords);
+    this.separatelyBilledChemicalIds = normalizeSalesList(separatelyBilledChemicalIds);
+    this.separatelyBilledChemicalKeywords = normalizeSalesList(separatelyBilledChemicalKeywords);
+    this.customerPurchasedChemicalIds = normalizeSalesList(customerPurchasedChemicalIds);
+    this.customerPurchasedChemicalKeywords = normalizeSalesList(customerPurchasedChemicalKeywords);
+    this.chemicalBillingNotes = chemicalBillingNotes;
     this.includedServices = includedServices;
     this.excludedServices = excludedServices;
     this.startDate = startDate;
     this.endDate = endDate;
     this.expiresAt = expiresAt;
     this.atWill = atWill;
+    this.activatedAt = activatedAt;
+    this.supersededAt = supersededAt;
+    this.supersededByAgreementTitle = supersededByAgreementTitle;
     this.createdByUserId = createdByUserId;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
@@ -420,6 +487,10 @@ export class SalesBillingSubscription {
     email = '',
     serviceLocationIds = [],
     agreementId = '',
+    previousAgreementId = '',
+    supersedesAgreementId = '',
+    agreementHistoryGroupId = '',
+    agreementVersion = 1,
     billingProfileId = '',
     stripeConnectedAccountId = '',
     stripeCustomerId = '',
@@ -455,6 +526,14 @@ export class SalesBillingSubscription {
     invoiceDeliveryMethod = SalesInvoiceDeliveryMethod.email,
     lineItems = [],
     agreementSnapshot = null,
+    chemicalBillingMode = SalesAgreementChemicalBillingMode.includedAll,
+    includedChemicalIds = [],
+    includedChemicalKeywords = [],
+    separatelyBilledChemicalIds = [],
+    separatelyBilledChemicalKeywords = [],
+    customerPurchasedChemicalIds = [],
+    customerPurchasedChemicalKeywords = [],
+    chemicalBillingNotes = '',
     checkoutSessionId = '',
     checkoutUrl = '',
     checkoutStatus = 'notStarted',
@@ -471,6 +550,9 @@ export class SalesBillingSubscription {
     currentPeriodEnd = null,
     cancelAtPeriodEnd = false,
     canceledAt = null,
+    supersededAt = null,
+    supersededByAgreementId = '',
+    supersededByBillingSubscriptionId = '',
     applicationFeePercent = null,
     createdAt = null,
     updatedAt = null,
@@ -485,6 +567,10 @@ export class SalesBillingSubscription {
     this.email = email;
     this.serviceLocationIds = serviceLocationIds;
     this.agreementId = agreementId;
+    this.previousAgreementId = previousAgreementId || supersedesAgreementId;
+    this.supersedesAgreementId = supersedesAgreementId || previousAgreementId;
+    this.agreementHistoryGroupId = agreementHistoryGroupId || previousAgreementId || agreementId;
+    this.agreementVersion = Math.max(Number(agreementVersion || 1), 1);
     this.billingProfileId = billingProfileId;
     this.stripeConnectedAccountId = stripeConnectedAccountId;
     this.stripeCustomerId = stripeCustomerId;
@@ -520,6 +606,14 @@ export class SalesBillingSubscription {
     this.invoiceDeliveryMethod = invoiceDeliveryMethod;
     this.lineItems = lineItems;
     this.agreementSnapshot = agreementSnapshot;
+    this.chemicalBillingMode = chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
+    this.includedChemicalIds = normalizeSalesList(includedChemicalIds);
+    this.includedChemicalKeywords = normalizeSalesList(includedChemicalKeywords);
+    this.separatelyBilledChemicalIds = normalizeSalesList(separatelyBilledChemicalIds);
+    this.separatelyBilledChemicalKeywords = normalizeSalesList(separatelyBilledChemicalKeywords);
+    this.customerPurchasedChemicalIds = normalizeSalesList(customerPurchasedChemicalIds);
+    this.customerPurchasedChemicalKeywords = normalizeSalesList(customerPurchasedChemicalKeywords);
+    this.chemicalBillingNotes = chemicalBillingNotes;
     this.checkoutSessionId = checkoutSessionId;
     this.checkoutUrl = checkoutUrl;
     this.checkoutStatus = checkoutStatus;
@@ -536,6 +630,9 @@ export class SalesBillingSubscription {
     this.currentPeriodEnd = currentPeriodEnd;
     this.cancelAtPeriodEnd = cancelAtPeriodEnd;
     this.canceledAt = canceledAt;
+    this.supersededAt = supersededAt;
+    this.supersededByAgreementId = supersededByAgreementId;
+    this.supersededByBillingSubscriptionId = supersededByBillingSubscriptionId;
     this.applicationFeePercent = applicationFeePercent;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;

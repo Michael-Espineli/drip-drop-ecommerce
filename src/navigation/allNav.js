@@ -110,6 +110,7 @@ export const allNav = [
     { id: 119, title: 'Customer Export Upload', icon: <AiOutlineFileText />, role: 'Company', path: '/company/migration/customer-export-import', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
     { id: 120, title: 'Equipment Upload', icon: <FaWrench />, role: 'Company', path: '/company/migration/equipment-import', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
     { id: 121, title: 'Service History Upload', icon: <FaRegFileAlt />, role: 'Company', path: '/company/migration/skimmer-previous-dosages-upload', category: 'Migration', permissionId: '800', featureFlagIds: ['feature_flag_008', 'feature_flag_009'] },
+    { id: 122, title: 'Performance History Upload (Murdock Only)', icon: <FaRegFileAlt />, role: 'Company', path: '/company/migration/performance-history-import', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
 
     // Settings
     { id: 100, title: 'Settings', icon: <FaGear />, role: 'Company', path: '/company/Settings', category: 'Settings', permissionId: '800' },

@@ -607,7 +607,9 @@ const Payroll = ({ mode = "payroll" }) => {
   const [paymentModal, setPaymentModal] = useState(null);
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
   const [detailLineItem, setDetailLineItem] = useState(null);
+  const [detailStatement, setDetailStatement] = useState(null);
   const [backfillResult, setBackfillResult] = useState(null);
+  const [backfillProgress, setBackfillProgress] = useState(null);
   const [stopPayModal, setStopPayModal] = useState(null);
   const [rateMatrixEditMode, setRateMatrixEditMode] = useState(false);
   const [rateMatrixDrafts, setRateMatrixDrafts] = useState({});
@@ -645,7 +647,9 @@ const Payroll = ({ mode = "payroll" }) => {
       setEditingWorkTypeId("");
       setEditingServiceStopTypeId("");
       setEditingRateId("");
+      setDetailStatement(null);
       setBackfillResult(null);
+      setBackfillProgress(null);
       setRateMatrixEditMode(false);
       setRateMatrixDrafts({});
       setRateMatrixFiltersOpen(false);
@@ -817,6 +821,31 @@ const Payroll = ({ mode = "payroll" }) => {
   const lineItemsForStatement = (statement) => {
     const ids = new Set(Array.isArray(statement.lineItemIds) ? statement.lineItemIds : []);
     return lineItems.filter((item) => ids.has(item.id) || item.payStatementId === statement.id);
+  };
+
+  const lineItemsForStatementDetail = (detail) => {
+    if (!detail) return [];
+    return detail.type === "candidate" ? detail.group?.lineItems || [] : lineItemsForStatement(detail.statement || {});
+  };
+
+  const statementDetailSummary = (detail) => {
+    if (!detail) return null;
+    const lines = lineItemsForStatementDetail(detail);
+    const source = detail.type === "candidate" ? detail.group : detail.statement;
+    return {
+      lines,
+      title: detail.type === "candidate"
+        ? `${source?.technicianName || "Technician"} Statement Preview`
+        : source?.statementReference || source?.technicianName || "Pay Statement",
+      technicianName: source?.technicianName || "Technician",
+      workerType: source?.workerType || "notAssigned",
+      startDate: detail.type === "candidate" ? startDate : source?.startDate,
+      endDate: detail.type === "candidate" ? endDate : source?.endDate,
+      subtotalCents: detail.type === "candidate" ? source?.subtotalCents : source?.subtotalCents,
+      adjustmentCents: detail.type === "candidate" ? 0 : source?.adjustmentCents,
+      totalCents: detail.type === "candidate" ? source?.subtotalCents : source?.totalCents,
+      status: detail.type === "candidate" ? "ready" : source?.status,
+    };
   };
 
   const statementLineItemIds = (statement) => {
@@ -1764,6 +1793,7 @@ const Payroll = ({ mode = "payroll" }) => {
   };
 
   const showServiceStopBackfill = recentlySelectedCompany === SERVICE_STOP_BACKFILL_COMPANY_ID;
+  const showServiceStopBackfillPanel = showServiceStopBackfill && (isSetupMode || activeTab === "lineItems");
 
   const serviceStopTypeForStop = (stop = {}) => {
     const typeId = stop.typeId || stop.serviceStopTypeId || "";
@@ -1901,6 +1931,12 @@ const Payroll = ({ mode = "payroll" }) => {
     setSavingAction(actionKey);
     setActionNotice();
     setBackfillResult(null);
+    setBackfillProgress({
+      action: "Finishing Stops",
+      current: 0,
+      total: 0,
+      detail: "Finding unfinished service stops...",
+    });
 
     try {
       const stopsSnap = await getDocs(
@@ -1917,16 +1953,32 @@ const Payroll = ({ mode = "payroll" }) => {
 
       if (unfinishedStops.length === 0) {
         setBackfillResult({ finishedStops: 0, generatedLines: 0, preservedLines: 0, finishedTasks: 0 });
+        setBackfillProgress(null);
         setActionNotice("No unfinished service stops were found in that date range.");
         return;
       }
+
+      const totalUnfinishedStops = unfinishedStops.length;
+      setBackfillProgress({
+        action: "Finishing Stops",
+        current: 0,
+        total: totalUnfinishedStops,
+        detail: `0/${totalUnfinishedStops} service stops ready`,
+      });
 
       const generatedLineItems = [];
       let generatedLines = 0;
       let preservedLines = 0;
       let finishedTasks = 0;
 
-      for (const stop of unfinishedStops) {
+      for (let index = 0; index < unfinishedStops.length; index += 1) {
+        const stop = unfinishedStops[index];
+        setBackfillProgress({
+          action: "Finishing Stops",
+          current: index + 1,
+          total: totalUnfinishedStops,
+          detail: `${index + 1}/${totalUnfinishedStops} service stops being worked on`,
+        });
         const tasksSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", stop.id, "tasks"));
         const rawTasks = tasksSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
         const serviceDate = dateFromValue(stop.serviceDate) || new Date();
@@ -2015,7 +2067,7 @@ const Payroll = ({ mode = "payroll" }) => {
           });
         });
 
-        payLines.forEach((line) => {
+        for (const line of payLines) {
           const payload = buildPayLineItemPayload({
             line,
             serviceStop: finishedStop,
@@ -2038,7 +2090,7 @@ const Payroll = ({ mode = "payroll" }) => {
           );
           generatedLineItems.push(payload);
           generatedLines += 1;
-        });
+        }
 
         await batch.commit();
         finishedTasks += newlyFinishedTasks.length;
@@ -2058,6 +2110,12 @@ const Payroll = ({ mode = "payroll" }) => {
         preservedLines,
         finishedTasks,
       };
+      setBackfillProgress({
+        action: "Finishing Stops",
+        current: totalUnfinishedStops,
+        total: totalUnfinishedStops,
+        detail: "Refreshing payroll line items...",
+      });
       setBackfillResult(result);
       setActionNotice(
         `Finished ${result.finishedStops} service stop(s), finished ${result.finishedTasks} task(s), and generated ${result.generatedLines} payroll line item(s).`
@@ -2067,6 +2125,7 @@ const Payroll = ({ mode = "payroll" }) => {
       setActionFailure(err.message || "Could not finish service stops for that date range.");
     } finally {
       setSavingAction("");
+      setBackfillProgress(null);
     }
   };
 
@@ -2141,6 +2200,11 @@ const Payroll = ({ mode = "payroll" }) => {
         )
       );
       setActionNotice(`Created pay statement ${createdStatement.statementReference} for ${createdStatement.technicianName}.`);
+      setDetailStatement((current) =>
+        current?.type === "candidate" && current?.group?.technicianId === group.technicianId
+          ? { type: "statement", statement: createdStatement }
+          : current
+      );
     } catch (err) {
       console.error("Error creating pay statement:", err);
       setActionFailure("Could not create that pay statement.");
@@ -2244,6 +2308,11 @@ const Payroll = ({ mode = "payroll" }) => {
 
       await batch.commit();
       updateLocalStatement(statement.id, statementPayload);
+      setDetailStatement((current) =>
+        current?.type === "statement" && current?.statement?.id === statement.id
+          ? { ...current, statement: { ...current.statement, ...statementPayload } }
+          : current
+      );
       setLineItems((items) =>
         items.map((item) => (eligibleLineIds.includes(item.id) ? { ...item, ...linePayload } : item))
       );
@@ -2335,6 +2404,11 @@ const Payroll = ({ mode = "payroll" }) => {
 
       await batch.commit();
       updateLocalStatement(statement.id, statementPayload);
+      setDetailStatement((current) =>
+        current?.type === "statement" && current?.statement?.id === statement.id
+          ? { ...current, statement: { ...current.statement, ...statementPayload } }
+          : current
+      );
       setLineItems((items) =>
         items.map((item) =>
           linkedLineIds.includes(item.id)
@@ -2369,6 +2443,45 @@ const Payroll = ({ mode = "payroll" }) => {
   const closeDetailModal = () => {
     setDetailLineItem(null);
   };
+
+  const closeStatementDetail = () => {
+    if (savingAction) return;
+    setDetailStatement(null);
+  };
+
+  const renderStatementLineItemsTable = (items) => (
+    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+      <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+          <tr>
+            <th className="px-4 py-3">Date</th>
+            <th className="px-4 py-3">Work</th>
+            <th className="px-4 py-3">Customer</th>
+            <th className="px-4 py-3">Status</th>
+            <th className="px-4 py-3 text-right">Amount</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {items.length === 0 ? (
+            <tr>
+              <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No line items found.</td>
+            </tr>
+          ) : items.map((item) => (
+            <tr key={item.id}>
+              <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(item.completedDate)}</td>
+              <td className="px-4 py-3 text-slate-700">
+                <div className="font-medium text-slate-900">{displayWorkTitle(item)}</div>
+                <div className="text-xs text-slate-500">{rateTypeLabel(item)} · {Number(item.quantity || 0)} {item.quantityUnit || "each"}</div>
+              </td>
+              <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
+              <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isLineItemPaid(item) ? "paid" : item.calculationStatus} /></td>
+              <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   const renderLineItems = () => {
     if (summary.activeItems.length === 0) {
@@ -2467,44 +2580,50 @@ const Payroll = ({ mode = "payroll" }) => {
               No approved line items are ready for statements.
             </div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              {statementCandidateGroups.map((group) => (
-                <div key={group.technicianId} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <p className="text-lg font-bold text-slate-900">{group.technicianName}</p>
-                      <p className="text-sm text-slate-500">{statusLabel(group.workerType)} · {group.lineItems.length} item(s)</p>
-                    </div>
-                    <p className="text-lg font-bold text-slate-900">{moneyFromCents(group.subtotalCents)}</p>
-                  </div>
-
-                  <div className="mt-4 space-y-2 border-t border-slate-100 pt-3">
-                    {group.lineItems.slice(0, 3).map((item) => (
-                      <div key={item.id} className="flex items-start justify-between gap-3 text-sm">
-                        <div>
-                          <p className="font-semibold text-slate-800">{displayWorkTitle(item)}</p>
-                          <p className="text-xs text-slate-500">{shortDate(item.completedDate)} · {item.customerName || item.serviceLocationAddress || "No customer"}</p>
+            <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Technician</th>
+                    <th className="px-4 py-3">Period</th>
+                    <th className="px-4 py-3">Line Items</th>
+                    <th className="px-4 py-3 text-right">Ready Total</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {statementCandidateGroups.map((group) => (
+                    <tr key={group.technicianId}>
+                      <td className="px-4 py-3">
+                        <div className="font-semibold text-slate-900">{group.technicianName}</div>
+                        <div className="text-xs text-slate-500">{statusLabel(group.workerType)}</div>
+                      </td>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(startDate)} - {shortDate(endDate)}</td>
+                      <td className="px-4 py-3 text-slate-600">{group.lineItems.length} approved unpaid line item(s)</td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(group.subtotalCents)}</td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDetailStatement({ type: "candidate", group })}
+                            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => createStatementForGroup(group)}
+                            disabled={savingAction === `create-statement-${group.technicianId}` || Boolean(savingAction)}
+                            className="rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {savingAction === `create-statement-${group.technicianId}` ? "Creating" : "Create"}
+                          </button>
                         </div>
-                        <p className="font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</p>
-                      </div>
-                    ))}
-                    {group.lineItems.length > 3 ? (
-                      <p className="text-xs font-semibold text-slate-500">+ {group.lineItems.length - 3} more line item(s)</p>
-                    ) : null}
-                  </div>
-
-                  <div className="mt-4 flex justify-end">
-                    <button
-                      type="button"
-                      onClick={() => createStatementForGroup(group)}
-                      disabled={savingAction === `create-statement-${group.technicianId}` || Boolean(savingAction)}
-                      className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                    >
-                      {savingAction === `create-statement-${group.technicianId}` ? "Creating" : "Create Statement"}
-                    </button>
-                  </div>
-                </div>
-              ))}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
@@ -2518,61 +2637,185 @@ const Payroll = ({ mode = "payroll" }) => {
           {statements.length === 0 ? (
             <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No pay statements found for this date range.</div>
           ) : (
-            <div className="grid gap-4 md:grid-cols-2">
-              {statements.map((statement) => {
-                const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
-                const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
-                const linkedLines = lineItemsForStatement(statement);
+            <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+              <table className="min-w-full divide-y divide-slate-200 text-sm">
+                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3">Statement</th>
+                    <th className="px-4 py-3">Technician</th>
+                    <th className="px-4 py-3">Period</th>
+                    <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3 text-right">Line Items</th>
+                    <th className="px-4 py-3 text-right">Total</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {statements.map((statement) => {
+                    const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
+                    const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
+                    const linkedLines = lineItemsForStatement(statement);
 
-                return (
-                  <div key={statement.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <p className="text-lg font-bold text-slate-900">{statement.statementReference || statement.technicianName || "Pay Statement"}</p>
-                        <p className="text-sm text-slate-500">{shortDate(statement.startDate)} - {shortDate(statement.endDate)}</p>
-                        <p className="mt-1 text-xs text-slate-500">{linkedLines.length || statement.lineItemIds?.length || 0} linked line item(s)</p>
-                        {statement.paymentReference ? <p className="mt-1 text-xs text-slate-500">Payment ref: {statement.paymentReference}</p> : null}
-                      </div>
-                      <StatusPill status={isPaid ? "paid" : statement.status} />
-                    </div>
-                    <div className="mt-4 grid grid-cols-3 gap-3 text-sm">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subtotal</p>
-                        <p className="font-bold text-slate-900">{moneyFromCents(statement.subtotalCents)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Adjustments</p>
-                        <p className="font-bold text-slate-900">{moneyFromCents(statement.adjustmentCents)}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total</p>
-                        <p className="font-bold text-slate-900">{moneyFromCents(statement.totalCents)}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 flex flex-wrap justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => approveStatement(statement)}
-                        disabled={isApproved || savingAction === `approve-statement-${statement.id}`}
-                        className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {savingAction === `approve-statement-${statement.id}` ? "Saving" : "Approve Statement"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openPaymentModal("statement", statement)}
-                        disabled={isPaid}
-                        className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Mark Paid
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
+                    return (
+                      <tr key={statement.id}>
+                        <td className="px-4 py-3">
+                          <div className="font-semibold text-slate-900">{statement.statementReference || "Draft Statement"}</div>
+                          {statement.paymentReference ? <div className="text-xs text-slate-500">Payment ref: {statement.paymentReference}</div> : null}
+                        </td>
+                        <td className="px-4 py-3 text-slate-600">{statement.technicianName || "Technician"}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(statement.startDate)} - {shortDate(statement.endDate)}</td>
+                        <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isPaid ? "paid" : statement.status} /></td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{linkedLines.length || statement.lineItemIds?.length || 0}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(statement.totalCents)}</td>
+                        <td className="whitespace-nowrap px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setDetailStatement({ type: "statement", statement })}
+                              className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                            >
+                              Inspect
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => approveStatement(statement)}
+                              disabled={isApproved || savingAction === `approve-statement-${statement.id}`}
+                              className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {savingAction === `approve-statement-${statement.id}` ? "Saving" : "Approve"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => openPaymentModal("statement", statement)}
+                              disabled={isPaid}
+                              className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Mark Paid
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           )}
         </section>
+      </div>
+    );
+  };
+
+  const renderStatementDetailModal = () => {
+    if (!detailStatement) return null;
+
+    const detail = detailStatement;
+    const summary = statementDetailSummary(detail);
+    const isCandidate = detail.type === "candidate";
+    const statement = detail.statement || {};
+    const group = detail.group || {};
+    const isPaid = !isCandidate && (Boolean(statement.paidAt) || statement.status === "paid");
+    const isApproved = !isCandidate && (Boolean(statement.approvedAt) || statement.status === "approved" || isPaid);
+    const createActionKey = `create-statement-${group.technicianId}`;
+
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+        <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-lg bg-white shadow-xl">
+          <div className="sticky top-0 z-10 flex flex-col gap-4 border-b border-slate-200 bg-white p-5 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">
+                {isCandidate ? "Statement Preview" : "Statement Detail"}
+              </p>
+              <h2 className="mt-1 text-xl font-bold text-slate-900">{summary.title}</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {summary.technicianName} · {shortDate(summary.startDate)} - {shortDate(summary.endDate)}
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
+              {isCandidate ? (
+                <button
+                  type="button"
+                  onClick={() => createStatementForGroup(group)}
+                  disabled={savingAction === createActionKey || Boolean(savingAction)}
+                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {savingAction === createActionKey ? "Creating" : "Create Statement"}
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => approveStatement(statement)}
+                    disabled={isApproved || savingAction === `approve-statement-${statement.id}`}
+                    className="rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {savingAction === `approve-statement-${statement.id}` ? "Saving" : "Approve Statement"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetailStatement(null);
+                      openPaymentModal("statement", statement);
+                    }}
+                    disabled={isPaid}
+                    className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Mark Paid
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                onClick={closeStatementDetail}
+                className="rounded-md px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+
+          <div className="p-5">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              <DetailField label="Status" value={summary.status} accent />
+              <DetailField label="Line Items" value={summary.lines.length} />
+              <DetailField label="Subtotal" value={moneyFromCents(summary.subtotalCents)} />
+              <DetailField label="Adjustments" value={moneyFromCents(summary.adjustmentCents)} />
+              <DetailField label="Total" value={moneyFromCents(summary.totalCents)} accent />
+            </div>
+
+            <div className="mt-5">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Line Items</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Review each payroll line before {isCandidate ? "creating" : "approving"} this statement.
+                  </p>
+                </div>
+              </div>
+              {renderStatementLineItemsTable(summary.lines)}
+            </div>
+
+            {!isCandidate ? (
+              <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Statement Dates</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <p><span className="font-semibold">Created:</span> {debugDateTime(statement.createdAt)}</p>
+                    <p><span className="font-semibold">Approved:</span> {debugDateTime(statement.approvedAt)}</p>
+                    <p><span className="font-semibold">Paid:</span> {debugDateTime(statement.paidAt)}</p>
+                  </div>
+                </div>
+                <div className="rounded-lg border border-slate-200 bg-white p-4">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-600">Payment</h3>
+                  <div className="mt-3 space-y-2 text-sm text-slate-700">
+                    <p><span className="font-semibold">Reference:</span> {statement.paymentReference || statement.externalReferenceId || "-"}</p>
+                    <p><span className="font-semibold">Notes:</span> {statement.paidNotes || statement.notes || "-"}</p>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
       </div>
     );
   };
@@ -3543,6 +3786,9 @@ const Payroll = ({ mode = "payroll" }) => {
       ["lineItems", "Line Items"],
       ["statements", "Statements"],
     ];
+  const backfillProgressPercent = backfillProgress?.total
+    ? Math.max(5, Math.round((backfillProgress.current / backfillProgress.total) * 100))
+    : 8;
 
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -3598,14 +3844,14 @@ const Payroll = ({ mode = "payroll" }) => {
           </div>
         </section>
 
-        {isSetupMode && showServiceStopBackfill ? (
+        {showServiceStopBackfillPanel ? (
           <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 shadow-sm">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Company Service Stop Backfill</p>
                 <h2 className="mt-1 text-base font-bold text-slate-950">Finish Unfinished Stops and Generate Payroll</h2>
                 <p className="mt-1 max-w-3xl text-sm text-slate-700">
-                  Uses the selected service date range, skips customer emails, marks unfinished stops complete, and creates technician pay line items.
+                  Murdock pool service only. Uses the selected service date range, skips customer emails, marks unfinished stops complete, and creates technician pay line items.
                 </p>
               </div>
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
@@ -3668,6 +3914,25 @@ const Payroll = ({ mode = "payroll" }) => {
         {!loading && !error && isSetupMode && activeTab === "settings" ? renderSettings() : null}
       </div>
       {renderStopPayEditorModal()}
+      {renderStatementDetailModal()}
+      {backfillProgress ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/40 px-4">
+          <div className="w-full max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-2xl">
+            <p className="text-sm font-semibold uppercase tracking-wide text-amber-600">{backfillProgress.action}</p>
+            <p className="mt-2 text-2xl font-bold text-slate-900">
+              {backfillProgress.total ? `${backfillProgress.current}/${backfillProgress.total}` : "Finding stops"}
+            </p>
+            <p className="mt-1 text-sm text-slate-600">{backfillProgress.detail}</p>
+            <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-amber-700">Murdock pool service only</p>
+            <div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-amber-600 transition-all duration-300"
+                style={{ width: `${backfillProgressPercent}%` }}
+              />
+            </div>
+          </div>
+        </div>
+      ) : null}
       {paymentModal ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
           <form onSubmit={submitPayment} className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl">

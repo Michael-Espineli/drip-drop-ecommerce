@@ -9,6 +9,7 @@ import {
     ArchiveBoxIcon,
     CreditCardIcon,
     CurrencyDollarIcon,
+    ClipboardDocumentCheckIcon,
     DocumentTextIcon,
     BuildingStorefrontIcon,
     TruckIcon,
@@ -293,6 +294,12 @@ const CompanySettings = () => {
                 icon: <UsersIcon className="w-6 h-6" />,
                 title: 'User Roles',
                 description: 'Define and manage roles and permissions for your team.'
+            },
+            {
+                to: '/company/settings/onboarding-checklist',
+                icon: <ClipboardDocumentCheckIcon className="w-6 h-6" />,
+                title: 'Onboarding Checklist',
+                description: 'Manage the default setup list copied onto new company users.'
             },
             {
                 to: '/company/vendors',

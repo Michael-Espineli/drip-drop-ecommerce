@@ -2,7 +2,8 @@ import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } 
 import { Link, useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
 import { query, collection, getDocs, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
-import { db } from "../../../utils/config";
+import { httpsCallable } from "firebase/functions";
+import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
@@ -15,6 +16,9 @@ const ALL_ROUTES_MAP_OVERLAYS = Object.freeze({
     techTrail: false,
     timeAreas: false,
 });
+const MOVE_MODE_ONE_TIME = 'oneTime';
+const MOVE_MODE_PERMANENT = 'permanent';
+const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -54,6 +58,13 @@ const getStopDisplayStatus = (stop) => {
         label: 'Finished',
         className: 'bg-green-100 text-green-800',
     };
+};
+
+const isStopMovable = (stop) => {
+    const { end } = getStopTiming(stop);
+    const operationStatus = String(stop?.operationStatus || '').toLowerCase();
+
+    return !end && operationStatus !== 'finished';
 };
 
 const formatTimeValue = (date) => {
@@ -632,9 +643,12 @@ const RouteDashboard = () => {
     const [isSeedingDemoRoute, setIsSeedingDemoRoute] = useState(false);
     const [vehicleUpdatingRouteId, setVehicleUpdatingRouteId] = useState('');
     const [selectedStopIds, setSelectedStopIds] = useState([]);
+    const [moveMode, setMoveMode] = useState(MOVE_MODE_ONE_TIME);
     const [moveDate, setMoveDate] = useState(new Date());
+    const [moveDay, setMoveDay] = useState(format(new Date(), 'EEEE'));
     const [moveTechId, setMoveTechId] = useState('');
     const [isMovingStops, setIsMovingStops] = useState(false);
+    const [showMapPanel, setShowMapPanel] = useState(true);
     const [mapOverlays, setMapOverlays] = useState({
         stops: true,
         techTrail: true,
@@ -924,6 +938,21 @@ const RouteDashboard = () => {
         [allRouteStops, isAllRoutesSelected, selectedRoute, serviceStops]
     );
 
+    const selectedStopsForMove = useMemo(() => {
+        const stopsById = new Map(allRouteStops.map(stop => [stop.id, stop]));
+
+        serviceStops.forEach(stop => {
+            if (!stopsById.has(stop.id)) {
+                stopsById.set(stop.id, stop);
+            }
+        });
+
+        return selectedStopIds
+            .map(stopId => stopsById.get(stopId))
+            .filter(Boolean)
+            .filter(isStopMovable);
+    }, [allRouteStops, selectedStopIds, serviceStops]);
+
     const selectedRouteLocations = useMemo(() => (
         isAllRoutesSelected ? [] :
         activeRouteLocations
@@ -956,7 +985,9 @@ const RouteDashboard = () => {
 
     useEffect(() => {
         setSelectedStopIds([]);
-    }, [selectedRouteId]);
+        setMoveDate(new Date(serviceDate));
+        setMoveDay(format(serviceDate, 'EEEE'));
+    }, [serviceDate]);
 
     const toggleMapOverlay = (overlayName) => {
         setMapOverlays(previous => ({
@@ -966,8 +997,7 @@ const RouteDashboard = () => {
     };
 
     const toggleSelectedStop = (stop) => {
-        const { end } = getStopTiming(stop);
-        if (end) {
+        if (!isStopMovable(stop)) {
             toast.error('Finished stops cannot be moved from the active route manager.');
             return;
         }
@@ -979,8 +1009,43 @@ const RouteDashboard = () => {
         ));
     };
 
+    const toggleRouteUnfinishedStops = (route) => {
+        const routeStopIds = getOrderedRouteStops(route, serviceStops)
+            .filter(isStopMovable)
+            .map(stop => stop.id);
+
+        if (routeStopIds.length === 0) {
+            toast.error('This route has no unfinished stops to move.');
+            return;
+        }
+
+        setSelectedStopIds(currentIds => {
+            const routeIdSet = new Set(routeStopIds);
+            const hasEveryRouteStop = routeStopIds.every(stopId => currentIds.includes(stopId));
+
+            if (hasEveryRouteStop) {
+                return currentIds.filter(stopId => !routeIdSet.has(stopId));
+            }
+
+            return Array.from(new Set([...currentIds, ...routeStopIds]));
+        });
+    };
+
+    const selectAllUnfinishedStops = () => {
+        const unfinishedStopIds = serviceStops
+            .filter(isStopMovable)
+            .map(stop => stop.id);
+
+        if (unfinishedStopIds.length === 0) {
+            toast.error('There are no unfinished stops on this date.');
+            return;
+        }
+
+        setSelectedStopIds(unfinishedStopIds);
+    };
+
     const moveSelectedStops = async () => {
-        if (!recentlySelectedCompany || !selectedRoute || selectedStopIds.length === 0) return;
+        if (!recentlySelectedCompany || selectedStopsForMove.length === 0) return;
 
         const destinationTech = technicians.find(tech => tech.userId === moveTechId);
         if (!destinationTech) {
@@ -991,53 +1056,41 @@ const RouteDashboard = () => {
         setIsMovingStops(true);
 
         try {
-            const nextServiceDate = new Date(moveDate);
-            nextServiceDate.setHours(0, 0, 0, 0);
-            const selectedIdSet = new Set(selectedStopIds);
-            const batch = writeBatch(db);
-
-            selectedStopIds.forEach(stopId => {
-                batch.update(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', stopId), {
-                    serviceDate: Timestamp.fromDate(nextServiceDate),
-                    techId: destinationTech.userId,
-                    tech: destinationTech.userName,
-                    updatedAt: Timestamp.fromDate(new Date()),
+            if (moveMode === MOVE_MODE_PERMANENT) {
+                const updateServiceStopDayPermanently = httpsCallable(functions, 'updateServiceStopDayPermanently');
+                const response = await updateServiceStopDayPermanently({
+                    companyId: recentlySelectedCompany,
+                    serviceStopList: selectedStopsForMove.map(stop => ({ id: stop.id })),
+                    newTech: {
+                        userId: destinationTech.userId,
+                        userName: destinationTech.userName,
+                    },
+                    newDay: moveDay,
                 });
-            });
 
-            const remainingRouteStopIds = (selectedRoute.serviceStopsIds || []).filter(stopId => !selectedIdSet.has(stopId));
-            const remainingStops = selectedRouteStops.filter(stop => !selectedIdSet.has(stop.id));
-            const remainingFinishedStops = remainingStops.filter(stop => {
-                const { start, end } = getStopTiming(stop);
-                return start && end;
-            }).length;
-            const remainingInProgressStops = remainingStops.filter(stop => {
-                const { start, end } = getStopTiming(stop);
-                return start && !end;
-            }).length;
-            const nextStatus = remainingRouteStopIds.length === 0
-                ? 'Did Not Start'
-                : remainingFinishedStops === remainingRouteStopIds.length
-                    ? 'Finished'
-                    : remainingInProgressStops > 0
-                        ? 'In Progress'
-                        : 'Did Not Start';
+                if (response?.data?.status === 500) {
+                    throw new Error(response.data.error || 'Permanent move failed.');
+                }
 
-            batch.update(doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', selectedRoute.id), {
-                serviceStopsIds: remainingRouteStopIds,
-                order: Array.isArray(selectedRoute.order)
-                    ? selectedRoute.order
-                        .filter(item => !selectedIdSet.has(item.serviceStopId || item.id))
-                        .map((item, index) => ({ ...item, order: index + 1 }))
-                    : [],
-                totalStops: remainingRouteStopIds.length,
-                finishedStops: remainingFinishedStops,
-                status: nextStatus,
-                updatedAt: Timestamp.fromDate(new Date()),
-            });
+                toast.success('Permanent move submitted.');
+            } else {
+                const nextServiceDate = new Date(moveDate);
+                nextServiceDate.setHours(0, 0, 0, 0);
+                const batch = writeBatch(db);
 
-            await batch.commit();
-            toast.success('Selected stops moved.');
+                selectedStopsForMove.forEach(stop => {
+                    batch.update(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', stop.id), {
+                        serviceDate: Timestamp.fromDate(nextServiceDate),
+                        techId: destinationTech.userId,
+                        tech: destinationTech.userName,
+                        updatedAt: Timestamp.fromDate(new Date()),
+                    });
+                });
+
+                await batch.commit();
+                toast.success('Selected stops moved.');
+            }
+
             setSelectedStopIds([]);
             await fetchData(serviceDate);
         } catch (error) {
@@ -1269,136 +1322,156 @@ const RouteDashboard = () => {
                         <p className="text-gray-500">Loading dashboard...</p>
                     </div>
                 ) : (
-                    <main className="grid grid-cols-1 xl:grid-cols-3 gap-8">
-                        <section className="xl:col-span-2 bg-white p-6 rounded-2xl shadow-lg">
-                            <div className="flex flex-col gap-4 mb-4 lg:flex-row lg:items-start lg:justify-between">
-                                <div>
-                                    <h2 className="text-xl font-bold text-gray-800">Daily Route Map</h2>
-                                    <p className="text-sm text-gray-500">
-                                        {isAllRoutesSelected
-                                            ? 'All technician service stops for the selected day. Trails and time areas are hidden in this view.'
-                                            : 'Stops, technician trail, and time areas mirror the iOS active route sheet.'}
-                                    </p>
-                                </div>
+                    <main className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
+                        <div className="min-w-0 space-y-4">
+                            <RouteWorkloadBoard
+                                routes={activeRoutes}
+                                stops={serviceStops}
+                                selectedRouteId={selectedRouteId}
+                                selectedStopIds={selectedStopIds}
+                                onSelectRoute={setSelectedRouteId}
+                                onSelectRouteStops={toggleRouteUnfinishedStops}
+                                onToggleStop={toggleSelectedStop}
+                                onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                            />
 
-                                <select
-                                    value={selectedRouteId}
-                                    onChange={(event) => setSelectedRouteId(event.target.value)}
-                                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm lg:w-72"
-                                    disabled={activeRoutes.length === 0}
-                                >
-                                    {activeRoutes.length === 0 ? (
-                                        <option value="">No active routes</option>
-                                    ) : (
-                                        <>
-                                            <option value={ALL_ROUTES_OPTION}>All technicians</option>
-                                            {activeRoutes.map(route => (
-                                                <option key={route.id} value={route.id}>
-                                                    {route.techName || route.name || 'Route'}
-                                                </option>
-                                            ))}
-                                        </>
-                                    )}
-                                </select>
-                            </div>
-
-                            <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
-                                <RouteMapMetric
-                                    label={isAllRoutesSelected ? 'Total Stops' : 'Stops'}
-                                    value={selectedRouteStops.length}
-                                    tone="blue"
-                                />
-                                <RouteMapMetric
-                                    label={isAllRoutesSelected ? 'Technicians' : 'Trail Points'}
-                                    value={isAllRoutesSelected ? activeRoutes.length : selectedRouteLocations.length}
-                                    tone="orange"
-                                />
-                                <RouteMapMetric
-                                    label={isAllRoutesSelected ? 'Finished' : 'Time Areas'}
-                                    value={isAllRoutesSelected ? selectedRouteStops.filter(stop => getStopTiming(stop).end).length : selectedRouteAreaEstimates.length}
-                                    tone="purple"
-                                />
-                                <RouteMapMetric
-                                    label={isAllRoutesSelected ? 'In Progress' : 'Route Logs'}
-                                    value={isAllRoutesSelected ? selectedRouteStops.filter(stop => {
-                                        const { start, end } = getStopTiming(stop);
-                                        return start && !end;
-                                    }).length : selectedRouteLogs.length}
-                                    tone="emerald"
-                                />
-                            </div>
-
-                            {selectedRoute && (
-                                <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
-                                    <span className="font-semibold text-gray-900">Vehicle:</span>{" "}
-                                    {routeVehicleSummary(selectedRoute, fleetVehicles, technicians)}
-                                    <span className="ml-2 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-gray-500">
-                                        {routeVehicleSourceLabel(selectedRoute)}
-                                    </span>
-                                </div>
-                            )}
-
-                            {isAllRoutesSelected ? (
-                                <div className="mb-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
-                                    Showing service stops only across all technicians.
-                                </div>
-                            ) : (
-                                <div className="mb-4 flex flex-wrap gap-2">
-                                    <OverlayButton
-                                        label="Stops"
-                                        colorClass="blue"
-                                        isOn={mapOverlays.stops}
-                                        onClick={() => toggleMapOverlay('stops')}
-                                    />
-                                    <OverlayButton
-                                        label="Tech trail"
-                                        colorClass="orange"
-                                        isOn={mapOverlays.techTrail}
-                                        onClick={() => toggleMapOverlay('techTrail')}
-                                    />
-                                    <OverlayButton
-                                        label="Time areas"
-                                        colorClass="purple"
-                                        isOn={mapOverlays.timeAreas}
-                                        onClick={() => toggleMapOverlay('timeAreas')}
-                                    />
-                                </div>
-                            )}
-
-                            <div className="w-full h-96 md:h-[500px] rounded-lg overflow-hidden border border-gray-200">
-                                {(isAllRoutesSelected || selectedRoute) && (selectedRouteStops.length > 0 || selectedRouteLocations.length > 0) ? (
-                                    <RouteActivityMap
-                                        route={selectedRoute}
-                                        stops={selectedRouteStops}
-                                        routeLocations={selectedRouteLocations}
-                                        areaEstimates={selectedRouteAreaEstimates}
-                                        overlays={isAllRoutesSelected ? ALL_ROUTES_MAP_OVERLAYS : mapOverlays}
-                                        showTechnicianLabels={isAllRoutesSelected}
-                                    />
-                                ) : (
-                                    <div className='flex justify-center items-center h-full bg-gray-100'>
-                                        <p className='text-gray-500'>
-                                            {isAllRoutesSelected ? 'No service stop map data for this date.' : 'No map data for this route.'}
+                            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                                    <div>
+                                        <h2 className="text-lg font-bold text-gray-800">Map & Activity</h2>
+                                        <p className="text-sm text-gray-500">
+                                            {isAllRoutesSelected
+                                                ? 'All technician service stops for the selected day. Trails and time areas are hidden in this view.'
+                                                : 'Focused route map, technician trail, and activity timeline.'}
                                         </p>
                                     </div>
-                                )}
-                            </div>
 
-                            {isAllRoutesSelected ? (
-                                <AllRoutesStopPanel
-                                    routes={activeRoutes}
-                                    stops={selectedRouteStops}
-                                    onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
-                                />
-                            ) : selectedRoute && (
-                                <RouteProgressTimeline
-                                    route={selectedRoute}
-                                    stops={selectedRouteStops}
-                                    areaEstimates={selectedRouteAreaEstimates}
-                                    routeLogs={selectedRouteLogs}
-                                    now={now}
-                                />
-                            )}
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                        <select
+                                            value={selectedRouteId}
+                                            onChange={(event) => setSelectedRouteId(event.target.value)}
+                                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm sm:w-72"
+                                            disabled={activeRoutes.length === 0}
+                                        >
+                                            {activeRoutes.length === 0 ? (
+                                                <option value="">No active routes</option>
+                                            ) : (
+                                                <>
+                                                    <option value={ALL_ROUTES_OPTION}>All technicians</option>
+                                                    {activeRoutes.map(route => (
+                                                        <option key={route.id} value={route.id}>
+                                                            {route.techName || route.name || 'Route'}
+                                                        </option>
+                                                    ))}
+                                                </>
+                                            )}
+                                        </select>
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowMapPanel((current) => !current)}
+                                            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
+                                        >
+                                            {showMapPanel ? 'Hide Map' : 'Show Map'}
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {showMapPanel && (
+                                    <>
+                                        <div className="mt-4 grid grid-cols-2 gap-2 lg:grid-cols-4">
+                                            <RouteMapMetric
+                                                label={isAllRoutesSelected ? 'Total Stops' : 'Stops'}
+                                                value={selectedRouteStops.length}
+                                                tone="blue"
+                                            />
+                                            <RouteMapMetric
+                                                label={isAllRoutesSelected ? 'Technicians' : 'Trail Points'}
+                                                value={isAllRoutesSelected ? activeRoutes.length : selectedRouteLocations.length}
+                                                tone="orange"
+                                            />
+                                            <RouteMapMetric
+                                                label={isAllRoutesSelected ? 'Finished' : 'Time Areas'}
+                                                value={isAllRoutesSelected ? selectedRouteStops.filter(stop => getStopTiming(stop).end).length : selectedRouteAreaEstimates.length}
+                                                tone="purple"
+                                            />
+                                            <RouteMapMetric
+                                                label={isAllRoutesSelected ? 'In Progress' : 'Route Logs'}
+                                                value={isAllRoutesSelected ? selectedRouteStops.filter(stop => {
+                                                    const { start, end } = getStopTiming(stop);
+                                                    return start && !end;
+                                                }).length : selectedRouteLogs.length}
+                                                tone="emerald"
+                                            />
+                                        </div>
+
+                                        {selectedRoute && (
+                                            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                                                <span className="font-semibold text-gray-900">Vehicle:</span>{" "}
+                                                {routeVehicleSummary(selectedRoute, fleetVehicles, technicians)}
+                                                <span className="ml-2 rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-gray-500">
+                                                    {routeVehicleSourceLabel(selectedRoute)}
+                                                </span>
+                                            </div>
+                                        )}
+
+                                        {isAllRoutesSelected ? (
+                                            <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700">
+                                                Showing service stops only across all technicians.
+                                            </div>
+                                        ) : (
+                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                <OverlayButton
+                                                    label="Stops"
+                                                    colorClass="blue"
+                                                    isOn={mapOverlays.stops}
+                                                    onClick={() => toggleMapOverlay('stops')}
+                                                />
+                                                <OverlayButton
+                                                    label="Tech trail"
+                                                    colorClass="orange"
+                                                    isOn={mapOverlays.techTrail}
+                                                    onClick={() => toggleMapOverlay('techTrail')}
+                                                />
+                                                <OverlayButton
+                                                    label="Time areas"
+                                                    colorClass="purple"
+                                                    isOn={mapOverlays.timeAreas}
+                                                    onClick={() => toggleMapOverlay('timeAreas')}
+                                                />
+                                            </div>
+                                        )}
+
+                                        <div className="mt-4 h-80 w-full overflow-hidden rounded-lg border border-gray-200 md:h-[420px]">
+                                            {(isAllRoutesSelected || selectedRoute) && (selectedRouteStops.length > 0 || selectedRouteLocations.length > 0) ? (
+                                                <RouteActivityMap
+                                                    route={selectedRoute}
+                                                    stops={selectedRouteStops}
+                                                    routeLocations={selectedRouteLocations}
+                                                    areaEstimates={selectedRouteAreaEstimates}
+                                                    overlays={isAllRoutesSelected ? ALL_ROUTES_MAP_OVERLAYS : mapOverlays}
+                                                    showTechnicianLabels={isAllRoutesSelected}
+                                                />
+                                            ) : (
+                                                <div className='flex h-full items-center justify-center bg-gray-100'>
+                                                    <p className='text-gray-500'>
+                                                        {isAllRoutesSelected ? 'No service stop map data for this date.' : 'No map data for this route.'}
+                                                    </p>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {!isAllRoutesSelected && selectedRoute && (
+                                            <RouteProgressTimeline
+                                                route={selectedRoute}
+                                                stops={selectedRouteStops}
+                                                areaEstimates={selectedRouteAreaEstimates}
+                                                routeLogs={selectedRouteLogs}
+                                                now={now}
+                                            />
+                                        )}
+                                    </>
+                                )}
+                            </section>
 
                             {!isAllRoutesSelected && selectedRoute && (
                                 <ActiveRouteDetailPanel
@@ -1407,47 +1480,67 @@ const RouteDashboard = () => {
                                     locations={selectedRouteLocations}
                                     areaEstimates={selectedRouteAreaEstimates}
                                     routeLogs={selectedRouteLogs}
-                                    technicians={technicians}
                                     selectedStopIds={selectedStopIds}
-                                    moveDate={moveDate}
-                                    moveTechId={moveTechId}
-                                    isMovingStops={isMovingStops}
                                     onSaveRouteCompletion={saveRouteCompletion}
                                     onToggleStop={toggleSelectedStop}
-                                    onMoveDateChange={setMoveDate}
-                                    onMoveTechChange={setMoveTechId}
-                                    onMoveSelectedStops={moveSelectedStops}
                                     onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
                                 />
                             )}
-                        </section>
 
-                        <section className="bg-white p-6 rounded-2xl shadow-lg">
-                            <h2 className="text-xl font-bold text-gray-800 mb-4">Technician Overview</h2>
-                            <div className="space-y-4">
-                                {activeRoutes.length > 0 ? activeRoutes.map(route => (
-                                    <TechRouteCard
-                                        key={route.id}
-                                        route={route}
-                                        stops={serviceStops}
-                                        now={now}
-                                        technicians={technicians}
-                                        fleetVehicles={fleetVehicles}
-                                        onVehicleChange={updateRouteVehicle}
-                                        isVehicleUpdating={vehicleUpdatingRouteId === route.id}
-                                    />
-                                )) : (
-                                    <p className="text-gray-500 pt-4">No active routes for this date.</p>
-                                )}
-                            </div>
-                        </section>
+                            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                <h2 className='text-lg font-bold text-gray-800'>
+                                    Service Stops ({serviceStops.length})
+                                </h2>
+                                <ServiceStopTable
+                                    stops={serviceStops}
+                                    navigate={navigate}
+                                    now={now}
+                                    selectedStopIds={selectedStopIds}
+                                    onToggleStop={toggleSelectedStop}
+                                />
+                            </section>
+                        </div>
 
-                        <section className="xl:col-span-3 bg-white p-6 rounded-2xl shadow-lg">
-                            <h2 className='text-xl font-bold text-gray-800 mb-4'>
-                                Service Stops ({serviceStops.length})
-                            </h2>
-                            <ServiceStopTable stops={serviceStops} navigate={navigate} now={now} />
-                        </section>
+                        <aside className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
+                            <MoveStopsPanel
+                                selectedStops={selectedStopsForMove}
+                                selectedStopIds={selectedStopIds}
+                                totalStops={serviceStops.length}
+                                technicians={technicians}
+                                moveMode={moveMode}
+                                moveDate={moveDate}
+                                moveDay={moveDay}
+                                moveTechId={moveTechId}
+                                isMovingStops={isMovingStops}
+                                onMoveModeChange={setMoveMode}
+                                onMoveDateChange={setMoveDate}
+                                onMoveDayChange={setMoveDay}
+                                onMoveTechChange={setMoveTechId}
+                                onMoveSelectedStops={moveSelectedStops}
+                                onSelectAllUnfinished={selectAllUnfinishedStops}
+                                onClearSelection={() => setSelectedStopIds([])}
+                            />
+
+                            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                                <h2 className="text-lg font-bold text-gray-800">Technician Overview</h2>
+                                <div className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
+                                    {activeRoutes.length > 0 ? activeRoutes.map(route => (
+                                        <TechRouteCard
+                                            key={route.id}
+                                            route={route}
+                                            stops={serviceStops}
+                                            now={now}
+                                            technicians={technicians}
+                                            fleetVehicles={fleetVehicles}
+                                            onVehicleChange={updateRouteVehicle}
+                                            isVehicleUpdating={vehicleUpdatingRouteId === route.id}
+                                        />
+                                    )) : (
+                                        <p className="text-gray-500 pt-4">No active routes for this date.</p>
+                                    )}
+                                </div>
+                            </section>
+                        </aside>
                     </main>
                 )}
             </div>
@@ -1455,92 +1548,322 @@ const RouteDashboard = () => {
     );
 };
 
-const AllRoutesStopPanel = ({ routes, stops, onOpenStop }) => {
-    const groupedStops = useMemo(() => {
-        const groupsByTech = stops.reduce((groups, stop) => {
-            const techKey = stop.routeTechId || stop.techId || stop.routeTechName || stop.tech || 'unassigned';
-            const existingGroup = groups.get(techKey) || {
-                techKey,
-                techName: stop.routeTechName || stop.tech || 'Unassigned',
-                routeName: stop.routeName || '',
-                stops: [],
-            };
+const getRouteStatusClass = (status) => {
+    switch (status) {
+        case 'Finished':
+            return 'bg-green-100 text-green-800';
+        case 'In Progress':
+            return 'bg-blue-100 text-blue-800';
+        default:
+            return 'bg-yellow-100 text-yellow-800';
+    }
+};
 
-            existingGroup.stops.push(stop);
-            groups.set(techKey, existingGroup);
-            return groups;
-        }, new Map());
+const RouteWorkloadBoard = ({
+    routes,
+    stops,
+    selectedRouteId,
+    selectedStopIds,
+    onSelectRoute,
+    onSelectRouteStops,
+    onToggleStop,
+    onOpenStop,
+}) => {
+    const routeGroups = useMemo(() => {
+        const routedStopIds = new Set();
+        const groups = routes
+            .map(route => {
+                const routeStops = getOrderedRouteStops(route, stops);
+                routeStops.forEach(stop => routedStopIds.add(stop.id));
 
-        return Array.from(groupsByTech.values()).sort((a, b) => a.techName.localeCompare(b.techName));
-    }, [stops]);
+                return {
+                    id: route.id,
+                    route,
+                    techName: route.techName || route.name || 'Route',
+                    stops: routeStops,
+                };
+            })
+            .sort((a, b) => a.techName.localeCompare(b.techName));
+        const looseStops = stops.filter(stop => !routedStopIds.has(stop.id));
+
+        if (looseStops.length > 0) {
+            groups.push({
+                id: 'unassigned-route-stops',
+                route: null,
+                techName: 'Unassigned',
+                stops: looseStops,
+            });
+        }
+
+        return groups;
+    }, [routes, stops]);
+    const finishedCount = stops.filter(stop => getStopTiming(stop).end).length;
+    const unfinishedCount = stops.filter(isStopMovable).length;
 
     return (
-        <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
+        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                    <h3 className="text-lg font-bold text-gray-800">All Technician Stops</h3>
-                    <p className="text-sm text-gray-500">
-                        Stop-only view for {routes.length} technician route{routes.length === 1 ? '' : 's'} on this date.
-                    </p>
+                    <h2 className="text-lg font-bold text-gray-800">Daily Routes</h2>
+                    <p className="text-sm text-gray-500">Dense dispatch view for route-level or individual stop moves.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <DetailPill label="Stops" value={stops.length} />
-                    <DetailPill label="Technicians" value={groupedStops.length} />
-                    <DetailPill label="Finished" value={stops.filter(stop => getStopTiming(stop).end).length} />
+                    <DetailPill label="Routes" value={routes.length} />
+                    <DetailPill label="Finished" value={finishedCount} />
+                    <DetailPill label="Open" value={unfinishedCount} />
                 </div>
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
-                {groupedStops.length ? groupedStops.map(group => {
+            <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+                {routeGroups.length ? routeGroups.map(group => {
                     const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
+                    const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
+                    const isFocused = group.route && selectedRouteId === group.route.id;
 
                     return (
-                        <div key={group.techKey} className="rounded-lg border border-gray-200">
-                            <div className="flex items-start justify-between gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3">
-                                <div>
-                                    <p className="font-semibold text-gray-900">{group.techName}</p>
-                                    <p className="text-xs text-gray-500">{group.routeName || 'Daily route'}</p>
+                        <div
+                            key={group.id}
+                            className={`overflow-hidden rounded-lg border ${isFocused ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200'}`}
+                        >
+                            <div className="border-b border-gray-200 bg-gray-50 px-3 py-2">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0">
+                                        <p className="truncate font-semibold text-gray-900">{group.techName}</p>
+                                        <p className="text-xs text-gray-500">{finishedCount}/{group.stops.length} finished</p>
+                                    </div>
+                                    {group.route && (
+                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(group.route.status)}`}>
+                                            {group.route.status || 'Did Not Start'}
+                                        </span>
+                                    )}
                                 </div>
-                                <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
-                                    {finishedCount}/{group.stops.length}
-                                </span>
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                    {group.route && (
+                                        <button
+                                            type="button"
+                                            onClick={() => onSelectRoute(group.route.id)}
+                                            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                        >
+                                            Focus
+                                        </button>
+                                    )}
+                                    {group.route && (
+                                        <button
+                                            type="button"
+                                            onClick={() => onSelectRouteStops(group.route)}
+                                            className="rounded-md border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                                        >
+                                            {selectedInRoute ? `${selectedInRoute} selected` : 'Select unfinished'}
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
-                            <div className="divide-y divide-gray-100">
+                            <div className="max-h-96 divide-y divide-gray-100 overflow-y-auto">
                                 {group.stops.map((stop, index) => {
                                     const status = getStopDisplayStatus(stop);
                                     const routeIndex = stop.routeStopIndex || index + 1;
+                                    const isSelected = selectedStopIds.includes(stop.id);
+                                    const movable = isStopMovable(stop);
 
                                     return (
-                                        <button
+                                        <div
                                             key={stop.id}
-                                            type="button"
-                                            onClick={() => onOpenStop(stop)}
-                                            className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-gray-50"
+                                            className={`grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                                         >
-                                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-sm font-bold text-blue-700">
-                                                {routeIndex}
-                                            </span>
+                                            <button
+                                                type="button"
+                                                onClick={() => onToggleStop(stop)}
+                                                disabled={!movable}
+                                                className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
+                                                        ? 'border-blue-600 bg-blue-600 text-white'
+                                                        : movable
+                                                            ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
+                                                            : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                                    }`}
+                                                title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
+                                            >
+                                                {isSelected ? '✓' : routeIndex}
+                                            </button>
                                             <span className="min-w-0 flex-1">
-                                                <span className="block truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
-                                                <span className="block truncate text-sm text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onOpenStop(stop)}
+                                                    className="block min-w-0 text-left"
+                                                >
+                                                    <span className="block truncate text-sm font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
+                                                    <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
+                                                </button>
                                             </span>
-                                            <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${status.className}`}>
-                                                {status.label}
+                                            <span
+                                                className={`h-2.5 w-2.5 rounded-full ${status.label === 'Finished'
+                                                        ? 'bg-green-500'
+                                                        : status.label === 'In Progress'
+                                                            ? 'bg-blue-500'
+                                                            : 'bg-yellow-500'
+                                                    }`}
+                                                title={status.label}
+                                            >
+                                                <span className="sr-only">{status.label}</span>
                                             </span>
-                                        </button>
+                                        </div>
                                     );
                                 })}
                             </div>
                         </div>
                     );
                 }) : (
-                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500">
+                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500 xl:col-span-2">
                         No service stops loaded for this date.
                     </div>
                 )}
             </div>
-        </div>
+        </section>
+    );
+};
+
+const MoveStopsPanel = ({
+    selectedStops,
+    selectedStopIds,
+    totalStops,
+    technicians,
+    moveMode,
+    moveDate,
+    moveDay,
+    moveTechId,
+    isMovingStops,
+    onMoveModeChange,
+    onMoveDateChange,
+    onMoveDayChange,
+    onMoveTechChange,
+    onMoveSelectedStops,
+    onSelectAllUnfinished,
+    onClearSelection,
+}) => {
+    const selectedCount = selectedStops.length;
+    const selectedPreview = selectedStops.slice(0, 4);
+
+    return (
+        <section className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+                <div>
+                    <h2 className="text-lg font-bold text-gray-800">Move Stops</h2>
+                    <p className="text-sm text-gray-500">{selectedCount} selected out of {totalStops}</p>
+                </div>
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                    {selectedCount}
+                </span>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-1">
+                <button
+                    type="button"
+                    onClick={() => onMoveModeChange(MOVE_MODE_ONE_TIME)}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_ONE_TIME ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                    One Time
+                </button>
+                <button
+                    type="button"
+                    onClick={() => onMoveModeChange(MOVE_MODE_PERMANENT)}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_PERMANENT ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                >
+                    Permanent
+                </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+                {moveMode === MOVE_MODE_ONE_TIME ? (
+                    <label className="block space-y-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Destination Date</span>
+                        <DatePicker
+                            selected={moveDate}
+                            onChange={onMoveDateChange}
+                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                        />
+                    </label>
+                ) : (
+                    <label className="block space-y-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recurring Day</span>
+                        <select
+                            value={moveDay}
+                            onChange={(event) => onMoveDayChange(event.target.value)}
+                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                        >
+                            {DAYS_OF_WEEK.map(day => (
+                                <option key={day} value={day}>{day}</option>
+                            ))}
+                        </select>
+                    </label>
+                )}
+
+                <label className="block space-y-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Technician</span>
+                    <select
+                        value={moveTechId}
+                        onChange={(event) => onMoveTechChange(event.target.value)}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                    >
+                        <option value="">Select technician</option>
+                        {technicians.map(tech => (
+                            <option key={tech.userId || tech.docId} value={tech.userId}>
+                                {tech.userName}
+                            </option>
+                        ))}
+                    </select>
+                </label>
+            </div>
+
+            <div className="mt-4 grid grid-cols-2 gap-2">
+                <button
+                    type="button"
+                    onClick={onSelectAllUnfinished}
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                    Select All Open
+                </button>
+                <button
+                    type="button"
+                    onClick={onClearSelection}
+                    disabled={selectedStopIds.length === 0}
+                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                    Clear
+                </button>
+            </div>
+
+            {selectedPreview.length > 0 && (
+                <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selected</p>
+                    <div className="mt-2 space-y-2">
+                        {selectedPreview.map(stop => (
+                            <div key={stop.id} className="min-w-0 text-sm">
+                                <p className="truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</p>
+                                <p className="truncate text-xs text-gray-500">{stop.routeTechName || stop.tech || 'Unassigned'}</p>
+                            </div>
+                        ))}
+                        {selectedStops.length > selectedPreview.length && (
+                            <p className="text-xs font-semibold text-gray-500">
+                                +{selectedStops.length - selectedPreview.length} more
+                            </p>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            <button
+                type="button"
+                onClick={onMoveSelectedStops}
+                disabled={!selectedCount || !moveTechId || isMovingStops}
+                className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+                {isMovingStops ? 'Moving...' : `Move ${selectedCount || ''} Stop${selectedCount === 1 ? '' : 's'}`}
+            </button>
+            {moveMode === MOVE_MODE_PERMANENT && (
+                <p className="mt-2 text-xs text-gray-500">Permanent moves update the recurring stop and future unfinished stops.</p>
+            )}
+        </section>
     );
 };
 
@@ -1550,23 +1873,16 @@ const ActiveRouteDetailPanel = ({
     locations,
     areaEstimates,
     routeLogs,
-    technicians,
     selectedStopIds,
-    moveDate,
-    moveTechId,
-    isMovingStops,
     onSaveRouteCompletion,
     onToggleStop,
-    onMoveDateChange,
-    onMoveTechChange,
-    onMoveSelectedStops,
     onOpenStop,
 }) => {
     const expectedStopCount = route.serviceStopsIds?.length || 0;
     const hasStopMismatch = expectedStopCount !== stops.length;
     const latestLocation = locations[locations.length - 1] || null;
-    const selectedCount = selectedStopIds.length;
-    const unfinishedStops = stops.filter(stop => !getStopTiming(stop).end);
+    const selectedCount = stops.filter(stop => selectedStopIds.includes(stop.id)).length;
+    const unfinishedStops = stops.filter(isStopMovable);
     const [completionDraft, setCompletionDraft] = useState({
         startMileage: "",
         endMileage: "",
@@ -1594,7 +1910,7 @@ const ActiveRouteDetailPanel = ({
                 <div>
                     <h3 className="text-lg font-bold text-gray-800">Active Route Detail</h3>
                     <p className="text-sm text-gray-500">
-                        Stops, logs, latest location, and manager actions for {route.techName || 'this route'}.
+                        Stops, logs, latest location, and completion controls for {route.techName || 'this route'}.
                     </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -1625,8 +1941,7 @@ const ActiveRouteDetailPanel = ({
                     <div className="divide-y divide-gray-100">
                         {stops.length ? stops.map((stop, index) => {
                             const status = getStopDisplayStatus(stop);
-                            const { end } = getStopTiming(stop);
-                            const isFinished = Boolean(end);
+                            const movable = isStopMovable(stop);
                             const isSelected = selectedStopIds.includes(stop.id);
 
                             return (
@@ -1634,14 +1949,14 @@ const ActiveRouteDetailPanel = ({
                                     <button
                                         type="button"
                                         onClick={() => onToggleStop(stop)}
-                                        disabled={isFinished}
+                                        disabled={!movable}
                                         className={`h-8 w-8 rounded-full border text-sm font-bold ${isSelected
                                                 ? 'border-blue-600 bg-blue-600 text-white'
-                                                : isFinished
+                                                : !movable
                                                     ? 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
                                                     : 'border-gray-300 bg-white text-gray-600 hover:border-blue-400'
                                             }`}
-                                        title={isFinished ? 'Finished stops cannot be moved' : 'Select stop'}
+                                        title={movable ? 'Select stop' : 'Finished stops cannot be moved'}
                                     >
                                         {isSelected ? '✓' : index + 1}
                                     </button>
@@ -1720,38 +2035,6 @@ const ActiveRouteDetailPanel = ({
                         >
                             Save Route Completion
                         </button>
-                    </div>
-
-                    <div className="rounded-lg border border-gray-200 p-4">
-                        <p className="font-semibold text-gray-800">Manager Actions</p>
-                        <p className="mt-1 text-sm text-gray-500">Move selected unfinished stops to another date or technician.</p>
-                        <div className="mt-3 space-y-3">
-                            <DatePicker
-                                selected={moveDate}
-                                onChange={onMoveDateChange}
-                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                            />
-                            <select
-                                value={moveTechId}
-                                onChange={(event) => onMoveTechChange(event.target.value)}
-                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
-                            >
-                                <option value="">Select technician</option>
-                                {technicians.map(tech => (
-                                    <option key={tech.userId || tech.docId} value={tech.userId}>
-                                        {tech.userName}
-                                    </option>
-                                ))}
-                            </select>
-                            <button
-                                type="button"
-                                onClick={onMoveSelectedStops}
-                                disabled={!selectedCount || !moveTechId || isMovingStops}
-                                className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                            >
-                                {isMovingStops ? 'Moving...' : `Move ${selectedCount || ''} Selected Stop${selectedCount === 1 ? '' : 's'}`}
-                            </button>
-                        </div>
                     </div>
 
                     <div className="rounded-lg border border-gray-200 p-4">
@@ -2326,11 +2609,12 @@ const TechRouteCard = ({
     );
 };
 
-const ServiceStopTable = ({ stops, navigate, now }) => (
+const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggleStop }) => (
     <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
                 <tr>
+                    <th className='px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Move</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Customer</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Address</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Technician</th>
@@ -2344,6 +2628,8 @@ const ServiceStopTable = ({ stops, navigate, now }) => (
                 {stops.length > 0 ? stops.map(stop => {
                     const { start, end } = getStopTiming(stop);
                     const status = getStopDisplayStatus(stop);
+                    const isSelected = selectedStopIds.includes(stop.id);
+                    const movable = isStopMovable(stop);
 
                     return (
                         <tr
@@ -2351,6 +2637,25 @@ const ServiceStopTable = ({ stops, navigate, now }) => (
                             onClick={() => navigate(`/company/serviceStops/detail/${stop.id}`)}
                             className="cursor-pointer hover:bg-gray-50"
                         >
+                            <td className='px-4 py-3 whitespace-nowrap'>
+                                <button
+                                    type="button"
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        onToggleStop(stop);
+                                    }}
+                                    disabled={!movable}
+                                    className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
+                                            ? 'border-blue-600 bg-blue-600 text-white'
+                                            : movable
+                                                ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
+                                                : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                        }`}
+                                    title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
+                                >
+                                    {isSelected ? '✓' : '+'}
+                                </button>
+                            </td>
                             <td className='px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900'>
                                 {stop.customerName}
                             </td>
@@ -2380,7 +2685,7 @@ const ServiceStopTable = ({ stops, navigate, now }) => (
                     );
                 }) : (
                     <tr>
-                        <td colSpan="6" className="text-center py-10 text-gray-500">
+                        <td colSpan="7" className="text-center py-10 text-gray-500">
                             No service stops for the selected date.
                         </td>
                     </tr>

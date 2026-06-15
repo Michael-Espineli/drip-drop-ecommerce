@@ -3834,8 +3834,11 @@ const JobDetailView = () => {
 
   const handleSelectedBillingStatus = (opt) => {
     setSelectedBillingStatus(opt);
+    const nextBillingStatus = opt?.value;
+    if (!nextBillingStatus || nextBillingStatus === "Estimate") return;
+
     const nextOperationStatus = suggestOperationForBilling(
-      opt.value,
+      nextBillingStatus,
       selectedOperationStatus?.value || job.operationStatus || "Estimate Pending"
     );
     setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });

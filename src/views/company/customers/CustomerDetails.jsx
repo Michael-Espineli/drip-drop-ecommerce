@@ -57,6 +57,12 @@ const formatCents = (value) => {
     return Number.isFinite(amount) ? `$${amount.toFixed(2)}` : "$0.00";
 };
 
+const formatCentsDelta = (value) => {
+    const amount = Number(value || 0);
+    if (!amount) return 'No change';
+    return `${amount > 0 ? '+' : '-'}${formatCents(Math.abs(amount))}`;
+};
+
 const toMillis = (value) => {
     if (!value) return 0;
     if (typeof value.toMillis === 'function') return value.toMillis();
@@ -148,6 +154,7 @@ const statusToneFor = (status) => {
     if (['accepted', 'active', 'paid', 'posted'].includes(normalized)) return 'emerald';
     if (['sent', 'open', 'invoiced', 'viewed', 'estimate'].includes(normalized)) return 'blue';
     if (['draft', 'pending', 'pastdue', 'past due', 'overdue'].includes(normalized)) return 'amber';
+    if (['superseded'].includes(normalized)) return 'slate';
     if (['rejected', 'canceled', 'cancelled', 'failed', 'void', 'expired'].includes(normalized)) return 'rose';
     return 'slate';
 };
@@ -2110,6 +2117,45 @@ const SalesActivitySection = ({ customer }) => {
     const latestInvoices = salesData.invoices.slice(0, 4);
     const latestSubscriptions = salesData.subscriptions.slice(0, 3);
     const latestPayments = salesData.payments.slice(0, 4);
+    const agreementHistory = useMemo(() => {
+        const groupedAgreements = new Map();
+
+        salesData.agreements.forEach((agreement) => {
+            const groupId = agreement.agreementHistoryGroupId
+                || agreement.supersedesAgreementId
+                || agreement.previousAgreementId
+                || agreement.id;
+
+            if (!groupedAgreements.has(groupId)) groupedAgreements.set(groupId, []);
+            groupedAgreements.get(groupId).push(agreement);
+        });
+
+        const history = [];
+
+        groupedAgreements.forEach((groupAgreements) => {
+            const sortedAgreements = [...groupAgreements].sort((left, right) => {
+                const leftDate = toMillis(left.startDate || left.acceptedAt || left.sentAt || left.createdAt || left.updatedAt);
+                const rightDate = toMillis(right.startDate || right.acceptedAt || right.sentAt || right.createdAt || right.updatedAt);
+                return leftDate - rightDate;
+            });
+
+            sortedAgreements.forEach((agreement, index) => {
+                const amountCents = Number(agreement.totalAmountCents ?? agreement.rateAmountCents ?? 0);
+                const previousAmountCents = index > 0
+                    ? Number(sortedAgreements[index - 1].totalAmountCents ?? sortedAgreements[index - 1].rateAmountCents ?? 0)
+                    : null;
+
+                history.push({
+                    agreement,
+                    amountCents,
+                    effectiveAt: agreement.startDate || agreement.acceptedAt || agreement.sentAt || agreement.createdAt || agreement.updatedAt,
+                    rateDeltaCents: previousAmountCents === null ? null : amountCents - previousAmountCents,
+                });
+            });
+        });
+
+        return history.sort((left, right) => toMillis(right.effectiveAt) - toMillis(left.effectiveAt));
+    }, [salesData.agreements]);
 
     return (
         <InfoCard title="Sales & Billing">
@@ -2160,6 +2206,48 @@ const SalesActivitySection = ({ customer }) => {
                             </div>
                         </div>
                     )}
+
+                    <SalesRecordList title="Service Agreement History" empty="No service agreement history found.">
+                        {agreementHistory.map(({ agreement, amountCents, effectiveAt, rateDeltaCents }) => {
+                            const statusKey = String(agreement.status || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+                            const endLabel = agreement.endDate
+                                ? formatDateValue(agreement.endDate)
+                                : statusKey === 'accepted'
+                                    ? 'Current'
+                                    : 'Open';
+                            const deltaTone = rateDeltaCents > 0
+                                ? 'text-amber-700'
+                                : rateDeltaCents < 0
+                                    ? 'text-emerald-700'
+                                    : 'text-slate-500';
+
+                            return (
+                                <Link
+                                    key={agreement.id}
+                                    to={`/company/sales/agreements/${agreement.id}`}
+                                    className="flex flex-col gap-3 p-3 transition hover:bg-slate-50 sm:flex-row sm:items-center sm:justify-between"
+                                >
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-900">
+                                            {agreement.title || 'Service Agreement'}
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            {formatDateValue(effectiveAt)} - {endLabel} • v{agreement.agreementVersion || 1}
+                                        </p>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
+                                        <div className="min-w-[7rem] sm:text-right">
+                                            <p className="text-sm font-semibold text-slate-900">{formatCents(amountCents)}</p>
+                                            <p className={`mt-0.5 text-xs font-semibold ${deltaTone}`}>
+                                                {rateDeltaCents === null ? 'Starting rate' : formatCentsDelta(rateDeltaCents)}
+                                            </p>
+                                        </div>
+                                        <StatusBadge tone={statusToneFor(agreement.status)}>{labelize(agreement.status)}</StatusBadge>
+                                    </div>
+                                </Link>
+                            );
+                        })}
+                    </SalesRecordList>
 
                     <div className="grid gap-5 xl:grid-cols-2">
                         <SalesRecordList title="Service Agreements" empty="No service agreements found.">

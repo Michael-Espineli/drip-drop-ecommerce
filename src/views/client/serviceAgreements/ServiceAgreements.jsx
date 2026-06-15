@@ -53,6 +53,7 @@ const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amo
 
 const statusTone = {
   accepted: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+  superseded: 'border-violet-200 bg-violet-50 text-violet-700',
   sent: 'border-sky-200 bg-sky-50 text-sky-700',
   revised: 'border-amber-200 bg-amber-50 text-amber-700',
   draft: 'border-slate-200 bg-slate-50 text-slate-700',

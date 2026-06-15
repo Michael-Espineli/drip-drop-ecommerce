@@ -1,5 +1,4 @@
 import { DripDropStoredImage } from "./DripDropStoredImage";
-import { format } from 'date-fns/format';
 
 export const EQUIPMENT_STATUS = {
   OPERATIONAL: "Operational",
@@ -40,6 +39,7 @@ export class Equipment {
     customerId = "",
     customerName = "",
     dateInstalled = null,
+    dateUninstalled = null,
     lastServiceDate = null,
     make = "",
     makeId = "",
@@ -69,6 +69,7 @@ export class Equipment {
     this.customerName = customerName;
     this.isActive = isActive;
     this.dateInstalled = dateInstalled;
+    this.dateUninstalled = dateUninstalled;
     this.lastServiceDate = lastServiceDate;
     this.make = make;
     this.makeId = makeId;
@@ -98,6 +99,7 @@ export class Equipment {
       customerId: this.customerId,
       customerName: this.customerName,
       dateInstalled: this.dateInstalled,
+      dateUninstalled: this.dateUninstalled,
       lastServiceDate: this.lastServiceDate,
       make: this.make,
       makeId: this.makeId,
@@ -140,6 +142,7 @@ export class Equipment {
       customerId: data.customerId || "",
       customerName: data.customerName || "",
       dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
+      dateUninstalled: data.dateUninstalled ? data.dateUninstalled.toDate() : null,
       lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,
       make: data.make || "",
       makeId: data.makeId || "",

@@ -1,19 +1,32 @@
 
 import React, { useState, useContext, useEffect } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { collection, addDoc, doc, getDoc, query, where, getDocs, orderBy, setDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
+import { EQUIPMENT_STATUS } from '../../../utils/models/Equipment';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
+const getDateFromReplacementContext = (value) => {
+    if (!value) return new Date();
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
+};
+
 const CreateNewEquipment = () => {
     const navigate = useNavigate();
+    const location = useLocation();
     const { recentlySelectedCompany } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     const { customerId: customerIdParam, locationId: locationIdParam, bodyOfWaterId: bodyOfWaterIdParam } = useParams();
+    const replacementContext = location.state?.replacementContext || null;
+    const isReplacementFlow = Boolean(replacementContext?.replacesEquipmentId);
+    const customerIdToLoad = customerIdParam || replacementContext?.customerId || '';
+    const locationIdToLoad = locationIdParam || replacementContext?.serviceLocationId || '';
+    const bodyOfWaterIdToLoad = bodyOfWaterIdParam || replacementContext?.bodyOfWaterId || '';
 
     // Form State
     const [name, setName] = useState('');
@@ -48,7 +61,7 @@ const CreateNewEquipment = () => {
         const fetchData = async () => {
             if (recentlySelectedCompany) {
                 // Fetch customers if no specific customer is passed in params
-                if (!customerIdParam) {
+                if (!customerIdToLoad) {
                     const custQuery = query(collection(db, 'companies', recentlySelectedCompany, 'customers'), orderBy("firstName"), where('active', '==', true));
                     const custSnapshot = await getDocs(custQuery);
                     const customerData = custSnapshot.docs.map(doc => ({ ...Customer.fromFirestore(doc), value: doc.id, label: `${doc.data().firstName} ${doc.data().lastName}` }));
@@ -61,36 +74,36 @@ const CreateNewEquipment = () => {
             }
         };
         fetchData();
-    }, [recentlySelectedCompany, customerIdParam]);
+    }, [recentlySelectedCompany, customerIdToLoad]);
 
     // Handle param-based data loading
     useEffect(() => {
         const loadParamData = async () => {
-            if (customerIdParam && recentlySelectedCompany) {
-                const custRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerIdParam);
+            if (customerIdToLoad && recentlySelectedCompany) {
+                const custRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerIdToLoad);
                 const custSnap = await getDoc(custRef);
                 if (custSnap.exists()) setSelectedCustomer({ ...custSnap.data(), value: custSnap.id, label: `${custSnap.data().firstName} ${custSnap.data().lastName}` });
             }
-            if (locationIdParam && recentlySelectedCompany) {
-                const locRef = doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', locationIdParam);
+            if (locationIdToLoad && recentlySelectedCompany) {
+                const locRef = doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', locationIdToLoad);
                 const locSnap = await getDoc(locRef);
                 if (locSnap.exists()) {
                     setSelectedLocation({ ...locSnap.data(), value: locSnap.id, label: locSnap.data().address.streetAddress });
                 }
             }
-            if (bodyOfWaterIdParam && recentlySelectedCompany) {
-                const bowRef = doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', bodyOfWaterIdParam);
+            if (bodyOfWaterIdToLoad && recentlySelectedCompany) {
+                const bowRef = doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', bodyOfWaterIdToLoad);
                 const bowSnap = await getDoc(bowRef);
                 if (bowSnap.exists()) setSelectedBodyOfWater({ ...bowSnap.data(), value: bowSnap.id, label: bowSnap.data().name });
             }
         };
         loadParamData();
-    }, [customerIdParam, locationIdParam, bodyOfWaterIdParam, recentlySelectedCompany]);
+    }, [customerIdToLoad, locationIdToLoad, bodyOfWaterIdToLoad, recentlySelectedCompany]);
 
 
     // Dependent dropdown logic
     useEffect(() => {
-        if (selectedCustomer && recentlySelectedCompany && !locationIdParam) {
+        if (selectedCustomer && recentlySelectedCompany && !locationIdToLoad) {
             const fetchLocations = async () => {
                 const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', selectedCustomer.value));
                 const locSnapshot = await getDocs(locQuery);
@@ -100,10 +113,10 @@ const CreateNewEquipment = () => {
             };
             fetchLocations();
         }
-    }, [selectedCustomer, recentlySelectedCompany, locationIdParam]);
+    }, [selectedCustomer, recentlySelectedCompany, locationIdToLoad]);
 
     useEffect(() => {
-        if (selectedLocation && recentlySelectedCompany && !bodyOfWaterIdParam) {
+        if (selectedLocation && recentlySelectedCompany && !bodyOfWaterIdToLoad) {
             const fetchBOWs = async () => {
                 const bowQuery = query(collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'), where('serviceLocationId', '==', selectedLocation.value));
                 const bowSnapshot = await getDocs(bowQuery);
@@ -114,7 +127,7 @@ const CreateNewEquipment = () => {
             };
             fetchBOWs();
         }
-    }, [selectedLocation, recentlySelectedCompany, bodyOfWaterIdParam]);
+    }, [selectedLocation, recentlySelectedCompany, bodyOfWaterIdToLoad]);
 
     useEffect(() => {
         if (category && category.value !== 'Other') {
@@ -250,12 +263,34 @@ const CreateNewEquipment = () => {
                 lastServiceDate: null,
                 nextServiceDate: null,
                 isActive: true,
+                active: true,
+                dateUninstalled: null,
                 needsService: false,
-                status: 'Operational',
-                currentPressure: null
+                status: EQUIPMENT_STATUS.OPERATIONAL,
+                currentPressure: null,
+                ...(isReplacementFlow ? {
+                    replacesEquipmentId: replacementContext.replacesEquipmentId,
+                    replacedEquipmentName: replacementContext.replacedEquipmentName || '',
+                } : {})
             };
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
             await copyCatalogPartsToEquipment(equipmentId, catalogEquipmentId);
+            if (isReplacementFlow) {
+                await updateDoc(
+                    doc(db, 'companies', recentlySelectedCompany, 'equipment', replacementContext.replacesEquipmentId),
+                    {
+                        isActive: false,
+                        active: false,
+                        dateUninstalled: getDateFromReplacementContext(replacementContext.dateUninstalled),
+                        needsService: false,
+                        nextServiceDate: null,
+                        status: EQUIPMENT_STATUS.REPLACED,
+                        replacedByEquipmentId: equipmentId,
+                        replacementJobId: '',
+                        replacementTaskId: '',
+                    }
+                );
+            }
             navigate(`/company/equipment/detail/${equipmentId}`);
         } catch (error) {
             console.error("Error creating new equipment: ", error);
@@ -272,13 +307,18 @@ const CreateNewEquipment = () => {
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
             <div className="max-w-screen-xl mx-auto">
                 <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-3xl font-bold text-gray-800">Create New Equipment</h2>
-                    <Link to={'/company/equipment'} className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition'>
+                    <h2 className="text-3xl font-bold text-gray-800">{isReplacementFlow ? 'Create Replacement Equipment' : 'Create New Equipment'}</h2>
+                    <Link to={isReplacementFlow ? `/company/equipment/detail/${replacementContext.replacesEquipmentId}` : '/company/equipment'} className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition'>
                         Cancel
                     </Link>
                 </div>
 
                 <form onSubmit={handleCreate} className="bg-white shadow-lg rounded-xl p-6 space-y-6">
+                    {isReplacementFlow && (
+                        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+                            This equipment will replace {replacementContext.replacedEquipmentName || 'the selected equipment'}.
+                        </div>
+                    )}
                     {/* Section 1: Customer and Location */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6 border-b pb-6">
                         <h3 className="text-lg font-semibold text-gray-700 md:col-span-3">Owner Details</h3>
@@ -288,7 +328,7 @@ const CreateNewEquipment = () => {
                             onChange={setSelectedCustomer}
                             placeholder="Select a Customer..."
                             styles={selectStyles}
-                            isDisabled={!!customerIdParam}
+                            isDisabled={!!customerIdToLoad}
                         />
                         <Select
                             value={selectedLocation}
@@ -296,7 +336,7 @@ const CreateNewEquipment = () => {
                             onChange={setSelectedLocation}
                             placeholder="Select a Service Location..."
                             styles={selectStyles}
-                            isDisabled={!selectedCustomer || !!locationIdParam}
+                            isDisabled={!selectedCustomer || !!locationIdToLoad}
                         />
                         <Select
                             value={selectedBodyOfWater}
@@ -304,7 +344,7 @@ const CreateNewEquipment = () => {
                             onChange={setSelectedBodyOfWater}
                             placeholder="Select a Body of Water..."
                             styles={selectStyles}
-                            isDisabled={!selectedLocation || !!bodyOfWaterIdParam}
+                            isDisabled={!selectedLocation || !!bodyOfWaterIdToLoad}
                         />
                     </div>
 
@@ -373,7 +413,7 @@ const CreateNewEquipment = () => {
 
                     <div className="flex justify-end pt-4">
                         <button type="submit" className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition">
-                            Create Equipment
+                            {isReplacementFlow ? 'Create Replacement Equipment' : 'Create Equipment'}
                         </button>
                     </div>
                 </form>

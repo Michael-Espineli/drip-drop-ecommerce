@@ -4,6 +4,8 @@ import {
   SalesBillingMode,
   SalesBillingCollectionMethod,
   SalesBillingSubscriptionStatus,
+  SalesAgreementStatus,
+  SalesAgreementChemicalBillingMode,
   salesCollectionNames,
 } from '../models/Sales';
 import {
@@ -16,6 +18,44 @@ import {
 } from './agreementCadence';
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const renewalPreviousAgreementId = (agreement = {}) => (
+  agreement.supersedesAgreementId ||
+  agreement.previousAgreementId ||
+  agreement.renewalSourceAgreementId ||
+  ''
+);
+
+const agreementHistoryGroupId = (agreement = {}) => (
+  agreement.agreementHistoryGroupId ||
+  renewalPreviousAgreementId(agreement) ||
+  agreement.id ||
+  ''
+);
+
+const activeStripeStatusKeys = new Set(['active', 'trialing', 'pastdue', 'unpaid', 'paused']);
+
+const supersededSubscriptionUpdates = (subscription = {}, timestamp) => {
+  const hasStripeSubscription = Boolean(subscription.stripeSubscriptionId);
+  const statusKey = normalizeStatus(subscription.stripeStatus || subscription.status);
+  const keepStripeManagedStatus = hasStripeSubscription && activeStripeStatusKeys.has(statusKey);
+
+  return {
+    supersededAt: timestamp,
+    manualBillingEnabled: false,
+    manualBillingStatus: 'disabledSupersededAgreement',
+    manualBillingReason: 'agreementSuperseded',
+    nextAction: keepStripeManagedStatus ? 'reviewStripeSubscriptionAfterRenewal' : 'agreementSuperseded',
+    ...(keepStripeManagedStatus
+      ? {}
+      : {
+        status: SalesBillingSubscriptionStatus.canceled,
+        autopayStatus: SalesAutopayStatus.canceled,
+        canceledAt: timestamp,
+      }),
+    updatedAt: timestamp,
+  };
+};
 
 const copyLineItemsForBilling = (lineItems = []) => (
   Array.isArray(lineItems)
@@ -36,6 +76,12 @@ const copyLineItemsForBilling = (lineItems = []) => (
       metadata: item.metadata || {},
     }))
     : []
+);
+
+const copyList = (value) => (
+  Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean)
+    : String(value || '').split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
 );
 
 export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = {}) => {
@@ -89,6 +135,10 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     serviceCadenceCount,
     serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
     serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+    previousAgreementId: agreement.previousAgreementId || agreement.supersedesAgreementId || '',
+    supersedesAgreementId: agreement.supersedesAgreementId || agreement.previousAgreementId || '',
+    agreementHistoryGroupId: agreementHistoryGroupId(agreement),
+    agreementVersion: Math.max(Number(agreement.agreementVersion || 1), 1),
     recurringServiceStopId: agreement.recurringServiceStopId || '',
     recurringRouteId: agreement.recurringRouteId || '',
     recurringRouteName: agreement.recurringRouteName || '',
@@ -98,6 +148,14 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
     paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
     invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || 'email',
     lineItems,
+    chemicalBillingMode: agreement.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
+    includedChemicalIds: copyList(agreement.includedChemicalIds),
+    includedChemicalKeywords: copyList(agreement.includedChemicalKeywords),
+    separatelyBilledChemicalIds: copyList(agreement.separatelyBilledChemicalIds),
+    separatelyBilledChemicalKeywords: copyList(agreement.separatelyBilledChemicalKeywords),
+    customerPurchasedChemicalIds: copyList(agreement.customerPurchasedChemicalIds),
+    customerPurchasedChemicalKeywords: copyList(agreement.customerPurchasedChemicalKeywords),
+    chemicalBillingNotes: agreement.chemicalBillingNotes || '',
     agreementSnapshot: {
       agreementId: agreement.id,
       title: agreement.title || 'Service Agreement',
@@ -117,11 +175,23 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
       serviceCadenceCount: String(serviceCadenceCount),
       serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? agreement.serviceDaysOfWeek : [],
       serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+      previousAgreementId: agreement.previousAgreementId || agreement.supersedesAgreementId || '',
+      supersedesAgreementId: agreement.supersedesAgreementId || agreement.previousAgreementId || '',
+      agreementHistoryGroupId: agreementHistoryGroupId(agreement),
+      agreementVersion: String(Math.max(Number(agreement.agreementVersion || 1), 1)),
       recurringServiceStopId: agreement.recurringServiceStopId || '',
       recurringRouteId: agreement.recurringRouteId || '',
       recurringRouteName: agreement.recurringRouteName || '',
       operationsSetupStatus: agreement.operationsSetupStatus || '',
       operationsSetupReason: agreement.operationsSetupReason || '',
+      chemicalBillingMode: agreement.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
+      includedChemicalIds: copyList(agreement.includedChemicalIds),
+      includedChemicalKeywords: copyList(agreement.includedChemicalKeywords),
+      separatelyBilledChemicalIds: copyList(agreement.separatelyBilledChemicalIds),
+      separatelyBilledChemicalKeywords: copyList(agreement.separatelyBilledChemicalKeywords),
+      customerPurchasedChemicalIds: copyList(agreement.customerPurchasedChemicalIds),
+      customerPurchasedChemicalKeywords: copyList(agreement.customerPurchasedChemicalKeywords),
+      chemicalBillingNotes: agreement.chemicalBillingNotes || '',
     },
     checkoutSessionId: '',
     checkoutUrl: '',
@@ -214,6 +284,10 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       serviceCadenceCount: subscription.serviceCadenceCount,
       serviceDaysOfWeek: subscription.serviceDaysOfWeek,
       serviceFrequencyLabel: subscription.serviceFrequencyLabel,
+      previousAgreementId: subscription.previousAgreementId,
+      supersedesAgreementId: subscription.supersedesAgreementId,
+      agreementHistoryGroupId: subscription.agreementHistoryGroupId,
+      agreementVersion: subscription.agreementVersion,
       recurringServiceStopId: subscription.recurringServiceStopId,
       recurringRouteId: subscription.recurringRouteId,
       recurringRouteName: subscription.recurringRouteName,
@@ -223,6 +297,14 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       paymentTerms: subscription.paymentTerms,
       invoiceDeliveryMethod: subscription.invoiceDeliveryMethod,
       lineItems: subscription.lineItems,
+      chemicalBillingMode: subscription.chemicalBillingMode,
+      includedChemicalIds: subscription.includedChemicalIds,
+      includedChemicalKeywords: subscription.includedChemicalKeywords,
+      separatelyBilledChemicalIds: subscription.separatelyBilledChemicalIds,
+      separatelyBilledChemicalKeywords: subscription.separatelyBilledChemicalKeywords,
+      customerPurchasedChemicalIds: subscription.customerPurchasedChemicalIds,
+      customerPurchasedChemicalKeywords: subscription.customerPurchasedChemicalKeywords,
+      chemicalBillingNotes: subscription.chemicalBillingNotes,
       agreementSnapshot: subscription.agreementSnapshot,
       checkoutStatus: hasStripeSubscription ? existingSubscription.checkoutStatus : subscription.checkoutStatus,
       nextAction: hasStripeSubscription ? existingSubscription.nextAction : subscription.nextAction,
@@ -258,27 +340,66 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
       updatedAt: serverTimestamp(),
     };
 
-    transaction.set(subscriptionRef, nextSubscription, { merge: true });
     const willBeAccepted = normalizeStatus(options.agreementUpdates?.status || currentAgreement.status) === 'accepted';
+    const acceptedTimestamp = options.agreementUpdates?.acceptedAt || serverTimestamp();
+    const previousAgreementId = willBeAccepted ? renewalPreviousAgreementId(currentAgreement) : '';
+    const historyGroupId = agreementHistoryGroupId(currentAgreement);
+    let previousAgreementRef = null;
+    let previousAgreement = null;
+    let previousSubscriptionRef = null;
+    let previousSubscription = null;
+
+    if (previousAgreementId && previousAgreementId !== currentAgreement.id) {
+      previousAgreementRef = doc(db, salesCollectionNames.agreements, previousAgreementId);
+      const previousAgreementSnap = await transaction.get(previousAgreementRef);
+      if (previousAgreementSnap.exists()) {
+        previousAgreement = { id: previousAgreementSnap.id, ...previousAgreementSnap.data() };
+        if (previousAgreement.billingSubscriptionId) {
+          previousSubscriptionRef = doc(db, salesCollectionNames.billingSubscriptions, previousAgreement.billingSubscriptionId);
+          const previousSubscriptionSnap = await transaction.get(previousSubscriptionRef);
+          if (previousSubscriptionSnap.exists()) {
+            previousSubscription = { id: previousSubscriptionSnap.id, ...previousSubscriptionSnap.data() };
+          }
+        }
+      }
+    }
+
     const operationsSetupUpdates = willBeAccepted
       ? {
         operationsSetupStatus: currentAgreement.operationsSetupStatus || 'needsRecurringServiceStop',
         operationsSetupReason: currentAgreement.operationsSetupReason || 'acceptedServiceAgreement',
-        operationsSetupUpdatedAt: serverTimestamp(),
+        operationsSetupUpdatedAt: acceptedTimestamp,
+      }
+      : {};
+    const renewalActivationUpdates = willBeAccepted
+      ? {
+        agreementHistoryGroupId: historyGroupId,
+        agreementVersion: Math.max(Number(currentAgreement.agreementVersion || 1), 1),
+        activatedAt: currentAgreement.activatedAt || acceptedTimestamp,
+        startDate: currentAgreement.startDate || acceptedTimestamp,
+        ...(previousAgreementId
+          ? {
+            previousAgreementId,
+            supersedesAgreementId: previousAgreementId,
+            previousAgreementEndedAt: acceptedTimestamp,
+          }
+          : {}),
       }
       : {};
 
+    transaction.set(subscriptionRef, nextSubscription, { merge: true });
     transaction.update(agreementRef, {
       billingSubscriptionId: subscription.id,
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
-      billingFlowUpdatedAt: serverTimestamp(),
+      billingFlowUpdatedAt: acceptedTimestamp,
       billingCollectionMethod: nextSubscription.billingCollectionMethod,
       autopayStatus: nextSubscription.autopayStatus,
       manualBillingEnabled: nextSubscription.manualBillingEnabled,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       ...operationsSetupUpdates,
-      updatedAt: serverTimestamp(),
+      ...renewalActivationUpdates,
+      updatedAt: acceptedTimestamp,
       ...options.agreementUpdates,
       acceptedSnapshot: {
         ...(currentAgreement.acceptedSnapshot || {}),
@@ -291,6 +412,28 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
         manualBillingEnabled: nextSubscription.manualBillingEnabled,
       },
     });
+
+    if (previousAgreementRef && previousAgreement) {
+      transaction.update(previousAgreementRef, {
+        status: SalesAgreementStatus.superseded,
+        endDate: currentAgreement.startDate || acceptedTimestamp,
+        supersededAt: acceptedTimestamp,
+        supersededByAgreementId: currentAgreement.id,
+        supersededByAgreementTitle: currentAgreement.title || 'Service Agreement',
+        agreementHistoryGroupId: historyGroupId,
+        updatedAt: acceptedTimestamp,
+        statusChangedAt: acceptedTimestamp,
+        statusChangeReason: 'Superseded by accepted renewal agreement.',
+      });
+    }
+
+    if (previousSubscriptionRef && previousSubscription) {
+      transaction.update(previousSubscriptionRef, {
+        ...supersededSubscriptionUpdates(previousSubscription, acceptedTimestamp),
+        supersededByAgreementId: currentAgreement.id,
+        supersededByBillingSubscriptionId: subscription.id,
+      });
+    }
   });
 
   return subscription;

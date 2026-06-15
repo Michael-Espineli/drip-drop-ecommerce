@@ -26,6 +26,38 @@ const DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID = "d-866f4368544048aeabf108413f8b8c5
 const APP_LIVE_FEATURE_FLAG_ID = "feature_flag_000";
 const BASE_TECHNICIAN_RATE_ID = "base_technician_default";
 const BASE_TECHNICIAN_RATE_COPY_PLAN_ID = "base_technician_default_copy";
+const DEFAULT_ONBOARDING_CHECKLIST_ITEMS = [
+  {
+    id: "default_invite_access",
+    name: "Confirm company access",
+    description: "Verify the user accepted the invite and can access the selected company.",
+    sortOrder: 10,
+  },
+  {
+    id: "default_profile",
+    name: "Complete profile",
+    description: "Confirm name, email, phone, photo, and basic profile details are filled in.",
+    sortOrder: 20,
+  },
+  {
+    id: "default_role_permissions",
+    name: "Review role and permissions",
+    description: "Assign the correct company role and confirm the user has the access they need.",
+    sortOrder: 30,
+  },
+  {
+    id: "default_payroll",
+    name: "Review payroll setup",
+    description: "Confirm worker type, rate sheet, payroll settings, and any required tax paperwork.",
+    sortOrder: 40,
+  },
+  {
+    id: "default_field_training",
+    name: "Complete field orientation",
+    description: "Review route workflow, service stop expectations, photos, notes, safety, and chemical handling.",
+    sortOrder: 50,
+  },
+];
 
 const isCompanyCreationEnabled = async () => {
   const flagDoc = await getFirestore()
@@ -93,6 +125,103 @@ const copyBaseTechnicianRatesToCompanyUser = async ({ firestore, companyId, tech
 
     batch.set(ratesRef.doc(rateId), copiedRate, { merge: true });
     existingKeys.add(copyKey);
+    copiedCount += 1;
+  });
+
+  return copiedCount;
+};
+
+const onboardingTemplateItemsRef = (firestore, companyId) => (
+  firestore
+    .collection("companies")
+    .doc(companyId)
+    .collection("settings")
+    .doc("onboardingChecklist")
+    .collection("items")
+);
+
+const companyUserOnboardingItemsRef = (firestore, companyId, companyUserId) => (
+  firestore
+    .collection("companies")
+    .doc(companyId)
+    .collection("companyUsers")
+    .doc(companyUserId)
+    .collection("onboardingChecklist")
+);
+
+const ensureCompanyOnboardingChecklistTemplates = async ({ firestore, companyId, now }) => {
+  if (!firestore || !companyId) return 0;
+
+  const templateRef = onboardingTemplateItemsRef(firestore, companyId);
+  const existingTemplateSnap = await templateRef.limit(1).get();
+  if (!existingTemplateSnap.empty) return 0;
+
+  const templateBatch = firestore.batch();
+  DEFAULT_ONBOARDING_CHECKLIST_ITEMS.forEach((item) => {
+    templateBatch.set(templateRef.doc(item.id), {
+      ...item,
+      active: true,
+      createdAt: now,
+      updatedAt: now,
+    }, { merge: true });
+  });
+  await templateBatch.commit();
+  return DEFAULT_ONBOARDING_CHECKLIST_ITEMS.length;
+};
+
+const copyOnboardingChecklistToCompanyUser = async ({
+  firestore,
+  companyId,
+  companyUserId,
+  batch,
+  now,
+  actorUserId,
+}) => {
+  if (!firestore || !companyId || !companyUserId || !batch) return 0;
+
+  await ensureCompanyOnboardingChecklistTemplates({ firestore, companyId, now });
+
+  const [templateSnap, existingUserItemsSnap] = await Promise.all([
+    onboardingTemplateItemsRef(firestore, companyId).orderBy("sortOrder", "asc").get(),
+    companyUserOnboardingItemsRef(firestore, companyId, companyUserId).get(),
+  ]);
+  const existingTemplateIds = new Set(
+    existingUserItemsSnap.docs
+      .map((itemDoc) => {
+        const item = itemDoc.data() || {};
+        return item.templateItemId || item.id || itemDoc.id;
+      })
+      .filter(Boolean)
+  );
+  const userItemsRef = companyUserOnboardingItemsRef(firestore, companyId, companyUserId);
+  let copiedCount = 0;
+
+  templateSnap.docs.forEach((templateDoc) => {
+    const template = templateDoc.data() || {};
+    if (template.active === false || existingTemplateIds.has(templateDoc.id)) return;
+
+    const userItem = removeUndefinedDeep({
+      id: templateDoc.id,
+      templateItemId: templateDoc.id,
+      name: template.name || "",
+      description: template.description || "",
+      sortOrder: Number(template.sortOrder || 0),
+      isComplete: false,
+      dateCompleted: null,
+      completedAt: null,
+      completedByUserId: "",
+      completedByName: "",
+      companyId,
+      companyUserId,
+      copiedFromTemplate: true,
+      createdAt: now,
+      createdByUserId: actorUserId || "",
+      updatedAt: now,
+      updatedByUserId: actorUserId || "",
+    });
+
+    batch.set(userItemsRef.doc(templateDoc.id), userItem, { merge: true });
+    existingTemplateIds.add(templateDoc.id);
     copiedCount += 1;
   });
 
@@ -5028,6 +5157,14 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       now,
       actorUserId: authUserId,
     });
+    const onboardingItemsCopied = await copyOnboardingChecklistToCompanyUser({
+      firestore: db,
+      companyId: invite.companyId,
+      companyUserId: userId,
+      batch,
+      now,
+      actorUserId: authUserId,
+    });
 
     await batch.commit();
 
@@ -5037,6 +5174,7 @@ exports.acceptTechInvite = functions.https.onCall(async (data, context) => {
       userId: userId,
       companyId: invite.companyId,
       baseTechnicianRatesCopied,
+      onboardingItemsCopied,
       account: "Successfully Accepted"
     };
   } catch (error) {
@@ -5074,14 +5212,22 @@ exports.populateBaseTechnicianRatesOnCompanyUserCreate = functions1.firestore
       now,
       actorUserId: companyUser.createdByUserId || companyUser.updatedByUserId || "",
     });
+    const onboardingItemsCopied = await copyOnboardingChecklistToCompanyUser({
+      firestore,
+      companyId,
+      companyUserId,
+      batch,
+      now,
+      actorUserId: companyUser.createdByUserId || companyUser.updatedByUserId || "",
+    });
 
-    if (copiedCount === 0) {
-      return { copiedCount: 0 };
+    if (copiedCount === 0 && onboardingItemsCopied === 0) {
+      return { copiedCount: 0, onboardingItemsCopied: 0 };
     }
 
     await batch.commit();
-    console.log(`Copied ${copiedCount} base technician rate(s) for company user ${technicianId} in company ${companyId}.`);
-    return { copiedCount };
+    console.log(`Copied ${copiedCount} base technician rate(s) and ${onboardingItemsCopied} onboarding item(s) for company user ${technicianId} in company ${companyId}.`);
+    return { copiedCount, onboardingItemsCopied };
   });
 
 exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, context) => {

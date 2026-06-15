@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { collection, getDocs, query, where } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import {
@@ -13,6 +13,7 @@ import {
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
+import { estimateServiceStopPaySummary } from "../../../utils/payroll/payEstimate";
 import {
   customerHasAnyTag,
   filterCustomersByRoleTagAccess,
@@ -20,6 +21,10 @@ import {
   getCustomerTagOptions,
   getRoleCustomerTagAccess,
 } from "../../../utils/customerTags";
+import {
+  ChemicalBillingTreatment,
+  classifyAgreementChemicalBilling,
+} from "../../../utils/sales/chemicalBilling";
 
 const reportCategories = [
   { value: "operations", label: "Operations" },
@@ -31,17 +36,18 @@ const reportCatalog = [
   { value: "readings", label: "Readings Summary", status: "Ready", source: "stopData readings", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
   { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
+  { value: "pnlPerPool", label: "PNL Per Pool", status: "Ready", source: "service agreements, labor, chemicals", category: "performance" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
   { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
   { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll", category: "operations" },
   { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll", category: "operations" },
   { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes", category: "operations" },
   { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items", category: "finance" },
-  { value: "pnl", label: "P.N.L.", status: "Ready", source: "jobs, purchases, payroll", category: "finance" },
+  { value: "pnl", label: "P.N.L.", status: "Ready", source: "service agreements, jobs, purchases, payroll", category: "finance" },
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
-const fixedGroupingReportTypes = new Set(["readingHealth", "readingPerformance"]);
+const fixedGroupingReportTypes = new Set(["readingHealth", "readingPerformance", "pnlPerPool"]);
 
 const readingPerformanceViewOptions = [
   { value: "users", label: "Users" },
@@ -64,11 +70,25 @@ const dateRangeFromDates = (start, end) => ({
 const displayDateInputValue = (value) => {
   if (!value) return "-";
   const parsed = new Date(`${value}T00:00:00`);
-  return Number.isNaN(parsed.getTime()) ? String(value) : format(parsed, "MM/dd/yyyy");
+  return Number.isNaN(parsed.getTime()) ? String(value) : format(parsed, "M/d/yyyy");
 };
 
 const displayDateRange = ({ start, end } = {}) =>
   `${displayDateInputValue(start)} - ${displayDateInputValue(end)}`;
+
+const displayDateRangeFromValues = (start, end) => {
+  const normalizeDisplayDate = (value) => {
+    if (!value) return null;
+    if (value?.toDate) return value.toDate();
+    if (value instanceof Date) return value;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  };
+  const startDate = normalizeDisplayDate(start);
+  const endDate = normalizeDisplayDate(end);
+  if (!startDate || !endDate) return "";
+  return `${format(startDate, "M/d/yyyy")} - ${format(endDate, "M/d/yyyy")}`;
+};
 
 const dateRangePresets = [
   { value: "custom", label: "Custom", getRange: null },
@@ -351,13 +371,16 @@ const workerDisplayName = (record = {}, fallback = "-") =>
   record.userId ||
   fallback;
 
-const assignedRssWorkerName = (recurringStop = {}, serviceStop = {}) => {
+const serviceWorkerDisplayName = (stop = {}, serviceStop = {}, fallback = "-") =>
+  workerDisplayName(stop, workerDisplayName(serviceStop, fallback));
+
+const assignedRssWorkerName = (recurringStop = {}, serviceStop = {}, fallback = "") => {
   const assignedName = workerDisplayName(recurringStop, "");
   if (assignedName) return assignedName;
   if (recurringStop.techId || recurringStop.userId || recurringStop.technicianId) {
     return recurringStop.techId || recurringStop.userId || recurringStop.technicianId;
   }
-  return serviceStop.recurringServiceStopId || recurringStop.id ? "Unassigned" : "";
+  return fallback;
 };
 
 const ensureGroup = (groups, group) => {
@@ -569,6 +592,350 @@ const jobRevenueCents = (job) => cents(job.revenueCents ?? job.invoiceTotalCents
 const jobLaborCostCents = (job) => cents(job.laborCostCents ?? job.laborCost ?? 0);
 const payrollLineCents = (line) => cents(line.totalAmountCents ?? line.amountCents ?? line.payCents ?? 0);
 
+const firstPresent = (...values) =>
+  values.find((value) => value !== null && value !== undefined && value !== "");
+
+const moneyNumber = (value) => {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+  const parsed = Number(String(value).replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const centsField = (...values) => Math.round(moneyNumber(firstPresent(...values)));
+const dollarFieldToCents = (...values) => Math.round(moneyNumber(firstPresent(...values)) * 100);
+
+const reportStatusKey = (value) =>
+  String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+
+const isInactiveAgreementStatus = (status) =>
+  ["canceled", "cancelled", "rejected", "expired", "void", "voided"].includes(reportStatusKey(status));
+
+const pnlChemicalCostModes = {
+  includeAll: "includeAll",
+  excludeAll: "excludeAll",
+  excludeSelected: "excludeSelected",
+};
+
+const activeRangeOverlapDays = (recordStart, recordEnd, rangeStart, rangeEnd) => {
+  const start = dateFromValue(recordStart);
+  const end = dateFromValue(recordEnd);
+  const effectiveStart = start && start > rangeStart ? start : rangeStart;
+  const effectiveEnd = end && end < rangeEnd ? end : rangeEnd;
+
+  if (effectiveStart > rangeEnd || effectiveEnd < rangeStart) return 0;
+
+  return Math.max(1, Math.ceil((effectiveEnd.getTime() - effectiveStart.getTime()) / 86400000));
+};
+
+const billingIntervalDays = (record = {}) => {
+  const frequency = reportStatusKey(
+    record.billingFrequency ||
+      record.billingCadence ||
+      record.invoiceFrequency ||
+      record.rateType ||
+      "monthly"
+  );
+  const count = Math.max(
+    Number(record.billingFrequencyCount || record.billingCadenceCount || record.invoiceFrequencyCount || 1),
+    1
+  );
+
+  if (frequency.includes("day")) return count;
+  if (frequency.includes("week")) return 7 * count;
+  if (frequency.includes("year") || frequency.includes("annual")) return 365.25 * count;
+  return 30.4375 * count;
+};
+
+const agreementAmountCents = (agreement = {}) => {
+  const directAmount = centsField(
+    agreement.totalAmountCents,
+    agreement.rateAmountCents,
+    agreement.subtotalAmountCents,
+    agreement.amountCents
+  );
+  if (directAmount) return directAmount;
+
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  return lineItems.reduce((total, item) => {
+    const quantity = Number(item.quantity || 1) || 1;
+    const lineTotal = centsField(item.totalAmountCents);
+    if (lineTotal) return total + lineTotal;
+    return total + Math.round(centsField(item.unitAmountCents) * quantity);
+  }, 0);
+};
+
+const agreementRevenueCentsForRange = (agreement = {}, startDate, endDate) => {
+  if (isInactiveAgreementStatus(agreement.status)) return 0;
+  if (agreement.pnlIncludeInReports === false) return 0;
+  const amountCents = agreementAmountCents(agreement);
+  if (!amountCents) return 0;
+
+  const agreementStart = firstPresent(agreement.startDate, agreement.acceptedAt, agreement.sentAt, agreement.createdAt);
+  const agreementEnd = firstPresent(agreement.endDate, agreement.canceledAt, agreement.cancelledAt);
+  const overlapDays = activeRangeOverlapDays(agreementStart, agreementEnd, startDate, endDate);
+  if (!overlapDays) return 0;
+
+  return Math.round(amountCents * (overlapDays / billingIntervalDays(agreement)));
+};
+
+const agreementServiceLocationIds = (agreement = {}) => {
+  const ids = normalizeIdList(agreement.serviceLocationIds);
+  if (ids.length) return ids;
+
+  const snapshots = Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [];
+  return normalizeIdList(...snapshots.map((snapshot) => snapshot.id || snapshot.serviceLocationId));
+};
+
+const truthyReportFlag = (value) => (
+  value === true ||
+  value === 1 ||
+  ["true", "yes", "y", "1", "customer", "homeowner", "owner", "separate", "separatelybilled", "billseparately"]
+    .includes(reportStatusKey(value))
+);
+
+const reportTermList = (...values) => (
+  Array.from(new Set(
+    values.flatMap((value) => {
+      if (Array.isArray(value)) return value;
+      return String(value || "").split(/[\n,]/);
+    })
+      .map((item) => String(item || "").trim())
+      .filter(Boolean)
+  ))
+);
+
+const recordIdCandidates = (...records) => (
+  reportTermList(...records.flatMap((record) => [
+    record?.id,
+    record?.itemId,
+    record?.dataBaseItemId,
+    record?.databaseItemId,
+    record?.templateId,
+    record?.universalTemplateId,
+    record?.dosageTemplateId,
+    record?.linkedItemId,
+    record?.linkedItemIds,
+    record?.catalogItemId,
+    record?.sourceId,
+  ])).map((value) => reportStatusKey(value))
+);
+
+const recordSearchText = (...records) => (
+  records.flatMap((record) => [
+    record?.name,
+    record?.chemType,
+    record?.dosageType,
+    record?.description,
+    record?.category,
+    record?.itemCategory,
+    record?.materialCategory,
+    record?.sku,
+    record?.UOM,
+    record?.uom,
+  ]).filter(Boolean).join(" ").toLowerCase()
+);
+
+const customerPurchasedCostRecord = (...records) => records.some((record) => [
+  record?.customerPurchased,
+  record?.customerSupplied,
+  record?.ownerSupplied,
+  record?.homeownerSupplied,
+  record?.purchasedByCustomer,
+  record?.paidByCustomer,
+  record?.excludeFromPnl,
+  record?.excludeFromPNL,
+  record?.pnlExcluded,
+].some(truthyReportFlag));
+
+const likelyChemicalCostRecord = (...records) => {
+  if (records.some((record) => record?.isChemicalCostRecord)) return true;
+  const text = recordSearchText(...records);
+  return /\b(chem|chlor|tab|tablet|trichlor|dichlor|shock|acid|alkalinity|soda|bicarb|salt|algaecide|phosphate|clarifier|enzyme)\b/.test(text);
+};
+
+const agreementChemicalCostMode = (agreement = {}) => {
+  if (agreement.pnlExcludeAllChemicalCosts === true) return pnlChemicalCostModes.excludeAll;
+  const mode = agreement.pnlChemicalCostMode || agreement.pnlChemicalCostTreatment || agreement.chemicalCostTreatment;
+  if (Object.values(pnlChemicalCostModes).includes(mode)) return mode;
+  const modeKey = reportStatusKey(mode);
+  if (["excludeall", "excludeallchemicals", "separate", "separatelybilled", "billseparately"].includes(modeKey)) {
+    return pnlChemicalCostModes.excludeAll;
+  }
+  if (["excludeselected", "selected", "specificchemicals"].includes(modeKey)) {
+    return pnlChemicalCostModes.excludeSelected;
+  }
+  if (reportTermList(agreement.pnlExcludedChemicalIds, agreement.pnlExcludedChemicalKeywords).length) {
+    return pnlChemicalCostModes.excludeSelected;
+  }
+  return pnlChemicalCostModes.includeAll;
+};
+
+const chemicalCostMatchesAgreementTerms = (agreement = {}, ...records) => {
+  const terms = reportTermList(
+    agreement.pnlExcludedChemicalIds,
+    agreement.pnlExcludedChemicalKeywords,
+    agreement.pnlExcludedChemicals
+  );
+  if (!terms.length) return false;
+
+  const ids = recordIdCandidates(...records);
+  const text = recordSearchText(...records);
+
+  return terms.some((term) => {
+    const normalizedTerm = reportStatusKey(term);
+    if (!normalizedTerm) return false;
+    if (ids.includes(normalizedTerm)) return true;
+    return text.includes(String(term).trim().toLowerCase());
+  });
+};
+
+const agreementAppliesToRecord = (agreement = {}, record = {}) => {
+  const agreementCustomerId = String(agreement.customerId || "").trim();
+  const recordCustomerId = String(record.customerId || record.customer || "").trim();
+  if (agreementCustomerId && recordCustomerId && agreementCustomerId !== recordCustomerId) return false;
+
+  const agreementLocationIds = agreementServiceLocationIds(agreement);
+  const recordLocationIds = normalizeIdList(record.serviceLocationId, record.serviceLocationIds, record.locationId);
+  if (agreementLocationIds.length && recordLocationIds.length && !recordLocationIds.some((id) => agreementLocationIds.includes(id))) {
+    return false;
+  }
+
+  return Boolean(agreementCustomerId || agreementLocationIds.length);
+};
+
+const agreementActiveForDate = (agreement = {}, value) => {
+  const date = dateFromValue(value);
+  if (!date) return true;
+  const agreementStart = firstPresent(agreement.startDate, agreement.acceptedAt, agreement.sentAt, agreement.createdAt);
+  const agreementEnd = firstPresent(agreement.endDate, agreement.canceledAt, agreement.cancelledAt);
+  return activeRangeOverlapDays(agreementStart, agreementEnd, date, date) > 0;
+};
+
+const agreementForPnlCost = (agreements = [], record = {}, value) => {
+  const date = dateFromValue(value) || itemDate(record, ["date", "createdAt", "dateCreated", "completedDate", "serviceDate"]);
+
+  return agreements
+    .filter((agreement) => (
+      !isInactiveAgreementStatus(agreement.status) &&
+      agreementAppliesToRecord(agreement, record) &&
+      agreementActiveForDate(agreement, date)
+    ))
+    .sort((left, right) => {
+      const leftLocationMatch = agreementServiceLocationIds(left).some((id) => normalizeIdList(record.serviceLocationId, record.serviceLocationIds, record.locationId).includes(id));
+      const rightLocationMatch = agreementServiceLocationIds(right).some((id) => normalizeIdList(record.serviceLocationId, record.serviceLocationIds, record.locationId).includes(id));
+      if (leftLocationMatch !== rightLocationMatch) return leftLocationMatch ? -1 : 1;
+      return toNumber(right.agreementVersion || 1) - toNumber(left.agreementVersion || 1);
+    })[0] || null;
+};
+
+const shouldExcludePnlChemicalCost = ({ agreement = null, record = {}, linkedRecord = {} } = {}) => {
+  if (agreement) {
+    const chemicalBilling = classifyAgreementChemicalBilling({ agreement, record, linkedRecord });
+    if (chemicalBilling.treatment === ChemicalBillingTreatment.customerPurchased) {
+      return agreement.pnlExcludeCustomerPurchasedChemicals !== false;
+    }
+  }
+
+  if (customerPurchasedCostRecord(record, linkedRecord)) {
+    return !agreement || agreement.pnlExcludeCustomerPurchasedChemicals !== false;
+  }
+
+  if (!agreement) return false;
+
+  const mode = agreementChemicalCostMode(agreement);
+  if (mode === pnlChemicalCostModes.excludeAll) return likelyChemicalCostRecord(record, linkedRecord);
+  if (mode === pnlChemicalCostModes.excludeSelected) return chemicalCostMatchesAgreementTerms(agreement, record, linkedRecord);
+  return false;
+};
+
+const invoiceRevenueStatusCounts = (invoice = {}) => (
+  !["draft", "void", "canceled", "cancelled", "uncollectible"].includes(reportStatusKey(invoice.status))
+);
+
+const invoiceLineAmountCents = (item = {}) => {
+  const total = centsField(item.totalAmountCents, item.amountCents, item.totalCents);
+  if (total) return total;
+  const quantity = Number(item.quantity || 1) || 1;
+  return Math.round(centsField(item.unitAmountCents, item.rateAmountCents, item.priceCents) * quantity);
+};
+
+const explicitlySeparateChemicalInvoiceLine = (item = {}) => {
+  const sourceKey = reportStatusKey(`${item.sourceType || ""} ${item.type || ""} ${item.metadata?.chemicalBillingTreatment || ""}`);
+  return (
+    ["chemical", "chemicals", "dosage", "chemicalusage", "separatelybilledchemical"].some((term) => sourceKey.includes(term)) ||
+    truthyReportFlag(item.billSeparately || item.separatelyBilled || item.separateBilling || item.metadata?.billSeparately)
+  );
+};
+
+const invoiceChemicalRevenueCentsForPnl = (invoice = {}, serviceAgreements = []) => {
+  if (!invoiceRevenueStatusCounts(invoice)) return 0;
+
+  const lineItems = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
+  if (!lineItems.length) return 0;
+
+  const invoiceAgreement = serviceAgreements.find((agreement) => agreement.id && agreement.id === invoice.agreementId) ||
+    agreementForPnlCost(
+      serviceAgreements,
+      invoice,
+      itemDate(invoice, ["sentAt", "paidAt", "invoiceDate", "createdAt", "date"])
+    );
+
+  return lineItems.reduce((total, item) => {
+    const explicitlySeparate = explicitlySeparateChemicalInvoiceLine(item);
+    if (!likelyChemicalCostRecord(item) && !explicitlySeparate) return total;
+
+    if (invoiceAgreement) {
+      const billing = classifyAgreementChemicalBilling({ agreement: invoiceAgreement, record: item });
+      if (billing.treatment === ChemicalBillingTreatment.customerPurchased) return total;
+      if (!billing.billSeparately && !explicitlySeparate) return total;
+      return total + invoiceLineAmountCents(item);
+    }
+
+    return explicitlySeparate
+      ? total + invoiceLineAmountCents(item)
+      : total;
+  }, 0);
+};
+
+const addressLine = (record = {}) => {
+  const address = record.address || record.billingAddress || {};
+  return [
+    address.streetAddress || record.streetAddress,
+    address.address02 || record.address02,
+    [address.city || record.city, address.state || record.state, address.zip || record.zip].filter(Boolean).join(" "),
+  ].filter(Boolean).join(", ");
+};
+
+const serviceLocationName = (location = {}) =>
+  [
+    location.nickName || location.name || location.label,
+    addressLine(location),
+  ].filter(Boolean).join(" | ") || location.id || "No Service Location";
+
+const targetRateCentsFor = (costCents, margin = 0.45) => {
+  const cost = Math.max(Number(costCents || 0), 0);
+  if (!cost) return 0;
+  return Math.ceil((cost / (1 - margin)) / 100) * 100;
+};
+
+const marginString = (netCents, revenueCents) => {
+  const revenue = Number(revenueCents || 0);
+  if (!revenue) return Number(netCents || 0) < 0 ? "No revenue" : "0.0%";
+  return `${((Number(netCents || 0) / revenue) * 100).toFixed(1)}%`;
+};
+
+const normalizeDetailDate = (value) => {
+  const date = dateFromValue(value);
+  return {
+    date: date ? shortDate(date) : "-",
+    sortTime: date ? date.getTime() : 0,
+  };
+};
+
 const normalizeDocs = (snapshot) => snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
 
 const getCollection = async (companyId, collectionName) => {
@@ -587,10 +954,24 @@ const safeFilePart = (value) =>
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 60) || "report";
+    .slice(0, 90) || "report";
 
-const reportFileName = (reportData, extension) =>
-  `${safeFilePart(reportData?.title)}_${format(new Date(), "yyyy-MM-dd_HH-mm")}.${extension}`;
+const reportModeLabel = (mode) => (mode === "detail" ? "Detail" : "Summary");
+
+const reportExportTitle = (reportData) =>
+  [
+    reportData?.title || "Report",
+    reportData?.mode ? reportModeLabel(reportData.mode) : "",
+  ].filter(Boolean).join(" - ");
+
+const reportFileName = (reportData, extension) => {
+  const fileParts = [
+    safeFilePart(reportData?.title),
+    reportData?.mode ? safeFilePart(reportModeLabel(reportData.mode)) : "",
+    format(new Date(), "yyyy-MM-dd_HH-mm"),
+  ].filter(Boolean);
+  return `${fileParts.join("_")}.${extension}`;
+};
 
 const displayColumnValue = (column, row) => {
   const value = column.render ? column.render(row) : row[column.key];
@@ -642,7 +1023,7 @@ const reportSummaryRowsForExport = (section) =>
 
 const reportSummarySheetRows = (reportData) => {
   const rows = [
-    [reportData?.title || "Report"],
+    [reportExportTitle(reportData)],
     [],
     ["Metric", "Value", "Subtitle"],
     ...reportStatsForExport(reportData).map((stat) => [stat.Metric, stat.Value, stat.Subtitle]),
@@ -719,6 +1100,7 @@ const escapeHtml = (value) =>
     .replaceAll("'", "&#039;");
 
 const printableReportHtml = (reportData) => {
+  const exportTitle = reportExportTitle(reportData);
   const statsHtml = reportStatsForExport(reportData)
     .map((stat) => `
       <div class="stat">
@@ -783,7 +1165,7 @@ const printableReportHtml = (reportData) => {
     <!doctype html>
     <html>
       <head>
-        <title>${escapeHtml(reportData.title || "Report")}</title>
+        <title>${escapeHtml(exportTitle)}</title>
         <style>
           body { color: #0f172a; font-family: Arial, sans-serif; margin: 28px; }
           h1 { font-size: 24px; margin: 0 0 4px; }
@@ -804,7 +1186,7 @@ const printableReportHtml = (reportData) => {
         </style>
       </head>
       <body>
-        <h1>${escapeHtml(reportData.title || "Report")}</h1>
+        <h1>${escapeHtml(exportTitle)}</h1>
         <div class="generated">Generated ${escapeHtml(format(new Date(), "MM/dd/yyyy h:mm a"))}</div>
         <div class="stats">${statsHtml}</div>
         ${summarySectionsHtml}
@@ -1064,6 +1446,8 @@ const buildReadingPerformanceReport = ({
   recurringServiceStops = [],
   readingPerformanceStandards,
   readingPerformanceView = "users",
+  dateRangeStart,
+  dateRangeEnd,
   mode,
 }) => {
   const standards = activeReadingPerformanceStandards(readingPerformanceStandards, readingTemplates);
@@ -1182,8 +1566,9 @@ const buildReadingPerformanceReport = ({
       serviceStop.customerName ||
       customerId ||
       "-";
-    const workerName = workerDisplayName(stop, workerDisplayName(serviceStop, "-"));
-    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop);
+    const servicedBy = serviceWorkerDisplayName(stop, serviceStop, "");
+    const workerName = servicedBy || "-";
+    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop, servicedBy);
     const value = [
       readingValue.toLocaleString(undefined, { maximumFractionDigits: 2 }),
       reading.UOM || reading.uom || standard.unit,
@@ -1201,7 +1586,7 @@ const buildReadingPerformanceReport = ({
       value,
       rule: `${readingOperatorLabel(standard.operator)} ${standard.thresholdLabel}`,
       serviceStop: stop.serviceStopId || stop.id || "-",
-      assignedRssTech: assignedRssTech || "-",
+      assignedRssTech: assignedRssTech || workerName,
       status: "Failing to meet standards",
     };
   };
@@ -1210,7 +1595,8 @@ const buildReadingPerformanceReport = ({
     const stopKey = String(stop.id || stop.serviceStopId || `stop-${stopIndex}`);
     const serviceStop = serviceStopForStopData(stop);
     const recurringStop = recurringStopFor(stop, serviceStop);
-    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop);
+    const servicedBy = serviceWorkerDisplayName(stop, serviceStop, "");
+    const assignedRssTech = assignedRssWorkerName(recurringStop, serviceStop, servicedBy);
     const group = ensureGroup(groups, groupForStop(stop, serviceStop));
     if (!group.performance) {
       group.performance = {
@@ -1274,13 +1660,18 @@ const buildReadingPerformanceReport = ({
         detailRows: [],
       };
       const failingStops = performance.failingStopIds.size;
+      const successfulStops = Math.max(performance.totalStops - failingStops, 0);
+      const failRate = percentString(failingStops, performance.totalStops);
+      const successRate = percentString(successfulStops, performance.totalStops);
       const latestDetail = [...performance.detailRows].sort((a, b) => b.sortTime - a.sortTime)[0];
       const assignedRssTechs = [...performance.assignedRssTechs].sort().join(", ") || "-";
       const anyStandardRow = {
         id: `${group.id}-any-standard`,
         standard: "Any standard",
+        successfulStops,
+        successRate,
         failingStops,
-        failingRate: percentString(failingStops, performance.totalStops),
+        failingRate: failRate,
         failingReadings: performance.totalFailingReadings,
         latestFail: latestDetail?.date || "-",
         lastCustomer: latestDetail?.customer || "-",
@@ -1289,11 +1680,15 @@ const buildReadingPerformanceReport = ({
       };
       const standardRows = standards.map((standard) => {
         const summary = performance.standards.get(standard.id);
+        const standardFailingStops = summary?.failingStops || 0;
+        const standardSuccessfulStops = Math.max(performance.totalStops - standardFailingStops, 0);
         return {
           id: `${group.id}-${standard.id}`,
           standard: standard.rule,
-          failingStops: summary?.failingStops || 0,
-          failingRate: percentString(summary?.failingStops || 0, performance.totalStops),
+          successfulStops: standardSuccessfulStops,
+          successRate: percentString(standardSuccessfulStops, performance.totalStops),
+          failingStops: standardFailingStops,
+          failingRate: percentString(standardFailingStops, performance.totalStops),
           failingReadings: summary?.failingReadings || 0,
           latestFail: summary?.latestFail || "-",
           lastCustomer: summary?.lastCustomer || "-",
@@ -1310,14 +1705,19 @@ const buildReadingPerformanceReport = ({
         name: group.name,
         sortFailRate: performance.totalStops ? failingStops / performance.totalStops : 0,
         sortFailingStops: failingStops,
+        sortSuccessRate: performance.totalStops ? successfulStops / performance.totalStops : 0,
+        sortSuccessfulStops: successfulStops,
         summary: {
           id: group.id,
           user: group.name,
           customer: group.name,
           serviceStops: performance.totalStops,
+          successfulStops,
           failingStops,
-          userFailingRate: percentString(failingStops, performance.totalStops),
-          customerFailingRate: percentString(failingStops, performance.totalStops),
+          userSuccessRate: successRate,
+          customerSuccessRate: successRate,
+          userFailingRate: failRate,
+          customerFailingRate: failRate,
           companyFailingShare: percentString(failingStops, totalCompanyFailingStops),
           failingReadings: performance.totalFailingReadings,
           assignedRssTechs,
@@ -1325,7 +1725,8 @@ const buildReadingPerformanceReport = ({
         },
         metrics: {
           "Service Stops": performance.totalStops,
-          "Not Good Standing": `${failingStops.toLocaleString()} (${percentString(failingStops, performance.totalStops)})`,
+          "Successful Stops": `${successfulStops.toLocaleString()} (${successRate})`,
+          "Not Good Standing": `${failingStops.toLocaleString()} (${failRate})`,
           "Company Failing Share": percentString(failingStops, totalCompanyFailingStops),
           ...(performanceView === "customers" ? { "Assigned RSS Techs": assignedRssTechs } : {}),
           "Failing Readings": performance.totalFailingReadings,
@@ -1333,17 +1734,25 @@ const buildReadingPerformanceReport = ({
         rows: mode === "summary" ? [anyStandardRow, ...standardRows] : detailRows,
       };
     })
-    .sort((a, b) => b.sortFailRate - a.sortFailRate || b.sortFailingStops - a.sortFailingStops || a.name.localeCompare(b.name))
-    .map(({ sortFailRate, sortFailingStops, ...group }) => group);
+    .sort((a, b) => (
+      performanceView === "users"
+        ? b.sortSuccessRate - a.sortSuccessRate || b.sortSuccessfulStops - a.sortSuccessfulStops || a.name.localeCompare(b.name)
+        : b.sortFailRate - a.sortFailRate || b.sortFailingStops - a.sortFailingStops || a.name.localeCompare(b.name)
+    ))
+    .map(({ sortFailRate, sortFailingStops, sortSuccessRate, sortSuccessfulStops, ...group }) => group);
 
   const worstStandard = [...overallStandardSummaries.values()]
     .sort((a, b) => b.failingStops - a.failingStops || a.standard.localeCompare(b.standard))[0];
   const userSummaryRows = resultGroups.map((group) => group.summary);
+  const failedGroupCount = resultGroups.filter((group) => (group.summary?.failingStops || 0) > 0).length;
+  const totalServicedGroupCount = resultGroups.length;
   const standardSummaryRows = [...overallStandardSummaries.values()]
     .sort((a, b) => b.failingStops - a.failingStops || a.standard.localeCompare(b.standard))
     .map((summary) => ({
       id: summary.id,
       standard: summary.standard,
+      successfulStops: Math.max(stopData.length - summary.failingStops, 0),
+      companySuccessRate: percentString(Math.max(stopData.length - summary.failingStops, 0), stopData.length),
       failingStops: summary.failingStops,
       companyFailingRate: percentString(summary.failingStops, stopData.length),
       failingReadings: summary.failingReadings,
@@ -1354,21 +1763,49 @@ const buildReadingPerformanceReport = ({
   const summaryEntityKey = performanceView === "customers" ? "customer" : "user";
   const summaryEntityLabel = performanceView === "customers" ? "Customer" : "User";
   const summaryFailingRateKey = performanceView === "customers" ? "customerFailingRate" : "userFailingRate";
-  const summaryColumns = [
-    { key: summaryEntityKey, label: summaryEntityLabel },
-    { key: "serviceStops", label: "Service Stops", align: "right" },
-    { key: "failingStops", label: "Failing Stops", align: "right" },
-    { key: summaryFailingRateKey, label: `% of ${summaryEntityLabel} Stops`, align: "right" },
-    { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
-    { key: "failingReadings", label: "Failing Readings", align: "right" },
-    ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
-    { key: "latestFail", label: "Latest Fail" },
-  ];
+  const summarySuccessRateKey = performanceView === "customers" ? "customerSuccessRate" : "userSuccessRate";
+  const summaryColumns = performanceView === "users"
+    ? [
+        { key: summaryEntityKey, label: summaryEntityLabel },
+        { key: "serviceStops", label: "Service Stops", align: "right" },
+        { key: "successfulStops", label: "Successful Stops", align: "right" },
+        { key: summarySuccessRateKey, label: "Success Rate", align: "right" },
+        { key: "failingStops", label: "Failing Stops", align: "right" },
+        { key: summaryFailingRateKey, label: "Fail Rate", align: "right" },
+        { key: "failingReadings", label: "Failing Readings", align: "right" },
+        { key: "latestFail", label: "Latest Fail" },
+      ]
+    : [
+        { key: summaryEntityKey, label: summaryEntityLabel },
+        { key: "serviceStops", label: "Service Stops", align: "right" },
+        { key: "failingStops", label: "Failing Stops", align: "right" },
+        { key: summaryFailingRateKey, label: `% of ${summaryEntityLabel} Stops`, align: "right" },
+        { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
+        { key: "failingReadings", label: "Failing Readings", align: "right" },
+        { key: "assignedRssTechs", label: "Assigned RSS Techs" },
+        { key: "latestFail", label: "Latest Fail" },
+      ];
+  const baseTitle = performanceView === "customers" ? "Reading Performance by Customer Report" : "Reading Performance Report";
+  const titleDateRange = displayDateRangeFromValues(dateRangeStart, dateRangeEnd);
+  const totalSuccessfulStops = Math.max(stopData.length - overallFailingStopIds.size, 0);
 
   return {
-    title: performanceView === "customers" ? "Reading Performance by Customer Report" : "Reading Performance Report",
+    title: [baseTitle, titleDateRange].filter(Boolean).join(" "),
     stats: [
       numberMetric("Service Stops", stopData.length),
+      ...(performanceView === "customers"
+        ? [{
+            label: "Failed Customers",
+            value: `${failedGroupCount.toLocaleString()} of ${totalServicedGroupCount.toLocaleString()}`,
+            subtitle: `${percentString(failedGroupCount, totalServicedGroupCount)} of serviced customers`,
+          }]
+        : []),
+      numberMetric("Successful Stops", totalSuccessfulStops),
+      {
+        label: "Success Rate",
+        value: percentString(totalSuccessfulStops, stopData.length),
+        subtitle: "100% - fail rate",
+      },
       numberMetric("Not Good Standing", overallFailingStopIds.size),
       percentageMetric("Not Good Standing %", overallFailingStopIds.size, stopData.length),
       numberMetric("Failing Readings", totalFailingReadings),
@@ -1383,8 +1820,14 @@ const buildReadingPerformanceReport = ({
     columns: mode === "summary"
       ? [
           { key: "standard", label: "Standard" },
+          ...(performanceView === "users"
+            ? [
+                { key: "successfulStops", label: "Successful Stops", align: "right" },
+                { key: "successRate", label: "Success Rate", align: "right" },
+              ]
+            : []),
           { key: "failingStops", label: "Failing Stops", align: "right" },
-          { key: "failingRate", label: "% of Stops", align: "right" },
+          { key: "failingRate", label: "Fail Rate", align: "right" },
           { key: "failingReadings", label: "Failing Readings", align: "right" },
           ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
           { key: "latestFail", label: "Latest Fail" },
@@ -1413,8 +1856,10 @@ const buildReadingPerformanceReport = ({
         title: "Standard Summary",
         columns: [
           { key: "standard", label: "Standard" },
+          { key: "successfulStops", label: "Successful Stops", align: "right" },
+          { key: "companySuccessRate", label: "Success Rate", align: "right" },
           { key: "failingStops", label: "Failing Stops", align: "right" },
-          { key: "companyFailingRate", label: "% of Company Stops", align: "right" },
+          { key: "companyFailingRate", label: "Fail Rate", align: "right" },
           { key: "failingReadings", label: "Failing Readings", align: "right" },
           { key: "latestFail", label: "Latest Fail" },
           { key: "lastCustomer", label: "Last Customer" },
@@ -1903,14 +2348,692 @@ const buildUsersReport = ({ users, serviceStops, jobs, purchases, payrollLines }
   };
 };
 
-const buildPnlReport = ({ jobs, purchases, payrollLines, groupBy }) => {
+const buildPnlPerPoolReport = ({
+  companyId = "",
+  stopData = [],
+  serviceStops = [],
+  payrollLines = [],
+  paySettings = null,
+  companyUsers = [],
+  companyServiceStopTypes = [],
+  companyWorkTypes = [],
+  workTypeMappings = [],
+  technicianRates = [],
+  serviceStopTasksById = new Map(),
+  dosageTemplates = [],
+  serviceAgreements = [],
+  serviceLocations = [],
+  bodiesOfWater = [],
+  customersById = new Map(),
+  mode,
+  dateRangeStart,
+  dateRangeEnd,
+}) => {
+  const serviceLocationsById = new Map(serviceLocations.map((location) => [location.id, location]));
+  const bodiesById = new Map(bodiesOfWater.map((body) => [body.id, body]));
+  const bodiesByLocationId = new Map();
+  const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
+  const serviceStopsById = new Map();
+  const stopDataByServiceStopId = new Map();
+  const pools = new Map();
+  const actualPayServiceStopIds = new Set();
+  const serviceStopTypesById = new Map();
+  const serviceStopTypesByName = new Map();
+
+  const idValue = (value) => String(value || "").trim();
+  const keyValue = (value) => idValue(value).toLowerCase();
+
+  companyServiceStopTypes.forEach((type) => {
+    ["id", "typeId", "serviceStopTypeId"].forEach((field) => {
+      const value = idValue(type?.[field]);
+      if (value) serviceStopTypesById.set(value, type);
+    });
+    [type?.name, type?.serviceStopTypeName, type?.type].forEach((value) => {
+      const key = keyValue(value);
+      if (key && !serviceStopTypesByName.has(key)) serviceStopTypesByName.set(key, type);
+    });
+  });
+
+  const companyUserForServiceStop = (serviceStop = {}) => {
+    const workerId = idValue(firstPresent(
+      serviceStop.techId,
+      serviceStop.userId,
+      serviceStop.technicianId,
+      serviceStop.workerId,
+      serviceStop.companyUserId,
+      serviceStop.assignedUserId,
+      serviceStop.assignedToId
+    ));
+
+    if (!workerId) return null;
+
+    return (
+      companyUsers.find((user) =>
+        [user.userId, user.id, user.docId, user.uid, user.companyUserId].some((value) => idValue(value) === workerId)
+      ) || {
+        id: workerId,
+        userId: workerId,
+        userName: serviceStop.tech || serviceStop.techName || serviceStop.technicianName || serviceStop.userName || "Technician",
+      }
+    );
+  };
+
+  const serviceStopTypeFor = (serviceStop = {}) => {
+    const typeId = idValue(firstPresent(
+      serviceStop.typeId,
+      serviceStop.serviceStopTypeId,
+      serviceStop.companyServiceStopTypeId,
+      typeof serviceStop.serviceStopType === "string" ? serviceStop.serviceStopType : ""
+    ));
+    const typeName = keyValue(firstPresent(
+      serviceStop.type,
+      serviceStop.serviceStopTypeName,
+      typeof serviceStop.serviceStopType === "string" ? serviceStop.serviceStopType : ""
+    ));
+
+    if (typeId && serviceStopTypesById.has(typeId)) return serviceStopTypesById.get(typeId);
+    if (typeName && serviceStopTypesByName.has(typeName)) return serviceStopTypesByName.get(typeName);
+
+    if (!typeId && !typeName) return null;
+
+    return {
+      id: typeId || typeName,
+      name: serviceStop.type || serviceStop.serviceStopTypeName || "Service Stop",
+      defaultWorkTypeIds: serviceStop.defaultWorkTypeIds || serviceStop.serviceStopDefaultWorkTypeIds || [],
+      category: serviceStop.category || serviceStop.serviceStopCategory || "",
+      serviceStopTypeUseCaseRawValue: serviceStop.serviceStopTypeUseCaseRawValue || "",
+    };
+  };
+
+  const tasksForServiceStop = (serviceStop = {}) => {
+    const stopId = idValue(firstPresent(serviceStop.id, serviceStop.serviceStopId));
+    const tasks = [
+      ...(serviceStopTasksById instanceof Map ? serviceStopTasksById.get(stopId) || [] : serviceStopTasksById?.[stopId] || []),
+      ...(Array.isArray(serviceStop.tasks) ? serviceStop.tasks : []),
+    ];
+    if (tasks.length) return tasks;
+
+    const estimatedMinutes = Number(firstPresent(serviceStop.duration, serviceStop.estimatedDuration, serviceStop.estimatedMinutes));
+    if (!Number.isFinite(estimatedMinutes) || estimatedMinutes <= 0) return [];
+
+    return [{
+      id: `${stopId || "stop"}_duration_estimate`,
+      name: "Duration estimate",
+      type: "__report_duration_estimate__",
+      estimatedTime: estimatedMinutes,
+      contractedRate: 0,
+    }];
+  };
+
+  const serviceStopUseCaseSourceId = (serviceStop = {}) => {
+    if (serviceStop.jobId) return "system_job_service_stop";
+    if (serviceStop.recurringServiceStopId || serviceStop.recurringStopId) return "system_recurring_service_stop";
+    if (serviceStop.serviceAgreementId || serviceStop.agreementId) return "system_service_agreement_estimate_service_stop";
+    return "";
+  };
+
+  const payrollEstimateLineLabel = (line = {}, serviceStop = {}) =>
+    [
+      line.title || line.workTypeName || serviceStop.type || serviceStop.serviceStopTypeName || "Service Stop Pay",
+      line.workTypeName && line.title !== line.workTypeName ? line.workTypeName : "",
+      "estimated from payroll rate",
+    ].filter(Boolean).join(" | ");
+
+  const addBodyForLocation = (body) => {
+    const serviceLocationId = body.serviceLocationId || "";
+    if (!serviceLocationId) return;
+    if (!bodiesByLocationId.has(serviceLocationId)) bodiesByLocationId.set(serviceLocationId, []);
+    bodiesByLocationId.get(serviceLocationId).push(body);
+  };
+
+  bodiesOfWater
+    .filter((body) => body.active !== false && body.isActive !== false)
+    .forEach(addBodyForLocation);
+
+  const indexByIds = (map, record, fields) => {
+    fields.forEach((field) => {
+      const value = record?.[field];
+      if (value) map.set(String(value), record);
+    });
+  };
+
+  serviceStops.forEach((stop) => {
+    indexByIds(serviceStopsById, stop, ["id", "serviceStopId", "internalId"]);
+  });
+
+  stopData.forEach((stop, index) => {
+    const stopId = String(stop.serviceStopId || stop.id || `stop-data-${index}`);
+    if (!stopDataByServiceStopId.has(stopId)) stopDataByServiceStopId.set(stopId, []);
+    stopDataByServiceStopId.get(stopId).push(stop);
+  });
+
+  const customerNameFor = (customerId, fallback = "") => {
+    const customer = customerId ? customersById.get(customerId) : null;
+    return customerDisplayName(customer) || fallback || customerId || "No Customer";
+  };
+
+  const poolDescriptor = ({ bodyOfWaterId = "", serviceLocationId = "", customerId = "", customerName = "" } = {}) => {
+    const body = bodyOfWaterId ? bodiesById.get(bodyOfWaterId) || {} : {};
+    const resolvedServiceLocationId = serviceLocationId || body.serviceLocationId || "";
+    const location = resolvedServiceLocationId ? serviceLocationsById.get(resolvedServiceLocationId) || {} : {};
+    const resolvedCustomerId = customerId || body.customerId || location.customerId || "no-customer";
+    const resolvedCustomerName = customerNameFor(resolvedCustomerId, customerName || body.customerName || location.customerName);
+    const locationName = serviceLocationName(location);
+    const poolName =
+      body.name ||
+      body.nickName ||
+      body.label ||
+      location.poolName ||
+      location.nickName ||
+      locationName ||
+      "Pool";
+    const id = body.id
+      ? `body:${body.id}`
+      : `location:${resolvedServiceLocationId || resolvedCustomerId || "unknown"}`;
+
+    return {
+      id,
+      customerId: resolvedCustomerId,
+      customerName: resolvedCustomerName,
+      serviceLocationId: resolvedServiceLocationId,
+      serviceLocation: locationName,
+      bodyOfWaterId: body.id || "",
+      pool: poolName,
+    };
+  };
+
+  const poolDescriptorsForLocation = (serviceLocationId, fallback = {}) => {
+    const bodies = bodiesByLocationId.get(serviceLocationId) || [];
+    if (bodies.length) {
+      return bodies.map((body) =>
+        poolDescriptor({
+          bodyOfWaterId: body.id,
+          serviceLocationId,
+          customerId: fallback.customerId,
+          customerName: fallback.customerName,
+        })
+      );
+    }
+
+    return [
+      poolDescriptor({
+        serviceLocationId,
+        customerId: fallback.customerId,
+        customerName: fallback.customerName,
+      }),
+    ];
+  };
+
+  const fallbackPoolDescriptorsForCustomer = (customerId, customerName) => {
+    const locations = serviceLocations.filter((location) => location.customerId === customerId && location.active !== false && location.isActive !== false);
+    if (!locations.length) return [poolDescriptor({ customerId, customerName })];
+    return locations.flatMap((location) => poolDescriptorsForLocation(location.id, { customerId, customerName }));
+  };
+
+  const uniqueDescriptors = (descriptors) => {
+    const seen = new Set();
+    return descriptors.filter((descriptor) => {
+      if (!descriptor?.id || seen.has(descriptor.id)) return false;
+      seen.add(descriptor.id);
+      return true;
+    });
+  };
+
+  const ensurePool = (descriptor) => {
+    const poolId = descriptor.id || "location:unknown";
+    if (!pools.has(poolId)) {
+      pools.set(poolId, {
+        ...descriptor,
+        agreementIds: new Set(),
+        visitIds: new Set(),
+        revenueCents: 0,
+        laborCents: 0,
+        chemicalCents: 0,
+        detailRows: [],
+      });
+    }
+
+    const pool = pools.get(poolId);
+    pool.customerName = pool.customerName || descriptor.customerName;
+    pool.serviceLocation = pool.serviceLocation || descriptor.serviceLocation;
+    pool.pool = pool.pool || descriptor.pool;
+    return pool;
+  };
+
+  const addDetail = (descriptor, row) => {
+    const pool = ensurePool(descriptor);
+    pool.detailRows.push({
+      id: `${pool.id}-${pool.detailRows.length}-${row.type || "line"}`,
+      customer: pool.customerName,
+      serviceLocation: pool.serviceLocation,
+      pool: pool.pool,
+      revenueCents: 0,
+      laborCents: 0,
+      chemicalCents: 0,
+      netCents: 0,
+      sortTime: 0,
+      ...row,
+    });
+  };
+
+  const addRevenue = (descriptor, amountCents, agreement) => {
+    const amount = Math.round(Number(amountCents || 0));
+    if (!amount) return;
+    const pool = ensurePool(descriptor);
+    pool.revenueCents += amount;
+    if (agreement?.id) pool.agreementIds.add(agreement.id);
+
+    const dateInfo = normalizeDetailDate(firstPresent(agreement?.startDate, agreement?.acceptedAt, agreement?.sentAt, agreement?.createdAt));
+    addDetail(descriptor, {
+      ...dateInfo,
+      type: "Agreement Revenue",
+      source: agreement?.title || agreement?.id || "Service Agreement",
+      revenueCents: amount,
+      netCents: amount,
+    });
+  };
+
+  const addLabor = (descriptor, amountCents, row = {}) => {
+    const amount = Math.round(Number(amountCents || 0));
+    if (!amount) return;
+    const pool = ensurePool(descriptor);
+    pool.laborCents += amount;
+    addDetail(descriptor, {
+      ...row,
+      type: row.type || "Labor",
+      laborCents: amount,
+      netCents: -amount,
+    });
+  };
+
+  const addChemical = (descriptor, amountCents, row = {}) => {
+    const amount = Math.round(Number(amountCents || 0));
+    if (!amount) return;
+    const pool = ensurePool(descriptor);
+    pool.chemicalCents += amount;
+    addDetail(descriptor, {
+      ...row,
+      type: row.type || "Chemical",
+      chemicalCents: amount,
+      netCents: -amount,
+    });
+  };
+
+  const descriptorsForServiceStop = (serviceStop = {}, fallback = {}) => {
+    if (fallback.bodyOfWaterId || serviceStop.bodyOfWaterId) {
+      return [
+        poolDescriptor({
+          bodyOfWaterId: fallback.bodyOfWaterId || serviceStop.bodyOfWaterId,
+          serviceLocationId: fallback.serviceLocationId || serviceStop.serviceLocationId,
+          customerId: fallback.customerId || serviceStop.customerId,
+          customerName: fallback.customerName || serviceStop.customerName,
+        }),
+      ];
+    }
+
+    const stopRecords = stopDataByServiceStopId.get(String(serviceStop.id || serviceStop.serviceStopId || fallback.serviceStopId || "")) || [];
+    if (stopRecords.length) {
+      return uniqueDescriptors(
+        stopRecords.map((record) =>
+          poolDescriptor({
+            bodyOfWaterId: record.bodyOfWaterId,
+            serviceLocationId: record.serviceLocationId || serviceStop.serviceLocationId,
+            customerId: record.customerId || serviceStop.customerId,
+            customerName: record.customerName || serviceStop.customerName,
+          })
+        )
+      );
+    }
+
+    const serviceLocationId = fallback.serviceLocationId || serviceStop.serviceLocationId;
+    if (serviceLocationId) {
+      return poolDescriptorsForLocation(serviceLocationId, {
+        customerId: fallback.customerId || serviceStop.customerId,
+        customerName: fallback.customerName || serviceStop.customerName,
+      });
+    }
+
+    return [
+      poolDescriptor({
+        customerId: fallback.customerId || serviceStop.customerId,
+        customerName: fallback.customerName || serviceStop.customerName,
+      }),
+    ];
+  };
+
+  const distributeAmount = (descriptors, amountCents, addValue, rowFactory) => {
+    const targets = uniqueDescriptors(descriptors);
+    if (!targets.length || !amountCents) return;
+    const share = Math.round(Number(amountCents || 0) / targets.length);
+    targets.forEach((descriptor) => addValue(descriptor, share, rowFactory?.(descriptor) || {}));
+  };
+
+  serviceAgreements.forEach((agreement) => {
+    const revenueCents = agreementRevenueCentsForRange(agreement, dateRangeStart, dateRangeEnd);
+    if (!revenueCents) return;
+
+    const locationIds = agreementServiceLocationIds(agreement);
+    const descriptors = locationIds.length
+      ? locationIds.flatMap((serviceLocationId) =>
+          poolDescriptorsForLocation(serviceLocationId, {
+            customerId: agreement.customerId,
+            customerName: agreement.customerName,
+          })
+        )
+      : fallbackPoolDescriptorsForCustomer(agreement.customerId, agreement.customerName);
+
+    distributeAmount(
+      descriptors,
+      revenueCents,
+      (descriptor, amount) => addRevenue(descriptor, amount, agreement),
+      null
+    );
+  });
+
+  stopData.forEach((stop, index) => {
+    const serviceStop = serviceStopsById.get(String(stop.serviceStopId || "")) || {};
+    const descriptor = poolDescriptor({
+      bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
+      serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId,
+      customerId: stop.customerId || serviceStop.customerId,
+      customerName: stop.customerName || serviceStop.customerName,
+    });
+    const pool = ensurePool(descriptor);
+    pool.visitIds.add(String(stop.serviceStopId || stop.id || `${descriptor.id}-${index}`));
+
+    const dosages = Array.isArray(stop.dosages) ? stop.dosages : [];
+    dosages.forEach((dosage) => {
+      const template = dosageTemplateFor(dosage, dosageTemplatesById) || {};
+      const costRecord = {
+        ...dosage,
+        isChemicalCostRecord: true,
+        customerId: stop.customerId || serviceStop.customerId,
+        customerName: stop.customerName || serviceStop.customerName,
+        serviceLocationId: stop.serviceLocationId || serviceStop.serviceLocationId,
+        bodyOfWaterId: stop.bodyOfWaterId || serviceStop.bodyOfWaterId,
+        date: stop.date || serviceStop.serviceDate || serviceStop.date,
+      };
+      const costAgreement = agreementForPnlCost(serviceAgreements, costRecord, costRecord.date);
+      if (shouldExcludePnlChemicalCost({ agreement: costAgreement, record: costRecord, linkedRecord: template })) return;
+
+      const explicitCostCents = centsField(dosage.totalCostCents, dosage.costCents, dosage.extendedCostCents);
+      const explicitCostDollars = dollarFieldToCents(dosage.totalCost, dosage.cost, dosage.extendedCost);
+      const amount = Number(dosage.amount ?? dosage.quantity ?? dosage.value ?? 0);
+      const unitRateCents =
+        centsField(dosage.rateCents, dosage.unitCostCents, template.rateCents, template.unitCostCents) ||
+        dollarFieldToCents(dosage.rate, dosage.unitCost, template.rate, template.unitCost);
+      const chemicalCostCents = explicitCostCents || explicitCostDollars || Math.round((Number.isFinite(amount) ? amount : 0) * unitRateCents);
+
+      if (!chemicalCostCents) return;
+
+      const dateInfo = normalizeDetailDate(stop.date);
+      addChemical(descriptor, chemicalCostCents, {
+        ...dateInfo,
+        source: [
+          dosage.name || template.name || template.chemType || "Dosage",
+          valueWithUnit(dosage),
+        ].filter(Boolean).join(" | "),
+      });
+    });
+  });
+
+  const activePayrollLines = payrollLines.filter((line) => reportStatusKey(line.calculationStatus) !== "voided" && !line.voidedAt);
+  activePayrollLines.forEach((line) => {
+    const amountCents = payrollLineCents(line);
+    if (!amountCents) return;
+
+    const lineServiceStopId = idValue(firstPresent(line.serviceStopId, line.serviceStopID, line.stopId));
+    const serviceStop = serviceStopsById.get(lineServiceStopId) || {};
+    if (lineServiceStopId) actualPayServiceStopIds.add(lineServiceStopId);
+
+    const descriptors = descriptorsForServiceStop(serviceStop, {
+      serviceStopId: lineServiceStopId,
+      bodyOfWaterId: line.bodyOfWaterId,
+      serviceLocationId: line.serviceLocationId,
+      customerId: line.customerId,
+      customerName: line.customerName,
+    });
+    const dateInfo = normalizeDetailDate(firstPresent(line.completedDate, line.paidAt, line.createdAt));
+
+    distributeAmount(
+      descriptors,
+      amountCents,
+      addLabor,
+      () => ({
+        ...dateInfo,
+        source: line.displayTitle || line.workTypeName || line.serviceStopTypeName || line.id || "Payroll Line",
+      })
+    );
+  });
+
+  serviceStops.forEach((serviceStop) => {
+    const serviceStopId = String(serviceStop.id || serviceStop.serviceStopId || "");
+    if (!serviceStopId || actualPayServiceStopIds.has(serviceStopId)) return;
+
+    const estimatedPay = estimateServiceStopPaySummary({
+      companyId,
+      settings: paySettings,
+      serviceStop,
+      serviceStopType: serviceStopTypeFor(serviceStop),
+      serviceStopUseCaseSourceId: serviceStopUseCaseSourceId(serviceStop),
+      tasks: tasksForServiceStop(serviceStop),
+      worker: companyUserForServiceStop(serviceStop),
+      workTypes: companyWorkTypes,
+      mappings: workTypeMappings,
+      rates: technicianRates,
+      date: dateFromValue(firstPresent(serviceStop.completedDate, serviceStop.serviceDate, serviceStop.date, serviceStop.createdAt)) || new Date(),
+    });
+    const laborLines = estimatedPay.lines.filter((line) => cents(line.totalAmountCents) > 0);
+    if (!laborLines.length) return;
+
+    const descriptors = descriptorsForServiceStop(serviceStop);
+    const dateInfo = normalizeDetailDate(firstPresent(serviceStop.completedDate, serviceStop.serviceDate, serviceStop.date));
+
+    laborLines.forEach((line) => {
+      distributeAmount(
+        descriptors,
+        cents(line.totalAmountCents),
+        addLabor,
+        () => ({
+          ...dateInfo,
+          source: payrollEstimateLineLabel(line, serviceStop),
+        })
+      );
+    });
+  });
+
+  const poolRows = [...pools.values()]
+    .map((pool) => {
+      const costCents = pool.laborCents + pool.chemicalCents;
+      const netCents = pool.revenueCents - costCents;
+      return {
+        id: pool.id,
+        customerId: pool.customerId,
+        customer: pool.customerName,
+        serviceLocation: pool.serviceLocation,
+        pool: pool.pool,
+        agreements: pool.agreementIds.size,
+        visits: pool.visitIds.size,
+        revenueCents: pool.revenueCents,
+        laborCents: pool.laborCents,
+        chemicalCents: pool.chemicalCents,
+        costCents,
+        netCents,
+        margin: marginString(netCents, pool.revenueCents),
+        targetRateCents: targetRateCentsFor(costCents),
+        detailRows: pool.detailRows.sort((left, right) => left.sortTime - right.sortTime),
+      };
+    })
+    .sort((left, right) => left.netCents - right.netCents || left.customer.localeCompare(right.customer) || left.pool.localeCompare(right.pool));
+
+  const totals = poolRows.reduce((result, row) => ({
+    revenueCents: result.revenueCents + row.revenueCents,
+    laborCents: result.laborCents + row.laborCents,
+    chemicalCents: result.chemicalCents + row.chemicalCents,
+    costCents: result.costCents + row.costCents,
+    netCents: result.netCents + row.netCents,
+    visits: result.visits + row.visits,
+  }), { revenueCents: 0, laborCents: 0, chemicalCents: 0, costCents: 0, netCents: 0, visits: 0 });
+
+  const summaryColumns = [
+    { key: "customer", label: "Customer" },
+    { key: "serviceLocation", label: "Service Location" },
+    { key: "pool", label: "Pool" },
+    { key: "agreements", label: "Agreements", align: "right" },
+    { key: "visits", label: "Visits", align: "right" },
+    { key: "revenueCents", label: "Agreement Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
+    { key: "laborCents", label: "Labor", align: "right", render: (row) => moneyFromCents(row.laborCents) },
+    { key: "chemicalCents", label: "Chemicals", align: "right", render: (row) => moneyFromCents(row.chemicalCents) },
+    { key: "costCents", label: "Direct Cost", align: "right", render: (row) => moneyFromCents(row.costCents) },
+    { key: "netCents", label: "Net", align: "right", render: (row) => moneyFromCents(row.netCents) },
+    { key: "margin", label: "Margin", align: "right" },
+    { key: "targetRateCents", label: "Target Rate", align: "right", render: (row) => moneyFromCents(row.targetRateCents) },
+  ];
+
+  const detailColumns = [
+    { key: "date", label: "Date" },
+    { key: "type", label: "Type" },
+    { key: "source", label: "Source" },
+    { key: "revenueCents", label: "Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
+    { key: "laborCents", label: "Labor", align: "right", render: (row) => moneyFromCents(row.laborCents) },
+    { key: "chemicalCents", label: "Chemicals", align: "right", render: (row) => moneyFromCents(row.chemicalCents) },
+    { key: "netCents", label: "Net", align: "right", render: (row) => moneyFromCents(row.netCents) },
+  ];
+
+  const summaryGroupsByCustomer = new Map();
+  poolRows.forEach((row) => {
+    const group = ensureGroup(summaryGroupsByCustomer, { id: row.customerId || row.customer, name: row.customer || "No Customer" });
+    group.rows.push(row);
+  });
+
+  const customerGroups = [...summaryGroupsByCustomer.values()].map((group) => {
+    const groupTotals = group.rows.reduce((result, row) => ({
+      revenueCents: result.revenueCents + row.revenueCents,
+      laborCents: result.laborCents + row.laborCents,
+      chemicalCents: result.chemicalCents + row.chemicalCents,
+      costCents: result.costCents + row.costCents,
+      netCents: result.netCents + row.netCents,
+      visits: result.visits + row.visits,
+    }), { revenueCents: 0, laborCents: 0, chemicalCents: 0, costCents: 0, netCents: 0, visits: 0 });
+
+    return {
+      ...group,
+      metrics: {
+        Revenue: moneyFromCents(groupTotals.revenueCents),
+        "Direct Cost": moneyFromCents(groupTotals.costCents),
+        Net: moneyFromCents(groupTotals.netCents),
+      },
+      footerRow: {
+        customer: "Total",
+        serviceLocation: "",
+        pool: "",
+        agreements: "",
+        visits: groupTotals.visits,
+        revenueCents: groupTotals.revenueCents,
+        laborCents: groupTotals.laborCents,
+        chemicalCents: groupTotals.chemicalCents,
+        costCents: groupTotals.costCents,
+        netCents: groupTotals.netCents,
+        margin: marginString(groupTotals.netCents, groupTotals.revenueCents),
+        targetRateCents: targetRateCentsFor(groupTotals.costCents),
+      },
+    };
+  }).sort((left, right) => left.name.localeCompare(right.name));
+
+  const detailGroups = poolRows.map((row) => ({
+    id: row.id,
+    name: `${row.customer} | ${row.pool}`,
+    metrics: {
+      Revenue: moneyFromCents(row.revenueCents),
+      Labor: moneyFromCents(row.laborCents),
+      Chemicals: moneyFromCents(row.chemicalCents),
+      Net: moneyFromCents(row.netCents),
+    },
+    rows: row.detailRows,
+    footerRow: {
+      date: "Total",
+      type: "",
+      source: "",
+      revenueCents: row.revenueCents,
+      laborCents: row.laborCents,
+      chemicalCents: row.chemicalCents,
+      netCents: row.netCents,
+    },
+  }));
+
+  const watchlistRows = poolRows
+    .filter((row) => row.netCents < 0 || row.revenueCents === 0 || (row.revenueCents > 0 && row.netCents / row.revenueCents < 0.35))
+    .slice(0, 20);
+
+  return {
+    title: "PNL Per Pool Report",
+    stats: [
+      numberMetric("Pools", poolRows.length),
+      moneyMetric("Agreement Revenue", totals.revenueCents),
+      moneyMetric("Direct Costs", totals.costCents),
+      moneyMetric("Net", totals.netCents),
+      numberMetric("Visits", totals.visits),
+    ],
+    columns: mode === "detail" ? detailColumns : summaryColumns,
+    summarySections: [
+      {
+        title: "Rate Watchlist",
+        columns: [
+          { key: "customer", label: "Customer" },
+          { key: "pool", label: "Pool" },
+          { key: "revenueCents", label: "Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
+          { key: "costCents", label: "Direct Cost", align: "right", render: (row) => moneyFromCents(row.costCents) },
+          { key: "netCents", label: "Net", align: "right", render: (row) => moneyFromCents(row.netCents) },
+          { key: "margin", label: "Margin", align: "right" },
+          { key: "targetRateCents", label: "Target Rate", align: "right", render: (row) => moneyFromCents(row.targetRateCents) },
+        ],
+        rows: watchlistRows,
+      },
+    ],
+    total: {
+      label: "Company Pool Net",
+      value: moneyFromCents(totals.netCents),
+      subtitle: `${poolRows.length.toLocaleString()} pool(s) | ${totals.visits.toLocaleString()} visit(s)`,
+    },
+    groups: mode === "detail" ? detailGroups : customerGroups,
+  };
+};
+
+const buildPnlReport = ({ jobs, purchases, payrollLines, salesInvoices = [], serviceAgreements = [], databaseItemById = new Map(), groupBy, dateRangeStart, dateRangeEnd }) => {
   const groups = new Map();
   jobs.forEach((job) => {
     const group = ensureGroup(groups, groupKey(job, groupBy));
     addMetric(group, "revenueCents", jobRevenueCents(job));
     addMetric(group, "jobLaborCents", jobLaborCostCents(job));
   });
+  serviceAgreements.forEach((agreement) => {
+    const revenueCents = agreementRevenueCentsForRange(agreement, dateRangeStart, dateRangeEnd);
+    if (!revenueCents) return;
+
+    const group = ensureGroup(groups, groupKey({
+      customerId: agreement.customerId,
+      customerName: agreement.customerName,
+      userId: agreement.createdByUserId,
+      userName: agreement.createdByUserName || agreement.acceptedByUserName || "Unassigned",
+    }, groupBy));
+    addMetric(group, "agreementRevenueCents", revenueCents);
+  });
+  salesInvoices.forEach((invoice) => {
+    const chemicalRevenueCents = invoiceChemicalRevenueCentsForPnl(invoice, serviceAgreements);
+    if (!chemicalRevenueCents) return;
+
+    const group = ensureGroup(groups, groupKey(invoice, groupBy));
+    addMetric(group, "chemicalInvoiceRevenueCents", chemicalRevenueCents);
+  });
   purchases.forEach((purchase) => {
+    const databaseItem = purchaseDatabaseItem(purchase, databaseItemById) || {};
+    const costAgreement = agreementForPnlCost(
+      serviceAgreements,
+      purchase,
+      itemDate(purchase, ["date", "createdAt", "dateCreated"])
+    );
+    if (shouldExcludePnlChemicalCost({ agreement: costAgreement, record: purchase, linkedRecord: databaseItem })) return;
+
     const group = ensureGroup(groups, groupKey(purchase, groupBy));
     addMetric(group, "purchaseCents", purchaseTotalCents(purchase));
   });
@@ -1920,9 +3043,12 @@ const buildPnlReport = ({ jobs, purchases, payrollLines, groupBy }) => {
   });
 
   const resultGroups = [...groups.values()].map((group) => {
-    const revenueCents = group.metrics.revenueCents || 0;
+    const jobRevenueCents = group.metrics.revenueCents || 0;
+    const agreementRevenueCents = group.metrics.agreementRevenueCents || 0;
+    const chemicalInvoiceRevenueCents = group.metrics.chemicalInvoiceRevenueCents || 0;
+    const revenueCents = jobRevenueCents + agreementRevenueCents + chemicalInvoiceRevenueCents;
     const costCents = (group.metrics.purchaseCents || 0) + (group.metrics.payrollCents || 0) + (group.metrics.jobLaborCents || 0);
-    group.rows = [{ revenueCents, costCents, netCents: revenueCents - costCents }];
+    group.rows = [{ jobRevenueCents, agreementRevenueCents, chemicalInvoiceRevenueCents, revenueCents, costCents, netCents: revenueCents - costCents }];
     return group;
   });
 
@@ -1934,7 +3060,10 @@ const buildPnlReport = ({ jobs, purchases, payrollLines, groupBy }) => {
       moneyMetric("Net", resultGroups.reduce((total, group) => total + group.rows[0].netCents, 0)),
     ],
     columns: [
-      { key: "revenueCents", label: "Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
+      { key: "agreementRevenueCents", label: "Agreement Revenue", align: "right", render: (row) => moneyFromCents(row.agreementRevenueCents) },
+      { key: "chemicalInvoiceRevenueCents", label: "Chemical Revenue", align: "right", render: (row) => moneyFromCents(row.chemicalInvoiceRevenueCents) },
+      { key: "jobRevenueCents", label: "Job Revenue", align: "right", render: (row) => moneyFromCents(row.jobRevenueCents) },
+      { key: "revenueCents", label: "Total Revenue", align: "right", render: (row) => moneyFromCents(row.revenueCents) },
       { key: "costCents", label: "Costs", align: "right", render: (row) => moneyFromCents(row.costCents) },
       { key: "netCents", label: "Net", align: "right", render: (row) => moneyFromCents(row.netCents) },
     ],
@@ -2572,12 +3701,16 @@ const Reports = () => {
 
       const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users"].includes(reportType);
       const needsJobs = ["pnl", "job", "tax", "users"].includes(reportType);
-      const needsPayroll = ["pnl", "job", "users"].includes(reportType);
-      const needsUsers = reportType === "users";
+      const needsPayroll = ["pnl", "job", "users", "pnlPerPool"].includes(reportType);
+      const needsPayrollFallback = reportType === "pnlPerPool";
+      const needsUsers = reportType === "users" || needsPayrollFallback;
       const needsFleet = reportType === "vehicle";
-      const needsBodiesOfWater = ["readingHealth", "readingPerformance"].includes(reportType);
-      const needsServiceStops = ["users", "readingPerformance"].includes(reportType);
+      const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
+      const needsServiceStops = ["users", "readingPerformance", "pnlPerPool"].includes(reportType);
       const needsRecurringServiceStops = reportType === "readingPerformance";
+      const needsServiceAgreements = ["pnl", "pnlPerPool"].includes(reportType);
+      const needsServiceLocations = reportType === "pnlPerPool";
+      const needsSalesInvoices = reportType === "pnl";
 
       const [
         purchasesRaw,
@@ -2586,10 +3719,18 @@ const Reports = () => {
         payrollLinesRaw,
         serviceStopsRaw,
         recurringServiceStopsRaw,
+        serviceAgreementsRaw,
+        salesInvoicesRaw,
+        serviceLocationsRaw,
         usersRaw,
         vehiclesRaw,
         activeRoutesRaw,
         bodiesOfWaterRaw,
+        paySettingsRaw,
+        companyServiceStopTypesRaw,
+        companyWorkTypesRaw,
+        workTypeMappingsRaw,
+        technicianRatesRaw,
       ] = await Promise.all([
         needsPurchases ? getCollection(recentlySelectedCompany, "purchasedItems") : Promise.resolve([]),
         needsPurchases ? getDatabaseItems(recentlySelectedCompany) : Promise.resolve([]),
@@ -2597,10 +3738,24 @@ const Reports = () => {
         needsPayroll ? getCollection(recentlySelectedCompany, "technicianPayLineItems") : Promise.resolve([]),
         needsServiceStops ? getCollection(recentlySelectedCompany, "serviceStops") : Promise.resolve([]),
         needsRecurringServiceStops ? getCollection(recentlySelectedCompany, "recurringServiceStop") : Promise.resolve([]),
+        needsServiceAgreements
+          ? getDocs(query(collection(db, "salesAgreements"), where("companyId", "==", recentlySelectedCompany))).then(normalizeDocs)
+          : Promise.resolve([]),
+        needsSalesInvoices
+          ? getDocs(query(collection(db, "salesInvoices"), where("companyId", "==", recentlySelectedCompany))).then(normalizeDocs)
+          : Promise.resolve([]),
+        needsServiceLocations ? getCollection(recentlySelectedCompany, "serviceLocations") : Promise.resolve([]),
         needsUsers ? getCollection(recentlySelectedCompany, "companyUsers") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "vehicals") : Promise.resolve([]),
         needsFleet ? getCollection(recentlySelectedCompany, "activeRoutes") : Promise.resolve([]),
         needsBodiesOfWater ? getCollection(recentlySelectedCompany, "bodiesOfWater") : Promise.resolve([]),
+        needsPayrollFallback
+          ? getDoc(doc(db, "companies", recentlySelectedCompany, "paySettings", "main")).then((snap) => (snap.exists() ? snap.data() : null))
+          : Promise.resolve(null),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyServiceStopTypes") : Promise.resolve([]),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyWorkTypes") : Promise.resolve([]),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "workTypeMappings") : Promise.resolve([]),
+        needsPayrollFallback ? getCollection(recentlySelectedCompany, "technicianRates") : Promise.resolve([]),
       ]);
 
       const purchases = filterRecordsByCustomerTags({
@@ -2625,14 +3780,41 @@ const Reports = () => {
         records: recurringServiceStopsRaw,
         ...tagFilterContext,
       });
+      const serviceAgreements = filterRecordsByCustomerTags({
+        records: serviceAgreementsRaw,
+        ...tagFilterContext,
+      });
+      const salesInvoices = filterRecordsByCustomerTags({
+        records: salesInvoicesRaw.filter((item) => inRange(item, startDate, endDate, ["sentAt", "paidAt", "invoiceDate", "createdAt", "date"])),
+        ...tagFilterContext,
+      });
+      const serviceLocations = filterRecordsByCustomerTags({
+        records: serviceLocationsRaw,
+        ...tagFilterContext,
+      });
       const bodiesOfWater = filterRecordsByCustomerTags({
         records: bodiesOfWaterRaw,
         ...tagFilterContext,
       });
+      const serviceStopTasksById = new Map();
+      if (needsPayrollFallback && serviceStops.length) {
+        const taskEntries = await Promise.all(
+          serviceStops.map(async (serviceStop) => {
+            const serviceStopId = String(serviceStop.id || serviceStop.serviceStopId || "").trim();
+            if (!serviceStopId) return ["", []];
+            const tasksSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "serviceStops", serviceStopId, "tasks"));
+            return [serviceStopId, normalizeDocs(tasksSnap)];
+          })
+        );
+        taskEntries.forEach(([serviceStopId, tasks]) => {
+          if (serviceStopId) serviceStopTasksById.set(serviceStopId, tasks);
+        });
+      }
       const activeRoutes = activeRoutesRaw.filter((item) => inRange(item, startDate, endDate, ["date", "routeDate", "startTime", "createdAt"]));
       const databaseItemById = new Map(databaseItemsRaw.map((item) => [item.id, item]));
 
       const context = {
+        companyId: recentlySelectedCompany,
         stopData,
         readingTemplates,
         dosageTemplates,
@@ -2647,9 +3829,21 @@ const Reports = () => {
         payrollLines,
         serviceStops,
         recurringServiceStops,
+        serviceAgreements,
+        salesInvoices,
+        serviceLocations,
         users: usersRaw,
+        companyUsers: usersRaw,
+        paySettings: paySettingsRaw,
+        companyServiceStopTypes: companyServiceStopTypesRaw,
+        companyWorkTypes: companyWorkTypesRaw,
+        workTypeMappings: workTypeMappingsRaw,
+        technicianRates: technicianRatesRaw,
+        serviceStopTasksById,
         vehicles: vehiclesRaw,
         activeRoutes,
+        dateRangeStart: startDate,
+        dateRangeEnd: endDate,
         mode,
         groupBy,
       };
@@ -2662,6 +3856,7 @@ const Reports = () => {
         purchases: buildPurchaseReport,
         waste: buildWasteReport,
         users: buildUsersReport,
+        pnlPerPool: buildPnlPerPoolReport,
         pnl: buildPnlReport,
         job: buildJobReport,
         vehicle: buildVehicleReport,
@@ -2671,6 +3866,7 @@ const Reports = () => {
       const nextReport = builders[reportType](context);
       setReportData({
         ...nextReport,
+        mode,
         stats: [
           ...(nextReport.stats || []),
           { label: "Date Range", value: displayDateRange(dateRange) },

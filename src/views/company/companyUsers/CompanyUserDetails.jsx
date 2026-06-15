@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useContext, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { addDoc, doc, query, where, collection, getDocs, getDoc, limit, updateDoc, orderBy, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Select from "react-select";
 import {
     ArrowLeftIcon,
     BriefcaseIcon,
     CheckIcon,
     ChatBubbleBottomCenterTextIcon,
+    ClipboardDocumentCheckIcon,
     ClipboardDocumentListIcon,
     ClockIcon,
     CurrencyDollarIcon,
@@ -22,7 +24,7 @@ import {
     StarIcon,
     XMarkIcon,
 } from "@heroicons/react/24/outline";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
@@ -55,6 +57,7 @@ const statusOptions = [
 const companyUserSections = [
     { id: "general", label: "General", helper: "Profile, role, route access, and rate sheet" },
     { id: "activity", label: "Activity", helper: "Recent service stops, routes, and statements" },
+    { id: "onboarding", label: "Onboarding", helper: "Setup list and completion tracking" },
     { id: "performance", label: "Performance", helper: "Internal reviews, references, and shared reports", permissionId: "260" },
 ];
 
@@ -81,6 +84,39 @@ const emptySummaryDraft = {
     body: "",
     technicianVisible: true,
 };
+
+const DEFAULT_ONBOARDING_TEMPLATE_ITEMS = [
+    {
+        id: "default_invite_access",
+        name: "Confirm company access",
+        description: "Verify the user accepted the invite and can access the selected company.",
+        sortOrder: 10,
+    },
+    {
+        id: "default_profile",
+        name: "Complete profile",
+        description: "Confirm name, email, phone, photo, and basic profile details are filled in.",
+        sortOrder: 20,
+    },
+    {
+        id: "default_role_permissions",
+        name: "Review role and permissions",
+        description: "Assign the correct company role and confirm the user has the access they need.",
+        sortOrder: 30,
+    },
+    {
+        id: "default_payroll",
+        name: "Review payroll setup",
+        description: "Confirm worker type, rate sheet, payroll settings, and any required tax paperwork.",
+        sortOrder: 40,
+    },
+    {
+        id: "default_field_training",
+        name: "Complete field orientation",
+        description: "Review route workflow, service stop expectations, photos, notes, safety, and chemical handling.",
+        sortOrder: 50,
+    },
+];
 
 const selectStyles = {
     control: (base, state) => ({
@@ -350,6 +386,19 @@ const getVisibilityClass = (visibleToTechnician) => (
         : "bg-slate-100 text-slate-600 ring-slate-200"
 );
 
+const inactiveStatusValues = new Set(["inactive", "past", "archived", "deleted", "canceled", "cancelled"]);
+
+const isActiveRecurringServiceStop = (stop = {}) => (
+    !inactiveStatusValues.has(String(stop.status || stop.operationStatus || "").trim().toLowerCase())
+);
+
+const performancePreviewStyle = {
+    display: "-webkit-box",
+    WebkitLineClamp: 2,
+    WebkitBoxOrient: "vertical",
+    overflow: "hidden",
+};
+
 const buildServiceStopReference = (stop = {}) => ({
     id: stop.id,
     type: "serviceStop",
@@ -372,6 +421,35 @@ const isNonEmptyString = (value) => String(value || "").trim().length > 0;
 
 const performanceReviewsRef = (companyId, companyUserId) => (
     collection(db, "companyUserPerformanceReviews", companyId, "companyUsers", companyUserId, "reviews")
+);
+
+const onboardingTemplateItemsRef = (companyId) => (
+    collection(db, "companies", companyId, "settings", "onboardingChecklist", "items")
+);
+
+const companyUserOnboardingItemsRef = (companyId, companyUserId) => (
+    collection(db, "companies", companyId, "companyUsers", companyUserId, "onboardingChecklist")
+);
+
+const normalizeOnboardingItem = (item = {}, fallbackOrder = 0) => ({
+    id: item.id || "",
+    templateItemId: item.templateItemId || item.id || "",
+    name: String(item.name || "").trim(),
+    description: String(item.description || "").trim(),
+    sortOrder: Number.isFinite(Number(item.sortOrder)) ? Number(item.sortOrder) : fallbackOrder,
+    active: item.active !== false,
+    isComplete: item.isComplete === true,
+    dateCompleted: item.dateCompleted || item.completedAt || null,
+    completedAt: item.completedAt || item.dateCompleted || null,
+    completedByUserId: item.completedByUserId || "",
+    completedByName: item.completedByName || "",
+});
+
+const safeStorageFileName = (name) => (
+    String(name || "attachment")
+        .trim()
+        .replace(/[^a-zA-Z0-9._-]/g, "_")
+        .slice(0, 140) || "attachment"
 );
 
 const EmptyState = ({ title, description }) => (
@@ -456,6 +534,7 @@ const CompanyUserDetails = () => {
     const [isRateSheetLoading, setIsRateSheetLoading] = useState(false);
     const [rateSheetError, setRateSheetError] = useState("");
     const [recentServiceStops, setRecentServiceStops] = useState([]);
+    const [assignedRecurringServiceStops, setAssignedRecurringServiceStops] = useState([]);
     const [recentRoutes, setRecentRoutes] = useState([]);
     const [recentJobs, setRecentJobs] = useState([]);
     const [recentStatements, setRecentStatements] = useState([]);
@@ -465,9 +544,20 @@ const CompanyUserDetails = () => {
     const [isPerformanceLoading, setIsPerformanceLoading] = useState(false);
     const [performanceError, setPerformanceError] = useState("");
     const [performanceDraft, setPerformanceDraft] = useState(emptyPerformanceDraft);
+    const [performanceFiles, setPerformanceFiles] = useState([]);
+    const [isPerformanceLineModalOpen, setIsPerformanceLineModalOpen] = useState(false);
+    const [isSummaryReportModalOpen, setIsSummaryReportModalOpen] = useState(false);
+    const [selectedPerformanceReview, setSelectedPerformanceReview] = useState(null);
+    const [showAllPerformanceHistory, setShowAllPerformanceHistory] = useState(false);
     const [summaryDraft, setSummaryDraft] = useState(emptySummaryDraft);
     const [isSavingPerformance, setIsSavingPerformance] = useState(false);
+    const [isUploadingPerformanceFiles, setIsUploadingPerformanceFiles] = useState(false);
     const [isSavingSummary, setIsSavingSummary] = useState(false);
+    const [onboardingItems, setOnboardingItems] = useState([]);
+    const [isOnboardingLoading, setIsOnboardingLoading] = useState(false);
+    const [onboardingError, setOnboardingError] = useState("");
+    const [isInitializingOnboarding, setIsInitializingOnboarding] = useState(false);
+    const [updatingOnboardingItemId, setUpdatingOnboardingItemId] = useState("");
 
     useEffect(() => {
         if (!recentlySelectedCompany || !companyUserId) return;
@@ -615,6 +705,7 @@ const CompanyUserDetails = () => {
     useEffect(() => {
         if (!recentlySelectedCompany || !user?.id) {
             setRecentServiceStops([]);
+            setAssignedRecurringServiceStops([]);
             setRecentRoutes([]);
             setRecentJobs([]);
             setRecentStatements([]);
@@ -655,14 +746,25 @@ const CompanyUserDetails = () => {
             };
 
             const serviceStopsQuery = buildLookupQuery("serviceStops", "techId", "serviceDate", 8);
+            const recurringServiceStopsQuery = (() => {
+                const targetIds = lookupIds.slice(0, 10);
+                if (targetIds.length === 0) return null;
+                const ref = collection(db, "companies", recentlySelectedCompany, "recurringServiceStop");
+                const idFilter = targetIds.length === 1
+                    ? where("techId", "==", targetIds[0])
+                    : where("techId", "in", targetIds);
+                return query(ref, idFilter, limit(500));
+            })();
             const routesQuery = buildLookupQuery("activeRoutes", "techId", "date", 8);
 
             const [
                 serviceStopsSnapshot,
+                recurringServiceStopsSnapshot,
                 routesSnapshot,
                 statementsSnapshot,
             ] = await Promise.all([
                 serviceStopsQuery ? safeGet("recent service stops", () => getDocs(serviceStopsQuery)) : Promise.resolve({ docs: [] }),
+                recurringServiceStopsQuery ? safeGet("assigned recurring service stops", () => getDocs(recurringServiceStopsQuery)) : Promise.resolve({ docs: [] }),
                 routesQuery ? safeGet("recent routes", () => getDocs(routesQuery)) : Promise.resolve({ docs: [] }),
                 safeGet("recent statements", () => getDocs(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"))),
             ]);
@@ -693,6 +795,9 @@ const CompanyUserDetails = () => {
 
             setRecentServiceStops(
                 serviceStops
+            );
+            setAssignedRecurringServiceStops(
+                recurringServiceStopsSnapshot.docs.map((rssDoc) => ({ id: rssDoc.id, ...rssDoc.data() }))
             );
             setRecentRoutes(
                 routesSnapshot.docs.map((routeDoc) => ({ id: routeDoc.id, ...routeDoc.data() }))
@@ -769,6 +874,50 @@ const CompanyUserDetails = () => {
         };
     }, [recentlySelectedCompany, user?.id, can]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany || !user?.id) {
+            setOnboardingItems([]);
+            setOnboardingError("");
+            setIsOnboardingLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchOnboardingItems = async () => {
+            setIsOnboardingLoading(true);
+            setOnboardingError("");
+
+            try {
+                const onboardingSnapshot = await getDocs(query(
+                    companyUserOnboardingItemsRef(recentlySelectedCompany, user.id),
+                    orderBy("sortOrder", "asc")
+                ));
+
+                if (cancelled) return;
+
+                setOnboardingItems(
+                    onboardingSnapshot.docs.map((itemDoc, index) => (
+                        normalizeOnboardingItem({ id: itemDoc.id, ...itemDoc.data() }, index * 10)
+                    ))
+                );
+            } catch (error) {
+                if (cancelled) return;
+                console.error("Error loading onboarding checklist:", error);
+                setOnboardingError("Could not load onboarding checklist.");
+                setOnboardingItems([]);
+            } finally {
+                if (!cancelled) setIsOnboardingLoading(false);
+            }
+        };
+
+        fetchOnboardingItems();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany, user?.id]);
+
     const roleOptions = useMemo(() => {
         const options = roleList.map((role) => ({
             ...role,
@@ -805,6 +954,7 @@ const CompanyUserDetails = () => {
     const isContractor = normalizeWorkerType(user?.workerType) === WorkerTypeEnum.contractor;
     const canViewPerformanceReviews = can("260");
     const canEditPerformanceReviews = can("264");
+    const canEditOnboardingChecklist = can("264");
     const visibleCompanyUserSections = useMemo(
         () => companyUserSections.filter((section) => !section.permissionId || can(section.permissionId)),
         [can]
@@ -894,6 +1044,10 @@ const CompanyUserDetails = () => {
         () => jobReferenceOptions.filter((reference) => performanceDraft.referenceJobIds.includes(reference.id)),
         [performanceDraft.referenceJobIds, jobReferenceOptions]
     );
+    const activeAssignedRecurringServiceStops = useMemo(
+        () => assignedRecurringServiceStops.filter(isActiveRecurringServiceStop),
+        [assignedRecurringServiceStops]
+    );
     const performanceStats = useMemo(() => {
         const praise = performanceReviews.filter((review) => review.type === "kudo").length;
         const complaints = performanceReviews.filter((review) => review.type === "complaint").length;
@@ -908,8 +1062,26 @@ const CompanyUserDetails = () => {
             complaints,
             summaries: performanceReviews.filter((review) => review.type === "summary" || review.isSummaryReport).length,
             sharedReports,
+            activeRss: activeAssignedRecurringServiceStops.length,
+            totalRss: assignedRecurringServiceStops.length,
         };
-    }, [performanceReviews]);
+    }, [activeAssignedRecurringServiceStops, assignedRecurringServiceStops, performanceReviews]);
+    const complaintTimelineItems = useMemo(
+        () => sortByRecentDate(
+            performanceReviews.filter((review) => review.type === "complaint"),
+            (review) => review.date || review.createdAt
+        ),
+        [performanceReviews]
+    );
+    const onboardingStats = useMemo(() => {
+        const completed = onboardingItems.filter((item) => item.isComplete).length;
+
+        return {
+            total: onboardingItems.length,
+            completed,
+            remaining: Math.max(onboardingItems.length - completed, 0),
+        };
+    }, [onboardingItems]);
 
     const workTypeNameForRate = (rate) => {
         if (rate.payBasis === "technicianHourly" && !rate.workTypeId) return "General Hourly";
@@ -995,6 +1167,132 @@ const CompanyUserDetails = () => {
         }
     };
 
+    const handleInitializeOnboardingChecklist = async () => {
+        if (!requirePermission("264", "initialize onboarding checklist")) return;
+        if (!recentlySelectedCompany || !user?.id) return;
+
+        setIsInitializingOnboarding(true);
+        try {
+            const [templateSnapshot, existingSnapshot] = await Promise.all([
+                getDocs(query(onboardingTemplateItemsRef(recentlySelectedCompany), orderBy("sortOrder", "asc"))),
+                getDocs(companyUserOnboardingItemsRef(recentlySelectedCompany, user.id)),
+            ]);
+            const templateItems = templateSnapshot.docs
+                .map((templateDoc, index) => normalizeOnboardingItem({ id: templateDoc.id, ...templateDoc.data() }, index * 10))
+                .filter((item) => item.name && item.active !== false);
+            const sourceItems = templateItems.length
+                ? templateItems
+                : DEFAULT_ONBOARDING_TEMPLATE_ITEMS.map((item) => normalizeOnboardingItem(item, item.sortOrder));
+            const existingTemplateIds = new Set(
+                existingSnapshot.docs
+                    .map((itemDoc) => {
+                        const item = itemDoc.data() || {};
+                        return item.templateItemId || item.id || itemDoc.id;
+                    })
+                    .filter(Boolean)
+            );
+            const batch = writeBatch(db);
+            const userChecklistRef = companyUserOnboardingItemsRef(recentlySelectedCompany, user.id);
+            const localNow = Timestamp.fromDate(new Date());
+            const newItems = [];
+
+            sourceItems.forEach((item, index) => {
+                const templateItemId = item.templateItemId || item.id || `onboarding_${index + 1}`;
+                if (!templateItemId || existingTemplateIds.has(templateItemId)) return;
+
+                const itemRef = doc(userChecklistRef, templateItemId);
+                const payload = {
+                    id: itemRef.id,
+                    templateItemId,
+                    name: item.name,
+                    description: item.description,
+                    sortOrder: Number(item.sortOrder || (index + 1) * 10),
+                    isComplete: false,
+                    dateCompleted: null,
+                    completedAt: null,
+                    completedByUserId: "",
+                    completedByName: "",
+                    companyId: recentlySelectedCompany,
+                    companyUserId: user.id,
+                    copiedFromTemplate: true,
+                    createdAt: serverTimestamp(),
+                    createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+                    updatedAt: serverTimestamp(),
+                    updatedByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+                };
+
+                batch.set(itemRef, payload, { merge: true });
+                existingTemplateIds.add(templateItemId);
+                newItems.push({
+                    ...payload,
+                    createdAt: localNow,
+                    updatedAt: localNow,
+                });
+            });
+
+            if (newItems.length === 0) {
+                toast.success("Onboarding checklist is already current.");
+                return;
+            }
+
+            await batch.commit();
+            setOnboardingItems((current) => (
+                [...current, ...newItems].sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0))
+            ));
+            toast.success("Onboarding checklist copied to user.");
+        } catch (error) {
+            console.error("Error initializing onboarding checklist:", error);
+            toast.error("Could not copy onboarding checklist.");
+        } finally {
+            setIsInitializingOnboarding(false);
+        }
+    };
+
+    const handleToggleOnboardingItem = async (item, isComplete) => {
+        if (!requirePermission("264", "update onboarding checklist")) return;
+        if (!recentlySelectedCompany || !user?.id || !item?.id) return;
+
+        const actorUserId = dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "";
+        const completedDate = isComplete ? Timestamp.fromDate(new Date()) : null;
+        const payload = isComplete
+            ? {
+                isComplete: true,
+                dateCompleted: completedDate,
+                completedAt: completedDate,
+                completedByUserId: actorUserId,
+                completedByName: reviewerName,
+                updatedAt: serverTimestamp(),
+                updatedByUserId: actorUserId,
+            }
+            : {
+                isComplete: false,
+                dateCompleted: null,
+                completedAt: null,
+                completedByUserId: "",
+                completedByName: "",
+                updatedAt: serverTimestamp(),
+                updatedByUserId: actorUserId,
+            };
+
+        setUpdatingOnboardingItemId(item.id);
+        try {
+            await updateDoc(doc(companyUserOnboardingItemsRef(recentlySelectedCompany, user.id), item.id), payload);
+            setOnboardingItems((current) => (
+                current.map((currentItem) => (
+                    currentItem.id === item.id
+                        ? { ...currentItem, ...payload, updatedAt: completedDate || Timestamp.fromDate(new Date()) }
+                        : currentItem
+                ))
+            ));
+            toast.success(isComplete ? "Onboarding item completed." : "Onboarding item reopened.");
+        } catch (error) {
+            console.error("Error updating onboarding item:", error);
+            toast.error("Could not update onboarding item.");
+        } finally {
+            setUpdatingOnboardingItemId("");
+        }
+    };
+
     const updatePerformanceDraftField = (field, value) => {
         setPerformanceDraft((current) => ({ ...current, [field]: value }));
     };
@@ -1012,53 +1310,102 @@ const CompanyUserDetails = () => {
         });
     };
 
+    const handlePerformanceFilesChange = (event) => {
+        const files = Array.from(event.target.files || []);
+        if (!files.length) return;
+
+        setPerformanceFiles((current) => [...current, ...files]);
+        event.target.value = "";
+    };
+
+    const removePerformanceFile = (fileIndex) => {
+        setPerformanceFiles((current) => current.filter((_, index) => index !== fileIndex));
+    };
+
     const handleSavePerformanceLine = async () => {
         if (!requirePermission("264", "create performance review lines")) return;
         if (!recentlySelectedCompany || !user?.id) return;
 
         const hasNote = isNonEmptyString(performanceDraft.note);
-        const hasReport = [performanceDraft.reportTitle, performanceDraft.reportUrl, performanceDraft.reportNotes].some(isNonEmptyString);
+        const hasReportDetails = [performanceDraft.reportTitle, performanceDraft.reportUrl, performanceDraft.reportNotes].some(isNonEmptyString);
+        const hasFileAttachments = performanceFiles.length > 0;
 
-        if (!hasNote && !hasReport) {
+        if (!hasNote && !hasReportDetails && !hasFileAttachments) {
             toast.error("Add a note or attach a report before saving.");
             return;
         }
 
-        const attachedReports = hasReport
-            ? [{
-                id: `report_${Date.now()}`,
-                title: performanceDraft.reportTitle.trim() || "Attached report",
-                url: performanceDraft.reportUrl.trim(),
-                notes: performanceDraft.reportNotes.trim(),
-                isTechnicianVisible: Boolean(performanceDraft.reportTechnicianVisible),
-                attachedAt: Timestamp.fromDate(new Date()),
-            }]
-            : [];
-        const reviewDate = Timestamp.fromDate(new Date());
-        const payload = {
-            type: performanceDraft.type,
-            note: performanceDraft.note.trim(),
-            date: reviewDate,
-            references: {
-                serviceStops: selectedServiceStopReferences,
-                jobs: selectedJobReferences,
-            },
-            attachedReports,
-            visibleToTechnician: false,
-            isSummaryReport: false,
-            companyInternal: true,
-            companyId: recentlySelectedCompany,
-            companyUserId: user.id,
-            technicianUserId: user.userId || "",
-            technicianName: displayName,
-            createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
-            createdByName: reviewerName,
-            createdAt: serverTimestamp(),
-            updatedAt: serverTimestamp(),
-        };
-
         setIsSavingPerformance(true);
+        setIsUploadingPerformanceFiles(hasFileAttachments);
         try {
+            const reviewDate = Timestamp.fromDate(new Date());
+            const filesVisibleToTechnician = Boolean(performanceDraft.reportTechnicianVisible);
+            const uploadedAttachments = [];
+
+            for (const [index, file] of performanceFiles.entries()) {
+                const attachmentId = `file_${Date.now()}_${index}`;
+                const visibilityFolder = filesVisibleToTechnician ? "shared" : "internal";
+                const storagePath = [
+                    "companies",
+                    recentlySelectedCompany,
+                    "performanceReviews",
+                    user.id,
+                    visibilityFolder,
+                    `${attachmentId}_${safeStorageFileName(file.name)}`,
+                ].join("/");
+                const storageRef = ref(storage, storagePath);
+
+                await uploadBytes(storageRef, file, {
+                    contentType: file.type || "application/octet-stream",
+                });
+                const url = await getDownloadURL(storageRef);
+
+                uploadedAttachments.push({
+                    id: attachmentId,
+                    name: file.name || "Attachment",
+                    title: file.name || "Attachment",
+                    url,
+                    contentType: file.type || "",
+                    size: file.size || 0,
+                    storagePath,
+                    isTechnicianVisible: filesVisibleToTechnician,
+                    attachedAt: reviewDate,
+                });
+            }
+
+            const attachedReports = hasReportDetails || uploadedAttachments.length
+                ? [{
+                    id: `report_${Date.now()}`,
+                    title: performanceDraft.reportTitle.trim() || (uploadedAttachments.length ? "Uploaded attachments" : "Attached report"),
+                    url: performanceDraft.reportUrl.trim(),
+                    notes: performanceDraft.reportNotes.trim(),
+                    isTechnicianVisible: filesVisibleToTechnician,
+                    attachments: uploadedAttachments,
+                    attachedAt: reviewDate,
+                }]
+                : [];
+            const payload = {
+                type: performanceDraft.type,
+                note: performanceDraft.note.trim(),
+                date: reviewDate,
+                references: {
+                    serviceStops: selectedServiceStopReferences,
+                    jobs: selectedJobReferences,
+                },
+                attachedReports,
+                attachments: uploadedAttachments,
+                visibleToTechnician: false,
+                isSummaryReport: false,
+                companyInternal: true,
+                companyId: recentlySelectedCompany,
+                companyUserId: user.id,
+                technicianUserId: user.userId || "",
+                technicianName: displayName,
+                createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+                createdByName: reviewerName,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            };
             const reviewsCollectionRef = performanceReviewsRef(recentlySelectedCompany, user.id);
             const batch = writeBatch(db);
             const reviewRef = doc(reviewsCollectionRef);
@@ -1087,6 +1434,7 @@ const CompanyUserDetails = () => {
                     date: reviewDate,
                     references: payload.references,
                     attachedReports: visibleReports,
+                    attachments: uploadedAttachments.filter((attachment) => attachment.isTechnicianVisible),
                     visibleToTechnician: true,
                     isSummaryReport: false,
                     companyInternal: true,
@@ -1113,12 +1461,15 @@ const CompanyUserDetails = () => {
             await batch.commit();
             setPerformanceReviews((current) => [...localRecords, ...current]);
             setPerformanceDraft(emptyPerformanceDraft);
+            setPerformanceFiles([]);
+            setIsPerformanceLineModalOpen(false);
             toast.success("Performance line saved.");
         } catch (error) {
             console.error("Error saving performance line:", error);
             toast.error("Failed to save performance line.");
         } finally {
             setIsSavingPerformance(false);
+            setIsUploadingPerformanceFiles(false);
         }
     };
 
@@ -1230,6 +1581,7 @@ const CompanyUserDetails = () => {
                 },
                 ...current,
             ]);
+            setIsSummaryReportModalOpen(false);
             toast.success("Summary report saved.");
         } catch (error) {
             console.error("Error saving summary report:", error);
@@ -1284,6 +1636,12 @@ const CompanyUserDetails = () => {
             ...(review.references?.jobs || []),
         ];
         const attachedReports = Array.isArray(review.attachedReports) ? review.attachedReports : [];
+        const attachedFiles = [
+            ...(Array.isArray(review.attachments) ? review.attachments : []),
+            ...attachedReports.flatMap((report) => Array.isArray(report.attachments) ? report.attachments : []),
+        ].filter((attachment, index, attachments) => (
+            attachment?.url && attachments.findIndex((candidate) => candidate.url === attachment.url) === index
+        ));
 
         return (
             <article key={review.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -1351,9 +1709,144 @@ const CompanyUserDetails = () => {
                         </div>
                     </div>
                 )}
+
+                {attachedFiles.length > 0 && (
+                    <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+                            <PaperClipIcon className="h-4 w-4" />
+                            Files & Photos
+                        </div>
+                        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                            {attachedFiles.map((attachment) => {
+                                const isImage = String(attachment.contentType || "").startsWith("image/");
+                                return (
+                                    <a
+                                        key={attachment.id || attachment.url}
+                                        href={attachment.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="group overflow-hidden rounded-md border border-slate-200 bg-white transition hover:border-blue-200 hover:bg-blue-50"
+                                    >
+                                        {isImage && (
+                                            <img
+                                                src={attachment.url}
+                                                alt={attachment.name || "Performance attachment"}
+                                                className="h-28 w-full object-cover"
+                                            />
+                                        )}
+                                        <div className="flex items-center gap-2 p-3">
+                                            <PaperClipIcon className="h-4 w-4 shrink-0 text-slate-400 group-hover:text-blue-500" />
+                                            <span className="min-w-0 truncate text-sm font-semibold text-slate-700 group-hover:text-blue-700">
+                                                {attachment.name || attachment.title || "Attachment"}
+                                            </span>
+                                        </div>
+                                    </a>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
             </article>
         );
     };
+
+    const renderPerformanceHistoryRow = (review) => {
+        const references = [
+            ...(review.references?.serviceStops || []),
+            ...(review.references?.jobs || []),
+        ];
+        const attachedReports = Array.isArray(review.attachedReports) ? review.attachedReports : [];
+        const attachedFiles = [
+            ...(Array.isArray(review.attachments) ? review.attachments : []),
+            ...attachedReports.flatMap((report) => Array.isArray(report.attachments) ? report.attachments : []),
+        ].filter((attachment, index, attachments) => (
+            attachment?.url && attachments.findIndex((candidate) => candidate.url === attachment.url) === index
+        ));
+
+        return (
+            <tr key={review.id} className="align-top">
+                <td className="whitespace-nowrap px-4 py-3 text-xs font-semibold text-slate-500">
+                    {formatDateTime(review.date || review.createdAt)}
+                </td>
+                <td className="px-4 py-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <Badge className={getPerformanceTypeClass(review.type)}>{getPerformanceTypeLabel(review.type)}</Badge>
+                        <Badge className={getVisibilityClass(review.visibleToTechnician)}>
+                            {review.visibleToTechnician ? "Technician" : "Internal"}
+                        </Badge>
+                    </div>
+                    {review.title && <p className="mt-2 text-sm font-semibold text-slate-950">{review.title}</p>}
+                </td>
+                <td className="min-w-[260px] px-4 py-3">
+                    <p className="text-sm leading-6 text-slate-700" style={performancePreviewStyle}>
+                        {review.note || "No notes recorded."}
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => setSelectedPerformanceReview(review)}
+                        className="mt-2 text-xs font-semibold text-blue-700 transition hover:text-blue-900"
+                    >
+                        View detail
+                    </button>
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">
+                    {references.length.toLocaleString()} ref{references.length === 1 ? "" : "s"}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">
+                    {(attachedReports.length + attachedFiles.length).toLocaleString()} item{attachedReports.length + attachedFiles.length === 1 ? "" : "s"}
+                </td>
+                <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-600">
+                    {review.createdByName || "Management"}
+                </td>
+            </tr>
+        );
+    };
+
+    const renderComplaintTimeline = () => (
+        <Section
+            title="Complaint Timeline"
+            description="All saved complaint entries for this technician, shown newest first."
+        >
+            {complaintTimelineItems.length === 0 ? (
+                <EmptyState
+                    title="No complaints recorded"
+                    description="Complaint entries will appear here as a running performance timeline."
+                />
+            ) : (
+                <ol className="relative space-y-3 before:absolute before:left-3 before:top-3 before:h-[calc(100%-1.5rem)] before:w-px before:bg-rose-100">
+                    {complaintTimelineItems.map((review) => (
+                        <li key={`complaint-${review.id}`} className="relative pl-9">
+                            <span className="absolute left-0 top-4 flex h-6 w-6 items-center justify-center rounded-full bg-rose-100 ring-4 ring-white">
+                                <ChatBubbleBottomCenterTextIcon className="h-3.5 w-3.5 text-rose-700" />
+                            </span>
+                            <div className="rounded-lg border border-rose-100 bg-white p-4">
+                                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Badge className={getPerformanceTypeClass(review.type)}>{getPerformanceTypeLabel(review.type)}</Badge>
+                                            <span className="text-xs font-semibold text-slate-500">{review.createdByName || "Management"}</span>
+                                        </div>
+                                        {review.title && <p className="mt-2 text-sm font-semibold text-slate-950">{review.title}</p>}
+                                        <p className="mt-2 text-sm leading-6 text-slate-700" style={performancePreviewStyle}>
+                                            {review.note || "No notes recorded."}
+                                        </p>
+                                        <button
+                                            type="button"
+                                            onClick={() => setSelectedPerformanceReview(review)}
+                                            className="mt-2 text-xs font-semibold text-blue-700 transition hover:text-blue-900"
+                                        >
+                                            View full complaint
+                                        </button>
+                                    </div>
+                                    <p className="shrink-0 text-xs font-semibold text-slate-500">{formatDateTime(review.date || review.createdAt)}</p>
+                                </div>
+                            </div>
+                        </li>
+                    ))}
+                </ol>
+            )}
+        </Section>
+    );
 
     const renderRateSheetSection = () => (
         <Section
@@ -1817,6 +2310,321 @@ const CompanyUserDetails = () => {
         </Section>
     );
 
+    const renderOnboardingTab = () => (
+        <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <StatTile
+                    icon={ClipboardDocumentCheckIcon}
+                    title="Checklist Items"
+                    value={onboardingStats.total}
+                    subtitle="Copied to user"
+                />
+                <StatTile
+                    icon={CheckIcon}
+                    title="Completed"
+                    value={onboardingStats.completed}
+                    subtitle="Marked done"
+                />
+                <StatTile
+                    icon={ClockIcon}
+                    title="Remaining"
+                    value={onboardingStats.remaining}
+                    subtitle="Still open"
+                />
+            </div>
+
+            <Section
+                title="Onboarding Checklist"
+                description="Per-user setup items copied from the company onboarding template."
+                action={canEditOnboardingChecklist && (
+                    <button
+                        type="button"
+                        onClick={handleInitializeOnboardingChecklist}
+                        disabled={isInitializingOnboarding}
+                        className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <ClipboardDocumentCheckIcon className="h-4 w-4" />
+                        {isInitializingOnboarding ? "Copying..." : "Copy Company Template"}
+                    </button>
+                )}
+            >
+                <div className="space-y-4">
+                    {onboardingError && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                            {onboardingError}
+                        </div>
+                    )}
+
+                    {isOnboardingLoading ? (
+                        <p className="text-sm text-slate-500">Loading onboarding checklist...</p>
+                    ) : onboardingItems.length === 0 ? (
+                        <EmptyState
+                            title="No onboarding checklist copied yet"
+                            description="Copy the company template to start tracking this user's setup items."
+                        />
+                    ) : (
+                        <div className="divide-y divide-slate-100 rounded-lg border border-slate-200 bg-white">
+                            {onboardingItems.map((item) => {
+                                const isUpdating = updatingOnboardingItemId === item.id;
+
+                                return (
+                                    <article key={item.id} className="flex flex-col gap-3 p-4 sm:flex-row sm:items-start sm:justify-between">
+                                        <label className="flex min-w-0 flex-1 items-start gap-3">
+                                            <input
+                                                type="checkbox"
+                                                checked={item.isComplete}
+                                                onChange={(event) => handleToggleOnboardingItem(item, event.target.checked)}
+                                                disabled={!canEditOnboardingChecklist || isUpdating}
+                                                className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                            />
+                                            <span className="min-w-0">
+                                                <span className={`block text-sm font-semibold ${item.isComplete ? "text-slate-500 line-through" : "text-slate-950"}`}>
+                                                    {item.name}
+                                                </span>
+                                                <span className="mt-1 block text-sm text-slate-500">{item.description || "No description"}</span>
+                                            </span>
+                                        </label>
+                                        <div className="shrink-0 text-left sm:text-right">
+                                            <Badge className={item.isComplete ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-slate-100 text-slate-600 ring-slate-200"}>
+                                                {item.isComplete ? "Complete" : "Open"}
+                                            </Badge>
+                                            <p className="mt-2 text-xs font-semibold text-slate-500">
+                                                {item.isComplete ? `Completed ${formatDate(item.dateCompleted)}` : "Date completed: Not set"}
+                                            </p>
+                                            {item.isComplete && (
+                                                <p className="mt-1 text-xs text-slate-500">
+                                                    By {item.completedByName || item.completedByUserId || "Management"}
+                                                </p>
+                                            )}
+                                        </div>
+                                    </article>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </Section>
+        </div>
+    );
+
+    const renderPerformanceLineForm = ({ onCancel }) => (
+        <div className="space-y-5">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Line Type</span>
+                    <select
+                        value={performanceDraft.type}
+                        onChange={(event) => updatePerformanceDraftField("type", event.target.value)}
+                        className={inputBase}
+                    >
+                        {performanceLineTypes.map((option) => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                    </select>
+                </label>
+
+                <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Notes</span>
+                    <textarea
+                        value={performanceDraft.note}
+                        onChange={(event) => updatePerformanceDraftField("note", event.target.value)}
+                        rows={4}
+                        className={`${inputBase} min-h-[120px]`}
+                        placeholder="Document the performance line..."
+                    />
+                </label>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                {renderReferencePicker({
+                    title: "Service Stop References",
+                    icon: ListBulletIcon,
+                    references: serviceStopReferenceOptions,
+                    fieldName: "referenceStopIds",
+                    emptyTitle: "No recent service stops found for this technician.",
+                })}
+                {renderReferencePicker({
+                    title: "Job References",
+                    icon: BriefcaseIcon,
+                    references: jobReferenceOptions,
+                    fieldName: "referenceJobIds",
+                    emptyTitle: "No linked jobs found from recent service stops.",
+                })}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+                    <PaperClipIcon className="h-4 w-4 text-slate-500" />
+                    Attach Report
+                </div>
+                <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <label className="space-y-1.5">
+                        <span className="text-sm font-semibold text-slate-700">Report Title</span>
+                        <input
+                            value={performanceDraft.reportTitle}
+                            onChange={(event) => updatePerformanceDraftField("reportTitle", event.target.value)}
+                            className={inputBase}
+                            placeholder="Reading performance report"
+                        />
+                    </label>
+                    <label className="space-y-1.5">
+                        <span className="text-sm font-semibold text-slate-700">Report Link</span>
+                        <input
+                            type="url"
+                            value={performanceDraft.reportUrl}
+                            onChange={(event) => updatePerformanceDraftField("reportUrl", event.target.value)}
+                            className={inputBase}
+                            placeholder="https://..."
+                        />
+                    </label>
+                </div>
+                <label className="mt-4 block space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Report Notes</span>
+                    <textarea
+                        value={performanceDraft.reportNotes}
+                        onChange={(event) => updatePerformanceDraftField("reportNotes", event.target.value)}
+                        rows={3}
+                        className={`${inputBase} min-h-[92px]`}
+                        placeholder="Optional report context..."
+                    />
+                </label>
+
+                <div className="mt-4 space-y-3">
+                    <label className="block">
+                        <span className="mb-1.5 block text-sm font-semibold text-slate-700">Files & Photos</span>
+                        <input
+                            type="file"
+                            multiple
+                            accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
+                            onChange={handlePerformanceFilesChange}
+                            className="block w-full text-sm text-slate-600 file:mr-4 file:rounded-md file:border-0 file:bg-slate-900 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-slate-700"
+                        />
+                    </label>
+                    {performanceFiles.length > 0 && (
+                        <div className="space-y-2">
+                            {performanceFiles.map((file, index) => (
+                                <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2">
+                                    <div className="min-w-0">
+                                        <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
+                                        <p className="text-xs text-slate-500">{Math.ceil((file.size || 0) / 1024).toLocaleString()} KB</p>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => removePerformanceFile(index)}
+                                        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                                        aria-label={`Remove ${file.name}`}
+                                    >
+                                        <XMarkIcon className="h-4 w-4" />
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                <label className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input
+                        type="checkbox"
+                        checked={performanceDraft.reportTechnicianVisible}
+                        onChange={(event) => updatePerformanceDraftField("reportTechnicianVisible", event.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Share attached report with technician
+                </label>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    disabled={isSavingPerformance}
+                    className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    onClick={handleSavePerformanceLine}
+                    disabled={isSavingPerformance}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <PlusIcon className="h-4 w-4" />
+                    {isSavingPerformance
+                        ? (isUploadingPerformanceFiles ? "Uploading..." : "Saving...")
+                        : "Add Line"}
+                </button>
+            </div>
+        </div>
+    );
+
+    const renderSummaryReportForm = ({ onCancel }) => (
+        <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-100 bg-blue-50 p-3">
+                <div>
+                    <p className="text-sm font-semibold text-blue-950">Build from saved performance history</p>
+                    <p className="mt-1 text-sm text-blue-700">Generate a draft, edit the full summary, then save it to this technician.</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={handleGenerateSummaryReport}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                >
+                    <SparklesIcon className="h-4 w-4" />
+                    Generate Draft
+                </button>
+            </div>
+
+            <label className="block space-y-1.5">
+                <span className="text-sm font-semibold text-slate-700">Summary Title</span>
+                <input
+                    value={summaryDraft.title}
+                    onChange={(event) => setSummaryDraft((current) => ({ ...current, title: event.target.value }))}
+                    className={inputBase}
+                />
+            </label>
+            <label className="block space-y-1.5">
+                <span className="text-sm font-semibold text-slate-700">Summary Body</span>
+                <textarea
+                    value={summaryDraft.body}
+                    onChange={(event) => setSummaryDraft((current) => ({ ...current, body: event.target.value }))}
+                    rows={12}
+                    className={`${inputBase} min-h-[300px] font-mono text-xs leading-5`}
+                    placeholder="Generate or write a performance summary..."
+                />
+            </label>
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
+                    <input
+                        type="checkbox"
+                        checked={summaryDraft.technicianVisible}
+                        onChange={(event) => setSummaryDraft((current) => ({ ...current, technicianVisible: event.target.checked }))}
+                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    Make summary available to technician
+                </label>
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        disabled={isSavingSummary}
+                        className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={handleSaveSummaryReport}
+                        disabled={isSavingSummary || !isNonEmptyString(summaryDraft.body)}
+                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <ClipboardDocumentListIcon className="h-4 w-4" />
+                        {isSavingSummary ? "Saving..." : "Save Summary"}
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+
     const renderPerformanceTab = () => {
         if (!canViewPerformanceReviews) {
             return (
@@ -1829,9 +2637,14 @@ const CompanyUserDetails = () => {
             );
         }
 
+        const displayedPerformanceReviews = showAllPerformanceHistory
+            ? performanceReviews
+            : performanceReviews.slice(0, 10);
+        const hiddenPerformanceReviewCount = performanceReviews.length - displayedPerformanceReviews.length;
+
         return (
             <div className="space-y-4">
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <StatTile
                         icon={StarIcon}
                         title="Review Lines"
@@ -1856,11 +2669,27 @@ const CompanyUserDetails = () => {
                         value={performanceStats.sharedReports}
                         subtitle="Visible items"
                     />
+                    <StatTile
+                        icon={ListBulletIcon}
+                        title="Assigned RSS"
+                        value={performanceStats.activeRss}
+                        subtitle={`${performanceStats.totalRss.toLocaleString()} total`}
+                    />
                 </div>
 
                 <Section
-                    title="Add Performance Line"
-                    description="Capture praise, complaints, coaching notes, and supporting work references."
+                    title="Performance Lines"
+                    description="Capture praise, complaints, coaching notes, supporting work references, and attachments."
+                    action={canEditPerformanceReviews && (
+                        <button
+                            type="button"
+                            onClick={() => setIsPerformanceLineModalOpen(true)}
+                            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                        >
+                            <PlusIcon className="h-4 w-4" />
+                            Add Performance Line
+                        </button>
+                    )}
                 >
                     {!canEditPerformanceReviews ? (
                         <EmptyState
@@ -1868,108 +2697,19 @@ const CompanyUserDetails = () => {
                             description="You can review history, but cannot add performance lines with this role."
                         />
                     ) : (
-                        <div className="space-y-5">
-                            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-                                <label className="space-y-1.5">
-                                    <span className="text-sm font-semibold text-slate-700">Line Type</span>
-                                    <select
-                                        value={performanceDraft.type}
-                                        onChange={(event) => updatePerformanceDraftField("type", event.target.value)}
-                                        className={inputBase}
-                                    >
-                                        {performanceLineTypes.map((option) => (
-                                            <option key={option.value} value={option.value}>{option.label}</option>
-                                        ))}
-                                    </select>
-                                </label>
-
-                                <label className="space-y-1.5">
-                                    <span className="text-sm font-semibold text-slate-700">Notes</span>
-                                    <textarea
-                                        value={performanceDraft.note}
-                                        onChange={(event) => updatePerformanceDraftField("note", event.target.value)}
-                                        rows={4}
-                                        className={`${inputBase} min-h-[120px]`}
-                                        placeholder="Document the performance line..."
-                                    />
-                                </label>
+                        <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">Ready for the next performance line.</p>
+                                <p className="mt-1 text-sm text-slate-500">References and attachments are saved with the line.</p>
                             </div>
-
-                            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                                {renderReferencePicker({
-                                    title: "Service Stop References",
-                                    icon: ListBulletIcon,
-                                    references: serviceStopReferenceOptions,
-                                    fieldName: "referenceStopIds",
-                                    emptyTitle: "No recent service stops found for this technician.",
-                                })}
-                                {renderReferencePicker({
-                                    title: "Job References",
-                                    icon: BriefcaseIcon,
-                                    references: jobReferenceOptions,
-                                    fieldName: "referenceJobIds",
-                                    emptyTitle: "No linked jobs found from recent service stops.",
-                                })}
-                            </div>
-
-                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                                    <PaperClipIcon className="h-4 w-4 text-slate-500" />
-                                    Attach Report
-                                </div>
-                                <div className="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
-                                    <label className="space-y-1.5">
-                                        <span className="text-sm font-semibold text-slate-700">Report Title</span>
-                                        <input
-                                            value={performanceDraft.reportTitle}
-                                            onChange={(event) => updatePerformanceDraftField("reportTitle", event.target.value)}
-                                            className={inputBase}
-                                            placeholder="Reading performance report"
-                                        />
-                                    </label>
-                                    <label className="space-y-1.5">
-                                        <span className="text-sm font-semibold text-slate-700">Report Link</span>
-                                        <input
-                                            type="url"
-                                            value={performanceDraft.reportUrl}
-                                            onChange={(event) => updatePerformanceDraftField("reportUrl", event.target.value)}
-                                            className={inputBase}
-                                            placeholder="https://..."
-                                        />
-                                    </label>
-                                </div>
-                                <label className="mt-4 block space-y-1.5">
-                                    <span className="text-sm font-semibold text-slate-700">Report Notes</span>
-                                    <textarea
-                                        value={performanceDraft.reportNotes}
-                                        onChange={(event) => updatePerformanceDraftField("reportNotes", event.target.value)}
-                                        rows={3}
-                                        className={`${inputBase} min-h-[92px]`}
-                                        placeholder="Optional report context..."
-                                    />
-                                </label>
-                                <label className="mt-4 inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={performanceDraft.reportTechnicianVisible}
-                                        onChange={(event) => updatePerformanceDraftField("reportTechnicianVisible", event.target.checked)}
-                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    Share attached report with technician
-                                </label>
-                            </div>
-
-                            <div className="flex justify-end">
-                                <button
-                                    type="button"
-                                    onClick={handleSavePerformanceLine}
-                                    disabled={isSavingPerformance}
-                                    className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    <PlusIcon className="h-4 w-4" />
-                                    {isSavingPerformance ? "Saving..." : "Add Line"}
-                                </button>
-                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsPerformanceLineModalOpen(true)}
+                                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                            >
+                                <PlusIcon className="h-4 w-4" />
+                                Add Line
+                            </button>
                         </div>
                     )}
                 </Section>
@@ -1980,11 +2720,11 @@ const CompanyUserDetails = () => {
                     action={canEditPerformanceReviews && (
                         <button
                             type="button"
-                            onClick={handleGenerateSummaryReport}
+                            onClick={() => setIsSummaryReportModalOpen(true)}
                             className="inline-flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
                         >
                             <SparklesIcon className="h-4 w-4" />
-                            Generate
+                            Create Summary
                         </button>
                     )}
                 >
@@ -1994,50 +2734,24 @@ const CompanyUserDetails = () => {
                             description="You can review saved summaries, but cannot create a new one with this role."
                         />
                     ) : (
-                        <div className="space-y-4">
-                            <label className="block space-y-1.5">
-                                <span className="text-sm font-semibold text-slate-700">Summary Title</span>
-                                <input
-                                    value={summaryDraft.title}
-                                    onChange={(event) => setSummaryDraft((current) => ({ ...current, title: event.target.value }))}
-                                    className={inputBase}
-                                />
-                            </label>
-                            <label className="block space-y-1.5">
-                                <span className="text-sm font-semibold text-slate-700">Summary Body</span>
-                                <textarea
-                                    value={summaryDraft.body}
-                                    onChange={(event) => setSummaryDraft((current) => ({ ...current, body: event.target.value }))}
-                                    rows={10}
-                                    className={`${inputBase} min-h-[240px] font-mono text-xs leading-5`}
-                                    placeholder="Generate or write a performance summary..."
-                                />
-                            </label>
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-                                    <input
-                                        type="checkbox"
-                                        checked={summaryDraft.technicianVisible}
-                                        onChange={(event) => setSummaryDraft((current) => ({ ...current, technicianVisible: event.target.checked }))}
-                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                    />
-                                    Make summary available to technician
-                                </label>
-                                <button
-                                    type="button"
-                                    onClick={handleSaveSummaryReport}
-                                    disabled={isSavingSummary || !isNonEmptyString(summaryDraft.body)}
-                                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-                                >
-                                    <ClipboardDocumentListIcon className="h-4 w-4" />
-                                    {isSavingSummary ? "Saving..." : "Save Summary"}
-                                </button>
+                        <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p className="text-sm font-semibold text-slate-900">Summary builder is ready.</p>
+                                <p className="mt-1 text-sm text-slate-500">Open the builder to generate, edit, and save a technician-facing summary.</p>
                             </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsSummaryReportModalOpen(true)}
+                                className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                            >
+                                <SparklesIcon className="h-4 w-4" />
+                                Open Summary Builder
+                            </button>
                         </div>
                     )}
                 </Section>
 
-                <Section title="Performance History" description="Saved review lines and profile-attached reports.">
+                <Section title="Recent Performance History" description="Recent saved review lines, summaries, and profile-attached reports.">
                     <div className="space-y-4">
                         {performanceError && (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2054,11 +2768,133 @@ const CompanyUserDetails = () => {
                             />
                         ) : (
                             <div className="space-y-3">
-                                {performanceReviews.map(renderPerformanceReviewCard)}
+                                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                                        <thead className="bg-slate-50 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                            <tr>
+                                                <th className="px-4 py-3 text-left">Date</th>
+                                                <th className="px-4 py-3 text-left">Type</th>
+                                                <th className="px-4 py-3 text-left">Note Preview</th>
+                                                <th className="px-4 py-3 text-left">Refs</th>
+                                                <th className="px-4 py-3 text-left">Files</th>
+                                                <th className="px-4 py-3 text-left">By</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 bg-white">
+                                            {displayedPerformanceReviews.map(renderPerformanceHistoryRow)}
+                                        </tbody>
+                                    </table>
+                                </div>
+                                {hiddenPerformanceReviewCount > 0 && (
+                                    <div className="flex justify-center">
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowAllPerformanceHistory(true)}
+                                            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            See {hiddenPerformanceReviewCount.toLocaleString()} more
+                                        </button>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>
                 </Section>
+
+                {renderComplaintTimeline()}
+
+                {isPerformanceLineModalOpen && canEditPerformanceReviews && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
+                        <div
+                            className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="performance-line-modal-title"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                                <div>
+                                    <h2 id="performance-line-modal-title" className="text-lg font-semibold text-slate-950">Add Performance Line</h2>
+                                    <p className="mt-1 text-sm text-slate-500">Internal by default. Shared reports become visible to the technician.</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsPerformanceLineModalOpen(false)}
+                                    disabled={isSavingPerformance}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                    aria-label="Close performance line modal"
+                                >
+                                    <XMarkIcon className="h-5 w-5" />
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto p-5">
+                                {renderPerformanceLineForm({
+                                    onCancel: () => setIsPerformanceLineModalOpen(false),
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {isSummaryReportModalOpen && canEditPerformanceReviews && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
+                        <div
+                            className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="summary-report-modal-title"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                                <div>
+                                    <h2 id="summary-report-modal-title" className="text-lg font-semibold text-slate-950">Summary Report</h2>
+                                    <p className="mt-1 text-sm text-slate-500">Generate, edit, and save a technician-facing summary.</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsSummaryReportModalOpen(false)}
+                                    disabled={isSavingSummary}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                    aria-label="Close summary report modal"
+                                >
+                                    <XMarkIcon className="h-5 w-5" />
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto p-5">
+                                {renderSummaryReportForm({
+                                    onCancel: () => setIsSummaryReportModalOpen(false),
+                                })}
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {selectedPerformanceReview && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
+                        <div
+                            className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="performance-detail-modal-title"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                                <div>
+                                    <h2 id="performance-detail-modal-title" className="text-lg font-semibold text-slate-950">Performance Detail</h2>
+                                    <p className="mt-1 text-sm text-slate-500">Full note, references, reports, and attachments.</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedPerformanceReview(null)}
+                                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                                    aria-label="Close performance detail modal"
+                                >
+                                    <XMarkIcon className="h-5 w-5" />
+                                </button>
+                            </div>
+                            <div className="overflow-y-auto bg-slate-50 p-5">
+                                {renderPerformanceReviewCard(selectedPerformanceReview)}
+                            </div>
+                        </div>
+                    </div>
+                )}
             </div>
         );
     };
@@ -2187,7 +3023,9 @@ const CompanyUserDetails = () => {
                             ? renderGeneralTab()
                             : activeTab === "activity"
                                 ? renderActivityTab()
-                                : renderPerformanceTab()}
+                                : activeTab === "onboarding"
+                                    ? renderOnboardingTab()
+                                    : renderPerformanceTab()}
                     </main>
                 </section>
             </div>

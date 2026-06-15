@@ -118,10 +118,12 @@ const MigrationDashboard = lazy(() => import("../../views/company/migration/Migr
 const CustomerExportImport = lazy(() => import("../../views/company/migration/CustomerExportImport"))
 const EquipmentImport = lazy(() => import("../../views/company/migration/EquipmentImport"))
 const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
+const PerformanceHistoryImport = lazy(() => import("../../views/company/migration/PerformanceHistoryImport"))
 
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
 const CompanySettings = lazy(() => import("../../views/company/settings/CompanySettings"))
+const OnboardingChecklistSettings = lazy(() => import("../../views/company/settings/OnboardingChecklistSettings"))
 const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySetupGuide"))
 
 const EmailConfiguration = lazy(() => import("../../views/company/settings/EmailConfiguration/EmailConfiguration"))
@@ -186,6 +188,12 @@ export const sellerRoutes = [
         role: 'Company',
         permissionId: '400',
         featureFlagId: 'feature_flag_006',
+    }, {
+        path: '/company/settings/onboarding-checklist',
+        element: <OnboardingChecklistSettings />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
     }, {
         path: '/company/setup-guide',
         element: <CompanySetupGuide />,
@@ -941,6 +949,15 @@ export const sellerRoutes = [
         role: 'Company',
         permissionId: '800',
         featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
+    }
+    ,
+    {
+        path: '/company/migration/performance-history-import',
+        element: <PerformanceHistoryImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
+        featureFlagId: 'feature_flag_008',
     }
     ,
     {
