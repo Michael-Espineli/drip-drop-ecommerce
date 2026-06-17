@@ -1,7 +1,6 @@
 import { allNav } from './allNav';
 
 export const DEFAULT_COMPANY_CATEGORY_ORDER = [
-    'NA',
     'Operations',
     'Routing',
     'Finance',
@@ -9,6 +8,13 @@ export const DEFAULT_COMPANY_CATEGORY_ORDER = [
     'Users',
     'Migration',
     'Settings',
+];
+
+export const COMPANY_PINNED_CATEGORY = 'NA';
+
+const COMPANY_PINNED_TITLE_ORDER = [
+    'Dashboard',
+    'Messages',
 ];
 
 const DEFAULT_ADMIN_CATEGORY_ORDER = [
@@ -47,6 +53,18 @@ const normalizeCategoryOrder = (categoryOrderOverride, fallbackOrder = DEFAULT_C
     });
 };
 
+const sortCompanyPinnedItems = (items = []) => {
+    return [...items].sort((a, b) => {
+        const aIndex = COMPANY_PINNED_TITLE_ORDER.indexOf(a.title);
+        const bIndex = COMPANY_PINNED_TITLE_ORDER.indexOf(b.title);
+
+        if (aIndex === -1 && bIndex === -1) return 0;
+        if (aIndex === -1) return 1;
+        if (bIndex === -1) return -1;
+        return aIndex - bIndex;
+    });
+};
+
 export const getNav = (accountType, categoryOrderOverride = null) => {
     // Return an empty object if there's no account type or if allNav is not an array
     if (!accountType || !Array.isArray(allNav)) {
@@ -77,8 +95,14 @@ export const getNav = (accountType, categoryOrderOverride = null) => {
     // Create a new object to store the sorted categories
     const sortedGrouped = {};
 
+    if (accountType === 'Company' && grouped[COMPANY_PINNED_CATEGORY]) {
+        sortedGrouped[COMPANY_PINNED_CATEGORY] = sortCompanyPinnedItems(grouped[COMPANY_PINNED_CATEGORY]);
+    }
+
     // Iterate over the defined category order and add the groups in that order
     categoryOrder.forEach(category => {
+        if (accountType === 'Company' && category === COMPANY_PINNED_CATEGORY) return;
+
         if (grouped[category]) {
             sortedGrouped[category] = grouped[category];
         }

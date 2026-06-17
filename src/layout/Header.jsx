@@ -2,7 +2,7 @@ import React, { useContext, useEffect, useState } from "react";
 import { Link } from 'react-router-dom';
 import { Context } from "../context/AuthContext";
 import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
-import { FaClipboardList, FaMoon, FaSun } from "react-icons/fa";
+import { FaClipboardList, FaMoon, FaSun, FaUserPlus } from "react-icons/fa";
 import { MdNotificationsActive } from "react-icons/md";
 import { collection, onSnapshot } from "firebase/firestore";
 import CompanyCommandSearch from "./CompanyCommandSearch";
@@ -81,6 +81,9 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         (accountType === 'Company' && recentlySelectedCompany)
         || accountType === 'Client'
     );
+    const canAddLead = accountType === 'Company' && recentlySelectedCompany && (
+        companyRoleLoading || hasCompanyPermission("612")
+    );
     const startChatMode = accountType === 'Company' ? 'company' : 'client';
     // const profileLink = '/company/profile' 
     return (
@@ -107,6 +110,15 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
 
                     {/* Profile Section */}
                     <div className='relative flex shrink-0 items-center justify-center gap-3'>
+                        {canAddLead && (
+                            <Link
+                                to="/company/leads/new"
+                                className="flex h-10 items-center gap-2 whitespace-nowrap rounded-md border border-white/15 bg-white px-3 text-sm font-semibold text-[#0e245c] shadow-sm transition hover:bg-blue-50"
+                            >
+                                <FaUserPlus className="h-4 w-4" />
+                                <span>Add Lead</span>
+                            </Link>
+                        )}
                         <button
                             type="button"
                             onClick={toggleTheme}

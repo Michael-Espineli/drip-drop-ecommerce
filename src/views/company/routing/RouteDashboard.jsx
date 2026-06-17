@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
-import { query, collection, getDocs, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
+import { query, collection, getDocs, getDoc, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
+import { ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import "react-datepicker/dist/react-datepicker.css";
 import { v4 as uuidv4 } from "uuid";
+import AddressAutocomplete from '../../components/AddressAutocomplete';
+import { fetchCompanyVendors } from '../../../utils/vendors';
 
 const ALL_ROUTES_OPTION = '__all_active_routes__';
 const ALL_ROUTES_MAP_OVERLAYS = Object.freeze({
@@ -19,6 +22,8 @@ const ALL_ROUTES_MAP_OVERLAYS = Object.freeze({
 const MOVE_MODE_ONE_TIME = 'oneTime';
 const MOVE_MODE_PERMANENT = 'permanent';
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MAX_ROUTE_WEEK_OFFSET = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -29,6 +34,51 @@ const getDateValue = (value) => {
 
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const startOfDayDate = (value) => {
+    const date = new Date(value);
+    date.setHours(0, 0, 0, 0);
+    return date;
+};
+
+const endOfDayDate = (value) => {
+    const date = new Date(value);
+    date.setHours(23, 59, 59, 999);
+    return date;
+};
+
+const startOfWeekDate = (value) => {
+    const date = startOfDayDate(value);
+    date.setDate(date.getDate() - date.getDay());
+    return date;
+};
+
+const addDaysToDate = (value, days) => {
+    const date = new Date(value);
+    date.setDate(date.getDate() + days);
+    return date;
+};
+
+const sameCalendarDate = (left, right) => (
+    startOfDayDate(left).getTime() === startOfDayDate(right).getTime()
+);
+
+const dayKey = (date) => format(date, 'yyyy-MM-dd');
+
+const weekOffsetFromCurrent = (weekStart, currentWeekStart) => (
+    Math.round((startOfWeekDate(weekStart).getTime() - startOfWeekDate(currentWeekStart).getTime()) / (DAY_MS * 7))
+);
+
+const clampDateToRouteWindow = (date, currentWeekStart) => {
+    const minDate = startOfDayDate(currentWeekStart);
+    const maxDate = endOfDayDate(addDaysToDate(currentWeekStart, (MAX_ROUTE_WEEK_OFFSET * 7) + 6));
+    const nextDate = startOfDayDate(date);
+
+    if (nextDate < minDate) return minDate;
+    if (nextDate > maxDate) return maxDate;
+
+    return nextDate;
 };
 
 const getStopTiming = (stop) => {
@@ -127,6 +177,33 @@ const getStopCoordinate = (stop) => {
     return { lat, lng };
 };
 
+const getAddressCoordinate = (address) => {
+    const lat = Number.parseFloat(address?.latitude ?? address?.lat);
+    const lng = Number.parseFloat(address?.longitude ?? address?.lng);
+
+    if (!isValidCoordinate(lat, lng)) return null;
+
+    return { lat, lng };
+};
+
+const getVendorCoordinate = (vendor) => (
+    getAddressCoordinate(vendor?.address) || getAddressCoordinate(vendor)
+);
+
+const formatAddressValue = (address) => [
+    address?.streetAddress,
+    address?.city,
+    address?.state,
+    address?.zip || address?.zipCode,
+].filter(Boolean).join(', ');
+
+const formatVendorAddress = (vendor) => formatAddressValue({
+    streetAddress: vendor?.streetAddress || vendor?.address?.streetAddress,
+    city: vendor?.city || vendor?.address?.city,
+    state: vendor?.state || vendor?.address?.state,
+    zip: vendor?.zip || vendor?.address?.zip || vendor?.address?.zipCode,
+});
+
 const getRouteLocationCoordinate = (location) => {
     const lat = Number.parseFloat(location?.latitude);
     const lng = Number.parseFloat(location?.longitude);
@@ -150,10 +227,110 @@ const getOrderedRouteStops = (route, stops) => {
     return stops.filter(stop => stop.techId === route.techId || stop.tech === route.techName);
 };
 
+const mergeStopsIntoRouteOrder = (route, stops) => {
+    const stopById = new Map(stops.map(stop => [stop.id, stop]));
+    const orderedIds = route?.serviceStopsIds?.length
+        ? route.serviceStopsIds
+        : (Array.isArray(route?.order) ? [...route.order]
+            .sort((left, right) => Number(left.order || 0) - Number(right.order || 0))
+            .map(item => item.serviceStopId || item.id)
+            .filter(Boolean) : []);
+    const includedStopIds = new Set();
+    const orderedStops = orderedIds
+        .map(stopId => stopById.get(stopId))
+        .filter(Boolean)
+        .filter(stop => {
+            if (includedStopIds.has(stop.id)) return false;
+            includedStopIds.add(stop.id);
+            return true;
+        });
+    const remainingStops = stops.filter(stop => !includedStopIds.has(stop.id));
+
+    return [...orderedStops, ...remainingStops];
+};
+
+const buildActiveRouteOrder = (route, orderedStops) => {
+    const existingOrder = Array.isArray(route?.order) ? route.order : [];
+    const existingByStopId = new Map(existingOrder.map(item => [item.serviceStopId || item.id, item]));
+
+    return orderedStops.map((stop, index) => {
+        const existing = existingByStopId.get(stop.id) || {};
+
+        return {
+            ...existing,
+            id: existing.id || stop.routeOrderId || `route_order_${uuidv4()}`,
+            order: index + 1,
+            serviceStopId: stop.id,
+            recurringServiceStopId: existing.recurringServiceStopId || stop.recurringServiceStopId || "",
+            customerId: existing.customerId || stop.customerId || "",
+            customerName: existing.customerName || stop.customerName || "",
+            locationId: existing.locationId || stop.serviceLocationId || stop.locationId || "",
+        };
+    });
+};
+
+const sameStopOrder = (leftStops, rightStops) => (
+    leftStops.length === rightStops.length &&
+    leftStops.every((stop, index) => stop.id === rightStops[index]?.id)
+);
+
+const autoOrderStopsFromAnchor = (stops, anchorCoordinate, anchorPosition) => {
+    const coordinateStops = [];
+    const missingCoordinateStops = [];
+
+    stops.forEach((stop) => {
+        const coordinate = getStopCoordinate(stop);
+
+        if (coordinate) {
+            coordinateStops.push({ stop, coordinate });
+        } else {
+            missingCoordinateStops.push(stop);
+        }
+    });
+
+    const ordered = [];
+    let currentCoordinate = anchorCoordinate;
+
+    while (coordinateStops.length > 0) {
+        let nearestIndex = 0;
+        let nearestDistance = Number.POSITIVE_INFINITY;
+
+        coordinateStops.forEach((item, index) => {
+            const distance = distanceMeters(currentCoordinate, item.coordinate);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = index;
+            }
+        });
+
+        const [nextStop] = coordinateStops.splice(nearestIndex, 1);
+        ordered.push(nextStop.stop);
+        currentCoordinate = nextStop.coordinate;
+    }
+
+    if (anchorPosition === 'end') {
+        return {
+            orderedStops: [...missingCoordinateStops, ...ordered.reverse()],
+            missingCoordinateCount: missingCoordinateStops.length,
+        };
+    }
+
+    return {
+        orderedStops: [...ordered, ...missingCoordinateStops],
+        missingCoordinateCount: missingCoordinateStops.length,
+    };
+};
+
 const routeHasWorkActivity = (route) => Boolean(
     route.startTime ||
     route.endTime ||
     (route.status && route.status !== 'Did Not Start')
+);
+
+const getRouteStopCount = (route) => (
+    Array.isArray(route?.serviceStopsIds)
+        ? route.serviceStopsIds.length
+        : Number(route?.totalStops || 0)
 );
 
 const pickCanonicalRoute = (routes) => (
@@ -630,12 +807,19 @@ const RouteDashboard = () => {
     const navigate = useNavigate();
     const { recentlySelectedCompany } = useContext(Context);
     const now = useNow();
+    const todayDate = useMemo(() => startOfDayDate(new Date()), []);
+    const currentWeekStart = useMemo(() => startOfWeekDate(todayDate), [todayDate]);
+    const maxSelectableDate = useMemo(() => endOfDayDate(addDaysToDate(currentWeekStart, (MAX_ROUTE_WEEK_OFFSET * 7) + 6)), [currentWeekStart]);
 
     const [serviceDate, setServiceDate] = useState(new Date());
     const [isLoading, setIsLoading] = useState(true);
+    const [isLoadingWeekMetrics, setIsLoadingWeekMetrics] = useState(false);
+    const [weekMetrics, setWeekMetrics] = useState({});
+    const [weekMetricsRefreshKey, setWeekMetricsRefreshKey] = useState(0);
     const [serviceStops, setServiceStops] = useState([]);
     const [technicians, setTechnicians] = useState([]);
     const [fleetVehicles, setFleetVehicles] = useState([]);
+    const [vendors, setVendors] = useState([]);
     const [activeRoutes, setActiveRoutes] = useState([]);
     const [activeRouteLocations, setActiveRouteLocations] = useState([]);
     const [activeRouteLogs, setActiveRouteLogs] = useState([]);
@@ -648,12 +832,41 @@ const RouteDashboard = () => {
     const [moveDay, setMoveDay] = useState(format(new Date(), 'EEEE'));
     const [moveTechId, setMoveTechId] = useState('');
     const [isMovingStops, setIsMovingStops] = useState(false);
+    const [showMoveStopsPanel, setShowMoveStopsPanel] = useState(false);
     const [showMapPanel, setShowMapPanel] = useState(true);
     const [mapOverlays, setMapOverlays] = useState({
         stops: true,
         techTrail: true,
         timeAreas: true,
     });
+    const selectedWeekStart = useMemo(() => startOfWeekDate(serviceDate), [serviceDate]);
+    const weekDays = useMemo(() => (
+        DAYS_OF_WEEK.map((dayName, index) => ({
+            dayName,
+            date: addDaysToDate(selectedWeekStart, index),
+        }))
+    ), [selectedWeekStart]);
+    const selectedWeekOffset = weekOffsetFromCurrent(selectedWeekStart, currentWeekStart);
+    const canNavigatePreviousWeek = selectedWeekOffset > 0;
+    const canNavigateNextWeek = selectedWeekOffset < MAX_ROUTE_WEEK_OFFSET;
+
+    const handleServiceDateChange = useCallback((date) => {
+        if (!date) return;
+        setServiceDate(clampDateToRouteWindow(date, currentWeekStart));
+    }, [currentWeekStart]);
+
+    const navigateWeek = useCallback((direction) => {
+        const nextWeekStart = addDaysToDate(selectedWeekStart, direction * 7);
+        const nextWeekOffset = weekOffsetFromCurrent(nextWeekStart, currentWeekStart);
+
+        if (nextWeekOffset < 0 || nextWeekOffset > MAX_ROUTE_WEEK_OFFSET) return;
+
+        handleServiceDateChange(addDaysToDate(nextWeekStart, serviceDate.getDay()));
+    }, [currentWeekStart, handleServiceDateChange, selectedWeekStart, serviceDate]);
+
+    const refreshWeekMetrics = useCallback(() => {
+        setWeekMetricsRefreshKey((current) => current + 1);
+    }, []);
 
     const fetchData = useCallback(async (date) => {
         if (!recentlySelectedCompany) return;
@@ -741,6 +954,98 @@ const RouteDashboard = () => {
         setActiveRouteLogs(fetchedLogs);
     };
 
+    const fetchWeekMetrics = useCallback(async (weekStart) => {
+        if (!recentlySelectedCompany) {
+            setWeekMetrics({});
+            return;
+        }
+
+        setIsLoadingWeekMetrics(true);
+
+        try {
+            const weekEnd = endOfDayDate(addDaysToDate(weekStart, 6));
+            const metricsByDay = DAYS_OF_WEEK.reduce((metrics, dayName, index) => {
+                const date = addDaysToDate(weekStart, index);
+
+                metrics[dayKey(date)] = {
+                    serviceStopCount: 0,
+                    activeRouteCount: 0,
+                    recurringRouteCount: 0,
+                    routeCount: 0,
+                    routeSource: 'active',
+                };
+
+                return metrics;
+            }, {});
+
+            const [stopsSnapshot, activeRoutesSnapshot, recurringRoutesSnapshot] = await Promise.all([
+                getDocs(query(
+                    collection(db, 'companies', recentlySelectedCompany, 'serviceStops'),
+                    where('serviceDate', '>=', startOfDayDate(weekStart)),
+                    where('serviceDate', '<=', weekEnd)
+                )),
+                getDocs(query(
+                    collection(db, 'companies', recentlySelectedCompany, 'activeRoutes'),
+                    where('date', '>=', startOfDayDate(weekStart)),
+                    where('date', '<=', weekEnd)
+                )),
+                getDocs(collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes')),
+            ]);
+
+            stopsSnapshot.docs.forEach(stopDoc => {
+                const stop = stopDoc.data();
+                const stopDate = getDateValue(stop.serviceDate);
+                if (!stopDate) return;
+
+                const key = dayKey(stopDate);
+                if (!metricsByDay[key]) return;
+
+                metricsByDay[key].serviceStopCount += 1;
+            });
+
+            activeRoutesSnapshot.docs
+                .map(routeDoc => ({ id: routeDoc.id, ...routeDoc.data() }))
+                .filter(route => !route.duplicateOf && getRouteStopCount(route) > 0)
+                .forEach(route => {
+                    const routeDate = getDateValue(route.date);
+                    if (!routeDate) return;
+
+                    const key = dayKey(routeDate);
+                    if (!metricsByDay[key]) return;
+
+                    metricsByDay[key].activeRouteCount += 1;
+                });
+
+            recurringRoutesSnapshot.docs
+                .map(routeDoc => routeDoc.data())
+                .forEach(route => {
+                    const dayIndex = DAYS_OF_WEEK.indexOf(route.day);
+                    if (dayIndex === -1) return;
+
+                    const date = addDaysToDate(weekStart, dayIndex);
+                    const key = dayKey(date);
+                    if (!metricsByDay[key]) return;
+
+                    metricsByDay[key].recurringRouteCount += 1;
+                });
+
+            Object.keys(metricsByDay).forEach(key => {
+                const metric = metricsByDay[key];
+                const hasActiveRoutes = metric.activeRouteCount > 0;
+
+                metric.routeCount = hasActiveRoutes ? metric.activeRouteCount : metric.recurringRouteCount;
+                metric.routeSource = hasActiveRoutes ? 'active' : 'recurring';
+            });
+
+            setWeekMetrics(metricsByDay);
+        } catch (error) {
+            console.error('Error loading route week metrics:', error);
+            setWeekMetrics({});
+        } finally {
+            setIsLoadingWeekMetrics(false);
+        }
+    }, [recentlySelectedCompany]);
+
     const syncActiveRoutes = async (stops, techs, date) => {
         const startOfDay = new Date(date).setHours(0, 0, 0, 0);
         const endOfDay = new Date(date).setHours(23, 59, 59, 999);
@@ -797,11 +1102,13 @@ const RouteDashboard = () => {
 
             if (routeForTech) {
                 const routeRef = doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', routeForTech.id);
+                const orderedTechStops = mergeStopsIntoRouteOrder(routeForTech, techStops);
                 await updateDoc(routeRef, {
                     totalStops: totalStopsCount,
                     finishedStops: finishedStopsCount,
                     status: newStatus,
-                    serviceStopsIds: techStops.map(stop => stop.id)
+                    serviceStopsIds: orderedTechStops.map(stop => stop.id),
+                    order: buildActiveRouteOrder(routeForTech, orderedTechStops)
                 });
 
                 const duplicateRoutes = routesForTech.filter(route => route.id !== routeForTech.id);
@@ -835,7 +1142,7 @@ const RouteDashboard = () => {
                     vehicleLabel: "",
                     vehiclePlate: "",
                     vehicleKind: "",
-                    order: []
+                    order: buildActiveRouteOrder(null, techStops)
                 };
 
                 await setDoc(doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', id), newRoute);
@@ -869,8 +1176,34 @@ const RouteDashboard = () => {
     };
 
     useEffect(() => {
-        fetchData(serviceDate);
-    }, [serviceDate, fetchData]);
+        fetchData(serviceDate).then(refreshWeekMetrics);
+    }, [serviceDate, fetchData, refreshWeekMetrics]);
+
+    useEffect(() => {
+        fetchWeekMetrics(selectedWeekStart);
+    }, [fetchWeekMetrics, selectedWeekStart, weekMetricsRefreshKey]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setVendors([]);
+            return undefined;
+        }
+
+        let isMounted = true;
+
+        fetchCompanyVendors(db, recentlySelectedCompany)
+            .then((fetchedVendors) => {
+                if (isMounted) setVendors(fetchedVendors);
+            })
+            .catch((error) => {
+                console.error('Error loading vendors for route reorder:', error);
+                if (isMounted) setVendors([]);
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [recentlySelectedCompany]);
 
     const isAllRoutesSelected = selectedRouteId === ALL_ROUTES_OPTION;
 
@@ -1093,6 +1426,7 @@ const RouteDashboard = () => {
 
             setSelectedStopIds([]);
             await fetchData(serviceDate);
+            refreshWeekMetrics();
         } catch (error) {
             console.error('Error moving selected stops:', error);
             toast.error('Failed to move selected stops.');
@@ -1250,6 +1584,127 @@ const RouteDashboard = () => {
         }
     };
 
+    const findRecurringRouteForActiveRoute = async (route, activeOrder) => {
+        if (!recentlySelectedCompany || !route?.techId) return null;
+
+        const directRouteId = route.recurringRouteId || route.plannedRouteId || route.routeTemplateId || route.recurringRouteDocId;
+        if (directRouteId) {
+            const directRef = doc(db, 'companies', recentlySelectedCompany, 'recurringRoutes', directRouteId);
+            const directSnap = await getDoc(directRef);
+
+            if (directSnap.exists()) {
+                return { id: directSnap.id, ...directSnap.data() };
+            }
+        }
+
+        const routeDate = getDateValue(route.date) || serviceDate;
+        const routeDay = format(routeDate, 'EEEE');
+        const activeRecurringIds = new Set(
+            activeOrder
+                .map(item => item.recurringServiceStopId)
+                .filter(Boolean)
+        );
+
+        const routesSnapshot = await getDocs(query(
+            collection(db, 'companies', recentlySelectedCompany, 'recurringRoutes'),
+            where('techId', '==', route.techId)
+        ));
+
+        const candidates = routesSnapshot.docs
+            .map(routeDoc => ({ id: routeDoc.id, ...routeDoc.data() }))
+            .filter(candidate => candidate.day === routeDay);
+
+        if (candidates.length === 0) return null;
+        if (candidates.length === 1 && activeRecurringIds.size === 0) return candidates[0];
+
+        const scoredCandidates = candidates
+            .map(candidate => {
+                const candidateOrder = Array.isArray(candidate.order)
+                    ? candidate.order
+                    : Array.isArray(candidate.recurringRouteOrder)
+                        ? candidate.recurringRouteOrder
+                        : [];
+                const candidateIds = new Set([
+                    ...candidateOrder.map(item => item.recurringServiceStopId).filter(Boolean),
+                    ...(Array.isArray(candidate.rssIds) ? candidate.rssIds : []),
+                ]);
+                const score = [...activeRecurringIds].filter(rssId => candidateIds.has(rssId)).length;
+
+                return { candidate, score };
+            })
+            .sort((left, right) => right.score - left.score);
+
+        if (scoredCandidates[0]?.score > 0) return scoredCandidates[0].candidate;
+
+        return candidates.length === 1 ? candidates[0] : null;
+    };
+
+    const saveRouteOrder = async (route, orderedStops, options = {}) => {
+        if (!recentlySelectedCompany || !route?.id || !orderedStops?.length) return false;
+
+        const nextOrder = buildActiveRouteOrder(route, orderedStops);
+        const serviceStopsIds = orderedStops.map(stop => stop.id);
+        const updatePlannedRoute = Boolean(options.updatePlannedRoute);
+        const activeRoutePayload = {
+            serviceStopsIds,
+            order: nextOrder,
+            totalStops: orderedStops.length,
+            updatedAt: Timestamp.fromDate(new Date()),
+        };
+        let activeRouteSaved = false;
+
+        try {
+            await updateDoc(doc(db, 'companies', recentlySelectedCompany, 'activeRoutes', route.id), activeRoutePayload);
+            activeRouteSaved = true;
+
+            setActiveRoutes(currentRoutes => (
+                currentRoutes.map(currentRoute => (
+                    currentRoute.id === route.id
+                        ? { ...currentRoute, ...activeRoutePayload }
+                        : currentRoute
+                ))
+            ));
+
+            if (updatePlannedRoute) {
+                const recurringRoute = await findRecurringRouteForActiveRoute(route, nextOrder);
+
+                if (!recurringRoute) {
+                    throw new Error('No matching planned route was found for this technician and day.');
+                }
+
+                const updateRecurringRouteOrderPermanently = httpsCallable(functions, 'updateRecurringRouteOrderPermanently');
+                const response = await updateRecurringRouteOrderPermanently({
+                    companyId: recentlySelectedCompany,
+                    routeId: recurringRoute.id,
+                    recurringRouteOrder: recurringRoute.order || recurringRoute.recurringRouteOrder || [],
+                    serviceStopOrders: nextOrder,
+                });
+
+                if (response?.data?.status === 500 || response?.data?.success === false) {
+                    throw new Error(response.data.error || 'Planned route order update failed.');
+                }
+            }
+
+            toast.success(updatePlannedRoute ? 'Route order saved and planned route updated.' : 'Route order saved for today.');
+            await fetchData(serviceDate);
+            refreshWeekMetrics();
+            return true;
+        } catch (error) {
+            console.error('Error saving route order:', error);
+            toast.error(activeRouteSaved && updatePlannedRoute
+                ? 'Daily order saved, but failed to update the planned route.'
+                : 'Failed to save route order.'
+            );
+
+            if (activeRouteSaved) {
+                await fetchData(serviceDate);
+                refreshWeekMetrics();
+            }
+
+            return false;
+        }
+    };
+
     const seedDemoRoute = async () => {
         if (!recentlySelectedCompany || process.env.NODE_ENV === 'production') return;
 
@@ -1276,6 +1731,7 @@ const RouteDashboard = () => {
             await batch.commit();
             toast.success('Demo route data added.');
             await fetchData(serviceDate);
+            refreshWeekMetrics();
         } catch (error) {
             console.error('Error seeding demo route:', error);
             toast.error('Failed to add demo route data.');
@@ -1299,6 +1755,25 @@ const RouteDashboard = () => {
                         >
                             Service Stops
                         </Link>
+                        {!sameCalendarDate(serviceDate, todayDate) && (
+                            <button
+                                type="button"
+                                onClick={() => handleServiceDateChange(todayDate)}
+                                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50"
+                            >
+                                Today
+                            </button>
+                        )}
+                        <button
+                            type="button"
+                            onClick={() => setShowMoveStopsPanel((current) => !current)}
+                            className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${showMoveStopsPanel
+                                    ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
+                                    : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+                                }`}
+                        >
+                            Move Stops{selectedStopsForMove.length ? ` (${selectedStopsForMove.length})` : ''}
+                        </button>
                         {process.env.NODE_ENV !== 'production' && (
                             <button
                                 type="button"
@@ -1311,11 +1786,49 @@ const RouteDashboard = () => {
                         )}
                         <DatePicker
                             selected={serviceDate}
-                            onChange={setServiceDate}
+                            onChange={handleServiceDateChange}
+                            minDate={currentWeekStart}
+                            maxDate={maxSelectableDate}
                             className="bg-white border border-gray-300 rounded-lg p-2 shadow-sm text-gray-700"
                         />
                     </div>
                 </header>
+
+                <RouteWeekNavigator
+                    weekDays={weekDays}
+                    weekMetrics={weekMetrics}
+                    selectedDate={serviceDate}
+                    todayDate={todayDate}
+                    isLoading={isLoadingWeekMetrics}
+                    canNavigatePreviousWeek={canNavigatePreviousWeek}
+                    canNavigateNextWeek={canNavigateNextWeek}
+                    onPreviousWeek={() => navigateWeek(-1)}
+                    onNextWeek={() => navigateWeek(1)}
+                    onSelectDate={handleServiceDateChange}
+                />
+
+                {!isLoading && showMoveStopsPanel && (
+                    <div className="mb-4">
+                        <MoveStopsPanel
+                            selectedStops={selectedStopsForMove}
+                            selectedStopIds={selectedStopIds}
+                            totalStops={serviceStops.length}
+                            technicians={technicians}
+                            moveMode={moveMode}
+                            moveDate={moveDate}
+                            moveDay={moveDay}
+                            moveTechId={moveTechId}
+                            isMovingStops={isMovingStops}
+                            onMoveModeChange={setMoveMode}
+                            onMoveDateChange={setMoveDate}
+                            onMoveDayChange={setMoveDay}
+                            onMoveTechChange={setMoveTechId}
+                            onMoveSelectedStops={moveSelectedStops}
+                            onSelectAllUnfinished={selectAllUnfinishedStops}
+                            onClearSelection={() => setSelectedStopIds([])}
+                        />
+                    </div>
+                )}
 
                 {isLoading ? (
                     <div className="flex justify-center items-center h-64">
@@ -1481,7 +1994,9 @@ const RouteDashboard = () => {
                                     areaEstimates={selectedRouteAreaEstimates}
                                     routeLogs={selectedRouteLogs}
                                     selectedStopIds={selectedStopIds}
+                                    vendors={vendors}
                                     onSaveRouteCompletion={saveRouteCompletion}
+                                    onSaveRouteOrder={saveRouteOrder}
                                     onToggleStop={toggleSelectedStop}
                                     onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
                                 />
@@ -1502,25 +2017,6 @@ const RouteDashboard = () => {
                         </div>
 
                         <aside className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
-                            <MoveStopsPanel
-                                selectedStops={selectedStopsForMove}
-                                selectedStopIds={selectedStopIds}
-                                totalStops={serviceStops.length}
-                                technicians={technicians}
-                                moveMode={moveMode}
-                                moveDate={moveDate}
-                                moveDay={moveDay}
-                                moveTechId={moveTechId}
-                                isMovingStops={isMovingStops}
-                                onMoveModeChange={setMoveMode}
-                                onMoveDateChange={setMoveDate}
-                                onMoveDayChange={setMoveDay}
-                                onMoveTechChange={setMoveTechId}
-                                onMoveSelectedStops={moveSelectedStops}
-                                onSelectAllUnfinished={selectAllUnfinishedStops}
-                                onClearSelection={() => setSelectedStopIds([])}
-                            />
-
                             <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                                 <h2 className="text-lg font-bold text-gray-800">Technician Overview</h2>
                                 <div className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
@@ -1547,6 +2043,102 @@ const RouteDashboard = () => {
         </div>
     );
 };
+
+const RouteWeekNavigator = ({
+    weekDays,
+    weekMetrics,
+    selectedDate,
+    todayDate,
+    isLoading,
+    canNavigatePreviousWeek,
+    canNavigateNextWeek,
+    onPreviousWeek,
+    onNextWeek,
+    onSelectDate,
+}) => (
+    <section className="mb-4 rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+        <div className="flex items-stretch gap-2">
+            <button
+                type="button"
+                onClick={onPreviousWeek}
+                disabled={!canNavigatePreviousWeek}
+                className="flex w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Previous week"
+            >
+                <ChevronLeftIcon className="h-4 w-4" />
+            </button>
+
+            <div className="grid min-w-0 flex-1 grid-cols-2 gap-2 sm:grid-cols-4 xl:grid-cols-7">
+                {weekDays.map(({ dayName, date }) => {
+                    const key = dayKey(date);
+                    const metric = weekMetrics[key] || {};
+                    const isSelected = sameCalendarDate(date, selectedDate);
+                    const isToday = sameCalendarDate(date, todayDate);
+                    const routeCount = metric.routeCount ?? 0;
+                    const serviceStopCount = metric.serviceStopCount ?? 0;
+
+                    return (
+                        <button
+                            key={key}
+                            type="button"
+                            onClick={() => onSelectDate(date)}
+                            className={`min-w-0 rounded-lg border px-3 py-2 text-left transition ${isSelected
+                                    ? 'border-blue-500 bg-blue-600 text-white shadow-sm'
+                                    : isToday
+                                        ? 'border-blue-200 bg-blue-50 text-gray-900 hover:bg-blue-100'
+                                        : 'border-gray-200 bg-gray-50 text-gray-800 hover:border-gray-300 hover:bg-white'
+                                }`}
+                        >
+                            <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                    <p className={`truncate text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>
+                                        {dayName}
+                                    </p>
+                                    <p className={`text-xs font-semibold ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                        {format(date, 'MMM d')}
+                                    </p>
+                                </div>
+                                {isToday && (
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'}`}>
+                                        Today
+                                    </span>
+                                )}
+                            </div>
+                            <div className="mt-2 grid grid-cols-2 gap-1">
+                                <div className={`rounded-md px-2 py-1 ${isSelected ? 'bg-white/15' : 'bg-white'}`}>
+                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                        Stops
+                                    </p>
+                                    <p className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>
+                                        {isLoading ? '...' : serviceStopCount}
+                                    </p>
+                                </div>
+                                <div className={`rounded-md px-2 py-1 ${isSelected ? 'bg-white/15' : 'bg-white'}`}>
+                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                        Routes
+                                    </p>
+                                    <p className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>
+                                        {isLoading ? '...' : routeCount}
+                                    </p>
+                                </div>
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+
+            <button
+                type="button"
+                onClick={onNextWeek}
+                disabled={!canNavigateNextWeek}
+                className="flex w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-35"
+                aria-label="Next week"
+            >
+                <ChevronRightIcon className="h-4 w-4" />
+            </button>
+        </div>
+    </section>
+);
 
 const getRouteStatusClass = (status) => {
     switch (status) {
@@ -1583,6 +2175,7 @@ const RouteWorkloadBoard = ({
                     stops: routeStops,
                 };
             })
+            .filter(group => group.stops.length > 0)
             .sort((a, b) => a.techName.localeCompare(b.techName));
         const looseStops = stops.filter(stop => !routedStopIds.has(stop.id));
 
@@ -1745,98 +2338,118 @@ const MoveStopsPanel = ({
     const selectedPreview = selectedStops.slice(0, 4);
 
     return (
-        <section className="rounded-xl border border-blue-200 bg-white p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-3">
-                <div>
+        <section className="rounded-xl border border-blue-200 bg-white p-3 shadow-sm">
+            <div className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
+                <div className="min-w-0 xl:w-52">
                     <h2 className="text-lg font-bold text-gray-800">Move Stops</h2>
                     <p className="text-sm text-gray-500">{selectedCount} selected out of {totalStops}</p>
+                    <span className="mt-2 inline-flex rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
+                        {selectedCount}
+                    </span>
                 </div>
-                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-bold text-blue-700">
-                    {selectedCount}
-                </span>
-            </div>
 
-            <div className="mt-4 grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-1">
-                <button
-                    type="button"
-                    onClick={() => onMoveModeChange(MOVE_MODE_ONE_TIME)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_ONE_TIME ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-                >
-                    One Time
-                </button>
-                <button
-                    type="button"
-                    onClick={() => onMoveModeChange(MOVE_MODE_PERMANENT)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_PERMANENT ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-                >
-                    Permanent
-                </button>
-            </div>
+                <div className="grid flex-1 gap-3 md:grid-cols-2 xl:grid-cols-[220px_180px_minmax(200px,1fr)_220px]">
+                    <div>
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Move Type</span>
+                        <div className="mt-1 grid grid-cols-2 rounded-lg border border-gray-200 bg-gray-50 p-1">
+                            <button
+                                type="button"
+                                onClick={() => onMoveModeChange(MOVE_MODE_ONE_TIME)}
+                                className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_ONE_TIME ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                One Time
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => onMoveModeChange(MOVE_MODE_PERMANENT)}
+                                className={`rounded-md px-3 py-2 text-sm font-semibold ${moveMode === MOVE_MODE_PERMANENT ? 'bg-white text-blue-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                            >
+                                Permanent
+                            </button>
+                        </div>
+                    </div>
 
-            <div className="mt-4 space-y-3">
-                {moveMode === MOVE_MODE_ONE_TIME ? (
-                    <label className="block space-y-1">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Destination Date</span>
-                        <DatePicker
-                            selected={moveDate}
-                            onChange={onMoveDateChange}
-                            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
-                        />
-                    </label>
-                ) : (
-                    <label className="block space-y-1">
-                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recurring Day</span>
+                    {moveMode === MOVE_MODE_ONE_TIME ? (
+                        <label className="block">
+                            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Destination Date</span>
+                            <DatePicker
+                                selected={moveDate}
+                                onChange={onMoveDateChange}
+                                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                            />
+                        </label>
+                    ) : (
+                        <label className="block">
+                            <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Recurring Day</span>
+                            <select
+                                value={moveDay}
+                                onChange={(event) => onMoveDayChange(event.target.value)}
+                                className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                            >
+                                {DAYS_OF_WEEK.map(day => (
+                                    <option key={day} value={day}>{day}</option>
+                                ))}
+                            </select>
+                        </label>
+                    )}
+
+                    <label className="block">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Technician</span>
                         <select
-                            value={moveDay}
-                            onChange={(event) => onMoveDayChange(event.target.value)}
-                            className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                            value={moveTechId}
+                            onChange={(event) => onMoveTechChange(event.target.value)}
+                            className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
                         >
-                            {DAYS_OF_WEEK.map(day => (
-                                <option key={day} value={day}>{day}</option>
+                            <option value="">Select technician</option>
+                            {technicians.map(tech => (
+                                <option key={tech.userId || tech.docId} value={tech.userId}>
+                                    {tech.userName}
+                                </option>
                             ))}
                         </select>
                     </label>
-                )}
 
-                <label className="block space-y-1">
-                    <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Technician</span>
-                    <select
-                        value={moveTechId}
-                        onChange={(event) => onMoveTechChange(event.target.value)}
-                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                    <div>
+                        <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selection</span>
+                        <div className="mt-1 grid grid-cols-2 gap-2">
+                            <button
+                                type="button"
+                                onClick={onSelectAllUnfinished}
+                                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Select All Open
+                            </button>
+                            <button
+                                type="button"
+                                onClick={onClearSelection}
+                                disabled={selectedStopIds.length === 0}
+                                className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="xl:w-56">
+                    <button
+                        type="button"
+                        onClick={onMoveSelectedStops}
+                        disabled={!selectedCount || !moveTechId || isMovingStops}
+                        className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                        <option value="">Select technician</option>
-                        {technicians.map(tech => (
-                            <option key={tech.userId || tech.docId} value={tech.userId}>
-                                {tech.userName}
-                            </option>
-                        ))}
-                    </select>
-                </label>
-            </div>
-
-            <div className="mt-4 grid grid-cols-2 gap-2">
-                <button
-                    type="button"
-                    onClick={onSelectAllUnfinished}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
-                >
-                    Select All Open
-                </button>
-                <button
-                    type="button"
-                    onClick={onClearSelection}
-                    disabled={selectedStopIds.length === 0}
-                    className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                    Clear
-                </button>
+                        {isMovingStops ? 'Moving...' : `Move ${selectedCount || ''} Stop${selectedCount === 1 ? '' : 's'}`}
+                    </button>
+                    {moveMode === MOVE_MODE_PERMANENT && (
+                        <p className="mt-2 text-xs text-gray-500">Permanent moves update recurring and future unfinished stops.</p>
+                    )}
+                </div>
             </div>
 
             {selectedPreview.length > 0 && (
-                <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
                     <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Selected</p>
-                    <div className="mt-2 space-y-2">
+                    <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
                         {selectedPreview.map(stop => (
                             <div key={stop.id} className="min-w-0 text-sm">
                                 <p className="truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</p>
@@ -1851,18 +2464,6 @@ const MoveStopsPanel = ({
                     </div>
                 </div>
             )}
-
-            <button
-                type="button"
-                onClick={onMoveSelectedStops}
-                disabled={!selectedCount || !moveTechId || isMovingStops}
-                className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-                {isMovingStops ? 'Moving...' : `Move ${selectedCount || ''} Stop${selectedCount === 1 ? '' : 's'}`}
-            </button>
-            {moveMode === MOVE_MODE_PERMANENT && (
-                <p className="mt-2 text-xs text-gray-500">Permanent moves update the recurring stop and future unfinished stops.</p>
-            )}
         </section>
     );
 };
@@ -1874,7 +2475,9 @@ const ActiveRouteDetailPanel = ({
     areaEstimates,
     routeLogs,
     selectedStopIds,
+    vendors = [],
     onSaveRouteCompletion,
+    onSaveRouteOrder,
     onToggleStop,
     onOpenStop,
 }) => {
@@ -1888,6 +2491,18 @@ const ActiveRouteDetailPanel = ({
         endMileage: "",
         completionNotes: "",
     });
+    const [isEditingOrder, setIsEditingOrder] = useState(false);
+    const [draftStops, setDraftStops] = useState(stops);
+    const [isOrderDirty, setIsOrderDirty] = useState(false);
+    const [anchorPosition, setAnchorPosition] = useState('start');
+    const [anchorSource, setAnchorSource] = useState('vendor');
+    const [selectedVendorId, setSelectedVendorId] = useState('');
+    const [manualAnchorAddress, setManualAnchorAddress] = useState(null);
+    const [manualAnchorInput, setManualAnchorInput] = useState('');
+    const [isSavingOrder, setIsSavingOrder] = useState(false);
+    const stopSignature = useMemo(() => stops.map(stop => stop.id).join('|'), [stops]);
+    const displayStops = isEditingOrder ? draftStops : stops;
+    const selectedVendor = vendors.find(vendor => vendor.id === selectedVendorId);
 
     useEffect(() => {
         setCompletionDraft({
@@ -1897,11 +2512,98 @@ const ActiveRouteDetailPanel = ({
         });
     }, [route.completionNotes, route.endMilage, route.endMileage, route.id, route.startMilage, route.startMileage]);
 
+    useEffect(() => {
+        setDraftStops(stops);
+        setIsOrderDirty(false);
+        setIsEditingOrder(false);
+    }, [route.id, stopSignature]);
+
     const updateCompletionDraft = (field, value) => {
         setCompletionDraft((current) => ({
             ...current,
             [field]: value,
         }));
+    };
+
+    const startEditingOrder = () => {
+        setDraftStops(stops);
+        setIsOrderDirty(false);
+        setIsEditingOrder(true);
+    };
+
+    const cancelEditingOrder = () => {
+        setDraftStops(stops);
+        setIsOrderDirty(false);
+        setIsEditingOrder(false);
+    };
+
+    const moveDraftStop = (index, direction) => {
+        const nextIndex = index + direction;
+
+        if (nextIndex < 0 || nextIndex >= draftStops.length || isSavingOrder) return;
+
+        setDraftStops(currentStops => {
+            const nextStops = [...currentStops];
+            [nextStops[index], nextStops[nextIndex]] = [nextStops[nextIndex], nextStops[index]];
+            setIsOrderDirty(!sameStopOrder(nextStops, stops));
+            return nextStops;
+        });
+    };
+
+    const resetDraftOrder = () => {
+        setDraftStops(stops);
+        setIsOrderDirty(false);
+    };
+
+    const applyAutoOrder = () => {
+        const anchorCoordinate = anchorSource === 'vendor'
+            ? getVendorCoordinate(selectedVendor)
+            : getAddressCoordinate(manualAnchorAddress);
+
+        if (!anchorCoordinate) {
+            toast.error(anchorSource === 'vendor'
+                ? 'Select a vendor with a saved map address, or use manual address.'
+                : 'Select an address from autocomplete before auto-ordering.'
+            );
+            return;
+        }
+
+        const { orderedStops, missingCoordinateCount } = autoOrderStopsFromAnchor(
+            draftStops,
+            anchorCoordinate,
+            anchorPosition
+        );
+
+        if (sameStopOrder(orderedStops, draftStops)) {
+            toast.success('Route order already matches that location.');
+            return;
+        }
+
+        setDraftStops(orderedStops);
+        setIsOrderDirty(!sameStopOrder(orderedStops, stops));
+
+        if (missingCoordinateCount > 0) {
+            toast.error(`${missingCoordinateCount} stop${missingCoordinateCount === 1 ? '' : 's'} had no map coordinates and stayed outside the optimized set.`);
+        } else {
+            toast.success('Route stops reordered by location.');
+        }
+    };
+
+    const saveDraftOrder = async (updatePlannedRoute = false) => {
+        if (!isOrderDirty || isSavingOrder) return;
+
+        setIsSavingOrder(true);
+
+        try {
+            const saved = await onSaveRouteOrder(route, draftStops, { updatePlannedRoute });
+
+            if (saved) {
+                setIsOrderDirty(false);
+                setIsEditingOrder(false);
+            }
+        } finally {
+            setIsSavingOrder(false);
+        }
     };
 
     return (
@@ -1929,23 +2631,191 @@ const ActiveRouteDetailPanel = ({
 
             <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
                 <div className="rounded-lg border border-gray-200">
-                    <div className="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3">
+                    <div className="flex flex-col gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
                         <div>
                             <p className="font-semibold text-gray-800">Route Stops</p>
                             <p className="text-xs text-gray-500">{unfinishedStops.length} unfinished stop(s) can be moved.</p>
                         </div>
-                        <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
-                            {selectedCount} selected
-                        </span>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <span className="rounded-full bg-white px-2 py-1 text-xs font-semibold text-gray-600">
+                                {selectedCount} selected
+                            </span>
+                            {isEditingOrder ? (
+                                <button
+                                    type="button"
+                                    onClick={cancelEditingOrder}
+                                    disabled={isSavingOrder}
+                                    className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Cancel
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={startEditingOrder}
+                                    disabled={!stops.length}
+                                    className="rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Edit Order
+                                </button>
+                            )}
+                        </div>
                     </div>
+
+                    {isEditingOrder && (
+                        <div className="border-b border-blue-100 bg-blue-50/70 p-4">
+                            <div className="grid gap-3 lg:grid-cols-[180px_180px_minmax(220px,1fr)_auto] lg:items-end">
+                                <div>
+                                    <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">Optimize From</span>
+                                    <div className="mt-1 grid grid-cols-2 rounded-lg border border-blue-200 bg-white p-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setAnchorPosition('start')}
+                                            className={`rounded-md px-3 py-2 text-sm font-semibold ${anchorPosition === 'start' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                        >
+                                            Start
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAnchorPosition('end')}
+                                            className={`rounded-md px-3 py-2 text-sm font-semibold ${anchorPosition === 'end' ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+                                        >
+                                            End
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">Location Type</span>
+                                    <div className="mt-1 grid grid-cols-2 rounded-lg border border-blue-200 bg-white p-1">
+                                        <button
+                                            type="button"
+                                            onClick={() => setAnchorSource('vendor')}
+                                            className={`rounded-md px-3 py-2 text-sm font-semibold ${anchorSource === 'vendor' ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-200' : 'text-gray-600 hover:text-gray-900'}`}
+                                        >
+                                            Vendor
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={() => setAnchorSource('manual')}
+                                            className={`rounded-md px-3 py-2 text-sm font-semibold ${anchorSource === 'manual' ? 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-200' : 'text-gray-600 hover:text-gray-900'}`}
+                                        >
+                                            Manual
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {anchorSource === 'vendor' ? (
+                                    <label className="block">
+                                        <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">Vendor Address</span>
+                                        <select
+                                            value={selectedVendorId}
+                                            onChange={(event) => setSelectedVendorId(event.target.value)}
+                                            className="mt-1 w-full rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm"
+                                        >
+                                            <option value="">Select vendor</option>
+                                            {vendors.map(vendor => {
+                                                const addressLabel = formatVendorAddress(vendor);
+
+                                                return (
+                                                    <option key={vendor.id} value={vendor.id}>
+                                                        {vendor.name}{addressLabel ? ` - ${addressLabel}` : ''}
+                                                    </option>
+                                                );
+                                            })}
+                                        </select>
+                                    </label>
+                                ) : (
+                                    <div>
+                                        <span className="text-xs font-semibold uppercase tracking-wide text-blue-700">Manual Address</span>
+                                        <AddressAutocomplete
+                                            initialValue={manualAnchorInput}
+                                            placeholder="Start typing an address"
+                                            onAddressSelect={(address) => {
+                                                setManualAnchorAddress(address);
+                                                setManualAnchorInput(formatAddressValue(address));
+                                            }}
+                                            onInputChange={setManualAnchorInput}
+                                            customClasses="mt-1 w-full rounded-lg border border-blue-200 bg-white py-2 pl-10 pr-3 text-sm text-gray-900"
+                                            iconClasses="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-blue-500"
+                                        />
+                                    </div>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={applyAutoOrder}
+                                    disabled={isSavingOrder}
+                                    className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Auto Reorder
+                                </button>
+                            </div>
+
+                            <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                                <p className="text-xs font-semibold text-blue-800">
+                                    {isOrderDirty ? 'Order changes are ready to save.' : 'Use arrows or auto reorder to change this route.'}
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={resetDraftOrder}
+                                        disabled={!isOrderDirty || isSavingOrder}
+                                        className="rounded-lg border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        Reset
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => saveDraftOrder(false)}
+                                        disabled={!isOrderDirty || isSavingOrder}
+                                        className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {isSavingOrder ? 'Saving...' : 'Save Today'}
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => saveDraftOrder(true)}
+                                        disabled={!isOrderDirty || isSavingOrder}
+                                        className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        {isSavingOrder ? 'Saving...' : 'Save Today + Planned Route'}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
                     <div className="divide-y divide-gray-100">
-                        {stops.length ? stops.map((stop, index) => {
+                        {displayStops.length ? displayStops.map((stop, index) => {
                             const status = getStopDisplayStatus(stop);
                             const movable = isStopMovable(stop);
                             const isSelected = selectedStopIds.includes(stop.id);
 
                             return (
                                 <div key={stop.id} className="flex items-center gap-3 px-4 py-3">
+                                    {isEditingOrder && (
+                                        <div className="flex shrink-0 gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => moveDraftStop(index, -1)}
+                                                disabled={index === 0 || isSavingOrder}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${stop.customerName || 'service stop'} up`}
+                                            >
+                                                <ArrowUpIcon className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => moveDraftStop(index, 1)}
+                                                disabled={index === draftStops.length - 1 || isSavingOrder}
+                                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${stop.customerName || 'service stop'} down`}
+                                            >
+                                                <ArrowDownIcon className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    )}
                                     <button
                                         type="button"
                                         onClick={() => onToggleStop(stop)}

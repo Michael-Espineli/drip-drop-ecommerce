@@ -16,7 +16,8 @@ import {
     ChevronRightIcon,
     ArrowDownIcon,
     ArrowUpIcon,
-    XMarkIcon
+    XMarkIcon,
+    BookmarkIcon
 } from '@heroicons/react/24/outline';
 import { BiPurchaseTagAlt } from 'react-icons/bi';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -24,7 +25,8 @@ import { doc, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { Context } from "../../../context/AuthContext";
 import { db } from '../../../utils/config';
-import { DEFAULT_COMPANY_CATEGORY_ORDER } from '../../../navigation';
+import { allNav } from '../../../navigation/allNav';
+import { COMPANY_PINNED_CATEGORY, DEFAULT_COMPANY_CATEGORY_ORDER } from '../../../navigation';
 
 const functions = getFunctions();
 
@@ -67,9 +69,8 @@ const SettingsSection = ({ title, items }) => {
     );
 };
 
-const categoryLabels = {
-    NA: 'Dashboard & Messages',
-};
+const BOOKMARKS_SECTION_TITLE = 'Book Marks';
+const BOOKMARK_EXCLUDED_PATHS = new Set(['/company/setup-guide']);
 
 const normalizeNavigationOrder = (savedOrder) => {
     const ordered = Array.isArray(savedOrder) ? savedOrder : [];
@@ -81,15 +82,74 @@ const normalizeNavigationOrder = (savedOrder) => {
     return [...new Set(normalized)];
 };
 
+const companyBookmarkPaths = new Set(
+    allNav
+        .filter((item) => item.role === 'Company')
+        .filter((item) => item.category !== COMPANY_PINNED_CATEGORY)
+        .filter((item) => !BOOKMARK_EXCLUDED_PATHS.has(item.path))
+        .map((item) => item.path)
+);
+
+const normalizeBookmarkPaths = (savedBookmarks) => {
+    const ordered = Array.isArray(savedBookmarks) ? savedBookmarks : [];
+
+    return [...new Set(
+        ordered.filter((path) => typeof path === 'string' && companyBookmarkPaths.has(path))
+    )];
+};
+
+const featureFlagsEnabledForItem = (item, featureFlagsLoaded, isFeatureEnabled) => {
+    const featureFlagIds = [
+        item.featureFlagId,
+        ...(Array.isArray(item.featureFlagIds) ? item.featureFlagIds : []),
+    ].filter(Boolean);
+
+    return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
+};
+
+const getBookmarkCandidateItems = ({
+    companyRoleLoading,
+    hasCompanyPermission,
+    featureFlagsLoaded,
+    isFeatureEnabled,
+}) => {
+    return allNav
+        .filter((item) => item.role === 'Company')
+        .filter((item) => item.category !== COMPANY_PINNED_CATEGORY)
+        .filter((item) => !BOOKMARK_EXCLUDED_PATHS.has(item.path))
+        .filter((item) => (
+            (!item.permissionId || companyRoleLoading || hasCompanyPermission(item.permissionId)) &&
+            featureFlagsEnabledForItem(item, featureFlagsLoaded, isFeatureEnabled)
+        ));
+};
+
 const NavigationOrderSettings = () => {
-    const { user, dataBaseUser, setDataBaseUser } = useContext(Context);
+    const {
+        user,
+        dataBaseUser,
+        setDataBaseUser,
+        companyRoleLoading,
+        hasCompanyPermission,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const [categoryOrder, setCategoryOrder] = useState(DEFAULT_COMPANY_CATEGORY_ORDER);
+    const [selectedBookmarkPaths, setSelectedBookmarkPaths] = useState([]);
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isSavingBookmarks, setIsSavingBookmarks] = useState(false);
 
     useEffect(() => {
         setCategoryOrder(normalizeNavigationOrder(dataBaseUser?.settings?.companyNavigationCategoryOrder));
+        setSelectedBookmarkPaths(normalizeBookmarkPaths(dataBaseUser?.settings?.companyNavigationBookmarks));
     }, [dataBaseUser]);
+
+    const bookmarkCandidateItems = getBookmarkCandidateItems({
+        companyRoleLoading,
+        hasCompanyPermission,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    });
 
     const saveCategoryOrder = async (nextOrder) => {
         if (!user?.uid) return;
@@ -118,6 +178,45 @@ const NavigationOrderSettings = () => {
         }
     };
 
+    const saveBookmarkPaths = async (nextPaths) => {
+        if (!user?.uid) return;
+
+        const normalizedPaths = normalizeBookmarkPaths(nextPaths);
+        setSelectedBookmarkPaths(normalizedPaths);
+        setIsSavingBookmarks(true);
+
+        try {
+            await updateDoc(doc(db, "users", user.uid), {
+                "settings.companyNavigationBookmarks": normalizedPaths,
+            });
+            setDataBaseUser((current) => ({
+                ...current,
+                settings: {
+                    ...(current?.settings || {}),
+                    companyNavigationBookmarks: normalizedPaths,
+                },
+            }));
+            toast.success("Book marks updated.");
+        } catch (error) {
+            console.error("Failed to save book marks:", error);
+            toast.error("Failed to save book marks.");
+            setSelectedBookmarkPaths(normalizeBookmarkPaths(dataBaseUser?.settings?.companyNavigationBookmarks));
+        } finally {
+            setIsSavingBookmarks(false);
+        }
+    };
+
+    const toggleBookmark = (item) => {
+        if (isSavingBookmarks) return;
+
+        const isSelected = selectedBookmarkPaths.includes(item.path);
+        const nextPaths = isSelected
+            ? selectedBookmarkPaths.filter((path) => path !== item.path)
+            : [...selectedBookmarkPaths, item.path];
+
+        saveBookmarkPaths(nextPaths);
+    };
+
     const moveCategory = (index, direction) => {
         const nextIndex = index + direction;
         if (nextIndex < 0 || nextIndex >= categoryOrder.length || isSaving) return;
@@ -138,7 +237,7 @@ const NavigationOrderSettings = () => {
                 <div>
                     <h2 className="text-xl font-semibold text-gray-800">Navigation Order</h2>
                     <p className="mt-1 text-sm text-gray-500">
-                        Set your personal sidebar order. This only changes navigation for your user account.
+                        Set your personal sidebar order and choose Book Marks. Dashboard and Messages stay pinned at the top.
                     </p>
                 </div>
                 <button
@@ -164,7 +263,7 @@ const NavigationOrderSettings = () => {
                                     Edit Navigation Order
                                 </h3>
                                 <p className="mt-1 text-sm text-slate-500">
-                                    Move each sidebar category into the order you want.
+                                    Move each sidebar category into the order you want. Dashboard and Messages stay above Book Marks.
                                 </p>
                             </div>
                             <button
@@ -178,11 +277,60 @@ const NavigationOrderSettings = () => {
                         </div>
 
                         <div className="max-h-[60vh] overflow-y-auto p-5">
+                            <div className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+                                <div className="mb-3 flex items-start gap-3">
+                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-slate-600 shadow-sm ring-1 ring-slate-200">
+                                        <BookmarkIcon className="h-5 w-5" />
+                                    </div>
+                                    <div>
+                                        <h4 className="text-sm font-semibold text-slate-900">{BOOKMARKS_SECTION_TITLE}</h4>
+                                        <p className="mt-0.5 text-xs text-slate-500">
+                                            Select pages to show below Dashboard and Messages and above your ordered categories.
+                                        </p>
+                                    </div>
+                                </div>
+
+                                {bookmarkCandidateItems.length > 0 ? (
+                                    <div className="grid gap-2 sm:grid-cols-2">
+                                        {bookmarkCandidateItems.map((item) => {
+                                            const isSelected = selectedBookmarkPaths.includes(item.path);
+
+                                            return (
+                                                <label
+                                                    key={item.path}
+                                                    className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                                                        isSelected
+                                                            ? 'border-slate-800 bg-white text-slate-900 shadow-sm'
+                                                            : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
+                                                    } ${isSavingBookmarks ? 'opacity-70' : ''}`}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isSelected}
+                                                        disabled={isSavingBookmarks}
+                                                        onChange={() => toggleBookmark(item)}
+                                                        className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-900"
+                                                    />
+                                                    <span className="flex h-6 w-6 shrink-0 items-center justify-center text-slate-500 [&>svg]:h-5 [&>svg]:w-5">
+                                                        {item.icon}
+                                                    </span>
+                                                    <span className="min-w-0 flex-1 truncate font-medium">{item.title}</span>
+                                                </label>
+                                            );
+                                        })}
+                                    </div>
+                                ) : (
+                                    <p className="rounded-md border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                                        No bookmarkable pages are available for this user.
+                                    </p>
+                                )}
+                            </div>
+
                             <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
                                 {categoryOrder.map((category, index) => (
                                     <div key={category} className="flex items-center justify-between gap-3 p-3">
                                         <div>
-                                            <p className="text-sm font-semibold text-slate-900">{categoryLabels[category] || category}</p>
+                                            <p className="text-sm font-semibold text-slate-900">{category}</p>
                                             <p className="text-xs text-slate-500">Position {index + 1}</p>
                                         </div>
                                         <div className="flex gap-2">
@@ -191,7 +339,7 @@ const NavigationOrderSettings = () => {
                                                 onClick={() => moveCategory(index, -1)}
                                                 disabled={index === 0 || isSaving}
                                                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                                aria-label={`Move ${categoryLabels[category] || category} up`}
+                                                aria-label={`Move ${category} up`}
                                             >
                                                 <ArrowUpIcon className="h-4 w-4" />
                                             </button>
@@ -200,7 +348,7 @@ const NavigationOrderSettings = () => {
                                                 onClick={() => moveCategory(index, 1)}
                                                 disabled={index === categoryOrder.length - 1 || isSaving}
                                                 className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                                aria-label={`Move ${categoryLabels[category] || category} down`}
+                                                aria-label={`Move ${category} down`}
                                             >
                                                 <ArrowDownIcon className="h-4 w-4" />
                                             </button>

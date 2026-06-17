@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
-import { getNav } from '../navigation/index';
+import { COMPANY_PINNED_CATEGORY, getNav } from '../navigation/index';
 import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
@@ -14,6 +14,30 @@ import {
     todoIsOpen,
 } from '../utils/models/TodoItem';
 
+const normalizeBookmarkPaths = (savedBookmarks) => (
+    Array.isArray(savedBookmarks)
+        ? [...new Set(savedBookmarks.filter((path) => typeof path === 'string' && path.trim()))]
+        : []
+);
+
+const getBookmarkedNavItems = (navItemsByCategory, savedBookmarks) => {
+    const visibleItemsByPath = new Map();
+
+    Object.entries(navItemsByCategory).forEach(([category, items]) => {
+        if (category === COMPANY_PINNED_CATEGORY) return;
+
+        items.forEach((item) => {
+            if (!visibleItemsByPath.has(item.path)) {
+                visibleItemsByPath.set(item.path, item);
+            }
+        });
+    });
+
+    return normalizeBookmarkPaths(savedBookmarks)
+        .map((path) => visibleItemsByPath.get(path))
+        .filter(Boolean);
+};
+
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
@@ -22,6 +46,33 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0 });
     const categoryLabel = (category) => category === 'Users' ? 'Users, Vendors & Fleet' : category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
+    const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
+    const navigationSections = [
+        ...(navItemsByCategory[COMPANY_PINNED_CATEGORY]?.length
+            ? [{
+                key: COMPANY_PINNED_CATEGORY,
+                category: COMPANY_PINNED_CATEGORY,
+                label: 'Dashboard Items',
+                items: navItemsByCategory[COMPANY_PINNED_CATEGORY],
+            }]
+            : []),
+        ...(bookmarkItems.length
+            ? [{
+                key: 'book-marks',
+                category: 'Book Marks',
+                label: 'Book Marks',
+                items: bookmarkItems,
+            }]
+            : []),
+        ...Object.entries(navItemsByCategory)
+            .filter(([category]) => category !== COMPANY_PINNED_CATEGORY)
+            .map(([category, items]) => ({
+                key: category,
+                category,
+                label: categoryLabel(category),
+                items,
+            })),
+    ];
 
     useEffect(() => {
         if (role) {
@@ -240,30 +291,30 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
                     {/* Navigation */}
                     <nav className={`px-2 pt-5 text-gray-700 flex-grow overflow-y-auto ${isCollapsed ? 'lg:px-2' : ''}`}>
-                        {Object.keys(navItemsByCategory).map((category, categoryIndex) => (
+                        {navigationSections.map((section, categoryIndex) => (
                             <div
-                                key={category}
+                                key={section.key}
                                 className={`mb-3 ${isCollapsed && categoryIndex > 0 ? 'lg:mt-5 lg:pt-2' : ''}`}
                             >
                                 {categoryIndex > 0 && (
                                     <div
                                         className={`hidden items-center px-1 pb-3 ${isCollapsed ? 'lg:flex' : ''}`}
                                         role="separator"
-                                        aria-label={`${categoryLabel(category)} section`}
-                                        title={categoryLabel(category)}
+                                        aria-label={`${section.label} section`}
+                                        title={section.label}
                                     >
                                         <span className="h-[2px] flex-1 bg-slate-500" />
                                         <span className="mx-2 shrink-0 text-[11px] font-bold uppercase leading-none text-slate-700">
-                                            {categoryInitial(category)}
+                                            {categoryInitial(section.label)}
                                         </span>
                                         <span className="h-[2px] flex-1 bg-slate-500" />
                                     </div>
                                 )}
-                                {category !== 'NA' && (
-                                    <h3 className={`px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider ${isCollapsed ? 'lg:hidden' : ''}`}>{categoryLabel(category)}</h3>
+                                {section.category !== COMPANY_PINNED_CATEGORY && (
+                                    <h3 className={`px-3 py-2 text-xs font-bold uppercase text-gray-500 tracking-wider ${isCollapsed ? 'lg:hidden' : ''}`}>{section.label}</h3>
                                 )}
                                 <ul className='flex flex-col gap-1'>
-                                    {navItemsByCategory[category].map(item => {
+                                    {section.items.map(item => {
                                         const isActive = pathname.toLowerCase() === item.path.toLowerCase();
                                         const count =
                                             item.title === 'Leads'
@@ -279,7 +330,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                                 : 0;
 
                                         return (
-                                            <li key={`${item.path}-${item.title}`}>
+                                            <li key={`${section.key}-${item.path}-${item.title}`}>
                                                 <Link
                                                     to={getPath(item.path)}
                                                     title={item.title}

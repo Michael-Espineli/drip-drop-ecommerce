@@ -608,6 +608,7 @@ const Payroll = ({ mode = "payroll" }) => {
   const [paymentForm, setPaymentForm] = useState(emptyPaymentForm);
   const [detailLineItem, setDetailLineItem] = useState(null);
   const [detailStatement, setDetailStatement] = useState(null);
+  const [showZeroAmountStatementLines, setShowZeroAmountStatementLines] = useState(false);
   const [backfillResult, setBackfillResult] = useState(null);
   const [backfillProgress, setBackfillProgress] = useState(null);
   const [stopPayModal, setStopPayModal] = useState(null);
@@ -648,6 +649,7 @@ const Payroll = ({ mode = "payroll" }) => {
       setEditingServiceStopTypeId("");
       setEditingRateId("");
       setDetailStatement(null);
+      setShowZeroAmountStatementLines(false);
       setBackfillResult(null);
       setBackfillProgress(null);
       setRateMatrixEditMode(false);
@@ -2205,6 +2207,7 @@ const Payroll = ({ mode = "payroll" }) => {
           ? { type: "statement", statement: createdStatement }
           : current
       );
+      setShowZeroAmountStatementLines(false);
     } catch (err) {
       console.error("Error creating pay statement:", err);
       setActionFailure("Could not create that pay statement.");
@@ -2444,12 +2447,23 @@ const Payroll = ({ mode = "payroll" }) => {
     setDetailLineItem(null);
   };
 
+  const openCandidateStatementDetail = (group) => {
+    setShowZeroAmountStatementLines(false);
+    setDetailStatement({ type: "candidate", group });
+  };
+
+  const openStatementDetail = (statement) => {
+    setShowZeroAmountStatementLines(false);
+    setDetailStatement({ type: "statement", statement });
+  };
+
   const closeStatementDetail = () => {
     if (savingAction) return;
     setDetailStatement(null);
+    setShowZeroAmountStatementLines(false);
   };
 
-  const renderStatementLineItemsTable = (items) => (
+  const renderStatementLineItemsTable = (items, emptyMessage = "No line items found.") => (
     <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
       <table className="min-w-full divide-y divide-slate-200 text-sm">
         <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -2464,7 +2478,7 @@ const Payroll = ({ mode = "payroll" }) => {
         <tbody className="divide-y divide-slate-100">
           {items.length === 0 ? (
             <tr>
-              <td colSpan={5} className="px-4 py-6 text-center text-slate-500">No line items found.</td>
+              <td colSpan={5} className="px-4 py-6 text-center text-slate-500">{emptyMessage}</td>
             </tr>
           ) : items.map((item) => (
             <tr key={item.id}>
@@ -2605,7 +2619,7 @@ const Payroll = ({ mode = "payroll" }) => {
                         <div className="flex justify-end gap-2">
                           <button
                             type="button"
-                            onClick={() => setDetailStatement({ type: "candidate", group })}
+                            onClick={() => openCandidateStatementDetail(group)}
                             className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
                           >
                             Inspect
@@ -2671,7 +2685,7 @@ const Payroll = ({ mode = "payroll" }) => {
                           <div className="flex justify-end gap-2">
                             <button
                               type="button"
-                              onClick={() => setDetailStatement({ type: "statement", statement })}
+                              onClick={() => openStatementDetail(statement)}
                               className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
                             >
                               Inspect
@@ -2711,6 +2725,17 @@ const Payroll = ({ mode = "payroll" }) => {
 
     const detail = detailStatement;
     const summary = statementDetailSummary(detail);
+    const zeroAmountLines = summary.lines.filter((item) => Number(item.totalAmountCents || 0) === 0);
+    const visibleStatementLines = showZeroAmountStatementLines
+      ? summary.lines
+      : summary.lines.filter((item) => Number(item.totalAmountCents || 0) !== 0);
+    const hiddenZeroLineCount = summary.lines.length - visibleStatementLines.length;
+    const lineItemCountLabel = hiddenZeroLineCount > 0
+      ? `${visibleStatementLines.length} shown / ${summary.lines.length} total`
+      : summary.lines.length;
+    const lineItemsEmptyMessage = hiddenZeroLineCount > 0
+      ? "0 amount line items are hidden."
+      : "No line items found.";
     const isCandidate = detail.type === "candidate";
     const statement = detail.statement || {};
     const group = detail.group || {};
@@ -2754,6 +2779,7 @@ const Payroll = ({ mode = "payroll" }) => {
                   <button
                     type="button"
                     onClick={() => {
+                      setShowZeroAmountStatementLines(false);
                       setDetailStatement(null);
                       openPaymentModal("statement", statement);
                     }}
@@ -2777,7 +2803,7 @@ const Payroll = ({ mode = "payroll" }) => {
           <div className="p-5">
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
               <DetailField label="Status" value={summary.status} accent />
-              <DetailField label="Line Items" value={summary.lines.length} />
+              <DetailField label="Line Items" value={lineItemCountLabel} />
               <DetailField label="Subtotal" value={moneyFromCents(summary.subtotalCents)} />
               <DetailField label="Adjustments" value={moneyFromCents(summary.adjustmentCents)} />
               <DetailField label="Total" value={moneyFromCents(summary.totalCents)} accent />
@@ -2791,8 +2817,17 @@ const Payroll = ({ mode = "payroll" }) => {
                     Review each payroll line before {isCandidate ? "creating" : "approving"} this statement.
                   </p>
                 </div>
+                {zeroAmountLines.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setShowZeroAmountStatementLines((value) => !value)}
+                    className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    {showZeroAmountStatementLines ? "Hide 0 Amount Line Items" : "Show 0 Amount Line Items"}
+                  </button>
+                ) : null}
               </div>
-              {renderStatementLineItemsTable(summary.lines)}
+              {renderStatementLineItemsTable(visibleStatementLines, lineItemsEmptyMessage)}
             </div>
 
             {!isCandidate ? (

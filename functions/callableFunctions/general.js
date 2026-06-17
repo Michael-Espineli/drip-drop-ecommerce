@@ -5629,32 +5629,80 @@ exports.updateCompanyReadingsSettings = functions.https.onCall(async (data, cont
 exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (data, context) => {
   const db = getFirestore();
 
-  let receivedData = data.data
-  let companyId = receivedData.companyId
-  let routeId = receivedData.routeId
-  let recurringRouteOrder = receivedData.recurringRouteOrder
-  let serviceStopOrders = receivedData.serviceStopOrders
+  const receivedData = data?.data ?? data ?? {};
+  const companyId = receivedData.companyId;
+  const routeId = receivedData.routeId;
+  const recurringRouteOrder = Array.isArray(receivedData.recurringRouteOrder)
+    ? receivedData.recurringRouteOrder
+    : Array.isArray(receivedData.order)
+      ? receivedData.order
+      : [];
+  const serviceStopOrders = Array.isArray(receivedData.serviceStopOrders)
+    ? receivedData.serviceStopOrders
+    : [];
+
+  if (!companyId) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId required");
+  }
 
   if (!routeId) {
     throw new functions.https.HttpsError("invalid-argument", "routeId required");
   }
 
-  const routeRef = db.collection("companies", companyId, "recurringRoute").doc(routeId);
-  const snap = await routeRef.get();
+  if (serviceStopOrders.length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "serviceStopOrders required");
+  }
+
+  let routeRef = db
+    .collection("companies")
+    .doc(companyId)
+    .collection("recurringRoutes")
+    .doc(routeId);
+  let snap = await routeRef.get();
+
+  if (!snap.exists) {
+    routeRef = db
+      .collection("companies")
+      .doc(companyId)
+      .collection("recurringRoute")
+      .doc(routeId);
+    snap = await routeRef.get();
+  }
 
   if (!snap.exists) {
     throw new functions.https.HttpsError("not-found", "Route not found");
   }
 
-  const recurring = recurringRouteOrder || [];
-  const active = serviceStopOrders || [];
+  const routeData = snap.data() || {};
+  const savedRecurring = recurringRouteOrder.length
+    ? recurringRouteOrder
+    : Array.isArray(routeData.order)
+      ? routeData.order
+      : Array.isArray(routeData.recurringRouteOrder)
+        ? routeData.recurringRouteOrder
+        : [];
+  const active = serviceStopOrders;
+  const recurring = savedRecurring.length
+    ? savedRecurring
+    : active
+      .filter(stop => stop?.recurringServiceStopId)
+      .map((stop, index) => ({
+        id: stop.id || stop.recurringServiceStopId,
+        order: index + 1,
+        recurringServiceStopId: stop.recurringServiceStopId,
+        customerId: stop.customerId || "",
+        customerName: stop.customerName || "",
+        locationId: stop.locationId || ""
+      }));
 
   // 1. Sort active by order
-  const activeSorted = [...active].sort((a, b) => a.order - b.order);
+  const activeSorted = [...active].sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
 
   // 2. Map recurring by recurringServiceStopId
   const recurringMap = new Map(
-    recurring.map(r => [r.recurringServiceStopId, { ...r }])
+    recurring
+      .filter(r => r?.recurringServiceStopId)
+      .map(r => [r.recurringServiceStopId, { ...r }])
   );
 
   // 3. Build reordered recurring list
@@ -5665,28 +5713,45 @@ exports.updateRecurringRouteOrderPermanently = functions.https.onCall(async (dat
     if (match) {
       reordered.push(match);
       recurringMap.delete(stop.recurringServiceStopId);
+    } else if (stop.recurringServiceStopId) {
+      reordered.push({
+        id: stop.id || uuidv4(),
+        recurringServiceStopId: stop.recurringServiceStopId,
+        customerId: stop.customerId || "",
+        customerName: stop.customerName || "",
+        locationId: stop.locationId || "",
+        order: 0
+      });
     }
   }
 
   // 4. Append remaining recurring stops not in active
   const remaining = Array.from(recurringMap.values())
-    .sort((a, b) => a.order - b.order);
+    .sort((a, b) => Number(a.order || 0) - Number(b.order || 0));
 
   reordered.push(...remaining);
 
   // 5. Rewrite order indexes
   const finalRecurring = reordered.map((r, index) => ({
     ...r,
-    order: index
+    order: index + 1
   }));
+  const rssIds = finalRecurring
+    .map(item => item.recurringServiceStopId)
+    .filter(Boolean);
 
   // 6. Save back to Firestore
-  await updateDoc(routeRef, {
-    recurringRouteOrder: finalRecurring
-  });
+  await routeRef.set({
+    order: finalRecurring,
+    recurringRouteOrder: finalRecurring,
+    rssIds: rssIds,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp()
+  }, { merge: true });
 
   return {
     success: true,
+    status: 200,
+    routeId: routeId,
     count: finalRecurring.length
   };
 });

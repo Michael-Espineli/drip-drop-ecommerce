@@ -180,6 +180,7 @@ const AddLead = () => {
         }
     };
     const inputClasses = "w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm";
+    const textInputClasses = "mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 sm:text-sm";
     const returnPath = isEditing ? `/company/leads/${routeLeadId}` : '/company/leads';
 
     if (loading) {
@@ -191,13 +192,13 @@ const AddLead = () => {
     }
 
     return (
-        <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
-            <div className="mx-auto">
-                <div className="flex justify-between items-center mb-6">
+        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
+            <div className="mx-auto max-w-screen-2xl">
+                <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
                     <div>
                         <button
                             onClick={() => navigate(returnPath)}
-                            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+                            className="mb-3 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50"
                         >
                             Back
                         </button>
@@ -207,67 +208,72 @@ const AddLead = () => {
                         </p>
                     </div>
                 </div>
-                <form onSubmit={handleSubmit} className="bg-white p-8 rounded-2xl shadow-lg space-y-6">
+                <form onSubmit={handleSubmit} className="grid min-h-[calc(100vh-13rem)] gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.65fr)]">
+                    <section className="flex min-h-[32rem] flex-col rounded-lg border border-gray-200 bg-white p-5 shadow-sm xl:min-h-[calc(100vh-13rem)]">
+                        <div className="mb-3 flex flex-wrap items-center gap-2">
+                            <label htmlFor="serviceDescription" className="text-lg font-bold text-gray-900">Shared Description</label>
+                            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                                Visible to homeowner
+                            </span>
+                        </div>
+                        <textarea
+                            name="serviceDescription"
+                            id="serviceDescription"
+                            value={formData.serviceDescription}
+                            onChange={handleInputChange}
+                            rows={24}
+                            className="min-h-[28rem] flex-1 resize-none rounded-md border border-gray-300 px-4 py-3 text-base leading-7 text-gray-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-blue-500 xl:min-h-0"
+                            placeholder="Write the customer's request here."
+                            required
+                            autoFocus={!isEditing}
+                        ></textarea>
+                    </section>
 
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Lead Info</h2>
-                        <div className="grid grid-cols-1 gap-6">
+                    <div className="space-y-6">
+                        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                            <h2 className="mb-4 border-b border-gray-200 pb-3 text-lg font-bold text-gray-900">Lead Info</h2>
                             <div>
                                 <label htmlFor="serviceName" className="block text-sm font-medium text-gray-700">Service Name</label>
-                                <input type="text" name="serviceName" id="serviceName" value={formData.serviceName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
+                                <input type="text" name="serviceName" id="serviceName" value={formData.serviceName} onChange={handleInputChange} className={textInputClasses} required />
                             </div>
-                            <div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <label htmlFor="serviceDescription" className="block text-sm font-medium text-gray-700">Shared Description</label>
-                                    <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                                        Visible to homeowner
-                                    </span>
+                        </section>
+
+                        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                            <h2 className="mb-4 border-b border-gray-200 pb-3 text-lg font-bold text-gray-900">Homeowner</h2>
+                            <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                                <div>
+                                    <label htmlFor="homeownerName" className="block text-sm font-medium text-gray-700">Name</label>
+                                    <input type="text" name="homeownerName" id="homeownerName" value={formData.homeownerName} onChange={handleInputChange} className={textInputClasses} required />
                                 </div>
-                                <p className="mt-1 text-sm text-gray-500">
-                                    This description is saved on the homeowner service request. Use company private notes on the lead detail page for internal notes.
-                                </p>
-                                <textarea name="serviceDescription" id="serviceDescription" value={formData.serviceDescription} onChange={handleInputChange} rows={4} className="mt-2 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"></textarea>
+                                <div>
+                                    <label htmlFor="homeownerPhone" className="block text-sm font-medium text-gray-700">Phone</label>
+                                    <input type="tel" name="homeownerPhone" id="homeownerPhone" value={formData.homeownerPhone} onChange={handleInputChange} className={textInputClasses} />
+                                </div>
+                                <div className="md:col-span-2 xl:col-span-1 2xl:col-span-2">
+                                    <label htmlFor="homeownerEmail" className="block text-sm font-medium text-gray-700">Email</label>
+                                    <input type="email" name="homeownerEmail" id="homeownerEmail" value={formData.homeownerEmail} onChange={handleInputChange} className={textInputClasses} />
+                                </div>
                             </div>
+                        </section>
+
+                        <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                            <h2 className="mb-4 border-b border-gray-200 pb-3 text-lg font-bold text-gray-900">Service Location</h2>
+                            <AddressAutocomplete onAddressSelect={(p) => handleAddressSelect(p, 'service')} customClasses={inputClasses} />
+
+                            {formData.streetAddress && (
+                                <div className="mt-4 rounded-md bg-gray-100 p-4 text-sm text-gray-800">
+                                    <p className="font-semibold">Selected Address:</p>
+                                    <p>{formData.streetAddress}, {formData.city}, {formData.state} {formData.zip}</p>
+                                </div>
+                            )}
+                        </section>
+
+                        <div className="flex justify-end">
+                            <button type="button" onClick={() => navigate(returnPath)} className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50">Cancel</button>
+                            <button type="submit" disabled={isSubmitting} className="ml-3 inline-flex justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
+                                {isSubmitting ? (isEditing ? 'Saving Lead...' : 'Adding Lead...') : (isEditing ? 'Save Lead' : 'Add Lead')}
+                            </button>
                         </div>
-                    </div>
-
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Homeowner</h2>
-                        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-                            <div>
-                                <label htmlFor="homeownerName" className="block text-sm font-medium text-gray-700">Name</label>
-                                <input type="text" name="homeownerName" id="homeownerName" value={formData.homeownerName} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" required />
-                            </div>
-                            <div>
-                                <label htmlFor="homeownerPhone" className="block text-sm font-medium text-gray-700">Phone</label>
-                                <input type="tel" name="homeownerPhone" id="homeownerPhone" value={formData.homeownerPhone} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
-                            </div>
-                            <div className="md:col-span-2">
-                                <label htmlFor="homeownerEmail" className="block text-sm font-medium text-gray-700">Email</label>
-                                <input type="email" name="homeownerEmail" id="homeownerEmail" value={formData.homeownerEmail} onChange={handleInputChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500" />
-                            </div>
-                        </div>
-                    </div>
-
-
-                    <div>
-                        <h2 className="text-xl font-bold text-gray-800 border-b pb-3 mb-4">Service Location</h2>
-                        <AddressAutocomplete onAddressSelect={(p) => handleAddressSelect(p, 'service')} customClasses={inputClasses} />
-
-                        {/* <AddressAutocomplete onAddressSelect={handleAddressSelect} /> */}
-                        {formData.streetAddress && (
-                            <div className="mt-4 p-4 bg-gray-100 rounded-lg">
-                                <p className="font-semibold">Selected Address:</p>
-                                <p>{formData.streetAddress}, {formData.city}, {formData.state} {formData.zip}</p>
-                            </div>
-                        )}
-                    </div>
-
-                    <div className="flex justify-end pt-4">
-                        <button type="button" onClick={() => navigate(returnPath)} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md shadow-sm hover:bg-gray-50">Cancel</button>
-                        <button type="submit" disabled={isSubmitting} className="ml-3 inline-flex justify-center px-4 py-2 text-sm font-medium text-white bg-blue-600 border border-transparent rounded-md shadow-sm hover:bg-blue-700 disabled:opacity-50">
-                            {isSubmitting ? (isEditing ? 'Saving Lead...' : 'Adding Lead...') : (isEditing ? 'Save Lead' : 'Add Lead')}
-                        </button>
                     </div>
                 </form>
             </div>
