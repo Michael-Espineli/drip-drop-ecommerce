@@ -14,6 +14,7 @@ import {
 import { v4 as uuidv4 } from "uuid";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import AddressAutocomplete from "../../components/AddressAutocomplete";
 import {
     fetchCompanyVendor,
     VENDOR_RECORDS_COLLECTION,
@@ -119,6 +120,18 @@ const CreateNewVendor = () => {
         setForm((current) => ({
             ...current,
             [field]: value,
+        }));
+    };
+
+    const handleAddressSelect = (address) => {
+        if (!address) return;
+
+        setForm((current) => ({
+            ...current,
+            streetAddress: address.streetAddress || current.streetAddress,
+            city: address.city || current.city,
+            state: address.state || current.state,
+            zip: address.zipCode || address.zip || current.zip,
         }));
     };
 
@@ -269,16 +282,17 @@ const CreateNewVendor = () => {
                                     <h3 className="text-base font-bold text-slate-950">Address</h3>
                                     <div className="mt-4 grid gap-4 md:grid-cols-2">
                                         <div className="md:col-span-2">
-                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorStreet">
-                                                Street Address
+                                            <label className="block text-sm font-semibold text-slate-700" htmlFor="vendorAddressSearch">
+                                                Address Search
                                             </label>
-                                            <input
-                                                id="vendorStreet"
-                                                value={form.streetAddress}
-                                                onChange={(event) => updateField("streetAddress", event.target.value)}
-                                                type="text"
-                                                placeholder="123 Main St"
-                                                className={`${fieldClass} mt-2`}
+                                            <AddressAutocomplete
+                                                inputId="vendorAddressSearch"
+                                                initialValue={form.streetAddress}
+                                                onAddressSelect={handleAddressSelect}
+                                                onInputChange={(value) => updateField("streetAddress", value)}
+                                                placeholder="Search vendor address"
+                                                customClasses={`${fieldClass} mt-2 pl-10`}
+                                                iconClasses="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 transform text-slate-400"
                                             />
                                         </div>
 

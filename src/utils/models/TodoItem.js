@@ -158,6 +158,8 @@ export const normalizeTodo = (documentSnapshot) => ({
   status: TODO_STATUS.open,
   scope: TODO_SCOPE.team,
   priority: TODO_PRIORITY.normal,
+  boardId: "",
+  boardName: "",
   reminderEnabled: false,
   relatedEntity: null,
   ...documentSnapshot.data(),

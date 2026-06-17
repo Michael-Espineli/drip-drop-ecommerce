@@ -191,7 +191,7 @@ const hourlyPaySourceOptions = ["activeRouteDuration", "activeRouteLogs", "servi
 const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifier"];
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
-const workCategoryOptions = ["route", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "extra", "custom"];
+const workCategoryOptions = ["route", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "estimate", "extra", "custom"];
 
 const defaultStopPayCategories = [
   {
@@ -325,11 +325,10 @@ const IosIconPicker = ({ label, value, onChange }) => {
               key={icon.name}
               onClick={() => onChange(icon.name)}
               aria-pressed={isSelected}
-              className={`flex min-h-[4.5rem] items-center gap-3 rounded-md border p-3 text-left transition ${
-                isSelected
+              className={`flex min-h-[4.5rem] items-center gap-3 rounded-md border p-3 text-left transition ${isSelected
                   ? "border-blue-500 bg-blue-50 text-blue-800 ring-1 ring-blue-500"
                   : "border-slate-200 bg-white text-slate-700 hover:border-blue-200 hover:bg-white"
-              }`}
+                }`}
             >
               <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${isSelected ? "bg-white" : "bg-slate-100"}`}>
                 <PreviewIcon className="h-5 w-5" aria-hidden="true" />
@@ -1310,11 +1309,11 @@ const Payroll = ({ mode = "payroll" }) => {
           types.map((type) =>
             mappedServiceStopTypeIds.has(type.id)
               ? {
-                  ...type,
-                  defaultWorkTypeIds: (type.defaultWorkTypeIds || []).filter((id) => id !== workType.id),
-                  updatedAt: now,
-                  updatedByUserId: currentUserId,
-                }
+                ...type,
+                defaultWorkTypeIds: (type.defaultWorkTypeIds || []).filter((id) => id !== workType.id),
+                updatedAt: now,
+                updatedByUserId: currentUserId,
+              }
               : type
           )
         );
@@ -2416,10 +2415,10 @@ const Payroll = ({ mode = "payroll" }) => {
         items.map((item) =>
           linkedLineIds.includes(item.id)
             ? {
-                ...item,
-                ...(item.approvedAt ? {} : approvalPayload),
-                ...linePaymentPayload,
-              }
+              ...item,
+              ...(item.approvedAt ? {} : approvalPayload),
+              ...linePaymentPayload,
+            }
             : item
         )
       );
@@ -3928,9 +3927,8 @@ const Payroll = ({ mode = "payroll" }) => {
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
-              className={`rounded-md px-4 py-2 text-sm font-bold transition ${
-                activeTab === tab ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
-              }`}
+              className={`rounded-md px-4 py-2 text-sm font-bold transition ${activeTab === tab ? "bg-blue-600 text-white" : "bg-white text-slate-700 hover:bg-slate-100"
+                }`}
             >
               {label}
             </button>

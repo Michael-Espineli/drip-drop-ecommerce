@@ -24,6 +24,11 @@ const MOVE_MODE_PERMANENT = 'permanent';
 const DAYS_OF_WEEK = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MAX_ROUTE_WEEK_OFFSET = 3;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_STOP_BUCKETS = Object.freeze({
+    routes: 'routes',
+    jobs: 'jobs',
+    estimates: 'estimates',
+});
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -332,6 +337,94 @@ const getRouteStopCount = (route) => (
         ? route.serviceStopsIds.length
         : Number(route?.totalStops || 0)
 );
+
+const createWeekStopBuckets = () => ({
+    [WEEK_STOP_BUCKETS.routes]: 0,
+    [WEEK_STOP_BUCKETS.jobs]: 0,
+    [WEEK_STOP_BUCKETS.estimates]: 0,
+});
+
+const normalizeStopBucketValue = (value = '') => (
+    String(value || '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '')
+        .replace(/[_/-]/g, '')
+);
+
+const serviceStopHasReference = (stop, keys = []) => (
+    keys.some((key) => {
+        const value = stop?.[key];
+        if (!value) return false;
+        if (typeof value === 'object') return Boolean(value.id || value.internalId);
+        return Boolean(String(value).trim());
+    })
+);
+
+const getServiceStopWeekBucket = (stop = {}) => {
+    const bucketValues = [
+        stop.serviceStopTypeUseCaseRawValue,
+        stop.serviceStopUseCaseSourceId,
+        stop.serviceStopTypeUseCase,
+        stop.typeUseCase,
+        stop.category,
+        stop.serviceStopCategory,
+        stop.serviceStopTypeCategory,
+        stop.typeId,
+        stop.serviceStopTypeId,
+        stop.type,
+        stop.serviceStopTypeName,
+        stop.sourceId,
+        stop.stopPayCategory,
+        stop.stopPayBucketId,
+        stop.serviceStopBucketId,
+        stop.serviceStopBucket,
+    ].map(normalizeStopBucketValue).filter(Boolean);
+
+    const hasBucketValue = (...values) => (
+        bucketValues.some((bucketValue) => (
+            values.some((value) => bucketValue.includes(normalizeStopBucketValue(value)))
+        ))
+    );
+
+    if (hasBucketValue(
+        'estimate',
+        'jobEstimate',
+        'serviceAgreementEstimate',
+        'serviceEstimate',
+        'system_job_estimate_service_stop',
+        'system_service_agreement_estimate_service_stop'
+    )) {
+        return WEEK_STOP_BUCKETS.estimates;
+    }
+
+    if (
+        hasBucketValue(
+            'jobVisit',
+            'customerRelationship',
+            'system_job_service_stop',
+            'system_customer_relationship_service_stop',
+            'serviceCall'
+        ) ||
+        serviceStopHasReference(stop, ['jobId', 'workOrderId', 'assignedJobId'])
+    ) {
+        return WEEK_STOP_BUCKETS.jobs;
+    }
+
+    if (
+        hasBucketValue(
+            'recurringRoute',
+            'recurringServiceStop',
+            'route',
+            'system_recurring_service_stop'
+        ) ||
+        serviceStopHasReference(stop, ['recurringServiceStopId', 'recurringStopId', 'routeId', 'activeRouteId'])
+    ) {
+        return WEEK_STOP_BUCKETS.routes;
+    }
+
+    return WEEK_STOP_BUCKETS.routes;
+};
 
 const pickCanonicalRoute = (routes) => (
     [...routes].sort((a, b) => {
@@ -846,6 +939,24 @@ const RouteDashboard = () => {
             date: addDaysToDate(selectedWeekStart, index),
         }))
     ), [selectedWeekStart]);
+    const weekTotals = useMemo(() => (
+        weekDays.reduce((totals, { date }) => {
+            const metric = weekMetrics[dayKey(date)] || {};
+            const buckets = metric.stopBuckets || {};
+
+            totals.totalStops += metric.serviceStopCount || 0;
+            totals.routes += buckets.routes || 0;
+            totals.jobs += buckets.jobs || 0;
+            totals.estimates += buckets.estimates || 0;
+
+            return totals;
+        }, {
+            totalStops: 0,
+            routes: 0,
+            jobs: 0,
+            estimates: 0,
+        })
+    ), [weekDays, weekMetrics]);
     const selectedWeekOffset = weekOffsetFromCurrent(selectedWeekStart, currentWeekStart);
     const canNavigatePreviousWeek = selectedWeekOffset > 0;
     const canNavigateNextWeek = selectedWeekOffset < MAX_ROUTE_WEEK_OFFSET;
@@ -969,6 +1080,7 @@ const RouteDashboard = () => {
 
                 metrics[dayKey(date)] = {
                     serviceStopCount: 0,
+                    stopBuckets: createWeekStopBuckets(),
                     activeRouteCount: 0,
                     recurringRouteCount: 0,
                     routeCount: 0,
@@ -1001,6 +1113,7 @@ const RouteDashboard = () => {
                 if (!metricsByDay[key]) return;
 
                 metricsByDay[key].serviceStopCount += 1;
+                metricsByDay[key].stopBuckets[getServiceStopWeekBucket(stop)] += 1;
             });
 
             activeRoutesSnapshot.docs
@@ -1206,17 +1319,20 @@ const RouteDashboard = () => {
     }, [recentlySelectedCompany]);
 
     const isAllRoutesSelected = selectedRouteId === ALL_ROUTES_OPTION;
+    const displayActiveRoutes = useMemo(() => (
+        activeRoutes.filter(route => getOrderedRouteStops(route, serviceStops).length > 0)
+    ), [activeRoutes, serviceStops]);
 
     const selectedRoute = useMemo(
-        () => isAllRoutesSelected ? null : activeRoutes.find(route => route.id === selectedRouteId) || null,
-        [activeRoutes, isAllRoutesSelected, selectedRouteId]
+        () => isAllRoutesSelected ? null : displayActiveRoutes.find(route => route.id === selectedRouteId) || null,
+        [displayActiveRoutes, isAllRoutesSelected, selectedRouteId]
     );
 
     const allRouteStops = useMemo(() => {
         const stopsWithRoute = [];
         const includedStopIds = new Set();
 
-        activeRoutes.forEach(route => {
+        displayActiveRoutes.forEach(route => {
             getOrderedRouteStops(route, serviceStops).forEach((stop, index) => {
                 if (includedStopIds.has(stop.id)) return;
 
@@ -1235,7 +1351,7 @@ const RouteDashboard = () => {
         serviceStops.forEach(stop => {
             if (includedStopIds.has(stop.id)) return;
 
-            const techRoute = activeRoutes.find(route => (
+            const techRoute = displayActiveRoutes.find(route => (
                 route.techId === stop.techId ||
                 route.techName === stop.tech ||
                 route.serviceStopsIds?.includes(stop.id)
@@ -1264,7 +1380,21 @@ const RouteDashboard = () => {
             const bTime = getDateValue(b.serviceDate)?.getTime() || 0;
             return aTime - bTime;
         });
-    }, [activeRoutes, serviceStops]);
+    }, [displayActiveRoutes, serviceStops]);
+
+    useEffect(() => {
+        setSelectedRouteId(previousRouteId => {
+            if (previousRouteId === ALL_ROUTES_OPTION) {
+                return displayActiveRoutes.length > 0 ? ALL_ROUTES_OPTION : '';
+            }
+
+            if (displayActiveRoutes.some(route => route.id === previousRouteId)) {
+                return previousRouteId;
+            }
+
+            return displayActiveRoutes.length > 0 ? ALL_ROUTES_OPTION : '';
+        });
+    }, [displayActiveRoutes]);
 
     const selectedRouteStops = useMemo(
         () => isAllRoutesSelected ? allRouteStops : getOrderedRouteStops(selectedRoute, serviceStops),
@@ -1797,6 +1927,7 @@ const RouteDashboard = () => {
                 <RouteWeekNavigator
                     weekDays={weekDays}
                     weekMetrics={weekMetrics}
+                    weekTotals={weekTotals}
                     selectedDate={serviceDate}
                     todayDate={todayDate}
                     isLoading={isLoadingWeekMetrics}
@@ -1838,7 +1969,7 @@ const RouteDashboard = () => {
                     <main className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
                         <div className="min-w-0 space-y-4">
                             <RouteWorkloadBoard
-                                routes={activeRoutes}
+                                routes={displayActiveRoutes}
                                 stops={serviceStops}
                                 selectedRouteId={selectedRouteId}
                                 selectedStopIds={selectedStopIds}
@@ -1864,14 +1995,14 @@ const RouteDashboard = () => {
                                             value={selectedRouteId}
                                             onChange={(event) => setSelectedRouteId(event.target.value)}
                                             className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 shadow-sm sm:w-72"
-                                            disabled={activeRoutes.length === 0}
+                                            disabled={displayActiveRoutes.length === 0}
                                         >
-                                            {activeRoutes.length === 0 ? (
+                                            {displayActiveRoutes.length === 0 ? (
                                                 <option value="">No active routes</option>
                                             ) : (
                                                 <>
                                                     <option value={ALL_ROUTES_OPTION}>All technicians</option>
-                                                    {activeRoutes.map(route => (
+                                                    {displayActiveRoutes.map(route => (
                                                         <option key={route.id} value={route.id}>
                                                             {route.techName || route.name || 'Route'}
                                                         </option>
@@ -1899,7 +2030,7 @@ const RouteDashboard = () => {
                                             />
                                             <RouteMapMetric
                                                 label={isAllRoutesSelected ? 'Technicians' : 'Trail Points'}
-                                                value={isAllRoutesSelected ? activeRoutes.length : selectedRouteLocations.length}
+                                                value={isAllRoutesSelected ? displayActiveRoutes.length : selectedRouteLocations.length}
                                                 tone="orange"
                                             />
                                             <RouteMapMetric
@@ -2020,7 +2151,7 @@ const RouteDashboard = () => {
                             <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                                 <h2 className="text-lg font-bold text-gray-800">Technician Overview</h2>
                                 <div className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
-                                    {activeRoutes.length > 0 ? activeRoutes.map(route => (
+                                    {displayActiveRoutes.length > 0 ? displayActiveRoutes.map(route => (
                                         <TechRouteCard
                                             key={route.id}
                                             route={route}
@@ -2044,9 +2175,17 @@ const RouteDashboard = () => {
     );
 };
 
+const WeekBucketStat = ({ label, value, className }) => (
+    <div className={`rounded-lg border px-3 py-2 ${className}`}>
+        <p className="text-[10px] font-bold uppercase tracking-wide opacity-70">{label}</p>
+        <p className="mt-0.5 text-lg font-bold leading-none">{value}</p>
+    </div>
+);
+
 const RouteWeekNavigator = ({
     weekDays,
     weekMetrics,
+    weekTotals,
     selectedDate,
     todayDate,
     isLoading,
@@ -2057,6 +2196,34 @@ const RouteWeekNavigator = ({
     onSelectDate,
 }) => (
     <section className="mb-4 rounded-xl border border-gray-200 bg-white p-3 shadow-sm">
+        <div className="mb-3 flex flex-col gap-3 border-b border-gray-100 pb-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-gray-500">Week Total</p>
+                <div className="mt-1 flex items-end gap-2">
+                    <p className="text-3xl font-bold leading-none text-gray-900">
+                        {isLoading ? '...' : weekTotals.totalStops}
+                    </p>
+                    <p className="pb-1 text-sm font-semibold text-gray-500">stops</p>
+                </div>
+            </div>
+            <div className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap sm:justify-end">
+                <WeekBucketStat
+                    label="Routes"
+                    value={isLoading ? '...' : weekTotals.routes}
+                    className="border-blue-100 bg-blue-50 text-blue-700"
+                />
+                <WeekBucketStat
+                    label="Jobs"
+                    value={isLoading ? '...' : weekTotals.jobs}
+                    className="border-emerald-100 bg-emerald-50 text-emerald-700"
+                />
+                <WeekBucketStat
+                    label="Estimates"
+                    value={isLoading ? '...' : weekTotals.estimates}
+                    className="border-violet-100 bg-violet-50 text-violet-700"
+                />
+            </div>
+        </div>
         <div className="flex items-stretch gap-2">
             <button
                 type="button"

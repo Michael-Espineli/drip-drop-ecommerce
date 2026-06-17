@@ -20,6 +20,24 @@ import { Link, useNavigate } from "react-router-dom";
 import { format, subDays } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
+const getRequestDateValue = (request) => (
+    request.date || request.dateCreated || request.createdAt || null
+);
+
+const toDate = (value) => {
+    if (!value) return null;
+    if (value?.toDate) return value.toDate();
+    if (value instanceof Date) return value;
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const toDateSortValue = (request) => {
+    const date = toDate(getRequestDateValue(request));
+    return date ? date.getTime() : 0;
+};
+
 const RepairRequests = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const navigate = useNavigate();
@@ -34,6 +52,7 @@ const RepairRequests = () => {
 
     const [searchTerm, setSearchTerm] = useState("");
     const [selectedStatuses, setSelectedStatuses] = useState(DEFAULT_REPAIR_REQUEST_FILTER_STATUSES);
+    const [dateSortDirection, setDateSortDirection] = useState("desc");
 
     const [startDate, setStartDate] = useState(() => {
         return format(subDays(new Date(), 60), "yyyy-MM-dd");
@@ -75,10 +94,13 @@ const RepairRequests = () => {
             );
 
             const internal = internalSnap.docs.map((docSnap) => {
+                const data = docSnap.data();
                 const request = RepairRequest.fromFirestore(docSnap);
 
                 return {
                     ...request,
+                    dateCreated: toDate(data.dateCreated),
+                    createdAt: toDate(data.createdAt),
                     source: "internal",
                     sourcePath: "company",
                 };
@@ -94,10 +116,13 @@ const RepairRequests = () => {
             );
 
             const external = externalSnap.docs.map((docSnap) => {
+                const data = docSnap.data();
                 const request = RepairRequest.fromFirestore(docSnap);
 
                 return {
                     ...request,
+                    dateCreated: toDate(data.dateCreated),
+                    createdAt: toDate(data.createdAt),
                     source: "external",
                     sourcePath: "homeowner",
                 };
@@ -122,7 +147,7 @@ const RepairRequests = () => {
         const end = endDate ? new Date(`${endDate}T23:59:59`) : null;
 
         return selectedRequests.filter((request) => {
-            const requestDate = request.date || request.dateCreated || null;
+            const requestDate = toDate(getRequestDateValue(request));
 
             const matchesDate =
                 !requestDate ||
@@ -161,8 +186,11 @@ const RepairRequests = () => {
                 term.length === 0 || searchable.includes(term);
 
             return matchesDate && matchesStatus && matchesSearch;
+        }).sort((left, right) => {
+            const result = toDateSortValue(left) - toDateSortValue(right);
+            return dateSortDirection === "asc" ? result : -result;
         });
-    }, [selectedRequests, selectedStatuses, searchTerm, startDate, endDate]);
+    }, [selectedRequests, selectedStatuses, searchTerm, startDate, endDate, dateSortDirection]);
 
     const internalNeedsActionCount = useMemo(() => {
         return internalRequests.filter((request) => {
@@ -188,10 +216,12 @@ const RepairRequests = () => {
     };
 
     const formatDate = (date) => {
-        if (!date) return "N/A";
+        const value = toDate(date);
+
+        if (!value) return "N/A";
 
         try {
-            return format(date, "PP");
+            return format(value, "PP");
         } catch {
             return "N/A";
         }
@@ -217,6 +247,10 @@ const RepairRequests = () => {
         });
     };
 
+    const toggleDateSortDirection = () => {
+        setDateSortDirection((current) => current === "asc" ? "desc" : "asc");
+    };
+
     const renderRequestTable = (requests) => {
         if (requests.length === 0) {
             return (
@@ -235,7 +269,16 @@ const RepairRequests = () => {
                     <thead className="bg-gray-50">
                         <tr>
                             <th className="p-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
-                                Date
+                                <button
+                                    type="button"
+                                    onClick={toggleDateSortDirection}
+                                    className="inline-flex items-center gap-1 text-left uppercase tracking-wider hover:text-gray-900"
+                                >
+                                    Date
+                                    <span className="text-xs text-gray-400">
+                                        {dateSortDirection === "asc" ? "ASC" : "DESC"}
+                                    </span>
+                                </button>
                             </th>
                             <th className="p-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">
                                 Customer
@@ -263,7 +306,7 @@ const RepairRequests = () => {
                                 onClick={() => handleOpenRequest(request)}
                             >
                                 <td className="p-4 whitespace-nowrap text-sm text-gray-700">
-                                    {formatDate(request.date || request.dateCreated)}
+                                    {formatDate(getRequestDateValue(request))}
                                 </td>
 
                                 <td className="p-4 whitespace-nowrap">
@@ -390,7 +433,7 @@ const RepairRequests = () => {
                     </div>
 
                     <div className="p-6">
-                        <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto_auto]">
+                        <div className="mb-5 grid grid-cols-1 gap-4 xl:grid-cols-[1fr_auto_auto_auto]">
                             <input
                                 value={searchTerm}
                                 onChange={(event) => setSearchTerm(event.target.value)}
@@ -415,6 +458,16 @@ const RepairRequests = () => {
                                     className="rounded-xl border border-gray-300 px-3 py-3 text-sm"
                                 />
                             </div>
+
+                            <select
+                                value={dateSortDirection}
+                                onChange={(event) => setDateSortDirection(event.target.value)}
+                                className="rounded-xl border border-gray-300 bg-white px-3 py-3 text-sm text-gray-700"
+                                aria-label="Sort repair requests by date"
+                            >
+                                <option value="desc">Newest first</option>
+                                <option value="asc">Oldest first</option>
+                            </select>
 
                             <button
                                 type="button"

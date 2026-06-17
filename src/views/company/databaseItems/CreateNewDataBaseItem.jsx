@@ -18,6 +18,7 @@ import {
   DEFAULT_CATEGORY,
   DEFAULT_SUBCATEGORY,
   DEFAULT_UOM,
+  isChemicalCategory,
   SUBCATEGORY_OPTIONS,
   UOM_OPTIONS,
 } from "./databaseItemOptions";
@@ -70,6 +71,8 @@ const CreateNewDataBaseItem = () => {
   const [uomList] = useState(UOM_OPTIONS);
   const [categoryList] = useState(CATEGORY_OPTIONS);
   const [subcategoryList] = useState(SUBCATEGORY_OPTIONS);
+
+  const allowsLinkedDosages = isChemicalCategory(category);
 
   const handleUOMChange = (selectedOption2) => {
     (async () => {
@@ -134,6 +137,13 @@ const CreateNewDataBaseItem = () => {
       }
     })();
   }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!allowsLinkedDosages) {
+      setLinkedDosageIds([]);
+      setDosageSearchTerm("");
+    }
+  }, [allowsLinkedDosages]);
 
   const filteredDosages = dosages.filter((dosage) =>
     dosageLabel(dosage).toLowerCase().includes(dosageSearchTerm.trim().toLowerCase())
@@ -265,7 +275,7 @@ const CreateNewDataBaseItem = () => {
         companyId: recentlySelectedCompany,
         itemId: id,
         dosages,
-        selectedDosageIds: linkedDosageIds,
+        selectedDosageIds: allowsLinkedDosages ? linkedDosageIds : [],
       });
       await batch.commit();
       navigate("/company/items/detail/" + id);
@@ -606,68 +616,70 @@ const CreateNewDataBaseItem = () => {
               />
             </div>
 
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <div className="text-sm font-semibold text-slate-800">Linked Dosages</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    Purchases of this item will count toward the selected dosage templates in the waste report.
+            {allowsLinkedDosages && (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-slate-800">Linked Dosages</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      Purchases of this item will count toward the selected dosage templates in the waste report.
+                    </div>
                   </div>
+                  <span className="rounded-md bg-white px-2 py-1 text-xs font-bold text-slate-600">
+                    {linkedDosageIds.length} selected
+                  </span>
                 </div>
-                <span className="rounded-md bg-white px-2 py-1 text-xs font-bold text-slate-600">
-                  {linkedDosageIds.length} selected
-                </span>
-              </div>
 
-              <input
-                className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
-                type="search"
-                value={dosageSearchTerm}
-                onChange={(event) => setDosageSearchTerm(event.target.value)}
-                placeholder="Search dosage name, amount, or unit"
-              />
+                <input
+                  className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  type="search"
+                  value={dosageSearchTerm}
+                  onChange={(event) => setDosageSearchTerm(event.target.value)}
+                  placeholder="Search dosage name, amount, or unit"
+                />
 
-              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
-                {filteredDosages.map((dosage) => {
-                  const checked = linkedDosageIds.includes(dosage.id);
-                  return (
-                    <label
-                      key={dosage.id}
-                      className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition ${
-                        checked ? "border-blue-300 bg-white text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleLinkedDosageId(dosage.id)}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span>
-                        <span className="block font-semibold">{dosage.name || dosage.chemType || "Unnamed dosage"}</span>
-                        <span className="block text-xs text-slate-500">{dosageLabel(dosage)}</span>
+                <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
+                  {filteredDosages.map((dosage) => {
+                    const checked = linkedDosageIds.includes(dosage.id);
+                    return (
+                      <label
+                        key={dosage.id}
+                        className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition ${
+                          checked ? "border-blue-300 bg-white text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleLinkedDosageId(dosage.id)}
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-semibold">{dosage.name || dosage.chemType || "Unnamed dosage"}</span>
+                          <span className="block text-xs text-slate-500">{dosageLabel(dosage)}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+
+                  {filteredDosages.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                      No dosage templates match that search.
+                    </p>
+                  ) : null}
+                </div>
+
+                {selectedLinkedDosages.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {selectedLinkedDosages.map((dosage) => (
+                      <span key={dosage.id} className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                        {dosage.name || dosage.chemType || "Unnamed dosage"}
                       </span>
-                    </label>
-                  );
-                })}
-
-                {filteredDosages.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-                    No dosage templates match that search.
-                  </p>
+                    ))}
+                  </div>
                 ) : null}
               </div>
-
-              {selectedLinkedDosages.length ? (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selectedLinkedDosages.map((dosage) => (
-                    <span key={dosage.id} className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
-                      {dosage.name || dosage.chemType || "Unnamed dosage"}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            )}
           </div>
 
           {/* Actions */}

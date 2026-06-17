@@ -91,18 +91,57 @@ const categoryOptionForParam = (value, hasJob = false) => {
     return hasJob ? SERVICE_STOP_CATEGORY_OPTIONS[0] : SERVICE_STOP_CATEGORY_OPTIONS[2];
 };
 
+const stopPayBucketIdForCategory = (categoryOption = {}) => (
+    categoryOption.id === "jobVisit" ? "job" : categoryOption.id
+);
+
+const inferStopPayBucketIdForServiceStopType = (type = {}) => {
+    const searchable = `${type.name || ""} ${type.type || ""}`.toLowerCase();
+
+    if (
+        searchable.includes("service agreement") ||
+        searchable.includes("recurring service estimate") ||
+        searchable.includes("startup")
+    ) {
+        return "serviceAgreementEstimate";
+    }
+    if (searchable.includes("estimate")) {
+        return "jobEstimate";
+    }
+    if (searchable.includes("route") || searchable.includes("weekly")) {
+        return "route";
+    }
+    if (
+        searchable.includes("customer") ||
+        searchable.includes("follow up") ||
+        searchable.includes("courtesy")
+    ) {
+        return "customerRelationship";
+    }
+
+    return "job";
+};
+
 const serviceStopTypeMatchesCategory = (type, categoryOption) => {
     const typeValues = [
+        type?.stopPayBucketId,
+        type?.serviceStopBucketId,
+        type?.stopPayBucketLabel,
         type?.category,
         type?.serviceStopCategory,
         type?.serviceStopTypeCategory,
+        type?.stopPayCategory,
+        type?.serviceStopBucket,
         type?.useCase,
         type?.serviceStopTypeUseCase,
         type?.serviceStopTypeUseCaseRawValue,
         type?.typeUseCase,
+        type?.sourceId,
         type?.id,
     ].map(normalizeCategory).filter(Boolean);
+    const stopPayBucketId = stopPayBucketIdForCategory(categoryOption);
     const categoryValues = [
+        stopPayBucketId,
         categoryOption.category,
         categoryOption.label,
         categoryOption.id,
@@ -110,7 +149,11 @@ const serviceStopTypeMatchesCategory = (type, categoryOption) => {
         categoryOption.sourceId,
     ].map(normalizeCategory).filter(Boolean);
 
-    return typeValues.some((value) => categoryValues.includes(value));
+    if (typeValues.some((value) => categoryValues.includes(value))) {
+        return true;
+    }
+
+    return inferStopPayBucketIdForServiceStopType(type) === stopPayBucketId;
 };
 
 const addressLine = (address = {}) => [

@@ -5,6 +5,8 @@ import { format } from "date-fns";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 
+const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
+
 const receiptFilters = [
   { value: "all", label: "All" },
   { value: "withFiles", label: "With Files" },
@@ -107,6 +109,7 @@ const normalizeReceipt = (docSnap) => {
 const ReceiptListView = () => {
   const navigate = useNavigate();
   const { recentlySelectedCompany } = useContext(Context);
+  const showAlphaWaterImport = recentlySelectedCompany === MURDOCK_COMPANY_ID;
   const [receipts, setReceipts] = useState([]);
   const [showFilterModal, setShowFilterModal] = useState(false);
   const [startViewingDate, setStartViewingDate] = useState(() => startOfDay(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)));
@@ -380,6 +383,14 @@ const ReceiptListView = () => {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
+            {showAlphaWaterImport ? (
+              <Link
+                to="/company/purchased-items/alpha-water-import"
+                className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 shadow-sm transition hover:bg-amber-100"
+              >
+                Alpha Water Import
+              </Link>
+            ) : null}
             <Link
               to="/company/purchased-items/createNew"
               className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm transition hover:bg-blue-100"

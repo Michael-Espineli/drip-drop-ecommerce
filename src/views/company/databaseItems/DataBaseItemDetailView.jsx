@@ -25,6 +25,7 @@ import {
   databaseItemSelectStyles,
   databaseItemSelectTheme,
   findOptionByLabel,
+  isChemicalCategory,
   SUBCATEGORY_OPTIONS,
   UOM_OPTIONS,
 } from "./databaseItemOptions";
@@ -139,6 +140,7 @@ const DataBaseItemDetailView = () => {
     dosageLabel(dosage).toLowerCase().includes(dosageSearchTerm.trim().toLowerCase())
   );
   const selectedLinkedDosages = dosages.filter((dosage) => linkedDosageIds.includes(dosage.id));
+  const allowsLinkedDosages = isChemicalCategory(category);
 
   const toggleLinkedDosageId = (dosageId) => {
     setLinkedDosageIds((currentIds) =>
@@ -147,6 +149,13 @@ const DataBaseItemDetailView = () => {
         : [...currentIds, dosageId]
     );
   };
+
+  useEffect(() => {
+    if (edit && !allowsLinkedDosages) {
+      setLinkedDosageIds([]);
+      setDosageSearchTerm("");
+    }
+  }, [allowsLinkedDosages, edit]);
 
   async function editItem(e) {
     e.preventDefault();
@@ -224,15 +233,16 @@ const DataBaseItemDetailView = () => {
 
       const batch = writeBatch(db);
       batch.update(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), updatedItem);
+      const nextLinkedDosageIds = allowsLinkedDosages ? linkedDosageIds : [];
       queueDatabaseItemDosageLinkUpdates(batch, {
         companyId: recentlySelectedCompany,
         itemId: id,
         dosages,
-        selectedDosageIds: linkedDosageIds,
+        selectedDosageIds: nextLinkedDosageIds,
       });
       await batch.commit();
 
-      const nextDosages = applyDatabaseItemDosageLinksLocally(dosages, id, linkedDosageIds);
+      const nextDosages = applyDatabaseItemDosageLinksLocally(dosages, id, nextLinkedDosageIds);
       setDosages(nextDosages);
       setLinkedDosageIds(linkedDosageIdsForItem(nextDosages, id));
       setPurchase((current) => ({
@@ -445,66 +455,68 @@ const DataBaseItemDetailView = () => {
               </div>
             </div>
 
-            <div className="border-t border-slate-200 p-5">
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Linked Dosages</h3>
-                  <p className="mt-1 text-sm text-slate-500">Select which dosage templates should count purchases of this item as usable inventory.</p>
+            {allowsLinkedDosages && (
+              <div className="border-t border-slate-200 p-5">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Linked Dosages</h3>
+                    <p className="mt-1 text-sm text-slate-500">Select which dosage templates should count purchases of this item as usable inventory.</p>
+                  </div>
+                  <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
+                    {linkedDosageIds.length} selected
+                  </span>
                 </div>
-                <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-bold text-slate-600">
-                  {linkedDosageIds.length} selected
-                </span>
-              </div>
 
-              <input
-                className={`${inputClass} mt-4`}
-                type="search"
-                value={dosageSearchTerm}
-                onChange={(event) => setDosageSearchTerm(event.target.value)}
-                placeholder="Search dosage name, amount, or unit"
-              />
+                <input
+                  className={`${inputClass} mt-4`}
+                  type="search"
+                  value={dosageSearchTerm}
+                  onChange={(event) => setDosageSearchTerm(event.target.value)}
+                  placeholder="Search dosage name, amount, or unit"
+                />
 
-              <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
-                {filteredDosages.map((dosage) => {
-                  const checked = linkedDosageIds.includes(dosage.id);
-                  return (
-                    <label
-                      key={dosage.id}
-                      className={`flex items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${
-                        checked ? "border-blue-300 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleLinkedDosageId(dosage.id)}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      <span>
-                        <span className="block font-semibold">{dosage.name || dosage.chemType || "Unnamed dosage"}</span>
-                        <span className="block text-xs text-slate-500">{dosageLabel(dosage)}</span>
+                <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto md:grid-cols-2">
+                  {filteredDosages.map((dosage) => {
+                    const checked = linkedDosageIds.includes(dosage.id);
+                    return (
+                      <label
+                        key={dosage.id}
+                        className={`flex items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${
+                          checked ? "border-blue-300 bg-blue-50 text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleLinkedDosageId(dosage.id)}
+                          className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>
+                          <span className="block font-semibold">{dosage.name || dosage.chemType || "Unnamed dosage"}</span>
+                          <span className="block text-xs text-slate-500">{dosageLabel(dosage)}</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+
+                  {filteredDosages.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                      No dosage templates match that search.
+                    </p>
+                  ) : null}
+                </div>
+
+                {selectedLinkedDosages.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {selectedLinkedDosages.map((dosage) => (
+                      <span key={dosage.id} className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
+                        {dosage.name || dosage.chemType || "Unnamed dosage"}
                       </span>
-                    </label>
-                  );
-                })}
-
-                {filteredDosages.length === 0 ? (
-                  <p className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
-                    No dosage templates match that search.
-                  </p>
+                    ))}
+                  </div>
                 ) : null}
               </div>
-
-              {selectedLinkedDosages.length ? (
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {selectedLinkedDosages.map((dosage) => (
-                    <span key={dosage.id} className="rounded-md bg-blue-100 px-3 py-1 text-xs font-semibold text-blue-800">
-                      {dosage.name || dosage.chemType || "Unnamed dosage"}
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-            </div>
+            )}
           </section>
         ) : (
           <section className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(280px,360px)]">

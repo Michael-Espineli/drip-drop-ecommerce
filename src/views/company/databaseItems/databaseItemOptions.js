@@ -57,6 +57,11 @@ export const DEFAULT_UOM = UOM_OPTIONS.find((option) => option.label === "Unit")
 export const DEFAULT_CATEGORY = CATEGORY_OPTIONS.find((option) => option.label === "Misc");
 export const DEFAULT_SUBCATEGORY = SUBCATEGORY_OPTIONS.find((option) => option.label === "Misc");
 
+export const isChemicalCategory = (category) => {
+  const label = typeof category === "string" ? category : category?.label;
+  return ["chemical", "chemicals"].includes(String(label || "").trim().toLowerCase());
+};
+
 export const findOptionByLabel = (options, label, fallback) =>
   options.find((option) => option.label === label) || fallback;
 

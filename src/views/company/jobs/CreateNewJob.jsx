@@ -33,7 +33,7 @@ const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
                         : "bg-gray-50 border-gray-200 text-gray-800";
 
     return (
-        <div className={`rounded-xl border p-4 ${toneClass}`}>
+        <div className={`rounded-lg border p-4 ${toneClass}`}>
             <p className="text-xs font-semibold uppercase tracking-wider opacity-70">
                 {title}
             </p>
@@ -44,16 +44,16 @@ const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
 };
 
 const SectionCard = ({ title, subtitle, children, action }) => (
-    <div className="bg-white p-6 rounded-xl shadow-lg">
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex items-start justify-between gap-3">
             <div>
-                <h3 className="text-xl font-bold text-gray-800">{title}</h3>
-                {subtitle && <p className="text-gray-600 mt-1">{subtitle}</p>}
+                <h3 className="text-xl font-bold text-slate-950">{title}</h3>
+                {subtitle && <p className="mt-1 text-sm text-slate-600">{subtitle}</p>}
             </div>
             {action}
         </div>
         <div className="mt-6">{children}</div>
-    </div>
+    </section>
 );
 
 const CreateNewJob = () => {
@@ -199,8 +199,8 @@ const CreateNewJob = () => {
             ...provided,
             backgroundColor: "white",
             border: state.isFocused ? "1px solid #2563eb" : "1px solid #d1d5db",
-            borderRadius: "0.75rem",
-            minHeight: 46,
+            borderRadius: "0.375rem",
+            minHeight: 42,
             boxShadow: state.isFocused ? "0 0 0 2px rgba(37,99,235,0.18)" : "none",
             "&:hover": {
                 borderColor: state.isFocused ? "#2563eb" : "#9ca3af",
@@ -209,10 +209,13 @@ const CreateNewJob = () => {
         menu: (provided) => ({
             ...provided,
             zIndex: 50,
-            borderRadius: "0.75rem",
+            borderRadius: "0.375rem",
             overflow: "hidden",
         }),
     };
+
+    const fieldLabelClasses = "mb-2 block text-sm font-semibold text-slate-700";
+    const fieldInputClasses = "w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
 
     const getCustomerDisplayName = (customer) => {
         if (!customer) return "";
@@ -1156,7 +1159,7 @@ const CreateNewJob = () => {
     };
 
     const emptyState = (title, message) => (
-        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
+        <div className="rounded-lg border border-dashed border-gray-300 p-6 text-center">
             <p className="font-semibold text-gray-700">{title}</p>
             <p className="text-sm text-gray-500 mt-1">{message}</p>
         </div>
@@ -1164,9 +1167,9 @@ const CreateNewJob = () => {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-                <div className="max-w-screen-xl mx-auto">
-                    <div className="bg-white shadow-lg rounded-xl p-6 animate-pulse">
+            <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+                <div className="w-full">
+                    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm animate-pulse">
                         <div className="h-7 bg-gray-200 rounded w-1/3" />
                         <div className="h-4 bg-gray-200 rounded w-1/2 mt-4" />
                         <div className="h-64 bg-gray-200 rounded mt-6" />
@@ -1180,71 +1183,86 @@ const CreateNewJob = () => {
         switch (activeStep) {
             case "Info":
                 return (
-                    <SectionCard
-                        title="Job Info"
-                        subtitle="Select the admin, customer, service location, and base pricing."
-                    >
-                        <div className="space-y-4">
-                            <Select
-                                options={adminList}
-                                value={selectedAdmin}
-                                onChange={setSelectedAdmin}
-                                placeholder="Select Admin"
-                                styles={selectStyles}
-                            />
-
-                            <Select
-                                options={customerList}
-                                value={selectedCustomer}
-                                onChange={setSelectedCustomer}
-                                placeholder="Select Customer"
-                                styles={selectStyles}
-                                isDisabled={!!customerIdParam || !!repairRequest?.customerId}
-                            />
-
-                            <Select
-                                options={serviceLocationList}
-                                value={selectedServiceLocation}
-                                onChange={setSelectedServiceLocation}
-                                placeholder="Select Service Location"
-                                styles={selectStyles}
-                                isDisabled={
-                                    !selectedCustomer ||
-                                    !!locationIdParam ||
-                                    !!repairRequest?.locationId ||
-                                    !!repairRequest?.serviceLocationId
-                                }
-                            />
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <Select
-                                    options={bodyOfWaterList}
-                                    value={selectedBodyOfWater}
-                                    onChange={setSelectedBodyOfWater}
-                                    placeholder="Select Body Of Water"
-                                    styles={selectStyles}
-                                    isDisabled={!selectedServiceLocation}
-                                    isClearable
-                                />
-
-                                <Select
-                                    options={equipmentList}
-                                    value={selectedEquipment}
-                                    onChange={setSelectedEquipment}
-                                    placeholder="Select Equipment"
-                                    styles={selectStyles}
-                                    isDisabled={!selectedServiceLocation}
-                                    isClearable
-                                />
+                    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)]">
+                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="border-b border-slate-200 pb-4">
+                                <h3 className="text-xl font-bold text-slate-950">Job Info</h3>
+                                <p className="mt-1 text-sm text-slate-600">
+                                    Select the admin, customer, service location, and base pricing.
+                                </p>
                             </div>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="mt-5 grid gap-4 lg:grid-cols-3">
                                 <div>
-                                    <label className="text-sm font-semibold text-gray-500">
-                                        Customer Price
-                                    </label>
-                                    <div className="mt-2 flex items-center gap-2">
-                                        <span className="font-bold text-gray-600">$</span>
+                                    <label className={fieldLabelClasses}>Admin</label>
+                                    <Select
+                                        options={adminList}
+                                        value={selectedAdmin}
+                                        onChange={setSelectedAdmin}
+                                        placeholder="Select Admin"
+                                        styles={selectStyles}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Customer</label>
+                                    <Select
+                                        options={customerList}
+                                        value={selectedCustomer}
+                                        onChange={setSelectedCustomer}
+                                        placeholder="Select Customer"
+                                        styles={selectStyles}
+                                        isDisabled={!!customerIdParam || !!repairRequest?.customerId}
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Service Location</label>
+                                    <Select
+                                        options={serviceLocationList}
+                                        value={selectedServiceLocation}
+                                        onChange={setSelectedServiceLocation}
+                                        placeholder="Select Service Location"
+                                        styles={selectStyles}
+                                        isDisabled={
+                                            !selectedCustomer ||
+                                            !!locationIdParam ||
+                                            !!repairRequest?.locationId ||
+                                            !!repairRequest?.serviceLocationId
+                                        }
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Body Of Water</label>
+                                    <Select
+                                        options={bodyOfWaterList}
+                                        value={selectedBodyOfWater}
+                                        onChange={setSelectedBodyOfWater}
+                                        placeholder="Select Body Of Water"
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation}
+                                        isClearable
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Equipment</label>
+                                    <Select
+                                        options={equipmentList}
+                                        value={selectedEquipment}
+                                        onChange={setSelectedEquipment}
+                                        placeholder="Select Equipment"
+                                        styles={selectStyles}
+                                        isDisabled={!selectedServiceLocation}
+                                        isClearable
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Customer Price</label>
+                                    <div className="relative">
+                                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">$</span>
                                         <input
                                             value={rate}
                                             onChange={(e) => setRate(e.target.value)}
@@ -1252,17 +1270,15 @@ const CreateNewJob = () => {
                                             type="number"
                                             min="0"
                                             step="0.01"
-                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                            className={`${fieldInputClasses} pl-7`}
                                         />
                                     </div>
                                 </div>
 
                                 <div>
-                                    <label className="text-sm font-semibold text-gray-500">
-                                        Saved Labor Cost
-                                    </label>
-                                    <div className="mt-2 flex items-center gap-2">
-                                        <span className="font-bold text-gray-600">$</span>
+                                    <label className={fieldLabelClasses}>Saved Labor Cost</label>
+                                    <div className="relative">
+                                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">$</span>
                                         <input
                                             value={laborCost}
                                             onChange={(e) => setLaborCost(e.target.value)}
@@ -1270,20 +1286,29 @@ const CreateNewJob = () => {
                                             type="number"
                                             min="0"
                                             step="0.01"
-                                            className="w-full p-3 border border-gray-300 rounded-lg"
+                                            className={`${fieldInputClasses} pl-7`}
                                         />
                                     </div>
                                 </div>
+                            </div>
+                        </section>
+
+                        <section className="flex min-h-[24rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:min-h-[calc(100vh-20rem)]">
+                            <div className="mb-3 border-b border-slate-200 pb-4">
+                                <h3 className="text-xl font-bold text-slate-950">Description</h3>
+                                <p className="mt-1 text-sm text-slate-600">
+                                    Scope notes for the job.
+                                </p>
                             </div>
 
                             <textarea
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder="Job description..."
-                                className="w-full min-h-[130px] p-3 border border-gray-300 rounded-lg"
+                                className="min-h-[18rem] flex-1 resize-none rounded-md border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 xl:min-h-0"
                             />
-                        </div>
-                    </SectionCard>
+                        </section>
+                    </div>
                 );
 
             case "Template":
@@ -1303,7 +1328,7 @@ const CreateNewJob = () => {
                         />
 
                         {selectedTemplate ? (
-                            <div className="mt-6 rounded-xl border border-blue-200 bg-blue-50 p-4">
+                            <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
                                 <p className="text-sm font-bold text-blue-800">
                                     Template Applied: {selectedTemplate.name}
                                 </p>
@@ -1344,7 +1369,7 @@ const CreateNewJob = () => {
                         />
 
                         {plannedServiceStops.length > 0 && (
-                            <div className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <div className="mb-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <h4 className="font-bold text-gray-800">Planned Service Stops</h4>
@@ -1365,7 +1390,7 @@ const CreateNewJob = () => {
                                         .map((stop) => (
                                             <div
                                                 key={stop.id}
-                                                className="rounded-xl border border-gray-200 bg-white p-4"
+                                                className="rounded-lg border border-gray-200 bg-white p-4"
                                             >
                                                 <div className="flex items-start justify-between gap-3">
                                                     <div>
@@ -1495,7 +1520,7 @@ const CreateNewJob = () => {
                                 {shoppingList.map((item) => (
                                     <div
                                         key={item.id}
-                                        className="rounded-xl border border-gray-200 bg-gray-50 p-4"
+                                        className="rounded-lg border border-gray-200 bg-gray-50 p-4"
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
@@ -1535,14 +1560,14 @@ const CreateNewJob = () => {
                         title="Schedule"
                         subtitle="Scheduling from web can happen after the job is created."
                     >
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                             <p className="font-semibold text-gray-800">Service Stops</p>
                             <p className="text-sm text-gray-600 mt-1">
                                 This create flow saves planned service stops from templates. Actual service stops can be scheduled from the Job Detail page after creation.
                             </p>
                         </div>
 
-                        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 mt-4">
+                        <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 mt-4">
                             <p className="font-semibold text-gray-800">Work Offers</p>
                             <p className="text-sm text-gray-600 mt-1">
                                 Work offers can be created after the job exists, so they can reference saved job tasks and planned stops.
@@ -1588,7 +1613,7 @@ const CreateNewJob = () => {
                         </div>
 
                         <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                     Admin
                                 </p>
@@ -1597,7 +1622,7 @@ const CreateNewJob = () => {
                                 </p>
                             </div>
 
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                     Customer
                                 </p>
@@ -1606,7 +1631,7 @@ const CreateNewJob = () => {
                                 </p>
                             </div>
 
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                     Service Location
                                 </p>
@@ -1615,7 +1640,7 @@ const CreateNewJob = () => {
                                 </p>
                             </div>
 
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                                 <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                                     Template
                                 </p>
@@ -1625,7 +1650,7 @@ const CreateNewJob = () => {
                             </div>
                         </div>
 
-                        <div className="mt-6 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 p-4">
                             <p className="font-semibold text-gray-800">Job Contents</p>
                             <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
                                 <StatCard
@@ -1648,41 +1673,43 @@ const CreateNewJob = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="max-w-screen-xl mx-auto space-y-6">
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-                    <div>
-                        <Link
-                            to="/company/jobs"
-                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <Link
+                                to="/company/jobs"
+                                className="inline-flex items-center text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            >
+                                &larr; Back to Jobs
+                            </Link>
+
+                            <h2 className="mt-2 text-3xl font-bold text-slate-950">Create New Job</h2>
+
+                            <p className="mt-1 text-sm text-slate-600">
+                                {selectedTemplate
+                                    ? `Started from template: ${selectedTemplate.name}`
+                                    : "Build the job scope, materials, pricing, and review before submitting."}
+                            </p>
+                        </div>
+
+                        <button
+                            onClick={createNewJob}
+                            disabled={!canCreateJob || creating}
+                            className={[
+                                "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
+                                canCreateJob && !creating
+                                    ? "bg-blue-600 text-white hover:bg-blue-700"
+                                    : "bg-slate-200 text-slate-500 cursor-not-allowed",
+                            ].join(" ")}
                         >
-                            &larr; Back to Jobs
-                        </Link>
-
-                        <h2 className="text-3xl font-bold text-gray-800">Create New Job</h2>
-
-                        <p className="text-gray-600 mt-1">
-                            {selectedTemplate
-                                ? `Started from template: ${selectedTemplate.name}`
-                                : "Build the job scope, materials, pricing, and review before submitting."}
-                        </p>
+                            {creating ? "Creating..." : "Create Job"}
+                        </button>
                     </div>
+                </section>
 
-                    <button
-                        onClick={createNewJob}
-                        disabled={!canCreateJob || creating}
-                        className={[
-                            "py-3 px-5 rounded-xl font-bold shadow-md transition",
-                            canCreateJob && !creating
-                                ? "bg-blue-600 text-white hover:bg-blue-700"
-                                : "bg-gray-200 text-gray-500 cursor-not-allowed",
-                        ].join(" ")}
-                    >
-                        {creating ? "Creating..." : "Create Job"}
-                    </button>
-                </div>
-
-                <div className="bg-white shadow-lg rounded-xl p-4">
+                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex flex-wrap gap-2">
                         {steps.map((step) => {
                             const active = step === activeStep;
@@ -1694,7 +1721,7 @@ const CreateNewJob = () => {
                                     type="button"
                                     onClick={() => setActiveStep(step)}
                                     className={[
-                                        "px-4 py-2 rounded-full text-sm font-semibold transition border",
+                                        "rounded-md border px-4 py-2 text-sm font-semibold transition",
                                         active
                                             ? "bg-blue-600 text-white border-blue-600 shadow-sm"
                                             : completed
@@ -1708,17 +1735,17 @@ const CreateNewJob = () => {
                             );
                         })}
                     </div>
-                </div>
+                </section>
 
                 {renderStepContent()}
 
-                <div className="bg-white shadow-lg rounded-xl p-4">
+                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                     <div className="flex items-center justify-between gap-3">
                         <button
                             type="button"
                             onClick={goBackStep}
                             disabled={activeStep === steps[0]}
-                            className="py-3 px-5 rounded-xl font-semibold border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                         >
                             Back
                         </button>
@@ -1729,10 +1756,10 @@ const CreateNewJob = () => {
                                 onClick={createNewJob}
                                 disabled={!canCreateJob || creating}
                                 className={[
-                                    "py-3 px-5 rounded-xl font-bold shadow-md transition",
+                                    "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
                                     canCreateJob && !creating
                                         ? "bg-blue-600 text-white hover:bg-blue-700"
-                                        : "bg-gray-200 text-gray-500 cursor-not-allowed",
+                                        : "bg-slate-200 text-slate-500 cursor-not-allowed",
                                 ].join(" ")}
                             >
                                 {creating ? "Creating..." : "Create Job"}
@@ -1741,13 +1768,13 @@ const CreateNewJob = () => {
                             <button
                                 type="button"
                                 onClick={goNext}
-                                className="py-3 px-5 rounded-xl font-semibold bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100"
+                                className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 hover:bg-blue-100"
                             >
                                 Next
                             </button>
                         )}
                     </div>
-                </div>
+                </section>
             </div>
         </div>
     );

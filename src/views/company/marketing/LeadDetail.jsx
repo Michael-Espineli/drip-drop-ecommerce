@@ -13,17 +13,12 @@ import {
     where,
     getDocs
 } from 'firebase/firestore';
-import { v4 as uuidv4 } from 'uuid';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
 import { format } from 'date-fns';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
-import {
-    debugServiceStopTypeWrite,
-    resolveServiceStopTypeFields,
-    SERVICE_STOP_TYPE_USE_CASES,
-} from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
+import { SERVICE_STOP_TYPE_USE_CASES } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 
 const SERVICE_STOP_OPERATION_STATUS = {
     finished: 'Finished',
@@ -32,7 +27,6 @@ const SERVICE_STOP_OPERATION_STATUS = {
 };
 
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
-const SERVICE_ESTIMATE_SCHEDULED_STATUS = 'Service Estimate Scheduled';
 
 const isLeadServiceEstimateVisit = (visit = {}) => {
     const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
@@ -107,281 +101,8 @@ const getVisitBadge = (visit) => {
     return { label: 'Scheduled', className: 'bg-yellow-100 text-yellow-800' };
 };
 
-const PreEstimateVisitCard = ({
-    lead,
-    companyId,
-    technicians,
-    existingVisit,
-    onVisitCreated
-}) => {
-    const { recentlySelectedCompany } = useContext(Context);
-    const { requirePermission } = useCompanyPermissions();
-    const db = getFirestore();
-    const [serviceDate, setServiceDate] = useState('');
-    const [techId, setTechId] = useState('');
-    const [notes, setNotes] = useState('');
-    const [saving, setSaving] = useState(false);
-    const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
-
+const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) => {
     const badge = getVisitBadge(existingVisit);
-
-    const defaultPreEstimateTasks = [
-        {
-            name: 'Verify service location details',
-            description: 'Confirm address, access instructions, gate code, pets, bodies of water, and any missing property details.',
-            estimatedTime: 15,
-            rate: 0,
-            status: 'Scheduled',
-            priority: 'Normal',
-        },
-        {
-            name: 'Get equipment information',
-            description: 'Document equipment type, model, condition, and any visible issues.',
-            estimatedTime: 15,
-            rate: 0,
-            status: 'Scheduled',
-            priority: 'Normal',
-        },
-        {
-            name: 'Test the water',
-            description: 'Collect water readings and note any water quality concerns.',
-            estimatedTime: 15,
-            rate: 0,
-            status: 'Scheduled',
-            priority: 'Normal',
-        },
-        {
-            name: 'Get yard access information',
-            description: 'Find out how to access the yard, gate codes, pets, lock details, and entry restrictions.',
-            estimatedTime: 10,
-            rate: 0,
-            status: 'Scheduled',
-            priority: 'Normal',
-        },
-        {
-            name: 'Note site-specific concerns',
-            description: 'Record any special instructions, hazards, obstacles, or customer-specific requests.',
-            estimatedTime: 10,
-            rate: 0,
-            status: 'Scheduled',
-            priority: 'Normal',
-        },
-    ];
-
-    useEffect(() => {
-        if (!companyId) return;
-
-        const fetchServiceStopTypes = async () => {
-            try {
-                const snapshot = await getDocs(collection(db, 'companies', companyId, 'companyServiceStopTypes'));
-                setCompanyServiceStopTypes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-            } catch (error) {
-                console.warn('[LeadDetail][serviceStopTypesLoadFailed]', {
-                    companyId,
-                    error: error?.message || String(error),
-                });
-            }
-        };
-
-        fetchServiceStopTypes();
-    }, [companyId, db]);
-
-    const handleCreateVisit = async () => {
-        if (!requirePermission("612", "respond to leads")) return;
-
-        if (!companyId) {
-            toast.error('No company selected.');
-            return;
-        }
-
-        if (!lead?.customerId) {
-            toast.error('Create a customer before scheduling a service estimate.');
-            return;
-        }
-
-        if (!serviceDate) {
-            toast.error('Please select a date for the visit.');
-            return;
-        }
-
-        setSaving(true);
-        try {
-            const selectedTech = technicians.find(t => t.userId === techId || t.id === techId);
-
-            const serviceStopId = 'comp_ss_' + uuidv4();
-
-            let serviceStopCount = 0;
-
-            const ref = doc(db, 'companies', recentlySelectedCompany, 'settings', 'recurringServiceStops');
-            const snap = await getDoc(ref);
-
-            if (snap.exists()) {
-                const data = snap.data();
-                serviceStopCount = typeof data.increment === 'number' ? data.increment : 0;
-            }
-
-            const updatedRecurringServiceStopCount = serviceStopCount + 1;
-            await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
-
-            const serviceStopInternalId = 'SS' + String(serviceStopCount);
-            const serviceStopRef = doc(db, 'companies', companyId, 'serviceStops', serviceStopId);
-
-            const totalEstimatedDuration = defaultPreEstimateTasks.reduce(
-                (sum, task) => sum + (task.estimatedTime || 0),
-                0
-            );
-            const resolvedTypeFields = resolveServiceStopTypeFields({
-                companyServiceStopTypes,
-                fallbackName: SERVICE_ESTIMATE_VISIT_LABEL,
-                useCase: SERVICE_STOP_TYPE_USE_CASES.serviceEstimate,
-                context: 'LeadDetail.PreEstimateVisitCard.createVisit',
-            });
-
-            const resolvedCustomerName =
-                lead.customerName ||
-                lead.ownerDetails?.displayName ||
-                lead.homeownerName ||
-                '';
-
-            const stopPayload = {
-                id: serviceStopId,
-                internalId: serviceStopInternalId,
-
-                companyId,
-                mainCompanyId: companyId,
-                companyName: lead.companyName || '',
-
-                customerId: lead.customerId || '',
-                customerName: resolvedCustomerName,
-
-                address: lead.serviceLocationAddress || null,
-                serviceLocationId: lead.serviceLocationId || '',
-
-                dateCreated: serverTimestamp(),
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-
-                serviceDate: new Date(serviceDate),
-                startTime: null,
-                endTime: null,
-
-                duration: 0,
-                estimatedDuration: totalEstimatedDuration,
-
-                tech: selectedTech?.userName || selectedTech?.displayName || selectedTech?.name || '',
-                techId: selectedTech?.userId || selectedTech?.id || '',
-
-                recurringServiceStopId: '',
-
-                description: notes || lead.serviceDescription || 'Service estimate visit',
-
-                typeId: resolvedTypeFields.typeId,
-                type: resolvedTypeFields.type,
-                typeImage: resolvedTypeFields.typeImage,
-                category: resolvedTypeFields.category,
-                serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
-
-                jobId: '',
-                jobName: lead.serviceName || 'Lead Visit',
-
-                operationStatus: SERVICE_STOP_OPERATION_STATUS.notFinished,
-                billingStatus: 'Non Billable',
-
-                includeReadings: false,
-                includeDosages: false,
-                otherCompany: false,
-
-                laborContractId: '',
-                contractedCompanyId: '',
-
-                photoUrls: [],
-                isInvoiced: false,
-                rate: 0,
-
-                leadId: lead.id,
-                estimateId: lead.estimateId || '',
-                source: 'LeadDetail',
-
-                isCompleted: false,
-                isSkipped: false,
-            };
-
-            debugServiceStopTypeWrite({
-                context: 'LeadDetail.PreEstimateVisitCard.createVisit',
-                payload: stopPayload,
-            });
-            await setDoc(serviceStopRef, stopPayload);
-
-            for (const task of defaultPreEstimateTasks) {
-                const taskId = 'comp_ss_tas_' + uuidv4();
-                const taskInternalId = uuidv4();
-
-                const taskRef = doc(
-                    db,
-                    'companies',
-                    companyId,
-                    'serviceStops',
-                    serviceStopId,
-                    'tasks',
-                    taskId
-                );
-
-                await setDoc(taskRef, {
-                    id: taskId,
-                    internalId: taskInternalId,
-
-                    name: task.name,
-                    description: task.description,
-                    estimatedTime: task.estimatedTime,
-                    rate: task.rate,
-                    status: task.status,
-                    priority: task.priority,
-
-                    companyId,
-                    customerId: lead.customerId || '',
-                    customerName: resolvedCustomerName,
-
-                    serviceStopId,
-                    serviceStopInternalId,
-
-                    workerId: selectedTech?.userId || selectedTech?.id || '',
-                    workerName: selectedTech?.userName || selectedTech?.displayName || selectedTech?.name || '',
-
-                    workOrderTaskId: '',
-                    createdAt: serverTimestamp(),
-                    updatedAt: serverTimestamp(),
-
-                    source: 'LeadDetailServiceEstimate',
-                    type: 'serviceEstimateTask',
-                    operationStatus: SERVICE_STOP_OPERATION_STATUS.notFinished,
-                    billingStatus: 'Non Billable',
-                    isCompleted: false,
-                    isSkipped: false,
-                });
-            }
-
-            await updateDoc(doc(db, 'homeownerServiceRequests', lead.id), {
-                serviceEstimateServiceStopId: serviceStopId,
-                initialEstimateServiceStopId: serviceStopId
-            });
-
-            const leadRef = doc(db, 'homeownerServiceRequests', lead.id);
-            const newStatus = SERVICE_ESTIMATE_SCHEDULED_STATUS;
-            await updateDoc(leadRef, { status: newStatus });
-            toast.success(`Status updated to ${newStatus}`);
-
-            toast.success('Service estimate created.');
-            onVisitCreated?.({
-                id: serviceStopId,
-                ...stopPayload
-            });
-        } catch (error) {
-            console.error('Error creating estimate visit:', error);
-            toast.error('Failed to create estimate visit.');
-        } finally {
-            setSaving(false);
-        }
-    };
 
     return (
         <div className="bg-white p-6 rounded-2xl shadow-lg">
@@ -425,62 +146,16 @@ const PreEstimateVisitCard = ({
             ) : (
                 <div className="space-y-4">
                     <p className="text-sm text-gray-600">
-                        Schedule a fact-finding service estimate before sending pricing.
+                        Create a service agreement estimate visit from this lead, customer, and service location.
                     </p>
 
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Visit Type</label>
-                        <input
-                            value={SERVICE_ESTIMATE_VISIT_LABEL}
-                            disabled
-                            className="w-full p-2 border rounded-md bg-gray-50 text-gray-700"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Service Date</label>
-                        <input
-                            type="date"
-                            value={serviceDate}
-                            onChange={(e) => setServiceDate(e.target.value)}
-                            className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Technician</label>
-                        <select
-                            value={techId}
-                            onChange={(e) => setTechId(e.target.value)}
-                            className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
-                        >
-                            <option value="">Unassigned</option>
-                            {technicians.map(tech => (
-                                <option key={tech.userId || tech.id} value={tech.userId || tech.id}>
-                                    {tech.userName || tech.displayName || tech.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
-                        <textarea
-                            rows={4}
-                            value={notes}
-                            onChange={(e) => setNotes(e.target.value)}
-                            placeholder="Scope, access notes, homeowner concerns, what to inspect..."
-                            className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
-                        />
-                    </div>
-
-                    <button
-                        onClick={handleCreateVisit}
-                        disabled={saving}
-                        className="w-full py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium disabled:opacity-60"
+                    <Link
+                        to={schedulerPath}
+                        state={schedulerState}
+                        className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium"
                     >
-                        {saving ? 'Creating Visit...' : 'Create Service Estimate'}
-                    </button>
+                        Create Service Estimate
+                    </Link>
                 </div>
             )}
         </div>
@@ -522,7 +197,6 @@ export default function LeadDetail() {
     const [lead, setLead] = useState(null);
     const [estimate, setEstimate] = useState(null);
     const [loading, setLoading] = useState(true);
-    const [technicians, setTechnicians] = useState([]);
     const [estimateVisit, setEstimateVisit] = useState(null);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [deletingLead, setDeletingLead] = useState(false);
@@ -580,11 +254,6 @@ export default function LeadDetail() {
                             setEstimate({ id: estimateSnap.id, ...estimateSnap.data() });
                         }
                     }
-
-                    const techSnap = await getDocs(
-                        collection(db, 'companies', recentlySelectedCompany, 'companyUsers')
-                    );
-                    setTechnicians(techSnap.docs.map(d => ({ id: d.id, ...d.data() })));
 
                     const estimateStopId = leadData.serviceEstimateServiceStopId || leadData.initialEstimateServiceStopId || '';
                     let matchedEstimateVisit = null;
@@ -804,9 +473,22 @@ export default function LeadDetail() {
         publicBodiesOfWater.length ||
         publicEquipment.length
     );
-    const linkedServiceLocationId = lead.serviceLocationId || lead.companyServiceLocationId || '';
+    const linkedCustomerId = customerId || lead.companyCustomerId || '';
+    const linkedServiceLocationId = lead.companyServiceLocationId || lead.serviceLocationId || '';
+    const leadContextState = {
+        leadContext: {
+            id: lead.id,
+            source: lead.source || '',
+            status: lead.status || '',
+            serviceName: lead.serviceName || '',
+            serviceDescription: lead.serviceDescription || '',
+            customerId: linkedCustomerId,
+            customerName: lead.customerName || '',
+            serviceLocationId: linkedServiceLocationId,
+        },
+    };
     const buildCreateJobPath = () => {
-        const basePath = `/company/jobs/createNew/${lead.customerId}`;
+        const basePath = `/company/jobs/createNew/${linkedCustomerId}`;
         return linkedServiceLocationId ? `${basePath}/${linkedServiceLocationId}` : basePath;
     };
     const buildServiceStopSchedulerPath = (category = 'serviceAgreementEstimate') => {
@@ -815,58 +497,35 @@ export default function LeadDetail() {
             category,
         });
 
-        if (lead.customerId) params.set('customerId', lead.customerId);
+        if (linkedCustomerId) params.set('customerId', linkedCustomerId);
         if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
 
         return `/company/serviceStops/createNew?${params.toString()}`;
     };
+    const serviceEstimateSchedulerPath = buildServiceStopSchedulerPath('serviceAgreementEstimate');
 
     const handleCreateJobFromLead = () => {
-        if (!lead.customerId) {
+        if (!linkedCustomerId) {
             toast.error('Create a customer before creating a job from this lead.');
             return;
         }
 
         navigate(buildCreateJobPath(), {
-            state: {
-                leadContext: {
-                    id: lead.id,
-                    source: lead.source || '',
-                    status: lead.status || '',
-                    serviceName: lead.serviceName || '',
-                    serviceDescription: lead.serviceDescription || '',
-                    customerId: lead.customerId || '',
-                    customerName: lead.customerName || '',
-                    serviceLocationId: linkedServiceLocationId,
-                },
-            },
+            state: leadContextState,
         });
     };
 
     const handleScheduleEstimateVisitFromLead = () => {
-        if (!lead.customerId) {
+        if (!linkedCustomerId) {
             toast.error('Create a customer before scheduling a service stop from this lead.');
             return;
         }
 
-        navigate(buildServiceStopSchedulerPath('serviceAgreementEstimate'), {
-            state: {
-                leadContext: {
-                    id: lead.id,
-                    source: lead.source || '',
-                    status: lead.status || '',
-                    serviceName: lead.serviceName || '',
-                    serviceDescription: lead.serviceDescription || '',
-                    customerId: lead.customerId || '',
-                    customerName: lead.customerName || '',
-                    serviceLocationId: linkedServiceLocationId,
-                },
-            },
-        });
+        navigate(serviceEstimateSchedulerPath, { state: leadContextState });
     };
 
     const renderActions = () => {
-        if (!customerId) {
+        if (!linkedCustomerId) {
             if (!can("612")) return null;
 
             return (
@@ -879,7 +538,7 @@ export default function LeadDetail() {
             );
         }
 
-        if (customerId) {
+        if (linkedCustomerId) {
             if (!can("22") && !can("242") && !can("612")) return null;
 
             return (
@@ -902,7 +561,7 @@ export default function LeadDetail() {
                     )}
                     {can("612") && (
                         <button
-                            onClick={() => navigate(`/company/recurring-contracts/createNew/${lead.customerId}`)}
+                            onClick={() => navigate(`/company/recurring-contracts/createNew/${linkedCustomerId}`)}
                             className="w-full py-2.5 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 font-medium"
                         >
                             Send Estimate
@@ -1280,15 +939,13 @@ export default function LeadDetail() {
                             </div>
                         )}
 
-                        {customerId && can("612") ? (
+                        {linkedCustomerId && can("242") ? (
                             <PreEstimateVisitCard
-                                lead={lead}
-                                companyId={recentlySelectedCompany}
-                                technicians={technicians}
                                 existingVisit={estimateVisit}
-                                onVisitCreated={setEstimateVisit}
+                                schedulerPath={serviceEstimateSchedulerPath}
+                                schedulerState={leadContextState}
                             />
-                        ) : !customerId && can("612") ? (
+                        ) : !linkedCustomerId && can("242") ? (
                             <PreEstimateVisitLockedCard lead={lead} />
                         ) : null}
 
@@ -1296,14 +953,14 @@ export default function LeadDetail() {
                             <EstimateSnapshot estimate={estimate} />
                         ) : (
                             <>
-                                {customerId && (
+                                {linkedCustomerId && (
                                     <div className="bg-white p-6 rounded-2xl shadow-lg">
                                         <h3 className="text-lg font-semibold text-gray-800 mb-4">
                                             Associated Customer
                                         </h3>
                                         <p className="text-gray-800 mb-3">{customerName}</p>
                                         <Link
-                                            to={`/company/customers/details/${customerId}`}
+                                            to={`/company/customers/details/${linkedCustomerId}`}
                                             className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
                                         >
                                             View Customer Profile
@@ -1311,10 +968,10 @@ export default function LeadDetail() {
                                     </div>
                                 )}
 
-                                {(can("612") || can("22")) && (
+                                {(can("612") || can("22") || can("242")) && (
                                     <div className="bg-white p-6 rounded-2xl shadow-lg">
                                         <h3 className="text-lg font-semibold text-gray-800 mb-4">
-                                            {customerId ? 'Next Steps' : 'Lead Conversion'}
+                                            {linkedCustomerId ? 'Next Steps' : 'Lead Conversion'}
                                         </h3>
                                         <div className="space-y-3">{renderActions()}</div>
                                     </div>

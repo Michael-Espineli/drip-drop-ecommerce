@@ -11,6 +11,7 @@ import { Context } from "../../../context/AuthContext";
 import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
 import { useNavigate } from "react-router-dom";
+import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
@@ -38,8 +39,183 @@ const BILLING_QUICK_BILLING_STATUSES = [
     "Expired"
 ];
 
+const OPERATION_STATUS_OPTIONS = [
+    "Estimate Pending",
+    "Unscheduled",
+    "Scheduled",
+    "Waiting for Parts",
+    "In Progress",
+    "Finished"
+];
+
+const BILLING_STATUS_OPTIONS = [
+    "Draft",
+    "Estimate",
+    "Accepted",
+    "In Progress",
+    "Invoiced",
+    "Paid",
+    "Expired"
+];
+
+const JOB_SORT_OPTIONS = [
+    { value: "dateCreated-desc", label: "Date Created: Newest First" },
+    { value: "dateCreated-asc", label: "Date Created: Oldest First" },
+    { value: "customerName-asc", label: "Customer: A to Z" },
+    { value: "customerName-desc", label: "Customer: Z to A" },
+    { value: "adminName-asc", label: "Admin: A to Z" },
+    { value: "adminName-desc", label: "Admin: Z to A" },
+    { value: "billingStatus-asc", label: "Billing Status: Workflow Order" },
+    { value: "billingStatus-desc", label: "Billing Status: Reverse Order" },
+    { value: "operationStatus-asc", label: "Operation Status: Workflow Order" },
+    { value: "operationStatus-desc", label: "Operation Status: Reverse Order" },
+    { value: "rate-desc", label: "Rate: High to Low" },
+    { value: "rate-asc", label: "Rate: Low to High" },
+];
+
+const DEFAULT_SORT_DIRECTIONS = {
+    dateCreated: "desc",
+    customerName: "asc",
+    adminName: "asc",
+    billingStatus: "asc",
+    operationStatus: "asc",
+    rate: "desc",
+};
+
+const billingStatusOrder = BILLING_STATUS_OPTIONS.reduce((acc, status, index) => {
+    acc[status.toLowerCase()] = index;
+    return acc;
+}, {});
+
+const operationStatusOrder = OPERATION_STATUS_OPTIONS.reduce((acc, status, index) => {
+    acc[status.toLowerCase()] = index;
+    return acc;
+}, {});
+
 const statusMatches = (value, status) => {
     return String(value || "").trim().toLowerCase() === status.toLowerCase();
+};
+
+const toMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === "function") return value.toMillis();
+    if (typeof value.toDate === "function") return value.toDate().getTime();
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number") return value;
+
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const compareText = (leftValue, rightValue, direction) => {
+    const left = String(leftValue || "").trim();
+    const right = String(rightValue || "").trim();
+
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+
+    const result = left.localeCompare(right, undefined, {
+        numeric: true,
+        sensitivity: "base",
+    });
+
+    return direction === "asc" ? result : -result;
+};
+
+const compareStatus = (leftValue, rightValue, direction, statusOrder) => {
+    const left = String(leftValue || "").trim().toLowerCase();
+    const right = String(rightValue || "").trim().toLowerCase();
+
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+
+    const leftRank = statusOrder[left] ?? 999;
+    const rightRank = statusOrder[right] ?? 999;
+
+    if (leftRank !== rightRank) {
+        return direction === "asc" ? leftRank - rightRank : rightRank - leftRank;
+    }
+
+    return compareText(leftValue, rightValue, direction);
+};
+
+const compareDateCreated = (leftValue, rightValue, direction) => {
+    const left = toMillis(leftValue);
+    const right = toMillis(rightValue);
+
+    if (!left && !right) return 0;
+    if (!left) return 1;
+    if (!right) return -1;
+
+    return direction === "asc" ? left - right : right - left;
+};
+
+const compareNumber = (leftValue, rightValue, direction) => {
+    const left = Number(leftValue || 0);
+    const right = Number(rightValue || 0);
+    const result = left - right;
+
+    return direction === "asc" ? result : -result;
+};
+
+const sortJobs = (jobList, sortBy) => {
+    const [sortField, sortDirection = "asc"] = sortBy.split("-");
+    const direction = sortDirection === "desc" ? "desc" : "asc";
+
+    return [...jobList].sort((left, right) => {
+        let result = 0;
+
+        switch (sortField) {
+            case "dateCreated":
+                result = compareDateCreated(left.dateCreated, right.dateCreated, direction);
+                break;
+            case "customerName":
+                result = compareText(left.customerName, right.customerName, direction);
+                break;
+            case "adminName":
+                result = compareText(left.adminName, right.adminName, direction);
+                break;
+            case "billingStatus":
+                result = compareStatus(left.billingStatus, right.billingStatus, direction, billingStatusOrder);
+                break;
+            case "operationStatus":
+                result = compareStatus(left.operationStatus, right.operationStatus, direction, operationStatusOrder);
+                break;
+            case "rate":
+                result = compareNumber(left.rate, right.rate, direction);
+                break;
+            default:
+                result = compareDateCreated(left.dateCreated, right.dateCreated, "desc");
+        }
+
+        if (result !== 0) return result;
+
+        return (
+            compareDateCreated(left.dateCreated, right.dateCreated, "desc") ||
+            compareText(left.internalId, right.internalId, "asc")
+        );
+    });
+};
+
+const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onSort }) => {
+    const active = activeSortKey === sortKey;
+    const Icon = active
+        ? (sortDirection === "asc" ? FaSortAmountUp : FaSortAmountDown)
+        : FaSort;
+
+    return (
+        <button
+            type="button"
+            onClick={() => onSort(sortKey)}
+            className={`inline-flex items-center gap-1.5 text-left text-sm font-semibold uppercase tracking-wider transition ${active ? "text-blue-700" : "text-gray-600 hover:text-gray-800"}`}
+            aria-label={`Sort jobs by ${children}`}
+        >
+            {children}
+            <Icon className="text-[0.65rem]" aria-hidden="true" />
+        </button>
+    );
 };
 
 const Jobs = () => {
@@ -69,25 +245,6 @@ const Jobs = () => {
 
     const [sortBy, setSortBy] = useState("dateCreated-desc");
 
-    const operationStatusOptions = [
-        "Estimate Pending",
-        "Unscheduled",
-        "Scheduled",
-        "Waiting for Parts",
-        "In Progress",
-        "Finished"
-    ];
-
-    const billingStatusOptions = [
-        "Draft",
-        "Estimate",
-        "Accepted",
-        "In Progress",
-        "Invoiced",
-        "Paid",
-        "Expired"
-    ];
-
     useEffect(() => {
         const fetchJobs = async () => {
             if (!recentlySelectedCompany) return;
@@ -104,21 +261,11 @@ const Jobs = () => {
                     queries.push(where("billingStatus", "in", billingStatusFilter));
                 }
 
-                const [sortField, sortDirection] = sortBy.split("-");
-                queries.push(orderBy(sortField, sortDirection));
-
                 q = query(q, ...queries);
 
                 const querySnapshot = await getDocs(q);
                 const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
-
-                const filteredJobs = jobsList.filter(job =>
-                    job.customerName?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    job.internalId?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                    job.description?.toLowerCase().includes(searchTerm.toLowerCase())
-                );
-
-                setJobs(filteredJobs);
+                setJobs(jobsList);
             } catch (error) {
                 console.error("Error fetching jobs: ", error);
             }
@@ -127,11 +274,28 @@ const Jobs = () => {
         fetchJobs();
     }, [
         recentlySelectedCompany,
-        searchTerm,
         operationStatusFilter,
-        billingStatusFilter,
-        sortBy
+        billingStatusFilter
     ]);
+
+    const visibleJobs = useMemo(() => {
+        const normalizedSearchTerm = searchTerm.trim().toLowerCase();
+
+        const filteredJobs = normalizedSearchTerm
+            ? jobs.filter(job =>
+                [
+                    job.customerName,
+                    job.adminName,
+                    job.internalId,
+                    job.description,
+                    job.billingStatus,
+                    job.operationStatus,
+                ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm))
+            )
+            : jobs;
+
+        return sortJobs(filteredJobs, sortBy);
+    }, [jobs, searchTerm, sortBy]);
 
     useEffect(() => {
         const fetchAllJobs = async () => {
@@ -154,14 +318,14 @@ const Jobs = () => {
 
     useEffect(() => {
         const fetchCommentCounts = async () => {
-            if (!recentlySelectedCompany || jobs.length === 0) {
+            if (!recentlySelectedCompany || visibleJobs.length === 0) {
                 setCommentCounts({});
                 return;
             }
 
             try {
                 const countsArray = await Promise.all(
-                    jobs.map(async (job) => {
+                    visibleJobs.map(async (job) => {
                         const commentsRef = collection(
                             db,
                             "companies",
@@ -197,7 +361,7 @@ const Jobs = () => {
         };
 
         fetchCommentCounts();
-    }, [jobs, recentlySelectedCompany]);
+    }, [visibleJobs, recentlySelectedCompany]);
 
     const fetchJobTemplates = async () => {
         if (!recentlySelectedCompany) return;
@@ -291,18 +455,29 @@ const Jobs = () => {
         return "custom";
     }, [billingStatusFilter, operationStatusFilter]);
 
+    const [activeSortKey, activeSortDirection = "asc"] = sortBy.split("-");
+
+    const handleHeaderSort = (nextSortKey) => {
+        if (activeSortKey === nextSortKey) {
+            setSortBy(`${nextSortKey}-${activeSortDirection === "asc" ? "desc" : "asc"}`);
+            return;
+        }
+
+        setSortBy(`${nextSortKey}-${DEFAULT_SORT_DIRECTIONS[nextSortKey] || "asc"}`);
+    };
+
     const uniqueJobsCount = useMemo(() => {
         const ids = new Set(
-            (jobs || [])
+            (visibleJobs || [])
                 .map((e) => (e?.internalId ?? "").toString().trim())
                 .filter(Boolean)
         );
 
         return ids.size;
-    }, [jobs]);
+    }, [visibleJobs]);
 
     const jobSummary = useMemo(() => {
-        const summaryJobs = allJobs.length > 0 ? allJobs : jobs;
+        const summaryJobs = allJobs.length > 0 ? allJobs : visibleJobs;
         const actionableJobIds = new Set();
 
         const draftBillingCount = summaryJobs.filter((job) => {
@@ -325,14 +500,14 @@ const Jobs = () => {
 
         return {
             totalRateCents: summaryJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
-            visibleRateCents: jobs.reduce((total, job) => total + Number(job.rate || 0), 0),
+            visibleRateCents: visibleJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             totalJobsCount: summaryJobs.length,
             actionableJobsCount: actionableJobIds.size,
             draftBillingCount,
             acceptedBillingCount,
             unscheduledOperationCount,
         };
-    }, [allJobs, jobs]);
+    }, [allJobs, visibleJobs]);
 
     const getStatusClass = (status) => {
         switch (status) {
@@ -418,14 +593,17 @@ const Jobs = () => {
 
                     <div className="space-y-6">
                         <div>
-                            <label className="block mb-2 font-semibold text-gray-700">Sort by Date</label>
+                            <label className="block mb-2 font-semibold text-gray-700">Sort</label>
                             <select
                                 value={sortBy}
                                 onChange={(e) => setSortBy(e.target.value)}
                                 className="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500"
                             >
-                                <option value="dateCreated-desc">Newest First</option>
-                                <option value="dateCreated-asc">Oldest First</option>
+                                {JOB_SORT_OPTIONS.map((option) => (
+                                    <option key={option.value} value={option.value}>
+                                        {option.label}
+                                    </option>
+                                ))}
                             </select>
                         </div>
 
@@ -435,7 +613,7 @@ const Jobs = () => {
                             </label>
 
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                                {operationStatusOptions.map(status => (
+                                {OPERATION_STATUS_OPTIONS.map(status => (
                                     <label key={status} className="flex items-center space-x-3 cursor-pointer">
                                         <input
                                             type="checkbox"
@@ -455,7 +633,7 @@ const Jobs = () => {
                             </label>
 
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                                {billingStatusOptions.map(status => (
+                                {BILLING_STATUS_OPTIONS.map(status => (
                                     <label key={status} className="flex items-center space-x-3 cursor-pointer">
                                         <input
                                             type="checkbox"
@@ -659,7 +837,7 @@ const Jobs = () => {
 
                         <div className="mt-2 inline-flex items-center gap-3 text-sm text-gray-700">
                             <span className="text-gray-600">
-                                Jobs: <span className="font-semibold text-gray-800">{jobs.length}</span>
+                                Jobs: <span className="font-semibold text-gray-800">{visibleJobs.length}</span>
                             </span>
 
                             <span className="text-gray-600">
@@ -689,7 +867,7 @@ const Jobs = () => {
                     <JobMetricCard
                         label="Shown Rate"
                         value={moneyFromCents(jobSummary.visibleRateCents)}
-                        detail={`${jobs.length} jobs in this view`}
+                        detail={`${visibleJobs.length} jobs in this view`}
                         tone="blue"
                     />
 
@@ -748,7 +926,7 @@ const Jobs = () => {
                             onChange={(e) => setSearchTerm(e.target.value)}
                             className="w-full sm:w-2/5 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
                             type="text"
-                            placeholder="Search by customer, ID, or description..."
+                            placeholder="Search by customer, admin, ID, status, or description..."
                         />
 
                         <button
@@ -764,18 +942,42 @@ const Jobs = () => {
                             <thead className="bg-gray-100">
                                 <tr>
                                     <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Job</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Date Created</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Customer</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Type</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Billing Status</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Operation Status</th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Rate</th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="dateCreated" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Date Created
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="customerName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Customer
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="adminName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Admin
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="billingStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Billing Status
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="operationStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Operation Status
+                                        </SortHeaderButton>
+                                    </th>
+                                    <th className="p-4 text-left hidden sm:table-cell">
+                                        <SortHeaderButton sortKey="rate" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Rate
+                                        </SortHeaderButton>
+                                    </th>
                                     <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Description</th>
                                 </tr>
                             </thead>
 
                             <tbody className="divide-y divide-gray-200">
-                                {jobs.length === 0 ? (
+                                {visibleJobs.length === 0 ? (
                                     <tr>
                                         <td colSpan="8" className="p-8 text-center">
                                             <p className="font-semibold text-gray-700">No jobs found.</p>
@@ -795,7 +997,7 @@ const Jobs = () => {
                                         </td>
                                     </tr>
                                 ) : (
-                                    jobs.map(job => (
+                                    visibleJobs.map(job => (
                                         <tr
                                             key={job.id}
                                             className="hover:bg-gray-50 transition-colors cursor-pointer"
@@ -822,7 +1024,7 @@ const Jobs = () => {
                                             </td>
 
                                             <td className="p-4 whitespace-nowrap text-gray-700">
-                                                {job.type}
+                                                {job.adminName || "Unassigned"}
                                             </td>
 
                                             <td className="p-4 whitespace-nowrap">

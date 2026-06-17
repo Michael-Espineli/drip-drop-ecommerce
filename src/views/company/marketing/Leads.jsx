@@ -35,7 +35,7 @@ export default function Leads() {
     const [loading, setLoading] = useState(true);
     const [stats, setStats] = useState({ pending: 0, inProgress: 0, completed: 0, cancelled: 0 });
     const [searchTerm, setSearchTerm] = useState('');
-    const [statusFilter, setStatusFilter] = useState('All');
+    const [statusFilter, setStatusFilter] = useState('Pending');
     const [sourceFilter, setSourceFilter] = useState('All');
     const { recentlySelectedCompany } = useContext(Context);
     const { can } = useCompanyPermissions();
@@ -105,8 +105,10 @@ export default function Leads() {
                 lead.homeownerPhone,
                 lead.customerName,
                 lead.customerId,
+                lead.companyCustomerId,
                 lead.homeownerId,
                 lead.serviceLocationId,
+                lead.companyServiceLocationId,
                 lead.homeownerserviceLocationId,
                 lead.serviceLocationAddress?.streetAddress,
                 lead.serviceLocationAddress?.city,
@@ -158,12 +160,17 @@ export default function Leads() {
         }
     };
 
+    const getLinkedCustomerId = (lead = {}) => lead.customerId || lead.companyCustomerId || '';
+    const getLinkedServiceLocationId = (lead = {}) => lead.companyServiceLocationId || lead.serviceLocationId || '';
+
     const renderLinkStatus = (lead) => {
-        if (lead.customerId) {
+        const linkedCustomerId = getLinkedCustomerId(lead);
+
+        if (linkedCustomerId) {
             return (
                 <div>
                     <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Customer linked</span>
-                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || (lead.customerId ? "Linked customer" : "")}</div>
+                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || "Linked customer"}</div>
                 </div>
             );
         }
@@ -185,9 +192,10 @@ export default function Leads() {
             leadId: lead.id,
             category: 'serviceAgreementEstimate',
         });
-        const linkedServiceLocationId = lead.serviceLocationId || lead.companyServiceLocationId || '';
+        const linkedCustomerId = getLinkedCustomerId(lead);
+        const linkedServiceLocationId = getLinkedServiceLocationId(lead);
 
-        if (lead.customerId) params.set('customerId', lead.customerId);
+        if (linkedCustomerId) params.set('customerId', linkedCustomerId);
         if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
 
         return `/company/serviceStops/createNew?${params.toString()}`;
@@ -195,8 +203,9 @@ export default function Leads() {
 
     const handleScheduleLeadVisit = (event, lead) => {
         event.stopPropagation();
+        const linkedCustomerId = getLinkedCustomerId(lead);
 
-        if (!lead.customerId) {
+        if (!linkedCustomerId) {
             toast.error('Convert or link the lead to a customer before scheduling a service stop.');
             return;
         }
@@ -336,9 +345,9 @@ export default function Leads() {
                                                     type="button"
                                                     onClick={(event) => handleScheduleLeadVisit(event, lead)}
                                                     className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                    disabled={!lead.customerId}
+                                                    disabled={!getLinkedCustomerId(lead)}
                                                 >
-                                                    Schedule Visit
+                                                    Create Estimate
                                                 </button>
                                             )}
                                         </td>

@@ -483,7 +483,7 @@ const PurchaseListView = () => {
             {showAlphaWaterImport ? (
               <Link
                 to="/company/purchased-items/alpha-water-import"
-                className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 rounded-xl shadow-sm hover:bg-indigo-100 transition"
+                className="px-4 py-2 text-sm font-medium text-amber-800 bg-amber-50 border border-amber-300 rounded-xl shadow-sm hover:bg-amber-100 transition"
               >
                 Alpha Water Import
               </Link>

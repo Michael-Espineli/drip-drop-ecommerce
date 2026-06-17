@@ -18,6 +18,7 @@ import { EquipmentPart } from "../../../utils/models/EquipmentPart";
 import {
   AdjustmentsHorizontalIcon,
   BriefcaseIcon,
+  DocumentTextIcon,
   EllipsisVerticalIcon,
   PencilSquareIcon,
   WrenchScrewdriverIcon,
@@ -82,7 +83,7 @@ const dateIsDue = (d) => {
 
 /**
  * Needs Maintenance filter rule:
- * Include an item if EITHER:
+ * Include an operational item if EITHER:
  * 1) status indicates maintenance
  * OR
  * 2) nextServiceDate is today or earlier
@@ -90,6 +91,8 @@ const dateIsDue = (d) => {
 const isNeedsMaintenance = (eq) => {
   if (!eq) return false;
   const status = normalizeEquipmentStatus(eq.status);
+  if (status === "nonoperational") return false;
+
   const statusSaysMaintenance =
     status === "needsmaintenance" ||
     status === "maintenance" ||
@@ -252,6 +255,7 @@ export default function EquipmentList() {
   const [quickModelId, setQuickModelId] = useState("");
   const [quickUniversalEquipmentId, setQuickUniversalEquipmentId] = useState("");
   const [quickManualPdfLink, setQuickManualPdfLink] = useState("");
+  const [quickNotes, setQuickNotes] = useState("");
   const [quickStatus, setQuickStatus] = useState("");
 
   const [maintenanceName, setMaintenanceName] = useState(DEFAULT_MAINTENANCE_NAME);
@@ -611,9 +615,14 @@ export default function EquipmentList() {
       setQuickModelId(equipment.modelId || "");
       setQuickUniversalEquipmentId(equipment.universalEquipmentId || equipment.modelId || "");
       setQuickManualPdfLink(equipment.manualPdfLink || "");
+      setQuickNotes(equipment.notes || "");
       setCatalogTypeId(equipment.typeId || CUSTOM_CATALOG_VALUE);
       setCatalogMakeId(equipment.makeId || CUSTOM_CATALOG_VALUE);
       setCatalogEquipmentId(equipment.universalEquipmentId || equipment.modelId || CUSTOM_CATALOG_VALUE);
+    }
+
+    if (modalName === "notes") {
+      setQuickNotes(equipment.notes || "");
     }
 
     if (modalName === "status") {
@@ -708,7 +717,7 @@ export default function EquipmentList() {
     if (!quickName.trim()) setQuickName(selected?.name || selected?.model || "");
   };
 
-  const handleSaveMakeModel = async () => {
+  const handleSaveEquipment = async () => {
     if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
 
     const updates = {
@@ -721,6 +730,7 @@ export default function EquipmentList() {
       modelId: quickModelId,
       universalEquipmentId: quickUniversalEquipmentId,
       manualPdfLink: quickManualPdfLink,
+      notes: quickNotes,
     };
 
     try {
@@ -730,10 +740,29 @@ export default function EquipmentList() {
       );
       updateEquipmentInLists(selectedQuickEquipment.id, updates);
       closeQuickModal();
-      toast.success("Make and model updated");
+      toast.success("Equipment updated");
     } catch (error) {
-      console.error("Error updating equipment make/model:", error);
-      toast.error("Failed to update make and model");
+      console.error("Error updating equipment:", error);
+      toast.error("Failed to update equipment");
+    }
+  };
+
+  const handleSaveNotes = async () => {
+    if (!selectedQuickEquipment || !recentlySelectedCompany || !can("64")) return;
+
+    const updates = { notes: quickNotes };
+
+    try {
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "equipment", selectedQuickEquipment.id),
+        updates
+      );
+      updateEquipmentInLists(selectedQuickEquipment.id, updates);
+      closeQuickModal();
+      toast.success("Notes updated");
+    } catch (error) {
+      console.error("Error updating equipment notes:", error);
+      toast.error("Failed to update notes");
     }
   };
 
@@ -1207,9 +1236,14 @@ export default function EquipmentList() {
               {can("64") && (
                 <>
                   <QuickActionMenuItem
-                    label="Make/Model"
+                    label="Edit Equipment"
                     icon={PencilSquareIcon}
                     onClick={() => openQuickModal(openActionEquipment, "makeModel")}
+                  />
+                  <QuickActionMenuItem
+                    label="Edit Notes"
+                    icon={DocumentTextIcon}
+                    onClick={() => openQuickModal(openActionEquipment, "notes")}
                   />
                   <QuickActionMenuItem
                     label="Update Status"
@@ -1258,7 +1292,7 @@ export default function EquipmentList() {
 
         {activeQuickModal === "makeModel" && selectedQuickEquipment && (
           <ModalShell
-            title="Edit Make and Model"
+            title="Edit Equipment"
             onClose={closeQuickModal}
             footer={
               <div className="flex justify-end gap-3">
@@ -1270,7 +1304,7 @@ export default function EquipmentList() {
                   Cancel
                 </button>
                 <button
-                  onClick={handleSaveMakeModel}
+                  onClick={handleSaveEquipment}
                   className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
                   type="button"
                 >
@@ -1382,7 +1416,50 @@ export default function EquipmentList() {
                   View selected catalog manual
                 </a>
               )}
+
+              <Field label="Notes">
+                <textarea
+                  value={quickNotes}
+                  onChange={(event) => setQuickNotes(event.target.value)}
+                  className={inputBase}
+                  rows={4}
+                />
+              </Field>
             </div>
+          </ModalShell>
+        )}
+
+        {activeQuickModal === "notes" && selectedQuickEquipment && (
+          <ModalShell
+            title="Edit Notes"
+            onClose={closeQuickModal}
+            footer={
+              <div className="flex justify-end gap-3">
+                <button
+                  onClick={closeQuickModal}
+                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  type="button"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSaveNotes}
+                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  type="button"
+                >
+                  Save
+                </button>
+              </div>
+            }
+          >
+            <Field label="Notes">
+              <textarea
+                value={quickNotes}
+                onChange={(event) => setQuickNotes(event.target.value)}
+                className={inputBase}
+                rows={6}
+              />
+            </Field>
           </ModalShell>
         )}
 

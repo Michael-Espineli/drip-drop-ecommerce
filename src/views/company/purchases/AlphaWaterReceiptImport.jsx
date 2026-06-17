@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Select from "react-select";
-import { collection, doc, getDocs, orderBy, query, setDoc } from "firebase/firestore";
+import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
@@ -49,7 +49,17 @@ const money = (value) =>
     currency: "USD",
   }).format(Number(value || 0));
 
-const centsFromDollars = (value) => Math.round(Number(value || 0) * 100);
+const centsFromDollars = (value) => {
+  const number = Number(String(value || "").replace(/[$,]/g, ""));
+  return Number.isFinite(number) ? Math.round(number * 100) : 0;
+};
+
+const formatDollarsFromCents = (value) => {
+  const cents = Number(value || 0);
+  return cents ? (cents / 100).toFixed(2) : "";
+};
+
+const moneyFromCents = (value) => money(Number(value || 0) / 100);
 
 const normalizedDatabaseUom = (value) => {
   const normalized = String(value || "").trim().toLowerCase();
@@ -71,6 +81,28 @@ const normalizedDatabaseUom = (value) => {
   };
 
   return uomMap[normalized] || value || "Unit";
+};
+
+const alphaWaterUomFromDatabaseUom = (value) => {
+  const normalized = String(value || "").trim().toLowerCase();
+  const uomMap = {
+    ea: "ea",
+    each: "ea",
+    unit: "ea",
+    gal: "gal",
+    gallon: "gal",
+    lb: "lbs",
+    lbs: "lbs",
+    pounds: "lbs",
+    oz: "oz",
+    ounce: "oz",
+    ft: "ft",
+    feet: "ft",
+    tab: "tab",
+    quart: "quart",
+  };
+
+  return uomMap[normalized] || (uomOptions.includes(normalized) ? normalized : "");
 };
 
 const selectTheme = (theme) => ({
@@ -195,6 +227,50 @@ const findMatchingItem = (line, databaseItems) => {
     databaseItems.find((item) => normalizeKey(item.name) === nameKey && nameKey) ||
     null
   );
+};
+
+const billingRateFromDatabaseItem = (item) => {
+  const billingRateCents = Number(item?.billingRate ?? item?.sellPrice ?? 0);
+  return billingRateCents ? formatDollarsFromCents(billingRateCents) : "";
+};
+
+const hydrateLineFromDatabaseItem = (line, item) => {
+  if (!item) return line;
+
+  const databaseUom = alphaWaterUomFromDatabaseUom(item.UOM || item.uom || "");
+  const billingRate = billingRateFromDatabaseItem(item);
+
+  return {
+    ...line,
+    matchedItemId: item.id,
+    createDatabaseItem: false,
+    sku: item.sku || line.sku,
+    name: item.name || item.description || line.name,
+    description: item.description || item.name || line.description,
+    uom: databaseUom || line.uom,
+    category: item.category || line.category,
+    billable: Boolean(item.billable),
+    billingRate: billingRate || line.billingRate,
+  };
+};
+
+const databaseItemRateCents = (item) => Number(item?.rate || 0);
+
+const lineUnitPriceCents = (line) => centsFromDollars(line?.unitPrice);
+
+const getLinePriceChange = (line, databaseItem) => {
+  if (!line?.matchedItemId || !databaseItem) return null;
+
+  const nextRateCents = lineUnitPriceCents(line);
+  if (!nextRateCents) return null;
+
+  const currentRateCents = databaseItemRateCents(databaseItem);
+  if (currentRateCents === nextRateCents) return null;
+
+  return {
+    currentRateCents,
+    nextRateCents,
+  };
 };
 
 const isAlphaWaterRowStart = (line) => {
@@ -585,6 +661,7 @@ const AlphaWaterReceiptImport = () => {
   const [lines, setLines] = useState([]);
   const [createItemModalOpen, setCreateItemModalOpen] = useState(false);
   const [creatingDatabaseItem, setCreatingDatabaseItem] = useState(false);
+  const [updatingDatabaseItemCostIds, setUpdatingDatabaseItemCostIds] = useState({});
   const [databaseItemForm, setDatabaseItemForm] = useState(blankDatabaseItemForm);
   const [sourceInputKey, setSourceInputKey] = useState(0);
   const [pendingSaveOptions, setPendingSaveOptions] = useState(null);
@@ -691,6 +768,10 @@ const AlphaWaterReceiptImport = () => {
     () => lines.filter((line) => !line.matchedItemId && line.createDatabaseItem).length,
     [lines]
   );
+  const databaseItemsById = useMemo(
+    () => new Map(databaseItems.map((item) => [item.id, item])),
+    [databaseItems]
+  );
   const databaseItemOptions = useMemo(
     () =>
       databaseItems.map((item) => {
@@ -700,6 +781,7 @@ const AlphaWaterReceiptImport = () => {
         const subCategory = item.subCategory || "";
         const uom = item.UOM || item.uom || "";
         const description = item.description || "";
+        const rateCents = databaseItemRateCents(item);
 
         return {
           value: item.id,
@@ -710,6 +792,7 @@ const AlphaWaterReceiptImport = () => {
           subCategory,
           uom,
           description,
+          rateCents,
           searchText: [name, sku, category, subCategory, uom, description, item.id].filter(Boolean).join(" "),
         };
       }),
@@ -730,7 +813,12 @@ const AlphaWaterReceiptImport = () => {
       <div>
         <p className="font-semibold text-slate-900">{option.name}</p>
         <p className="text-xs text-slate-500">
-          {[option.sku ? `SKU: ${option.sku}` : "", option.category, option.uom ? `UOM: ${option.uom}` : ""]
+          {[
+            option.sku ? `SKU: ${option.sku}` : "",
+            option.rateCents ? `Cost: ${moneyFromCents(option.rateCents)}` : "",
+            option.category,
+            option.uom ? `UOM: ${option.uom}` : "",
+          ]
             .filter(Boolean)
             .join(" | ") || "No item details saved"}
         </p>
@@ -897,11 +985,13 @@ const AlphaWaterReceiptImport = () => {
         if (line.id !== lineId) return line;
         const nextLine = { ...line, ...updates };
         if (updates.matchedItemId !== undefined) {
-          const match = databaseItems.find((item) => item.id === updates.matchedItemId);
-          nextLine.createDatabaseItem = updates.createDatabaseItem !== undefined ? updates.createDatabaseItem : !match;
-          nextLine.billable = updates.billable !== undefined ? updates.billable : Boolean(match?.billable);
-          nextLine.billingRate = match?.billingRate ? String(Number(match.billingRate) / 100) : nextLine.billingRate;
-          nextLine.category = match?.category || nextLine.category;
+          const match = databaseItemsById.get(updates.matchedItemId);
+          if (match) {
+            return hydrateLineFromDatabaseItem(nextLine, match);
+          }
+
+          nextLine.createDatabaseItem = updates.createDatabaseItem !== undefined ? updates.createDatabaseItem : true;
+          nextLine.billable = updates.billable !== undefined ? updates.billable : false;
         }
         return nextLine;
       })
@@ -1007,20 +1097,58 @@ const AlphaWaterReceiptImport = () => {
       await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", itemId), item);
 
       setDatabaseItems((prev) => [...prev, item].sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""))));
-      updateLine(databaseItemForm.lineId, {
-        matchedItemId: itemId,
-        createDatabaseItem: false,
-        billable: item.billable,
-        billingRate: item.billingRate ? String(Number(item.billingRate) / 100) : "",
-        category: item.category,
-      });
-      toast.success("Database item created");
+      setLines((prev) =>
+        prev.map((line) =>
+          line.id === databaseItemForm.lineId ? hydrateLineFromDatabaseItem(line, item) : line
+        )
+      );
+      toast.success("Database item created and row updated");
       resetCreateItemModal();
     } catch (error) {
       console.error("Error creating database item from receipt import:", error);
       toast.error("Could not create database item");
     } finally {
       setCreatingDatabaseItem(false);
+    }
+  };
+
+  const setDatabaseItemCostUpdating = (lineId, isUpdating) => {
+    setUpdatingDatabaseItemCostIds((current) => ({
+      ...current,
+      [lineId]: isUpdating,
+    }));
+  };
+
+  const updateDatabaseItemCostFromLine = async (line) => {
+    const databaseItem = databaseItemsById.get(line.matchedItemId);
+    const priceChange = getLinePriceChange(line, databaseItem);
+
+    if (!recentlySelectedCompany || !databaseItem || !priceChange) {
+      toast.error("No database item price update is available for this line.");
+      return;
+    }
+
+    setDatabaseItemCostUpdating(line.id, true);
+    try {
+      const updates = {
+        rate: priceChange.nextRateCents,
+        dateUpdated: new Date(),
+      };
+
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", databaseItem.id),
+        updates
+      );
+
+      setDatabaseItems((prev) =>
+        prev.map((item) => (item.id === databaseItem.id ? { ...item, ...updates } : item))
+      );
+      toast.success("Database item cost updated");
+    } catch (error) {
+      console.error("Error updating database item cost from receipt import:", error);
+      toast.error("Could not update database item cost");
+    } finally {
+      setDatabaseItemCostUpdating(line.id, false);
     }
   };
 
@@ -1587,146 +1715,167 @@ const AlphaWaterReceiptImport = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((line) => (
-                    <tr key={line.id} className="rounded-lg bg-gray-50 text-sm">
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.sku}
-                          onChange={(event) => updateLine(line.id, { sku: event.target.value })}
-                          className="w-32 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.name}
-                          onChange={(event) => updateLine(line.id, { name: event.target.value, description: event.target.value })}
-                          className="w-64 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.quantity}
-                          onChange={(event) => updateLine(line.id, { quantity: event.target.value })}
-                          className="w-20 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <select
-                          value={line.uom}
-                          onChange={(event) => updateLine(line.id, { uom: event.target.value })}
-                          className="w-24 rounded-lg border border-gray-300 px-2 py-1"
-                        >
-                          {uomOptions.map((uom) => (
-                            <option key={uom} value={uom}>
-                              {uom}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.lotSerial || ""}
-                          onChange={(event) => updateLine(line.id, { lotSerial: event.target.value })}
-                          className="w-28 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.unitPrice}
-                          onChange={(event) => updateLine(line.id, { unitPrice: event.target.value })}
-                          className="w-24 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.amount}
-                          onChange={(event) => updateLine(line.id, { amount: event.target.value })}
-                          className="w-24 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          type="checkbox"
-                          checked={Boolean(line.taxable)}
-                          onChange={(event) => updateLine(line.id, { taxable: event.target.checked })}
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <div className="w-72">
-                          <Select
-                            value={databaseItemOptionsById.get(line.matchedItemId) || null}
-                            onChange={(option) => updateLine(line.id, { matchedItemId: option?.value || "" })}
-                            options={databaseItemOptions}
-                            isClearable
-                            isSearchable
-                            placeholder="Search database items"
-                            noOptionsMessage={() => "No database items found"}
-                            formatOptionLabel={formatDatabaseItemOption}
-                            filterOption={(option, inputValue) =>
-                              option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
-                            }
-                            theme={selectTheme}
-                            styles={selectStyles}
-                            menuPortalTarget={selectMenuPortalTarget || undefined}
+                  {lines.map((line) => {
+                    const matchedDatabaseItem = databaseItemsById.get(line.matchedItemId) || null;
+                    const priceChange = getLinePriceChange(line, matchedDatabaseItem);
+                    const isUpdatingDatabaseItemCost = Boolean(updatingDatabaseItemCostIds[line.id]);
+
+                    return (
+                      <tr key={line.id} className="rounded-lg bg-gray-50 text-sm">
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.sku}
+                            onChange={(event) => updateLine(line.id, { sku: event.target.value })}
+                            className="w-32 rounded-lg border border-gray-300 px-2 py-1"
                           />
-                        </div>
-                        <label className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.name}
+                            onChange={(event) => updateLine(line.id, { name: event.target.value, description: event.target.value })}
+                            className="w-64 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.quantity}
+                            onChange={(event) => updateLine(line.id, { quantity: event.target.value })}
+                            className="w-20 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <select
+                            value={line.uom}
+                            onChange={(event) => updateLine(line.id, { uom: event.target.value })}
+                            className="w-24 rounded-lg border border-gray-300 px-2 py-1"
+                          >
+                            {uomOptions.map((uom) => (
+                              <option key={uom} value={uom}>
+                                {uom}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.lotSerial || ""}
+                            onChange={(event) => updateLine(line.id, { lotSerial: event.target.value })}
+                            className="w-28 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.unitPrice}
+                            onChange={(event) => updateLine(line.id, { unitPrice: event.target.value })}
+                            className="w-24 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.amount}
+                            onChange={(event) => updateLine(line.id, { amount: event.target.value })}
+                            className="w-24 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2">
                           <input
                             type="checkbox"
-                            checked={line.createDatabaseItem}
-                            disabled={Boolean(line.matchedItemId)}
-                            onChange={(event) => updateLine(line.id, { createDatabaseItem: event.target.checked })}
+                            checked={Boolean(line.taxable)}
+                            onChange={(event) => updateLine(line.id, { taxable: event.target.checked })}
                           />
-                          New database item
-                        </label>
-                        {line.createDatabaseItem ? (
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="w-72">
+                            <Select
+                              value={databaseItemOptionsById.get(line.matchedItemId) || null}
+                              onChange={(option) => updateLine(line.id, { matchedItemId: option?.value || "" })}
+                              options={databaseItemOptions}
+                              isClearable
+                              isSearchable
+                              placeholder="Search database items"
+                              noOptionsMessage={() => "No database items found"}
+                              formatOptionLabel={formatDatabaseItemOption}
+                              filterOption={(option, inputValue) =>
+                                option.data.searchText.toLowerCase().includes(inputValue.toLowerCase())
+                              }
+                              theme={selectTheme}
+                              styles={selectStyles}
+                              menuPortalTarget={selectMenuPortalTarget || undefined}
+                            />
+                          </div>
+                          <label className="mt-1 flex items-center gap-2 text-xs text-gray-600">
+                            <input
+                              type="checkbox"
+                              checked={line.createDatabaseItem}
+                              disabled={Boolean(line.matchedItemId)}
+                              onChange={(event) => updateLine(line.id, { createDatabaseItem: event.target.checked })}
+                            />
+                            New database item
+                          </label>
+                          {line.createDatabaseItem ? (
+                            <button
+                              type="button"
+                              onClick={() => openCreateItemModal(line)}
+                              className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            >
+                              Create New Item
+                            </button>
+                          ) : null}
+                          {priceChange ? (
+                            <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                              <p className="font-semibold">
+                                Cost changed: {priceChange.currentRateCents ? moneyFromCents(priceChange.currentRateCents) : "No catalog cost"} -> {moneyFromCents(priceChange.nextRateCents)}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={() => updateDatabaseItemCostFromLine(line)}
+                                disabled={isUpdatingDatabaseItemCost}
+                                className="mt-2 rounded-md bg-amber-600 px-2 py-1 font-semibold text-white hover:bg-amber-700 disabled:opacity-60"
+                              >
+                                {isUpdatingDatabaseItemCost ? "Updating..." : "Update Database Cost"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </td>
+                        <td className="px-2 py-2">
+                          <select
+                            value={line.category}
+                            onChange={(event) => updateLine(line.id, { category: event.target.value })}
+                            className="w-32 rounded-lg border border-gray-300 px-2 py-1"
+                          >
+                            {categoryOptions.map((category) => (
+                              <option key={category} value={category}>
+                                {category}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            type="checkbox"
+                            checked={line.billable}
+                            onChange={(event) => updateLine(line.id, { billable: event.target.checked })}
+                          />
+                        </td>
+                        <td className="px-2 py-2">
+                          <input
+                            value={line.billingRate}
+                            onChange={(event) => updateLine(line.id, { billingRate: event.target.value })}
+                            className="w-24 rounded-lg border border-gray-300 px-2 py-1"
+                          />
+                        </td>
+                        <td className="px-2 py-2 text-right">
                           <button
                             type="button"
-                            onClick={() => openCreateItemModal(line)}
-                            className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
+                            onClick={() => removeLine(line.id)}
+                            className="rounded-lg px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
                           >
-                            Create New Item
+                            Remove
                           </button>
-                        ) : null}
-                      </td>
-                      <td className="px-2 py-2">
-                        <select
-                          value={line.category}
-                          onChange={(event) => updateLine(line.id, { category: event.target.value })}
-                          className="w-32 rounded-lg border border-gray-300 px-2 py-1"
-                        >
-                          {categoryOptions.map((category) => (
-                            <option key={category} value={category}>
-                              {category}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          type="checkbox"
-                          checked={line.billable}
-                          onChange={(event) => updateLine(line.id, { billable: event.target.checked })}
-                        />
-                      </td>
-                      <td className="px-2 py-2">
-                        <input
-                          value={line.billingRate}
-                          onChange={(event) => updateLine(line.id, { billingRate: event.target.value })}
-                          className="w-24 rounded-lg border border-gray-300 px-2 py-1"
-                        />
-                      </td>
-                      <td className="px-2 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => removeLine(line.id)}
-                          className="rounded-lg px-2 py-1 text-xs font-semibold text-red-700 hover:bg-red-50"
-                        >
-                          Remove
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
               {!lines.length ? (

@@ -1715,7 +1715,7 @@ const JobDetailView = () => {
     ""
   );
 
-  const getCustomerDisplayName = () => (
+  const getCustomerDisplayName = (fallback = "Customer") => (
     job.customerName ||
     customer.displayName ||
     customer.customerName ||
@@ -1723,8 +1723,40 @@ const JobDetailView = () => {
     [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
     selectedSalesAgreement?.customerName ||
     selectedContract?.receiverName ||
-    "Customer"
+    fallback
   );
+
+  const getCustomerDetailId = (source = {}) => (
+    source?.customerId ||
+    source?.receiverId ||
+    source?.customer?.id ||
+    job.customerId ||
+    customer.id ||
+    ""
+  );
+
+  const renderCustomerDetailLink = (label, source = {}, className = "", fallback = "Customer") => {
+    const displayName = label || fallback;
+    const customerDetailId = getCustomerDetailId(source);
+    const sharedClassName = className.trim();
+
+    if (!customerDetailId || !displayName || displayName === "—" || displayName === "Not set") {
+      return <span className={sharedClassName}>{displayName}</span>;
+    }
+
+    return (
+      <Link
+        to={`/company/customers/details/${customerDetailId}`}
+        onClick={(event) => event.stopPropagation()}
+        className={[
+          sharedClassName,
+          "text-blue-700 hover:text-blue-900 hover:underline",
+        ].filter(Boolean).join(" ")}
+      >
+        {displayName}
+      </Link>
+    );
+  };
 
   const getCustomerUserId = (source = customer) => (
     source?.customerUserId ||
@@ -6389,6 +6421,7 @@ const JobDetailView = () => {
   const billingRecordDisplay = {
     sender: selectedSalesAgreement?.companyName || selectedContract?.senderName || "—",
     receiver: selectedSalesAgreement?.customerName || selectedContract?.receiverName || "—",
+    customerId: selectedSalesAgreement?.customerId || selectedContract?.customerId || selectedContract?.receiverId || job.customerId || customer.id || "",
     sentAt: selectedSalesAgreement?.sentAt || selectedSalesAgreement?.emailDelivery?.lastSentAt || selectedContract?.dateSent,
     acceptedAt: selectedSalesAgreement?.acceptedAt || selectedContract?.dateAccepted,
     acceptBy: selectedSalesAgreement?.expiresAt || selectedContract?.lastDateToAccept,
@@ -6502,7 +6535,7 @@ const JobDetailView = () => {
                   </div>
                   <h1 className="mt-3 text-3xl font-bold text-slate-950">{job.type || "Job Details"}</h1>
                   <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                    {job.customerName || "Customer"} · Created {formattedDateCreated} · Last updated {formattedLastUpdated}
+                    {renderCustomerDetailLink(getCustomerDisplayName())} · Created {formattedDateCreated} · Last updated {formattedLastUpdated}
                   </p>
                 </>
               )}
@@ -6628,7 +6661,9 @@ const JobDetailView = () => {
                 <dl className="mt-3 space-y-3">
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{job.customerName || "Not set"}</dd>
+                    <dd className="mt-1 font-semibold text-slate-900">
+                      {renderCustomerDetailLink(getCustomerDisplayName("Not set"), {}, "", "Not set")}
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
@@ -8189,7 +8224,7 @@ const JobDetailView = () => {
                                 <div>
                                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Customer</p>
                                   <p className="mt-1 text-gray-800">
-                                    {agreement.customerName || customer.firstName || "—"}
+                                    {renderCustomerDetailLink(agreement.customerName || customer.firstName || "—", agreement, "")}
                                   </p>
                                 </div>
                                 <div>
@@ -8293,7 +8328,13 @@ const JobDetailView = () => {
 
                             <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
                               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Receiver</p>
-                              <p className="mt-1 text-gray-800 font-semibold">{billingRecordDisplay.receiver}</p>
+                              <p className="mt-1 text-gray-800 font-semibold">
+                                {renderCustomerDetailLink(
+                                  billingRecordDisplay.receiver,
+                                  { customerId: billingRecordDisplay.customerId },
+                                  ""
+                                )}
+                              </p>
                             </div>
 
                             <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -9170,7 +9211,13 @@ const JobDetailView = () => {
                   </label>
                   <h1
                     className="w-full p-3 border border-gray-300 rounded-lg"
-                  >{draftContractData.receiverName}</h1>
+                  >
+                    {renderCustomerDetailLink(
+                      draftContractData.receiverName,
+                      { receiverId: draftContractData.receiverId },
+                      ""
+                    )}
+                  </h1>
                 </div>
 
                 <div>
