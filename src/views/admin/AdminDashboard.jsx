@@ -28,6 +28,7 @@ import {
   CONTACT_MESSAGES_COLLECTION,
   PRODUCT_FEEDBACK_COLLECTION,
 } from '../../utils/adminInbox';
+import { APP_ERRORS_COLLECTION } from '../../utils/errorReporting';
 import { APP_LIVE_FEATURE_FLAG_ID } from '../../utils/models/FeatureFlag';
 
 const functions = getFunctions();
@@ -80,6 +81,8 @@ const AdminDashboard = () => {
     appLaunchReleaseDate: null,
     productFeedback: 0,
     newProductFeedback: 0,
+    appErrors: 0,
+    newAppErrors: 0,
   });
 
   const [communicationStats, setCommunicationStats] = useState({
@@ -111,6 +114,8 @@ const AdminDashboard = () => {
           enabledFeatureFlags,
           productFeedback,
           newProductFeedback,
+          appErrors,
+          newAppErrors,
           liveChatThreads,
           unreadMessageRecords,
           reachOutMessages,
@@ -128,6 +133,8 @@ const AdminDashboard = () => {
           readCount(query(collection(db, 'featureFlags'), where('enabled', '==', true))),
           readCount(query(collection(db, PRODUCT_FEEDBACK_COLLECTION))),
           readCount(query(collection(db, PRODUCT_FEEDBACK_COLLECTION), where('status', '==', 'New'))),
+          readCount(query(collection(db, APP_ERRORS_COLLECTION))),
+          readCount(query(collection(db, APP_ERRORS_COLLECTION), where('status', '==', 'New'))),
           readCount(query(collection(db, 'chats'))),
           readCount(query(collection(db, 'messages'), where('read', '==', false))),
           readCount(query(collection(db, CONTACT_MESSAGES_COLLECTION))),
@@ -154,6 +161,8 @@ const AdminDashboard = () => {
           appLaunchReleaseDate: appLaunchFlag?.releaseDate || null,
           productFeedback,
           newProductFeedback,
+          appErrors,
+          newAppErrors,
         });
         setCommunicationStats({
           liveChatThreads,
@@ -267,6 +276,15 @@ const AdminDashboard = () => {
       to: '/admin/product-feedback',
       icon: MdOutlineFeedback,
       accent: '#86efac',
+    },
+    {
+      title: 'Errors',
+      value: developmentStats.newAppErrors,
+      label: 'new app errors',
+      hint: `${formatCount(developmentStats.appErrors)} total captured errors`,
+      to: '/admin/errors',
+      icon: FaExclamationTriangle,
+      accent: '#fca5a5',
     },
   ];
 

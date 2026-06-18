@@ -11,7 +11,7 @@ import {
 } from "firebase/firestore";
 import toast from "react-hot-toast";
 import { FaBell, FaCheckCircle, FaExclamationTriangle, FaRegBell } from "react-icons/fa";
-import { MdArchive, MdNotificationsActive, MdOutlineSchedule } from "react-icons/md";
+import { MdNotificationsActive, MdNotificationsOff, MdOutlineSchedule } from "react-icons/md";
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
 import {
@@ -32,7 +32,7 @@ const filters = [
   { id: "active", label: "Active" },
   { id: "unread", label: "Unread" },
   { id: "scheduled", label: "Scheduled" },
-  { id: "archived", label: "Archived" },
+  { id: "archived", label: "Dismissed" },
 ];
 
 const emptyAlertForm = () => ({
@@ -76,7 +76,7 @@ const statusTone = (alert) => {
 };
 
 const statusLabel = (alert) => {
-  if (alert.status === ALERT_STATUS.archived) return "Archived";
+  if (alert.status === ALERT_STATUS.archived) return "Dismissed";
   if (alertIsScheduled(alert)) return "Scheduled";
   if (alertNeedsAttention(alert)) return "Active";
   if (alertIsUnread(alert)) return "Unread";
@@ -575,8 +575,8 @@ const Alerts = () => {
                             onClick={() => updateAlertStatus(alert, ALERT_STATUS.archived)}
                             className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
                           >
-                            <MdArchive className="h-4 w-4" />
-                            Archive
+                            <MdNotificationsOff className="h-4 w-4" />
+                            Dismiss
                           </button>
                         )}
                         {alert.status === ALERT_STATUS.archived && (

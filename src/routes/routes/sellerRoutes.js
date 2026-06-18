@@ -309,7 +309,8 @@ export const sellerRoutes = [
         element: <Jobs />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
-    }, {
+    }
+    , {
         path: '/company/jobs/createNew',
         element: <CreateNewJob />,
         ability: ['Admin', 'Seller'],
@@ -327,6 +328,11 @@ export const sellerRoutes = [
     }, {
         path: '/company/jobs/detail/:jobId',
         element: <JobDetailView />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
+        path: '/company/jobs/:view',
+        element: <Jobs />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -888,7 +894,21 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/companyUsers/:companyUserId/:tab',
+        element: <CompanyUserDetails />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/companyUsers/detail/:companyUserId',
+        element: <CompanyUserDetails />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/companyUsers/detail/:companyUserId/:tab',
         element: <CompanyUserDetails />,
         ability: ['Admin', 'Seller'],
         role: 'Company'

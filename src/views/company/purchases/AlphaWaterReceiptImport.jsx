@@ -110,8 +110,8 @@ const selectTheme = (theme) => ({
   borderRadius: 6,
   colors: {
     ...theme.colors,
-    primary25: "#EFF6FF",
-    primary: "#2563EB",
+    primary25: "#E0F2FE",
+    primary: "#1D4ED8",
     neutral20: "#CBD5E1",
     neutral30: "#94A3B8",
   },
@@ -135,6 +135,17 @@ const selectStyles = {
   menuPortal: (base) => ({
     ...base,
     zIndex: 60,
+  }),
+  option: (base, state) => ({
+    ...base,
+    backgroundColor: state.isSelected ? "#1D4ED8" : state.isFocused ? "#E0F2FE" : "#FFFFFF",
+    borderLeft: state.isSelected ? "4px solid #93C5FD" : "4px solid transparent",
+    color: state.isSelected ? "#FFFFFF" : "#0F172A",
+    cursor: "pointer",
+    paddingLeft: state.isSelected ? 8 : 12,
+    "&:active": {
+      backgroundColor: state.isSelected ? "#1E40AF" : "#BAE6FD",
+    },
   }),
 };
 
@@ -234,11 +245,22 @@ const billingRateFromDatabaseItem = (item) => {
   return billingRateCents ? formatDollarsFromCents(billingRateCents) : "";
 };
 
+const numericInputValue = (value) => {
+  const number = Number(String(value || "").replace(/[$,]/g, ""));
+  return Number.isFinite(number) ? number : 0;
+};
+
+const calculatedLineAmount = (quantity, unitPrice) => {
+  if (!String(unitPrice || "").trim()) return "";
+  return (numericInputValue(quantity) * numericInputValue(unitPrice)).toFixed(2);
+};
+
 const hydrateLineFromDatabaseItem = (line, item) => {
   if (!item) return line;
 
   const databaseUom = alphaWaterUomFromDatabaseUom(item.UOM || item.uom || "");
   const billingRate = billingRateFromDatabaseItem(item);
+  const unitPrice = databaseItemRateCents(item) ? formatDollarsFromCents(databaseItemRateCents(item)) : line.unitPrice;
 
   return {
     ...line,
@@ -248,9 +270,11 @@ const hydrateLineFromDatabaseItem = (line, item) => {
     name: item.name || item.description || line.name,
     description: item.description || item.name || line.description,
     uom: databaseUom || line.uom,
+    unitPrice,
+    amount: calculatedLineAmount(line.quantity, unitPrice),
     category: item.category || line.category,
     billable: Boolean(item.billable),
-    billingRate: billingRate || line.billingRate,
+    billingRate,
   };
 };
 
@@ -809,10 +833,12 @@ const AlphaWaterReceiptImport = () => {
       return option.name;
     }
 
+    const isSelected = meta.selectValue?.some((selected) => selected.value === option.value);
+
     return (
       <div>
-        <p className="font-semibold text-slate-900">{option.name}</p>
-        <p className="text-xs text-slate-500">
+        <p className={`font-semibold ${isSelected ? "text-white" : "text-slate-900"}`}>{option.name}</p>
+        <p className={`text-xs ${isSelected ? "text-blue-100" : "text-slate-500"}`}>
           {[
             option.sku ? `SKU: ${option.sku}` : "",
             option.rateCents ? `Cost: ${moneyFromCents(option.rateCents)}` : "",
@@ -992,6 +1018,13 @@ const AlphaWaterReceiptImport = () => {
 
           nextLine.createDatabaseItem = updates.createDatabaseItem !== undefined ? updates.createDatabaseItem : true;
           nextLine.billable = updates.billable !== undefined ? updates.billable : false;
+          nextLine.billingRate = updates.billingRate !== undefined ? updates.billingRate : "";
+        }
+        if (
+          updates.amount === undefined &&
+          (updates.quantity !== undefined || updates.unitPrice !== undefined)
+        ) {
+          nextLine.amount = calculatedLineAmount(nextLine.quantity, nextLine.unitPrice);
         }
         return nextLine;
       })

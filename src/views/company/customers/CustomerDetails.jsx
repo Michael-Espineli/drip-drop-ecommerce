@@ -41,6 +41,21 @@ const customerSections = [
 ];
 const validCustomerTabs = customerSections.map((section) => section.id);
 
+const getLinkedCustomerUserId = (customer = {}) => {
+    const linkedIds = Array.isArray(customer.linkedCustomerIds) ? customer.linkedCustomerIds : [];
+
+    return String(
+        customer.customerUserId ||
+        customer.userId ||
+        customer.linkedCustomerUserId ||
+        customer.linkedHomeownerUserId ||
+        customer.homeownerUserId ||
+        customer.homeownerId ||
+        linkedIds[0] ||
+        ''
+    ).trim();
+};
+
 // Reusable Components
 const InfoCard = ({ title, children, actions }) => (
     <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -2694,6 +2709,11 @@ export default function CustomerDetails() {
             setLoading(true);
             setAccessDenied(false);
             try {
+                console.debug('[CustomerDetails] Fetching customer detail', {
+                    companyId: recentlySelectedCompany,
+                    customerId,
+                });
+
                 const customerRef = doc(db, 'companies', recentlySelectedCompany, 'customers', customerId);
                 const docSnap = await getDoc(customerRef);
                 if (docSnap.exists()) {
@@ -2703,26 +2723,40 @@ export default function CustomerDetails() {
                         ...normalizeCustomerForFirestore({ id: docSnap.id, ...customerData }),
                         id: docSnap.id,
                     };
+                    const linkedCustomerUserId = getLinkedCustomerUserId(customerData);
+                    if (linkedCustomerUserId) {
+                        nextCustomer.userId = linkedCustomerUserId;
+                    }
 
                     if (!customerMatchesRoleTagAccess(nextCustomer, companyRole)) {
+                        console.warn('[CustomerDetails] Customer hidden by role tag access', {
+                            companyId: recentlySelectedCompany,
+                            customerId,
+                            customerTags: nextCustomer.tags || [],
+                            roleCustomerTags: companyRole?.customerTags || companyRole?.allowedCustomerTags || [],
+                        });
                         setCustomer(null);
                         setAccessDenied(true);
                         return;
                     }
 
-                    if (customerData.email) {
-                        const userQuery = query(collection(db, 'users'), where("email", "==", customerData.email));
-                        const userSnapshot = await getDocs(userQuery);
-                        if (!userSnapshot.empty) {
-                            nextCustomer.userId = userSnapshot.docs[0].id;
-                        }
-                    }
+                    // Top-level users are self-readable only in Firestore rules; use link fields stored on the customer instead.
                     setCustomer(nextCustomer);
                     setCustomerInviteLink(nextCustomer.customerAccountInviteUrl || '');
                 } else {
+                    console.warn('[CustomerDetails] Customer document not found', {
+                        companyId: recentlySelectedCompany,
+                        customerId,
+                    });
                     toast.error('Customer not found.');
                 }
             } catch (error) {
+                console.error('[CustomerDetails] Failed to fetch customer data', {
+                    companyId: recentlySelectedCompany,
+                    customerId,
+                    code: error?.code,
+                    message: error?.message,
+                }, error);
                 toast.error("Failed to fetch customer data.");
             } finally {
                 setLoading(false);

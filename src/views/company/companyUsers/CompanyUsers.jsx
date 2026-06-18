@@ -35,17 +35,58 @@ const getUserDisplayName = (user = {}) => (
     'Unknown User'
 );
 
+const getUserInitials = (name) => {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    return parts.slice(0, 2).map((part) => part[0]?.toUpperCase()).join('') || 'U';
+};
+
+const getUserPhotoUrl = (user = {}) => (
+    user.photoUrl ||
+    user.profileImageUrl ||
+    user.profileImageURL ||
+    user.userImage ||
+    user.photoURL ||
+    ''
+);
+
 const formatDate = (value) => {
     const date = value?.toDate ? value.toDate() : value instanceof Date ? value : value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'N/A';
 };
 
+const UserAvatar = ({ user, displayName }) => {
+    const [imageFailed, setImageFailed] = useState(false);
+    const photoUrl = getUserPhotoUrl(user);
+
+    return (
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-slate-900 text-sm font-semibold text-white">
+            {photoUrl && !imageFailed ? (
+                <img
+                    src={photoUrl}
+                    alt={`${displayName} profile`}
+                    className="h-full w-full object-cover"
+                    onError={() => setImageFailed(true)}
+                />
+            ) : (
+                <span>{getUserInitials(displayName)}</span>
+            )}
+        </div>
+    );
+};
+
 const UserRow = ({ user, onClick }) => {
+    const displayName = getUserDisplayName(user);
+
     return (
         <tr onClick={onClick} className="cursor-pointer border-b border-gray-100 transition hover:bg-blue-50/60">
             <td className="whitespace-nowrap px-4 py-4">
-                <div className="font-semibold text-gray-900">{getUserDisplayName(user)}</div>
-                <div className="mt-0.5 text-xs text-gray-500">{user.email || user.userId || 'No email on file'}</div>
+                <div className="flex items-center gap-3">
+                    <UserAvatar user={user} displayName={displayName} />
+                    <div className="min-w-0">
+                        <div className="truncate font-semibold text-gray-900">{displayName}</div>
+                        <div className="mt-0.5 truncate text-xs text-gray-500">{user.email || 'No email on file'}</div>
+                    </div>
+                </div>
             </td>
             <td className="whitespace-nowrap px-4 py-4">
                 <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(user.status)}`}>
@@ -171,7 +212,7 @@ const CompanyUsers = () => {
                                     </thead>
                                     <tbody className="divide-y divide-gray-100 bg-white">
                                         {filteredUsers.map(user => (
-                                            <UserRow key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/${user.userId || user.id}`)} />
+                                            <UserRow key={user.id} user={user} onClick={() => navigate(`/company/companyUsers/${user.userId || user.id}/general`)} />
                                         ))}
                                     </tbody>
                                 </table>

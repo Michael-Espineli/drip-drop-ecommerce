@@ -173,6 +173,89 @@ service cloud.firestore {
         && data.updatedAt == request.time;
     }
 
+    function validAppErrorCreate(data) {
+      return data.keys().hasOnly([
+          "title",
+          "description",
+          "message",
+          "where",
+          "status",
+          "severity",
+          "source",
+          "userId",
+          "userEmail",
+          "accountType",
+          "companyId",
+          "companyName",
+          "location",
+          "pathname",
+          "data",
+          "stack",
+          "fingerprint",
+          "createdAt",
+          "updatedAt"
+        ])
+        && data.keys().hasAll([
+          "title",
+          "description",
+          "message",
+          "where",
+          "status",
+          "severity",
+          "source",
+          "userId",
+          "userEmail",
+          "accountType",
+          "companyId",
+          "companyName",
+          "location",
+          "pathname",
+          "data",
+          "stack",
+          "fingerprint",
+          "createdAt",
+          "updatedAt"
+        ])
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 220
+        && data.description is string
+        && data.description.size() <= 5000
+        && data.message is string
+        && data.message.size() > 0
+        && data.message.size() <= 5000
+        && data.where is string
+        && data.where.size() > 0
+        && data.where.size() <= 500
+        && data.status == "New"
+        && data.severity in ["info", "warning", "error", "critical"]
+        && data.source is string
+        && data.source.size() > 0
+        && data.source.size() <= 100
+        && data.userId is string
+        && data.userId.size() <= 320
+        && data.userEmail is string
+        && data.userEmail.size() <= 320
+        && data.accountType is string
+        && data.accountType.size() <= 120
+        && data.companyId is string
+        && data.companyId.size() <= 320
+        && data.companyName is string
+        && data.companyName.size() <= 320
+        && data.location is string
+        && data.location.size() <= 1000
+        && data.pathname is string
+        && data.pathname.size() <= 500
+        && data.data is string
+        && data.data.size() <= 10000
+        && data.stack is string
+        && data.stack.size() <= 15000
+        && data.fingerprint is string
+        && data.fingerprint.size() <= 500
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
     function chatParticipant(data) {
       return signedIn()
         && data.participantIds is list
@@ -452,6 +535,11 @@ service cloud.firestore {
 
     match /contactMessages/{messageId} {
       allow create: if validContactMessageCreate(request.resource.data) || isDripDropAdmin();
+      allow read, update, delete: if isDripDropAdmin();
+    }
+
+    match /appErrors/{errorId} {
+      allow create: if validAppErrorCreate(request.resource.data) || isDripDropAdmin();
       allow read, update, delete: if isDripDropAdmin();
     }
 

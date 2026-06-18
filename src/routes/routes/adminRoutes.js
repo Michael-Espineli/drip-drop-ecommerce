@@ -17,6 +17,7 @@ const DripDropWorkflowArchitectureDocsPage = lazy(() => import("../../views/admi
 const FeatureFlags = lazy(() => import("../../views/admin/featureFlags/FeatureFlags"))
 const Complaints = lazy(() => import("../../views/admin/complaints/Complaints"))
 const ProductFeedback = lazy(() => import("../../views/admin/feedback/ProductFeedback"))
+const AppErrors = lazy(() => import("../../views/admin/errors/AppErrors"))
 const ReachOutMessages = lazy(() => import("../../views/admin/messages/ReachOutMessages"))
 const DeactivatedSellers = lazy(() => import("../../views/admin/sellers/DeactivatedSellers"))
 const SellerRequests = lazy(() => import("../../views/admin/sellers/SellerRequests"))
@@ -121,6 +122,12 @@ export const adminRoutes = [
     {
         path: '/admin/product-feedback',
         element: <ProductFeedback />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/errors',
+        element: <AppErrors />,
         role: 'Admin'
     }
     ,

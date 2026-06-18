@@ -40,6 +40,8 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "deploy:prod": "npm run build && firebase deploy --only hosting,functions,storage --project the-pool-app-3e652",
+    "deploy:prod:rules": "firebase deploy --only storage,firestore:rules --project the-pool-app-3e652",
     "test": "react-scripts test",
     "test:ci": "react-scripts test --watchAll=false",
     "verify": "npm run test:ci && npm run build",

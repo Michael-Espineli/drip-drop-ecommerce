@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { addDoc, doc, query, where, collection, getDocs, getDoc, limit, updateDoc, orderBy, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
@@ -60,6 +60,8 @@ const companyUserSections = [
     { id: "onboarding", label: "Onboarding", helper: "Setup list and completion tracking" },
     { id: "performance", label: "Performance", helper: "Internal reviews, references, and shared reports", permissionId: "260" },
 ];
+
+const validCompanyUserTabs = companyUserSections.map((section) => section.id);
 
 const performanceLineTypes = [
     { value: "kudo", label: "Praise" },
@@ -513,12 +515,16 @@ const Badge = ({ children, className = "" }) => (
 
 const CompanyUserDetails = () => {
     const { recentlySelectedCompany, user: authUser, dataBaseUser } = useContext(Context);
-    const { can, requirePermission } = useCompanyPermissions();
-    const { companyUserId } = useParams();
+    const { can, requirePermission, permissionsReady } = useCompanyPermissions();
+    const { companyUserId, tab } = useParams();
     const navigate = useNavigate();
 
+    const getInitialTab = useCallback((tabValue) => (
+        validCompanyUserTabs.includes(tabValue) ? tabValue : "general"
+    ), []);
+
     const [user, setUser] = useState(null);
-    const [activeTab, setActiveTab] = useState("general");
+    const [activeTab, setActiveTab] = useState(getInitialTab(tab));
     const [isLoading, setIsLoading] = useState(true);
     const [roleList, setRoleList] = useState([]);
     const [areRolesLoading, setAreRolesLoading] = useState(true);
@@ -558,6 +564,23 @@ const CompanyUserDetails = () => {
     const [onboardingError, setOnboardingError] = useState("");
     const [isInitializingOnboarding, setIsInitializingOnboarding] = useState(false);
     const [updatingOnboardingItemId, setUpdatingOnboardingItemId] = useState("");
+
+    const handleTabChange = useCallback((nextTab) => {
+        const normalizedTab = getInitialTab(nextTab);
+        setActiveTab(normalizedTab);
+        navigate(`/company/companyUsers/${companyUserId}/${normalizedTab}`);
+    }, [companyUserId, getInitialTab, navigate]);
+
+    useEffect(() => {
+        setActiveTab(getInitialTab(tab));
+    }, [tab, getInitialTab]);
+
+    useEffect(() => {
+        if (!companyUserId) return;
+        if (!tab || !validCompanyUserTabs.includes(tab)) {
+            navigate(`/company/companyUsers/${companyUserId}/general`, { replace: true });
+        }
+    }, [companyUserId, navigate, tab]);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !companyUserId) return;
@@ -826,10 +849,11 @@ const CompanyUserDetails = () => {
     }, [recentlySelectedCompany, user, companyUserId]);
 
     useEffect(() => {
-        if (activeTab === "performance" && !can("260")) {
-            setActiveTab("general");
-        }
-    }, [activeTab, can]);
+        if (!permissionsReady || activeTab !== "performance" || can("260")) return;
+
+        setActiveTab("general");
+        navigate(`/company/companyUsers/${companyUserId}/general`, { replace: true });
+    }, [activeTab, can, companyUserId, navigate, permissionsReady]);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user?.id || !can("260")) {
@@ -2948,7 +2972,7 @@ const CompanyUserDetails = () => {
                             <button
                                 type="button"
                                 onClick={() => {
-                                    setActiveTab("general");
+                                    handleTabChange("general");
                                     setIsEditingProfile(true);
                                 }}
                                 className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
@@ -2971,7 +2995,7 @@ const CompanyUserDetails = () => {
                                         <button
                                             key={section.id}
                                             type="button"
-                                            onClick={() => setActiveTab(section.id)}
+                                            onClick={() => handleTabChange(section.id)}
                                             className={[
                                                 "w-full rounded-md border px-3 py-2 text-left transition",
                                                 active

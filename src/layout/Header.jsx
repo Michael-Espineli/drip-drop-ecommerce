@@ -132,13 +132,15 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                             <Link
                                 to="/company/alerts"
                                 className="relative flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
-                                aria-label={`${alertCount} active notifications`}
+                                aria-label={alertCount > 0 ? `${alertCount} active notifications` : "Notifications"}
                                 title="Notifications"
                             >
                                 <MdNotificationsActive className="h-5 w-5" />
-                                <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
-                                    {alertCount > 99 ? '99+' : alertCount}
-                                </span>
+                                {alertCount > 0 && (
+                                    <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
+                                        {alertCount > 99 ? '99+' : alertCount}
+                                    </span>
+                                )}
                             </Link>
                         )}
                         {canStartChat && (

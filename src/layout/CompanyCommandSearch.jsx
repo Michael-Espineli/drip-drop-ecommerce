@@ -34,6 +34,40 @@ const RESULT_LIMIT = 9;
 const RECENT_DOC_LIMIT = 8;
 const SEARCH_DOC_LIMIT = 14;
 const EXACT_ID_MIN_LENGTH = 5;
+const WORK_TREE_SECTIONS = [
+    {
+        key: "operations",
+        title: "Operations",
+        helper: "Customers, jobs, repairs, equipment, and routes.",
+        categories: ["Operations", "Routing"],
+    },
+    {
+        key: "sales",
+        title: "Sales",
+        helper: "Leads, estimates, agreements, and the sales board.",
+        titles: ["Sales Dashboard", "Estimates", "Service Agreements", "Leads", "Public Page"],
+    },
+    {
+        key: "finance",
+        title: "Finance",
+        helper: "Invoices, payments, subscriptions, and payroll.",
+        titles: ["Invoices", "Payment History", "Billing Subscriptions", "Payroll"],
+    },
+    {
+        key: "management",
+        title: "Management",
+        helper: "People, work logs, todo items, and migration tools.",
+        categories: ["Users", "Migration"],
+        titles: ["Todo List", "Messages"],
+    },
+    {
+        key: "settings",
+        title: "Company Settings",
+        helper: "Company setup, preferences, and configuration.",
+        categories: ["Settings"],
+        titles: ["Setup Guide"],
+    },
+];
 
 const compact = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
 
@@ -428,6 +462,17 @@ const canShowNavItem = ({ item, companyRoleLoading, hasCompanyPermission, featur
     return permissionAllowed && flagsAllowed;
 };
 
+const navResultForItem = (item) => ({
+    key: `nav-${item.path}`,
+    id: item.path,
+    kind: "page",
+    icon: item.icon,
+    eyebrow: item.category === "NA" ? "Page" : item.category,
+    title: item.title,
+    subtitle: "Open page",
+    path: item.path,
+});
+
 export default function CompanyCommandSearch() {
     const {
         recentlySelectedCompany,
@@ -447,8 +492,8 @@ export default function CompanyCommandSearch() {
 
     const terms = useMemo(() => searchTermsFor(searchTerm), [searchTerm]);
 
-    const navResults = useMemo(() => {
-        const companyNavItems = allNav
+    const companyNavItems = useMemo(() => (
+        allNav
             .filter((item) => item.role === "Company")
             .filter((item) => canShowNavItem({
                 item,
@@ -456,27 +501,40 @@ export default function CompanyCommandSearch() {
                 hasCompanyPermission,
                 featureFlagsLoaded,
                 isFeatureEnabled,
-            }));
+            }))
+    ), [companyRoleLoading, featureFlagsLoaded, hasCompanyPermission, isFeatureEnabled]);
 
-        const defaultTitles = new Set(["Dashboard", "Messages", "Setup Guide", "Customers", "Jobs"]);
+    const workTreeSections = useMemo(() => {
+        const usedPaths = new Set();
+
+        return WORK_TREE_SECTIONS.map((section) => {
+            const categorySet = new Set(section.categories || []);
+            const titleSet = new Set(section.titles || []);
+            const items = companyNavItems
+                .filter((item) => !usedPaths.has(item.path))
+                .filter((item) => categorySet.has(item.category) || titleSet.has(item.title))
+                .map((item) => {
+                    usedPaths.add(item.path);
+                    return navResultForItem(item);
+                });
+
+            return {
+                ...section,
+                items,
+            };
+        });
+    }, [companyNavItems]);
+
+    const navResults = useMemo(() => {
+        if (!terms.length) return [];
 
         return companyNavItems
             .filter((item) => {
-                if (!terms.length) return defaultTitles.has(item.title);
                 return hasEveryTerm(`${item.title} ${item.category} ${item.path}`, terms);
             })
-            .slice(0, terms.length ? 4 : 5)
-            .map((item) => ({
-                key: `nav-${item.path}`,
-                id: item.path,
-                kind: "page",
-                icon: item.icon,
-                eyebrow: item.category === "NA" ? "Page" : item.category,
-                title: item.title,
-                subtitle: "Open page",
-                path: item.path,
-            }));
-    }, [companyRoleLoading, featureFlagsLoaded, hasCompanyPermission, isFeatureEnabled, terms]);
+            .slice(0, 6)
+            .map(navResultForItem);
+    }, [companyNavItems, terms]);
 
     useEffect(() => {
         const handleClickAway = (event) => {
@@ -607,8 +665,83 @@ export default function CompanyCommandSearch() {
             </form>
 
             {isOpen && (
-                <div className="absolute left-0 right-0 top-full mt-2 overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl">
-                    {results.length > 0 ? (
+                <div className="absolute left-0 top-full mt-2 w-[min(760px,calc(100vw-2rem))] overflow-hidden rounded-md border border-slate-200 bg-white shadow-xl">
+                    {!terms.length && workTreeSections.length > 0 ? (
+                        <div className="max-h-[560px] overflow-y-auto">
+                            <div className="border-b border-slate-200 px-4 py-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Work Tree</p>
+                                <p className="mt-1 text-sm font-semibold text-slate-950">Jump to the rest of the company workspace</p>
+                            </div>
+                            <div className="space-y-4 p-3">
+                                {workTreeSections.map((section) => (
+                                    <section key={section.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                        <div className="mb-2">
+                                            <p className="text-sm font-bold text-slate-950">{section.title}</p>
+                                            <p className="mt-0.5 text-xs text-slate-500">{section.helper}</p>
+                                        </div>
+                                        {section.items.length > 0 ? (
+                                            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                                {section.items.map((result) => (
+                                                    <button
+                                                        key={result.key}
+                                                        type="button"
+                                                        onMouseDown={(event) => event.preventDefault()}
+                                                        onClick={() => openResult(result)}
+                                                        className="flex min-w-0 items-center gap-2 rounded-md border border-slate-200 bg-white px-2.5 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50"
+                                                    >
+                                                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white [&>svg]:h-4 [&>svg]:w-4">
+                                                            {result.icon}
+                                                        </span>
+                                                        <span className="min-w-0">
+                                                            <span className="block truncate text-sm font-semibold text-slate-900">{result.title}</span>
+                                                            <span className="block truncate text-[11px] font-semibold uppercase tracking-wide text-slate-500">{result.eyebrow}</span>
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <p className="rounded-md border border-dashed border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-500">
+                                                No available pages in this section for the current account.
+                                            </p>
+                                        )}
+                                    </section>
+                                ))}
+
+                                {(recordResults.length > 0 || isLoading) && (
+                                    <section className="rounded-lg border border-slate-200 bg-white">
+                                        <div className="border-b border-slate-100 px-3 py-2">
+                                            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recent Records</p>
+                                        </div>
+                                        {isLoading ? (
+                                            <div className="px-3 py-4 text-sm text-slate-500">Loading recent company records...</div>
+                                        ) : (
+                                            <ul className="divide-y divide-slate-100">
+                                                {recordResults.slice(0, 4).map((result) => (
+                                                    <li key={result.key}>
+                                                        <button
+                                                            type="button"
+                                                            onMouseDown={(event) => event.preventDefault()}
+                                                            onClick={() => openResult(result)}
+                                                            className="flex w-full items-center gap-3 px-3 py-2 text-left transition hover:bg-slate-50"
+                                                        >
+                                                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-700">
+                                                                {result.icon}
+                                                            </span>
+                                                            <span className="min-w-0 flex-1">
+                                                                <span className="block truncate text-sm font-semibold text-slate-900">{result.title}</span>
+                                                                {result.subtitle && <span className="block truncate text-xs text-slate-500">{result.subtitle}</span>}
+                                                            </span>
+                                                            <FiArrowUpRight className="h-4 w-4 shrink-0 text-slate-400" />
+                                                        </button>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </section>
+                                )}
+                            </div>
+                        </div>
+                    ) : results.length > 0 ? (
                         <ul className="max-h-[420px] overflow-y-auto py-2">
                             {results.map((result, index) => (
                                 <li key={result.key}>

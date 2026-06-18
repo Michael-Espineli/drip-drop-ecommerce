@@ -12,7 +12,7 @@ import {
 } from '../../../utils/chatMessaging';
 
 const RecentChatsWidget = () => {
-    const { user, recentlySelectedCompany } = useContext(Context);
+    const { user, recentlySelectedCompany, companyUserAccess, companyRoleLoaded } = useContext(Context);
     const [recentChats, setRecentChats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [unreadCount, setUnreadCount] = useState(0);
@@ -24,13 +24,22 @@ const RecentChatsWidget = () => {
             return undefined;
         }
 
+        if (recentlySelectedCompany && !companyRoleLoaded) {
+            setLoading(true);
+            return undefined;
+        }
+
+        const readableCompanyId = recentlySelectedCompany && companyUserAccess
+            ? recentlySelectedCompany
+            : '';
+
         const unsubscribe = listenVisibleChats({
             db,
             userId: user.uid,
-            companyId: recentlySelectedCompany || '',
+            companyId: readableCompanyId,
             onChange: (visibleChats) => {
                 setRecentChats(visibleChats.slice(0, 3));
-                setUnreadCount(visibleChats.filter((chat) => isChatUnreadFor(chat, user.uid, recentlySelectedCompany)).length);
+                setUnreadCount(visibleChats.filter((chat) => isChatUnreadFor(chat, user.uid, readableCompanyId)).length);
                 setLoading(false);
             },
             onError: (error) => {
@@ -40,7 +49,7 @@ const RecentChatsWidget = () => {
         });
 
         return () => unsubscribe();
-    }, [recentlySelectedCompany, user]);
+    }, [companyRoleLoaded, companyUserAccess, recentlySelectedCompany, user]);
 
     const handleChatClick = (chatId) => {
         navigate(`/companies-chat/detail/${chatId}`);
@@ -90,7 +99,7 @@ const RecentChatsWidget = () => {
                                 key={chat.id}
                                 chat={chat}
                                 userId={user.uid}
-                                companyId={recentlySelectedCompany}
+                                companyId={recentlySelectedCompany && companyUserAccess ? recentlySelectedCompany : ''}
                                 onClick={() => handleChatClick(chat.id)}
                             />
                         ))}

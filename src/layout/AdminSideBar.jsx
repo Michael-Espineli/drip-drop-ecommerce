@@ -14,7 +14,7 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
   const { role, recentlySelectedCompany, user, handleLogout } = useContext(Context);
   const { pathname } = useLocation();
   const [navItemsByCategory, setNavItemsByCategory] = useState({});
-  const [counts, setCounts] = useState({ leads: 0, messages: 0 });
+  const [counts, setCounts] = useState({ leads: 0, messages: 0, errors: 0 });
 
   useEffect(() => {
     if (role) {
@@ -45,6 +45,15 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
     );
   }, [recentlySelectedCompany, user]);
 
+  const errorsQuery = useMemo(() => {
+    if (role !== 'Admin' || !user) return null;
+
+    return query(
+      collection(db, 'appErrors'),
+      where('status', '==', 'New')
+    );
+  }, [role, user]);
+
   useEffect(() => {
     if (!recentlySelectedCompany || !user) return;
     if (!leadsQuery || !messagesQuery) return;
@@ -62,6 +71,22 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
       unsubscribeMessages();
     };
   }, [recentlySelectedCompany, user, leadsQuery, messagesQuery]);
+
+  useEffect(() => {
+    if (!errorsQuery) return undefined;
+
+    const unsubscribeErrors = onSnapshot(
+      errorsQuery,
+      (snapshot) => {
+        setCounts((prev) => ({ ...prev, errors: snapshot.size }));
+      },
+      (error) => {
+        console.error('Error loading app error count:', error);
+      }
+    );
+
+    return () => unsubscribeErrors();
+  }, [errorsQuery]);
 
   const logout = async () => {
     try {
@@ -125,6 +150,8 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
                         ? counts.leads
                         : item.title === 'Messages'
                         ? counts.messages
+                        : item.title === 'Errors'
+                        ? counts.errors
                         : 0;
 
                     return (

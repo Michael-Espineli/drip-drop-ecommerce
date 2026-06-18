@@ -43,8 +43,8 @@ export class Customer {
         const data = snapshot.data(options) || {};
 
         return new Customer({
-            id: snapshot.id,
             ...data,
+            id: snapshot.id,
             hireDate: normalizeDateValue(data.hireDate, null),
             linkedAt: normalizeDateValue(data.linkedAt, null),
         });

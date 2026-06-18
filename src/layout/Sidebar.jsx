@@ -10,6 +10,7 @@ import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
+    TODO_SCOPE,
     normalizeTodo,
     todoIsOpen,
 } from '../utils/models/TodoItem';
@@ -38,9 +39,27 @@ const getBookmarkedNavItems = (navItemsByCategory, savedBookmarks) => {
         .filter(Boolean);
 };
 
+const assignedTodoMatchesUser = (todo = {}, userIds = new Set()) => {
+    const assignedIds = [
+        todo.assignedToUserId,
+        todo.assignedToCompanyUserDocId,
+        todo.assignedTechId,
+        todo.techId,
+    ].map((value) => String(value || "").trim()).filter(Boolean);
+
+    const assignedToUser = assignedIds.some((assignedId) => userIds.has(assignedId));
+    const assignedSpecifically = (
+        todo.scope === TODO_SCOPE.specific ||
+        todo.assignmentType === TODO_SCOPE.specific ||
+        assignedIds.length > 0
+    );
+
+    return assignedToUser && assignedSpecifically;
+};
+
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
-    const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyRoleLoading, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+    const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0 });
@@ -154,7 +173,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         const messagesEnabled = featureFlagsLoaded && isFeatureEnabled("feature_flag_001");
         let unsubscribeMessages = () => {};
 
-        if (messagesEnabled) {
+        if (messagesEnabled && companyRoleLoaded && companyUserAccess) {
             unsubscribeMessages = listenVisibleChats({
                 db,
                 userId: user.uid,
@@ -179,12 +198,20 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         let unsubscribeTodos = () => {};
 
         if (todoListEnabled) {
+            const todoUserIds = new Set([
+                user.uid,
+                dataBaseUser?.id,
+                dataBaseUser?.uid,
+                dataBaseUser?.userId,
+            ].map((value) => String(value || "").trim()).filter(Boolean));
+
             unsubscribeTodos = onSnapshot(
                 collection(db, "companies", recentlySelectedCompany, "todoItems"),
                 snapshot => {
                     const openCount = snapshot.docs
                         .map(normalizeTodo)
                         .filter(todoIsOpen)
+                        .filter((todo) => assignedTodoMatchesUser(todo, todoUserIds))
                         .length;
 
                     setCounts(prev => ({ ...prev, todoItems: openCount }));
@@ -242,7 +269,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             unsubscribeInternalRepairRequests();
             unsubscribeExternalRepairRequests();
         };
-    }, [recentlySelectedCompany, user, featureFlagsLoaded, isFeatureEnabled]);
+    }, [recentlySelectedCompany, user, dataBaseUser, companyRoleLoaded, companyUserAccess, featureFlagsLoaded, isFeatureEnabled]);
 
     const logout = async () => {
         try {

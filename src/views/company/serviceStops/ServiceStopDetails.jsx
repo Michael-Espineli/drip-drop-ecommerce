@@ -603,7 +603,7 @@ const ServiceStopDetails = () => {
             order: buildRouteOrder(stops, routeForTech?.order || []),
             totalStops: serviceStopsIds.length,
             finishedStops,
-            durationMin: stops.reduce((total, stop) => total + Number(stop.duration || stop.estimatedDuration || 0), 0),
+            durationSeconds: stops.reduce((total, stop) => total + Number(stop.duration || stop.estimatedDuration || 0), 0) * 60,
             status: getRouteStatusFromStops(stops, routeForTech),
             distanceMiles: Number(routeForTech?.distanceMiles || routeForTech?.distance || 0),
             vehicalId: routeForTech?.vehicalId || "",

@@ -185,7 +185,7 @@ const JobDetailView = () => {
 
   const billingStatusOptions = useMemo(
     () =>
-      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Expired"].map((s) => ({
+      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Expired", "Rejected"].map((s) => ({
         value: s,
         label: s,
       })),
@@ -263,6 +263,8 @@ const JobDetailView = () => {
     genericItemId: "",
     name: "",
     description: "",
+    plannedUnitCost: "",
+    plannedUnitPrice: "",
     datePurchased: "",
     quantity: "",
     jobId: "",
@@ -317,6 +319,7 @@ const JobDetailView = () => {
   const [newComment, setNewComment] = useState("");
   const [addingComment, setAddingComment] = useState(false);
   const [commentFilter, setCommentFilter] = useState("All");
+  const [showCommentsModal, setShowCommentsModal] = useState(false);
 
   // Billing / Contracts
   const [contracts, setContracts] = useState([]);
@@ -333,6 +336,7 @@ const JobDetailView = () => {
   const [jobHistoryLoading, setJobHistoryLoading] = useState(true);
   const [changeOrders, setChangeOrders] = useState([]);
   const [changeOrdersLoading, setChangeOrdersLoading] = useState(true);
+  const [deletingJob, setDeletingJob] = useState(false);
   const [showChangeOrderModal, setShowChangeOrderModal] = useState(false);
   const [savingChangeOrder, setSavingChangeOrder] = useState(false);
   const [changeOrderForm, setChangeOrderForm] = useState({
@@ -440,6 +444,12 @@ const JobDetailView = () => {
         title: "Expired",
         description: "The estimate or billing window expired; unfinished work returns to estimate pending.",
       },
+      {
+        status: "Rejected",
+        operation: "Estimate Pending",
+        title: "Rejected",
+        description: "The customer rejected the billing or estimate; keep the job history because the work may still need a new path forward.",
+      },
     ],
     []
   );
@@ -490,6 +500,8 @@ const JobDetailView = () => {
       case "Paid":
         return "Finished";
       case "Expired":
+        return currentOperationStatus !== "Finished" ? "Estimate Pending" : currentOperationStatus;
+      case "Rejected":
         return currentOperationStatus !== "Finished" ? "Estimate Pending" : currentOperationStatus;
       default:
         return currentOperationStatus;
@@ -574,6 +586,12 @@ const JobDetailView = () => {
 
   const changeOrdersPath = (companyId, currentJobId) =>
     collection(db, "companies", companyId, "workOrders", currentJobId, "changeOrders");
+
+  const deleteQueryDocs = async (targetQuery) => {
+    const snap = await getDocs(targetQuery);
+    await Promise.all(snap.docs.map((docSnap) => deleteDoc(docSnap.ref)));
+    return snap.size;
+  };
 
   const getAuditUserName = () =>
     `${dataBaseUser?.firstName || ""} ${dataBaseUser?.lastName || ""}`.trim() ||
@@ -3674,6 +3692,60 @@ const JobDetailView = () => {
     }
   };
 
+  const deleteJob = async (e) => {
+    e.preventDefault();
+    if (!requirePermission("24", "delete jobs")) return;
+    if (!recentlySelectedCompany || !jobId) return;
+
+    const ok = window.confirm(
+      [
+        "Delete this job permanently?",
+        "",
+        "Cancel or Rejected keeps the job in history because the work may still need to be reviewed, revised, or done later.",
+        "Delete removes the job record and job-owned notes, tasks, planned stops, change orders, and planned material rows. Use delete only for accidental or duplicate jobs.",
+      ].join("\n")
+    );
+
+    if (!ok) return;
+
+    const confirmation = window.prompt('Type "DELETE" to permanently delete this job.');
+    if (confirmation !== "DELETE") {
+      toast.error("Job delete canceled");
+      return;
+    }
+
+    try {
+      setDeletingJob(true);
+
+      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+      const jobOwnedCollections = [
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks"),
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "comments"),
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "history"),
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "changeOrders"),
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plannedServiceStops"),
+        collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "workOfferRefs"),
+      ];
+
+      await Promise.all(jobOwnedCollections.map((collectionRef) => deleteQueryDocs(collectionRef)));
+
+      await Promise.all([
+        deleteQueryDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
+        deleteQueryDocs(query(workOffersPath(recentlySelectedCompany), where("jobId", "==", jobId))),
+      ]);
+
+      await deleteDoc(jobRef);
+
+      toast.success("Job deleted");
+      navigate("/company/jobs/operations", { replace: true });
+    } catch (err) {
+      console.error(err);
+      toast.error(err?.message || "Failed to delete job");
+    } finally {
+      setDeletingJob(false);
+    }
+  };
+
   const openCreateTemplateModal = () => {
     if (!requirePermission("24", "update jobs")) return;
 
@@ -4289,6 +4361,8 @@ const JobDetailView = () => {
     if (value === "Data Base") {
       nextData.name = "";
       nextData.description = "";
+      nextData.plannedUnitCost = "";
+      nextData.plannedUnitPrice = "";
     } else {
       nextData.dbItemId = "";
       nextData.genericItemId = "";
@@ -4332,6 +4406,8 @@ const JobDetailView = () => {
       genericItemId: "",
       name: "",
       description: "",
+      plannedUnitCost: "",
+      plannedUnitPrice: "",
       datePurchased: "",
       quantity: "",
       jobId: jobId || "",
@@ -4358,6 +4434,22 @@ const JobDetailView = () => {
         return toast.error("Select a database item");
       }
 
+      if (
+        requiresShoppingManualDetails &&
+        shoppingFormData.plannedUnitCost !== "" &&
+        (!Number.isFinite(Number(shoppingFormData.plannedUnitCost)) || Number(shoppingFormData.plannedUnitCost) < 0)
+      ) {
+        return toast.error("Unit cost cannot be negative");
+      }
+
+      if (
+        requiresShoppingManualDetails &&
+        shoppingFormData.plannedUnitPrice !== "" &&
+        (!Number.isFinite(Number(shoppingFormData.plannedUnitPrice)) || Number(shoppingFormData.plannedUnitPrice) < 0)
+      ) {
+        return toast.error("Unit price cannot be negative");
+      }
+
       let plannedUnitCostCents = 0;
       let plannedUnitPriceCents = 0;
 
@@ -4369,6 +4461,9 @@ const JobDetailView = () => {
           selectedShoppingDbItem?.cost ||
           0
         );
+      } else {
+        plannedUnitCostCents = centsFromCurrencyInput(shoppingFormData.plannedUnitCost);
+        plannedUnitPriceCents = centsFromCurrencyInput(shoppingFormData.plannedUnitPrice);
       }
 
       const plannedTotalCostCents = Math.round(plannedUnitCostCents * qty);
@@ -6408,6 +6503,108 @@ const JobDetailView = () => {
   );
 
   const commentFilters = ["All", "Open", "Resolved"];
+  const renderCommentFilters = (className = "mt-3 flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5") => (
+    <div className={className}>
+      {commentFilters.map((filter) => {
+        const active = filter === commentFilter;
+        return (
+          <button
+            key={filter}
+            type="button"
+            onClick={() => setCommentFilter(filter)}
+            className={[
+              "rounded-md px-2 py-1 text-xs font-semibold transition",
+              active ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
+            ].join(" ")}
+          >
+            {filter}
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  const renderCommentComposer = (expanded = false) => (
+    <div className={expanded ? "rounded-lg border border-slate-200 bg-white p-4 shadow-sm" : "mt-3 space-y-2"}>
+      {expanded && (
+        <div className="mb-3">
+          <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">New Comment</h3>
+          <p className="mt-1 text-xs text-slate-500">Add job notes or follow-ups without squeezing into the sidebar.</p>
+        </div>
+      )}
+      <textarea
+        className={[
+          "w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500",
+          expanded ? "min-h-[180px]" : "min-h-[72px]",
+        ].join(" ")}
+        placeholder="Write a comment..."
+        value={newComment}
+        onChange={(event) => setNewComment(event.target.value)}
+      />
+      <button
+        type="button"
+        onClick={addComment}
+        disabled={addingComment || !newComment.trim()}
+        className={[
+          "w-full rounded-md px-3 py-2 text-xs font-semibold transition",
+          addingComment || !newComment.trim()
+            ? "bg-slate-100 text-slate-400 cursor-not-allowed"
+            : "bg-blue-600 text-white hover:bg-blue-700",
+        ].join(" ")}
+      >
+        {addingComment ? "Adding..." : "Add Comment"}
+      </button>
+    </div>
+  );
+
+  const renderCommentsList = (expanded = false) => (
+    <div
+      className={
+        expanded
+          ? "max-h-[58vh] space-y-3 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-4"
+          : "mt-4 max-h-80 space-y-2 overflow-y-auto pr-1"
+      }
+    >
+      {commentsLoading ? (
+        <div className="text-xs text-slate-500">Loading comments...</div>
+      ) : !filteredComments?.length ? (
+        <div className="text-xs text-slate-500">No comments in this filter.</div>
+      ) : (
+        filteredComments.map((comment) => {
+          const dt = comment.date?.toDate?.() || null;
+          const when = dt ? format(dt, "MMM d, h:mm a") : "-";
+
+          return (
+            <div
+              key={comment.id}
+              className={[
+                "border border-slate-200 bg-white",
+                expanded ? "rounded-lg p-4 shadow-sm" : "rounded-md bg-slate-50 p-3",
+              ].join(" ")}
+            >
+              <div className="text-xs font-semibold text-slate-800">
+                {comment.userName || "Unknown"}
+              </div>
+              <div className="mt-0.5 text-[11px] text-slate-400">{when}</div>
+              <div className={expanded ? "mt-3 whitespace-pre-wrap text-sm text-slate-700" : "mt-2 whitespace-pre-wrap text-xs text-slate-700"}>
+                {comment.comment}
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-600">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5"
+                  checked={!!comment.resolved}
+                  onChange={(event) => setCommentResolved(comment.id, event.target.checked)}
+                />
+                Resolved
+              </label>
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+
   const normalizedSelectedTerms = selectedSalesAgreement?.termsList?.length
     ? normalizeTerms(selectedSalesAgreement.termsList)
     : selectedSalesAgreement?.termsSummary
@@ -6464,6 +6661,20 @@ const JobDetailView = () => {
   const isInitialShellLoading = loading && sectionLoading.shell;
   const visiblePlannedMaterials = showAllPlannedMaterials ? shoppingList : shoppingList.slice(0, 5);
   const hiddenPlannedMaterialCount = Math.max(shoppingList.length - 5, 0);
+  const shoppingPreviewQuantity = quantityNumber(shoppingFormData.quantity);
+  const shoppingPreviewUnitCostCents = requiresShoppingDbItem
+    ? Number(selectedShoppingDbItem?.rate || selectedShoppingDbItem?.cost || 0)
+    : centsFromCurrencyInput(shoppingFormData.plannedUnitCost);
+  const shoppingPreviewUnitPriceCents = requiresShoppingDbItem
+    ? Number(
+      selectedShoppingDbItem?.sellPrice ||
+      selectedShoppingDbItem?.rate ||
+      selectedShoppingDbItem?.cost ||
+      0
+    )
+    : centsFromCurrencyInput(shoppingFormData.plannedUnitPrice);
+  const shoppingPreviewTotalCostCents = Math.round(shoppingPreviewUnitCostCents * shoppingPreviewQuantity);
+  const shoppingPreviewTotalPriceCents = Math.round(shoppingPreviewUnitPriceCents * shoppingPreviewQuantity);
   const visibleWorkOffers = showAllWorkOffers ? workOffers : workOffers.slice(0, 5);
   const hiddenWorkOfferCount = Math.max(workOffers.length - 5, 0);
   const visibleActualServiceStops = showAllActualServiceStops ? serviceStops : serviceStops.slice(0, 5);
@@ -6576,10 +6787,20 @@ const JobDetailView = () => {
                     <button
                       type="button"
                       onClick={cancelJob}
-                      disabled={expiringJob}
+                      disabled={expiringJob || deletingJob}
                       className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Expire Job"}
+                      {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
+                    </button>
+                  )}
+                  {can("24") && (
+                    <button
+                      type="button"
+                      onClick={deleteJob}
+                      disabled={deletingJob || expiringJob}
+                      className="rounded-md border border-red-300 bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {deletingJob ? "Deleting..." : "Delete Job"}
                     </button>
                   )}
                   {can("24") && (
@@ -6693,80 +6914,18 @@ const JobDetailView = () => {
                   <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Comments</h2>
                   <p className="mt-1 text-xs text-slate-500">Notes and open follow-ups</p>
                 </div>
-              </div>
-
-              <div className="mt-3 flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5">
-                {commentFilters.map((f) => {
-                  const active = f === commentFilter;
-                  return (
-                    <button
-                      key={f}
-                      type="button"
-                      onClick={() => setCommentFilter(f)}
-                      className={[
-                        "rounded-md px-2 py-1 text-xs font-semibold transition",
-                        active ? "bg-blue-600 text-white" : "bg-white text-slate-600 hover:bg-slate-100",
-                      ].join(" ")}
-                    >
-                      {f}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div className="mt-3 space-y-2">
-                <textarea
-                  className="w-full min-h-[72px] rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                  placeholder="Write a comment..."
-                  value={newComment}
-                  onChange={(e) => setNewComment(e.target.value)}
-                />
                 <button
                   type="button"
-                  onClick={addComment}
-                  disabled={addingComment || !newComment.trim()}
-                  className={[
-                    "w-full rounded-md px-3 py-2 text-xs font-semibold transition",
-                    addingComment || !newComment.trim()
-                      ? "bg-slate-100 text-slate-400 cursor-not-allowed"
-                      : "bg-blue-600 text-white hover:bg-blue-700",
-                  ].join(" ")}
+                  onClick={() => setShowCommentsModal(true)}
+                  className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
                 >
-                  {addingComment ? "Adding..." : "Add Comment"}
+                  Expand
                 </button>
               </div>
 
-              <div className="mt-4 max-h-80 space-y-2 overflow-y-auto pr-1">
-                {commentsLoading ? (
-                  <div className="text-xs text-slate-500">Loading comments...</div>
-                ) : !filteredComments?.length ? (
-                  <div className="text-xs text-slate-500">No comments in this filter.</div>
-                ) : (
-                  filteredComments.map((c) => {
-                    const dt = c.date?.toDate?.() || null;
-                    const when = dt ? format(dt, "MMM d, h:mm a") : "-";
-
-                    return (
-                      <div key={c.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="text-xs font-semibold text-slate-800">
-                          {c.userName || "Unknown"}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-slate-400">{when}</div>
-                        <div className="mt-2 whitespace-pre-wrap text-xs text-slate-700">{c.comment}</div>
-                        <label className="mt-3 flex items-center gap-2 text-xs font-semibold text-slate-600">
-                          <input
-                            type="checkbox"
-                            className="h-3.5 w-3.5"
-                            checked={!!c.resolved}
-                            onChange={(e) => setCommentResolved(c.id, e.target.checked)}
-                          />
-                          Resolved
-                        </label>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
+              {renderCommentFilters()}
+              {renderCommentComposer()}
+              {renderCommentsList()}
             </div>
           </aside>
 
@@ -7323,6 +7482,38 @@ const JobDetailView = () => {
                                   placeholder="Enter custom material description"
                                 />
                               </div>
+
+                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Unit Cost
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={shoppingFormData.plannedUnitCost}
+                                    onChange={(e) => handleShoppingFormChange("plannedUnitCost", e.target.value)}
+                                    className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                    placeholder="0.00"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Unit Price
+                                  </label>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    min="0"
+                                    value={shoppingFormData.plannedUnitPrice}
+                                    onChange={(e) => handleShoppingFormChange("plannedUnitPrice", e.target.value)}
+                                    className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                    placeholder="0.00"
+                                  />
+                                </div>
+                              </div>
                             </>
                           )}
 
@@ -7377,7 +7568,7 @@ const JobDetailView = () => {
                         <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
                           <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
                           <p className="mt-0.5 text-xs text-slate-500">
-                            Database item pricing is stored as cents and copied into this material.
+                            Unit pricing is stored as cents and copied into this material.
                           </p>
 
                           <div className="mt-3 space-y-2">
@@ -7386,21 +7577,16 @@ const JobDetailView = () => {
                                 Unit Cost
                               </p>
                               <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(selectedShoppingDbItem?.rate || selectedShoppingDbItem?.cost || 0)}
+                                {moneyFromCents(shoppingPreviewUnitCostCents)}
                               </p>
                             </div>
 
                             <div className="rounded-md border border-slate-200 bg-white p-2.5">
                               <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Unit Billable
+                                Unit Price
                               </p>
                               <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(
-                                  selectedShoppingDbItem?.sellPrice ||
-                                  selectedShoppingDbItem?.rate ||
-                                  selectedShoppingDbItem?.cost ||
-                                  0
-                                )}
+                                {moneyFromCents(shoppingPreviewUnitPriceCents)}
                               </p>
                             </div>
 
@@ -7410,6 +7596,24 @@ const JobDetailView = () => {
                               </p>
                               <p className="mt-0.5 text-sm font-semibold text-slate-800">
                                 {shoppingFormData.quantity || "—"}
+                              </p>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Total Cost
+                              </p>
+                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                {moneyFromCents(shoppingPreviewTotalCostCents)}
+                              </p>
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                Total Price
+                              </p>
+                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                {moneyFromCents(shoppingPreviewTotalPriceCents)}
                               </p>
                             </div>
                           </div>
@@ -8470,7 +8674,7 @@ const JobDetailView = () => {
       {edit && can("24") && (
         <button
           onClick={cancelJob}
-          disabled={expiringJob}
+          disabled={expiringJob || deletingJob}
           className="w-full px-4 py-2 text-sm font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-xl shadow-sm hover:bg-rose-100 transition disabled:cursor-not-allowed disabled:opacity-60"
         >
           {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
@@ -8679,7 +8883,7 @@ const JobDetailView = () => {
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <p className="text-sm font-semibold text-blue-900">Paired-status rules</p>
                 <p className="mt-1 text-sm text-blue-800">
-                  Billing Invoiced or Paid marks operation Finished. Billing Expired moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced or paid.
+                  Billing Invoiced or Paid marks operation Finished. Billing Expired or Rejected moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced or paid.
                 </p>
               </div>
 
@@ -9362,6 +9566,45 @@ const JobDetailView = () => {
               >
                 Confirm & Create Agreement
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {showCommentsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-6xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
+            <div className="flex flex-col gap-4 border-b border-slate-200 p-5 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h3 className="text-xl font-bold text-slate-950">Job Comments</h3>
+                <p className="mt-1 text-sm text-slate-600">
+                  Review notes, add follow-ups, and resolve comments for this job.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCommentsModal(false)}
+                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-5">
+              {renderCommentFilters("flex flex-wrap gap-1.5 rounded-md border border-slate-200 bg-slate-50 p-1.5")}
+              <div className="mt-4 grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+                {renderCommentComposer(true)}
+                <div>
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Comment Thread</h3>
+                      <p className="mt-1 text-xs text-slate-500">
+                        {filteredComments.length} {filteredComments.length === 1 ? "comment" : "comments"} shown
+                      </p>
+                    </div>
+                  </div>
+                  {renderCommentsList(true)}
+                </div>
+              </div>
             </div>
           </div>
         </div>

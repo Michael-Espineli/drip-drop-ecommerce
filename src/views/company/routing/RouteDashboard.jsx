@@ -644,6 +644,16 @@ const minutesBetween = (start, end) => {
     return Math.max(0, Math.round((end.getTime() - start.getTime()) / 60000));
 };
 
+const getRouteDurationMinutes = (route) => {
+    const durationSeconds = Number(route?.durationSeconds);
+    if (Number.isFinite(durationSeconds) && durationSeconds > 0) {
+        return Math.round(durationSeconds / 60);
+    }
+
+    const durationMinutes = Number(route?.durationMin);
+    return Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes : 0;
+};
+
 const numberOrNull = (value) => {
     if (value === "" || value === null || value === undefined) return null;
     const parsed = Number(value);
@@ -660,6 +670,78 @@ const timelinePercent = (date, rangeStart, rangeEnd) => {
 };
 
 const addMinutes = (date, minutes) => new Date(date.getTime() + minutes * 60000);
+
+const roundDateToMinuteStep = (date, minuteStep = 15, direction = 'floor') => {
+    const nextDate = new Date(date);
+    nextDate.setSeconds(0, 0);
+    const minutes = nextDate.getMinutes();
+    const roundedMinutes = direction === 'ceil'
+        ? Math.ceil(minutes / minuteStep) * minuteStep
+        : Math.floor(minutes / minuteStep) * minuteStep;
+
+    nextDate.setMinutes(roundedMinutes);
+    return nextDate;
+};
+
+const buildTimelineMarks = (start, end, minuteStep = 15) => {
+    const marks = [];
+    let mark = roundDateToMinuteStep(start, minuteStep, 'floor');
+    const lastMark = roundDateToMinuteStep(end, minuteStep, 'ceil');
+
+    while (mark <= lastMark) {
+        marks.push(mark);
+        mark = addMinutes(mark, minuteStep);
+    }
+
+    return marks;
+};
+
+const expandTimelineRangeForSegments = (range, segments) => {
+    const segmentDates = segments
+        .flatMap(segment => [segment.displayStart, segment.displayEnd])
+        .filter(Boolean);
+
+    if (!segmentDates.length) return range;
+
+    return {
+        start: new Date(Math.min(range.start.getTime(), ...segmentDates.map(date => date.getTime()))),
+        end: new Date(Math.max(range.end.getTime(), ...segmentDates.map(date => date.getTime()))),
+    };
+};
+
+const stopDurationMinutes = (stop, start, end) => (
+    Math.max(
+        15,
+        minutesBetween(start, end),
+        Number(stop?.duration || stop?.estimatedDuration || stop?.estimatedMinutes || 0)
+    )
+);
+
+const layoutSequentialStopSegments = (segments) => {
+    let cursor = null;
+
+    return [...segments]
+        .sort((left, right) => {
+            const orderDelta = (left.stop.routeStopIndex || left.index + 1) - (right.stop.routeStopIndex || right.index + 1);
+            if (orderDelta !== 0) return orderDelta;
+            return left.start.getTime() - right.start.getTime();
+        })
+        .map((segment) => {
+            const duration = stopDurationMinutes(segment.stop, segment.start, segment.end);
+            const displayStart = cursor && segment.start < cursor ? cursor : segment.start;
+            const displayEnd = addMinutes(displayStart, duration);
+
+            cursor = displayEnd;
+
+            return {
+                ...segment,
+                duration,
+                displayStart,
+                displayEnd,
+                isSequentiallyShifted: displayStart.getTime() !== segment.start.getTime(),
+            };
+        });
+};
 
 const getRouteTimelineRange = (route, stops, areas, logs, now) => {
     const hasOpenStop = stops.some(stop => {
@@ -869,7 +951,7 @@ const buildDemoRouteData = (companyId, serviceDate) => {
             techName,
             traineeId: null,
             traineeName: null,
-            durationMin: minutesBetween(at(7, 0), at(12, 49)),
+            durationSeconds: minutesBetween(at(7, 0), at(12, 49)) * 60,
             distanceMiles: 42.7,
             status: 'Finished',
             totalStops: stops.length,
@@ -1247,7 +1329,7 @@ const RouteDashboard = () => {
                     totalStops: totalStopsCount,
                     finishedStops: finishedStopsCount,
                     status: newStatus,
-                    durationMin: 0,
+                    durationSeconds: 0,
                     distanceMiles: 0,
                     vehicalId: "",
                     vehicleSource: "",
@@ -1671,6 +1753,7 @@ const RouteDashboard = () => {
             startMileage !== null && endMileage !== null
                 ? Number((endMileage - startMileage).toFixed(1))
                 : Number(route.distanceMiles || route.distance || 0);
+        const durationMinutes = minutesBetween(routeStartTime, completedAt);
         const payload = {
             startMilage: startMileage,
             startMileage,
@@ -1681,7 +1764,7 @@ const RouteDashboard = () => {
             endTime: Timestamp.fromDate(completedAt),
             completedAt: Timestamp.fromDate(completedAt),
             completedDate: Timestamp.fromDate(completedAt),
-            durationMin: minutesBetween(routeStartTime, completedAt),
+            durationSeconds: durationMinutes * 60,
             status: "Finished",
             operationStatus: "Finished",
             mileageStatus: endMileage !== null ? "Complete" : "Needs Mileage",
@@ -3139,7 +3222,7 @@ const OverlayButton = ({ label, colorClass, isOn, onClick }) => {
     );
 };
 
-const TimelineBar = ({ start, end, rangeStart, rangeEnd, className, children, minWidth = 7 }) => {
+const TimelineBar = ({ start, end, rangeStart, rangeEnd, className, children, minWidth = 2.4 }) => {
     const left = timelinePercent(start, rangeStart, rangeEnd);
     const right = timelinePercent(end, rangeStart, rangeEnd);
     const width = Math.max(minWidth, right - left);
@@ -3169,8 +3252,11 @@ const CurrentTimeMarker = ({ now, rangeStart, rangeEnd }) => {
     );
 };
 
-const TimelineRow = ({ label, sublabel, children }) => (
-    <div className="grid min-w-[920px] grid-cols-[190px_minmax(720px,1fr)] gap-3 border-t border-gray-100 py-2 first:border-t-0">
+const TimelineRow = ({ label, sublabel, children, timelineWidth }) => (
+    <div
+        className="grid min-w-max gap-3 border-t border-gray-100 py-2 first:border-t-0"
+        style={{ gridTemplateColumns: `190px ${timelineWidth}px` }}
+    >
         <div className="flex flex-col justify-center">
             <div className="text-sm font-semibold text-gray-800">{label}</div>
             {sublabel && <div className="text-xs text-gray-500">{sublabel}</div>}
@@ -3182,13 +3268,8 @@ const TimelineRow = ({ label, sublabel, children }) => (
 );
 
 const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) => {
-    const range = getRouteTimelineRange(route, stops, areaEstimates, routeLogs, now);
-    const showCurrentMarker = now >= range.start && now <= range.end;
-    const timeMarks = Array.from({ length: 7 }, (_, index) => {
-        const stepMs = (range.end.getTime() - range.start.getTime()) / 6;
-        return new Date(range.start.getTime() + stepMs * index);
-    });
-    const stopSegments = stops
+    const baseRange = getRouteTimelineRange(route, stops, areaEstimates, routeLogs, now);
+    const rawStopSegments = stops
         .map((stop, index) => {
             const { start, end } = getStopTiming(stop);
             return {
@@ -3199,6 +3280,16 @@ const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) 
             };
         })
         .filter(segment => segment.start && segment.end);
+    const stopSegments = layoutSequentialStopSegments(rawStopSegments);
+    const expandedRange = expandTimelineRangeForSegments(baseRange, stopSegments);
+    const range = {
+        start: roundDateToMinuteStep(expandedRange.start, 15, 'floor'),
+        end: roundDateToMinuteStep(expandedRange.end, 15, 'ceil'),
+    };
+    const showCurrentMarker = now >= range.start && now <= range.end;
+    const timeMarks = buildTimelineMarks(range.start, range.end, 15);
+    const slotCount = Math.max(1, Math.ceil(minutesBetween(range.start, range.end) / 15));
+    const timelineWidth = Math.max(840, slotCount * 58);
 
     return (
         <div className="mt-5 rounded-xl border border-gray-200 bg-white p-4">
@@ -3215,8 +3306,11 @@ const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) 
             </div>
 
             <div className="overflow-x-auto">
-                <div className="min-w-[920px]">
-                    <div className="grid grid-cols-[190px_minmax(720px,1fr)] gap-3 pb-2">
+                <div className="min-w-max">
+                    <div
+                        className="grid gap-3 pb-2"
+                        style={{ gridTemplateColumns: `190px ${timelineWidth}px` }}
+                    >
                         <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">Time</div>
                         <div className="relative h-6">
                             {timeMarks.map(mark => (
@@ -3239,7 +3333,11 @@ const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) 
                         </div>
                     </div>
 
-                    <TimelineRow label="Time Areas" sublabel={`${areaEstimates.length} dwell estimate${areaEstimates.length === 1 ? '' : 's'}`}>
+                    <TimelineRow
+                        label="Time Areas"
+                        sublabel={`${areaEstimates.length} dwell estimate${areaEstimates.length === 1 ? '' : 's'}`}
+                        timelineWidth={timelineWidth}
+                    >
                         {areaEstimates.map(area => (
                             <TimelineBar
                                 key={area.id}
@@ -3256,24 +3354,32 @@ const RouteProgressTimeline = ({ route, stops, areaEstimates, routeLogs, now }) 
                         <CurrentTimeMarker now={now} rangeStart={range.start} rangeEnd={range.end} />
                     </TimelineRow>
 
-                    <TimelineRow label="Service Stops" sublabel={`${stopSegments.length} timed stop${stopSegments.length === 1 ? '' : 's'}`}>
+                    <TimelineRow
+                        label="Service Stops"
+                        sublabel={`${stopSegments.length} timed stop${stopSegments.length === 1 ? '' : 's'}`}
+                        timelineWidth={timelineWidth}
+                    >
                         {stopSegments.map(segment => (
                             <TimelineBar
                                 key={segment.stop.id}
-                                start={segment.start}
-                                end={segment.end}
+                                start={segment.displayStart}
+                                end={segment.displayEnd}
                                 rangeStart={range.start}
                                 rangeEnd={range.end}
                                 className={getStopTone(segment.stop)}
                             >
-                                <div className="truncate">#{segment.index + 1} {formatTimeValue(segment.start)} - {formatTimeValue(segment.end)}</div>
+                                <div className="truncate">#{segment.stop.routeStopIndex || segment.index + 1} {formatTimeValue(segment.displayStart)} - {formatTimeValue(segment.displayEnd)}</div>
                                 <div className="truncate text-[10px] font-medium opacity-90">{segment.stop.customerName}</div>
                             </TimelineBar>
                         ))}
                         <CurrentTimeMarker now={now} rangeStart={range.start} rangeEnd={range.end} />
                     </TimelineRow>
 
-                    <TimelineRow label="Route Logs" sublabel={`${routeLogs.length} work mode event${routeLogs.length === 1 ? '' : 's'}`}>
+                    <TimelineRow
+                        label="Route Logs"
+                        sublabel={`${routeLogs.length} work mode event${routeLogs.length === 1 ? '' : 's'}`}
+                        timelineWidth={timelineWidth}
+                    >
                         {routeLogs.map(log => (
                             <TimelineBar
                                 key={log.id}
@@ -3591,6 +3697,7 @@ const TechRouteCard = ({
     });
 
     const activeStart = activeStop ? getStopTiming(activeStop).start : null;
+    const durationMinutes = getRouteDurationMinutes(route);
     const vehicleOptions = buildVehicleOptionsForRoute(route, technicians, fleetVehicles);
 
     return (
@@ -3636,8 +3743,8 @@ const TechRouteCard = ({
                     </>
                 ) : (
                     <p>
-                        Duration: {route.durationMin
-                            ? `${Math.floor(route.durationMin / 60)}h ${route.durationMin % 60}m`
+                        Duration: {durationMinutes
+                            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
                             : 'N/A'}
                     </p>
                 )}

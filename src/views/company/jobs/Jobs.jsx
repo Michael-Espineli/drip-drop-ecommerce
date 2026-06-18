@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import {
     query,
     collection,
@@ -10,7 +10,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
@@ -39,6 +39,9 @@ const BILLING_QUICK_BILLING_STATUSES = [
     "Expired"
 ];
 
+const JOB_LIST_VIEWS = ["operations", "billing"];
+const DEFAULT_JOB_LIST_VIEW = "operations";
+
 const OPERATION_STATUS_OPTIONS = [
     "Estimate Pending",
     "Unscheduled",
@@ -55,7 +58,8 @@ const BILLING_STATUS_OPTIONS = [
     "In Progress",
     "Invoiced",
     "Paid",
-    "Expired"
+    "Expired",
+    "Rejected"
 ];
 
 const JOB_SORT_OPTIONS = [
@@ -219,6 +223,7 @@ const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onS
 };
 
 const Jobs = () => {
+    const { view } = useParams();
     const [jobs, setJobs] = useState([]);
     const [allJobs, setAllJobs] = useState([]);
     const [jobTemplates, setJobTemplates] = useState([]);
@@ -244,6 +249,32 @@ const Jobs = () => {
     ]);
 
     const [sortBy, setSortBy] = useState("dateCreated-desc");
+
+    const getInitialJobListView = useCallback((viewValue) => {
+        return JOB_LIST_VIEWS.includes(viewValue) ? viewValue : DEFAULT_JOB_LIST_VIEW;
+    }, []);
+
+    const applyJobListViewFilters = useCallback((nextView) => {
+        if (nextView === "billing") {
+            setOperationStatusFilter([...BILLING_QUICK_OPERATION_STATUSES]);
+            setBillingStatusFilter([...BILLING_QUICK_BILLING_STATUSES]);
+            return;
+        }
+
+        setOperationStatusFilter([...OPERATIONS_QUICK_OPERATION_STATUSES]);
+        setBillingStatusFilter([...OPERATIONS_QUICK_BILLING_STATUSES]);
+    }, []);
+
+    useEffect(() => {
+        const nextView = getInitialJobListView(view);
+        applyJobListViewFilters(nextView);
+    }, [view, getInitialJobListView, applyJobListViewFilters]);
+
+    useEffect(() => {
+        if (!view || !JOB_LIST_VIEWS.includes(view)) {
+            navigate(`/company/jobs/${DEFAULT_JOB_LIST_VIEW}`, { replace: true });
+        }
+    }, [view, navigate]);
 
     useEffect(() => {
         const fetchJobs = async () => {
@@ -429,14 +460,9 @@ const Jobs = () => {
         setShowFilterModal(false);
     };
 
-    const applyOperationsQuickFilter = () => {
-        setOperationStatusFilter([...OPERATIONS_QUICK_OPERATION_STATUSES]);
-        setBillingStatusFilter([...OPERATIONS_QUICK_BILLING_STATUSES]);
-    };
-
-    const applyBillingQuickFilter = () => {
-        setOperationStatusFilter([...BILLING_QUICK_OPERATION_STATUSES]);
-        setBillingStatusFilter([...BILLING_QUICK_BILLING_STATUSES]);
+    const handleJobListViewChange = (nextView) => {
+        applyJobListViewFilters(nextView);
+        navigate(`/company/jobs/${nextView}`);
     };
 
     const activeQuickFilter = useMemo(() => {
@@ -897,7 +923,7 @@ const Jobs = () => {
                     <div className="mb-4 flex flex-wrap gap-2">
                         <button
                             type="button"
-                            onClick={applyOperationsQuickFilter}
+                            onClick={() => handleJobListViewChange("operations")}
                             className={[
                                 "rounded-md px-4 py-2 text-sm font-semibold transition",
                                 activeQuickFilter === "operations"
@@ -909,7 +935,7 @@ const Jobs = () => {
                         </button>
                         <button
                             type="button"
-                            onClick={applyBillingQuickFilter}
+                            onClick={() => handleJobListViewChange("billing")}
                             className={[
                                 "rounded-md px-4 py-2 text-sm font-semibold transition",
                                 activeQuickFilter === "billing"
