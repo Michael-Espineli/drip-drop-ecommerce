@@ -88,14 +88,14 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     // const profileLink = '/company/profile' 
     return (
         <>
-            <div className='fixed top-0 left-0 w-full py-5 px-2 lg:px-1.69 z-40'>
-                <div className={`ml-0 ${shellMarginClass} rounded-md h-[65px] flex items-center justify-between gap-4 bg-[#0e245c] px-3 sm:px-5 transition-all`}>
+            <div className='fixed top-0 left-0 z-40 w-full px-3 py-3 lg:px-4'>
+                <div className={`app-header-bar ml-0 ${shellMarginClass} flex h-16 items-center justify-between gap-4 rounded-lg px-3 transition-all sm:px-5`}>
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                         {/* Hamburger Icon */}
                         <button
                             type="button"
                             onClick={() => setShowSidebar(!showSidebar)}
-                            className='flex h-[35px] w-[35px] shrink-0 items-center justify-center rounded-sm border border-slate-400 text-white cursor-pointer hover:bg-blue-500 lg:hidden'
+                            className='app-header-action flex h-10 w-10 shrink-0 items-center justify-center rounded-md transition lg:hidden'
                             aria-label="Open navigation"
                         >
                             <span>三</span>
@@ -113,7 +113,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         {canAddLead && (
                             <Link
                                 to="/company/leads/new"
-                                className="flex h-10 items-center gap-2 whitespace-nowrap rounded-md border border-white/15 bg-white px-3 text-sm font-semibold text-[#0e245c] shadow-sm transition hover:bg-blue-50"
+                                className="app-header-primary-action flex h-10 items-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-bold transition"
                             >
                                 <FaUserPlus className="h-4 w-4" />
                                 <span>Add Lead</span>
@@ -122,7 +122,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         <button
                             type="button"
                             onClick={toggleTheme}
-                            className="flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+                            className="app-header-action flex h-10 w-10 items-center justify-center rounded-md transition"
                             aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
                             title={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
                         >
@@ -131,7 +131,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         {alertsEnabled && (
                             <Link
                                 to="/company/alerts"
-                                className="relative flex h-10 w-10 items-center justify-center rounded-md border border-white/15 bg-white/10 text-white transition hover:bg-white/20"
+                                className="app-header-action relative flex h-10 w-10 items-center justify-center rounded-md transition"
                                 aria-label={alertCount > 0 ? `${alertCount} active notifications` : "Notifications"}
                                 title="Notifications"
                             >
@@ -147,7 +147,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                             <button
                                 type="button"
                                 onClick={() => setIsStartChatOpen(true)}
-                                className="flex h-10 items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                                className="app-header-action flex h-10 items-center gap-2 rounded-md px-3 text-sm font-semibold transition"
                                 aria-label="Start a new chat"
                             >
                                 <ChatBubbleLeftRightIcon className="h-5 w-5" />
@@ -157,7 +157,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         {canOpenSetupGuide && (
                             <Link
                                 to="/company/setup-guide"
-                                className="flex h-10 items-center gap-2 rounded-md border border-white/15 bg-white/10 px-3 text-sm font-semibold text-white transition hover:bg-white/20"
+                                className="app-header-action flex h-10 items-center gap-2 rounded-md px-3 text-sm font-semibold transition"
                             >
                                 <FaClipboardList className="h-4 w-4" />
                                 <span className="hidden xl:inline">Setup Guide</span>
@@ -166,15 +166,15 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         <div>
                             <Link to={profileLink} className="w-auto h-[50px]">
                                 <div className='flex justify-center items-center gap-3'>
-                                    <div className='hidden max-w-[220px] flex-col items-end justify-center text-end text-white sm:flex'>
+                                    <div className='hidden max-w-[220px] flex-col items-end justify-center text-end sm:flex'>
                                         <h2 className='line-clamp-1 text-md font-bold'>
                                             {accountType === 'Company' ? `${name} - ${accountType}` : name}
                                         </h2>
                                         {accountType === 'Company' && recentlySelectedCompanyName && (
-                                            <span className='w-full truncate text-[14px] font-normal'>{recentlySelectedCompanyName}</span>
+                                            <span className='app-header-muted w-full truncate text-[14px] font-medium'>{recentlySelectedCompanyName}</span>
                                         )}
                                     </div>
-                                    <img className='h-[45px] w-[45px] rounded-full bg-white object-cover' src={photoUrl} alt="profile" />
+                                    <img className='h-[45px] w-[45px] rounded-full bg-white object-cover ring-2 ring-white/35' src={photoUrl} alt="profile" />
                                 </div>
                             </Link>
                         </div>

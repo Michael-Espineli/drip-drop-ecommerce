@@ -15,6 +15,7 @@ export const TODO_STATUS_LABELS = {
 };
 
 export const TODO_SCOPE = {
+  me: "me",
   team: "team",
   specific: "specific",
 };

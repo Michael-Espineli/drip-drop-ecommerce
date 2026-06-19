@@ -645,7 +645,7 @@ export default function CompanyCommandSearch() {
                 <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-300" />
                 <input
                     ref={inputRef}
-                    className="h-10 w-full rounded-md border border-white/10 bg-slate-800/80 py-2 pl-9 pr-10 text-sm text-white outline-none placeholder:text-slate-300 focus:border-blue-300 focus:ring-2 focus:ring-blue-400/40"
+                    className="company-command-search-input h-10 w-full rounded-md border py-2 pl-9 pr-10 text-sm outline-none"
                     type="search"
                     value={searchTerm}
                     onChange={(event) => {

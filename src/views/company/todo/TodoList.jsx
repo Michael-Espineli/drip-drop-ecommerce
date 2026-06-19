@@ -124,7 +124,7 @@ const emptyTodoForm = () => ({
   title: "",
   description: "",
   boardId: "",
-  scope: TODO_SCOPE.team,
+  scope: TODO_SCOPE.me,
   assignedToUserId: "",
   priority: TODO_PRIORITY.normal,
   dueAt: "",
@@ -177,12 +177,14 @@ const memberSummary = (board = {}) => {
   return `${names.slice(0, 2).join(", ")} +${names.length - 2}`;
 };
 
-const buildTodoEditForm = (todo = {}) => ({
+const buildTodoEditForm = (todo = {}, currentUserId = "") => ({
   title: todo.title || "",
   description: todo.description || "",
   boardId: todoBoardId(todo),
   status: todo.status || TODO_STATUS.open,
-  scope: todo.scope || TODO_SCOPE.team,
+  scope: todo.scope === TODO_SCOPE.specific && currentUserId && todo.assignedToUserId === currentUserId
+    ? TODO_SCOPE.me
+    : todo.scope || TODO_SCOPE.team,
   assignedToUserId: todo.assignedToUserId || "",
   priority: todo.priority || TODO_PRIORITY.normal,
   dueAt: dateTimeInputValue(todo.dueAt),
@@ -217,6 +219,12 @@ const dueLabel = (todo) => {
   if (state === "overdue") return `Overdue ${formatShortDateTime(todo.dueAt)}`;
   if (state === "today") return `Due today ${formatShortDateTime(todo.dueAt)}`;
   return `Due ${formatShortDateTime(todo.dueAt)}`;
+};
+
+const assignmentLabel = (todo = {}) => {
+  if (todo.scope === TODO_SCOPE.team) return "Team task";
+  if (todo.scope === TODO_SCOPE.me) return "Assigned to me";
+  return `Assigned to ${todo.assignedToName || "Unassigned"}`;
 };
 
 const priorityTone = (priority) => {
@@ -405,6 +413,18 @@ const TodoList = () => {
     }))
     .sort((left, right) => left.userName.localeCompare(right.userName)), [companyUsers]);
 
+  const currentUserAssignee = useMemo(() => {
+    if (!user?.uid) return null;
+
+    return companyUserOptions.find((option) => option.userId === user.uid || option.id === user.uid) || {
+      id: user.uid,
+      userId: user.uid,
+      userName: name || user.email || "Me",
+      roleName: "",
+      status: "",
+    };
+  }, [companyUserOptions, name, user?.email, user?.uid]);
+
   const boardById = useMemo(() => (
     new Map(todoBoards.map((board) => [board.id, board]))
   ), [todoBoards]);
@@ -455,7 +475,7 @@ const TodoList = () => {
     return {
       open: openItems.length,
       team: openItems.filter((todo) => todo.scope === TODO_SCOPE.team).length,
-      assigned: openItems.filter((todo) => todo.scope === TODO_SCOPE.specific).length,
+      assigned: openItems.filter((todo) => todo.scope === TODO_SCOPE.specific || todo.scope === TODO_SCOPE.me).length,
       attention: attentionItems.length,
     };
   }, [boardScopedTodos]);
@@ -469,7 +489,7 @@ const TodoList = () => {
         if (filter === "done" && todo.status !== TODO_STATUS.done) return false;
         if (filter === "team" && (todo.scope !== TODO_SCOPE.team || !todoIsOpen(todo))) return false;
         if (filter === "mine") {
-          const mine = todo.assignedToUserId === user?.uid || todo.createdByUserId === user?.uid;
+          const mine = todo.scope === TODO_SCOPE.me || todo.assignedToUserId === user?.uid || todo.createdByUserId === user?.uid;
           if (!mine || !todoIsOpen(todo)) return false;
         }
 
@@ -506,7 +526,7 @@ const TodoList = () => {
     setForm((current) => ({
       ...current,
       [field]: value,
-      ...(field === "scope" && value === TODO_SCOPE.team ? { assignedToUserId: "" } : {}),
+      ...(field === "scope" && value !== TODO_SCOPE.specific ? { assignedToUserId: "" } : {}),
       ...(field === "relatedEntityType" ? { relatedEntityId: "", relatedEntityLabel: "" } : {}),
     }));
   };
@@ -608,7 +628,7 @@ const TodoList = () => {
 
   const openTodoDetails = (todo) => {
     setSelectedTodoId(todo.id);
-    setEditForm(buildTodoEditForm(todo));
+    setEditForm(buildTodoEditForm(todo, user?.uid || ""));
   };
 
   const updateEditForm = (field, value) => {
@@ -618,7 +638,7 @@ const TodoList = () => {
       return {
         ...current,
         [field]: value,
-        ...(field === "scope" && value === TODO_SCOPE.team ? { assignedToUserId: "" } : {}),
+        ...(field === "scope" && value !== TODO_SCOPE.specific ? { assignedToUserId: "" } : {}),
       };
     });
   };
@@ -634,7 +654,13 @@ const TodoList = () => {
       return;
     }
 
-    const assignee = companyUserOptions.find((option) => option.userId === editForm.assignedToUserId);
+    const assignee = editForm.scope === TODO_SCOPE.me
+      ? currentUserAssignee
+      : companyUserOptions.find((option) => option.userId === editForm.assignedToUserId);
+    if (editForm.scope === TODO_SCOPE.me && !assignee) {
+      toast.error("Sign in before assigning a todo to yourself.");
+      return;
+    }
     if (editForm.scope === TODO_SCOPE.specific && !assignee) {
       toast.error("Choose a team member for a specific task.");
       return;
@@ -707,7 +733,13 @@ const TodoList = () => {
       return;
     }
 
-    const assignee = companyUserOptions.find((option) => option.userId === form.assignedToUserId);
+    const assignee = form.scope === TODO_SCOPE.me
+      ? currentUserAssignee
+      : companyUserOptions.find((option) => option.userId === form.assignedToUserId);
+    if (form.scope === TODO_SCOPE.me && !assignee) {
+      toast.error("Sign in before assigning a todo to yourself.");
+      return;
+    }
     if (form.scope === TODO_SCOPE.specific && !assignee) {
       toast.error("Choose a team member for a specific task.");
       return;
@@ -930,7 +962,14 @@ const TodoList = () => {
 
               <div>
                 <p className="text-sm font-semibold text-slate-700">Assignment</p>
-                <div className="mt-2 grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
+                <div className="mt-2 grid grid-cols-3 gap-2 rounded-md bg-slate-100 p-1">
+                  <button
+                    type="button"
+                    onClick={() => updateForm("scope", TODO_SCOPE.me)}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${form.scope === TODO_SCOPE.me ? "bg-white text-slate-950 shadow-sm" : "text-slate-600 hover:text-slate-950"}`}
+                  >
+                    Me
+                  </button>
                   <button
                     type="button"
                     onClick={() => updateForm("scope", TODO_SCOPE.team)}
@@ -1304,7 +1343,7 @@ const TodoList = () => {
                         <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
                           <span>{TODO_STATUS_LABELS[todo.status] || "Open"}</span>
                           <span>{todoBoardName(todo, boardById)}</span>
-                          <span>{todo.scope === TODO_SCOPE.specific ? `Assigned to ${todo.assignedToName || "Unassigned"}` : "Team task"}</span>
+                          <span>{assignmentLabel(todo)}</span>
                           {todo.relatedEntity?.type && todo.relatedEntity?.id && (
                             <span>{todo.relatedEntity.type}: {todo.relatedEntity.label || todo.relatedEntity.id}</span>
                           )}
@@ -1456,7 +1495,14 @@ const TodoList = () => {
 
                       <div>
                         <p className="text-sm font-semibold text-slate-700">Assignment</p>
-                        <div className="mt-2 grid grid-cols-2 gap-2 rounded-md bg-slate-100 p-1">
+                        <div className="mt-2 grid grid-cols-3 gap-2 rounded-md bg-slate-100 p-1">
+                          <button
+                            type="button"
+                            onClick={() => updateEditForm("scope", TODO_SCOPE.me)}
+                            className={`rounded-md px-3 py-2 text-sm font-semibold transition ${editForm.scope === TODO_SCOPE.me ? "bg-white text-slate-950 shadow-sm" : "text-slate-600 hover:text-slate-950"}`}
+                          >
+                            Me
+                          </button>
                           <button
                             type="button"
                             onClick={() => updateEditForm("scope", TODO_SCOPE.team)}

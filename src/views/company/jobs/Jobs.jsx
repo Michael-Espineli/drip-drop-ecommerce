@@ -1,10 +1,13 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import {
+    doc,
     query,
     collection,
     getDocs,
     orderBy,
-    where
+    serverTimestamp,
+    where,
+    writeBatch
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -12,6 +15,7 @@ import { Job } from "../../../utils/models/Job";
 import { format } from "date-fns";
 import { useNavigate, useParams } from "react-router-dom";
 import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
+import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
@@ -58,6 +62,7 @@ const BILLING_STATUS_OPTIONS = [
     "In Progress",
     "Invoiced",
     "Paid",
+    "Comped",
     "Expired",
     "Rejected"
 ];
@@ -238,6 +243,10 @@ const Jobs = () => {
     const [showCreateOptionsModal, setShowCreateOptionsModal] = useState(false);
     const [showTemplatePickerModal, setShowTemplatePickerModal] = useState(false);
     const [loadingTemplates, setLoadingTemplates] = useState(false);
+    const [selectedJobIds, setSelectedJobIds] = useState(() => new Set());
+    const [bulkOperationStatus, setBulkOperationStatus] = useState("");
+    const [bulkBillingStatus, setBulkBillingStatus] = useState("");
+    const [bulkUpdating, setBulkUpdating] = useState(false);
 
     // Filter and Sort States
     const [operationStatusFilter, setOperationStatusFilter] = useState([
@@ -276,38 +285,41 @@ const Jobs = () => {
         }
     }, [view, navigate]);
 
-    useEffect(() => {
-        const fetchJobs = async () => {
-            if (!recentlySelectedCompany) return;
+    const fetchJobs = useCallback(async () => {
+        if (!recentlySelectedCompany) {
+            setJobs([]);
+            return;
+        }
 
-            try {
-                let q = collection(db, "companies", recentlySelectedCompany, "workOrders");
-                let queries = [];
+        try {
+            let q = collection(db, "companies", recentlySelectedCompany, "workOrders");
+            let queries = [];
 
-                if (operationStatusFilter.length > 0) {
-                    queries.push(where("operationStatus", "in", operationStatusFilter));
-                }
-
-                if (billingStatusFilter.length > 0) {
-                    queries.push(where("billingStatus", "in", billingStatusFilter));
-                }
-
-                q = query(q, ...queries);
-
-                const querySnapshot = await getDocs(q);
-                const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
-                setJobs(jobsList);
-            } catch (error) {
-                console.error("Error fetching jobs: ", error);
+            if (operationStatusFilter.length > 0) {
+                queries.push(where("operationStatus", "in", operationStatusFilter));
             }
-        };
 
-        fetchJobs();
+            if (billingStatusFilter.length > 0) {
+                queries.push(where("billingStatus", "in", billingStatusFilter));
+            }
+
+            q = query(q, ...queries);
+
+            const querySnapshot = await getDocs(q);
+            const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+            setJobs(jobsList);
+        } catch (error) {
+            console.error("Error fetching jobs: ", error);
+        }
     }, [
         recentlySelectedCompany,
         operationStatusFilter,
         billingStatusFilter
     ]);
+
+    useEffect(() => {
+        fetchJobs();
+    }, [fetchJobs]);
 
     const visibleJobs = useMemo(() => {
         const normalizedSearchTerm = searchTerm.trim().toLowerCase();
@@ -329,23 +341,88 @@ const Jobs = () => {
     }, [jobs, searchTerm, sortBy]);
 
     useEffect(() => {
-        const fetchAllJobs = async () => {
-            if (!recentlySelectedCompany) return;
+        setSelectedJobIds((previousIds) => {
+            if (previousIds.size === 0) return previousIds;
 
-            try {
-                const querySnapshot = await getDocs(
-                    collection(db, "companies", recentlySelectedCompany, "workOrders")
-                );
-                const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
-                setAllJobs(jobsList);
-            } catch (error) {
-                console.error("Error fetching job summary data: ", error);
-                setAllJobs([]);
+            const availableJobIds = new Set(jobs.map((job) => job.id));
+            const nextIds = new Set(
+                [...previousIds].filter((jobId) => availableJobIds.has(jobId))
+            );
+
+            return nextIds.size === previousIds.size ? previousIds : nextIds;
+        });
+    }, [jobs]);
+
+    const selectedJobs = useMemo(
+        () => jobs.filter((job) => selectedJobIds.has(job.id)),
+        [jobs, selectedJobIds]
+    );
+
+    const selectedVisibleCount = useMemo(
+        () => visibleJobs.filter((job) => selectedJobIds.has(job.id)).length,
+        [visibleJobs, selectedJobIds]
+    );
+
+    const allVisibleJobsSelected = visibleJobs.length > 0 &&
+        visibleJobs.every((job) => selectedJobIds.has(job.id));
+
+    const toggleJobSelection = useCallback((jobId) => {
+        setSelectedJobIds((previousIds) => {
+            const nextIds = new Set(previousIds);
+
+            if (nextIds.has(jobId)) {
+                nextIds.delete(jobId);
+            } else {
+                nextIds.add(jobId);
             }
-        };
 
-        fetchAllJobs();
+            return nextIds;
+        });
+    }, []);
+
+    const handleSelectAllVisibleJobs = useCallback((checked) => {
+        setSelectedJobIds((previousIds) => {
+            const nextIds = new Set(previousIds);
+
+            visibleJobs.forEach((job) => {
+                if (checked) {
+                    nextIds.add(job.id);
+                } else {
+                    nextIds.delete(job.id);
+                }
+            });
+
+            return nextIds;
+        });
+    }, [visibleJobs]);
+
+    const clearBatchSelection = useCallback(() => {
+        setSelectedJobIds(new Set());
+        setBulkOperationStatus("");
+        setBulkBillingStatus("");
+    }, []);
+
+    const fetchAllJobs = useCallback(async () => {
+        if (!recentlySelectedCompany) {
+            setAllJobs([]);
+            return;
+        }
+
+        try {
+            const querySnapshot = await getDocs(
+                collection(db, "companies", recentlySelectedCompany, "workOrders")
+            );
+            const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+            setAllJobs(jobsList);
+        } catch (error) {
+            console.error("Error fetching job summary data: ", error);
+            setAllJobs([]);
+        }
     }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        fetchAllJobs();
+    }, [fetchAllJobs]);
 
     useEffect(() => {
         const fetchCommentCounts = async () => {
@@ -482,6 +559,8 @@ const Jobs = () => {
     }, [billingStatusFilter, operationStatusFilter]);
 
     const [activeSortKey, activeSortDirection = "asc"] = sortBy.split("-");
+    const canCreateJobs = can("22");
+    const canUpdateJobs = can("24");
 
     const handleHeaderSort = (nextSortKey) => {
         if (activeSortKey === nextSortKey) {
@@ -490,6 +569,81 @@ const Jobs = () => {
         }
 
         setSortBy(`${nextSortKey}-${DEFAULT_SORT_DIRECTIONS[nextSortKey] || "asc"}`);
+    };
+
+    const handleApplyBatchStatusUpdate = async () => {
+        if (!requirePermission("24", "update jobs")) return;
+
+        if (selectedJobs.length === 0) {
+            toast.error("Select at least one job.");
+            return;
+        }
+
+        if (!recentlySelectedCompany) {
+            toast.error("Select a company before updating jobs.");
+            return;
+        }
+
+        if (!bulkOperationStatus && !bulkBillingStatus) {
+            toast.error("Choose at least one status to update.");
+            return;
+        }
+
+        const selectedLabels = [
+            bulkOperationStatus ? `operation status to ${bulkOperationStatus}` : null,
+            bulkBillingStatus ? `billing status to ${bulkBillingStatus}` : null,
+        ].filter(Boolean);
+
+        const ok = window.confirm(
+            `Update ${selectedJobs.length} selected job${selectedJobs.length === 1 ? "" : "s"}: ${selectedLabels.join(" and ")}?`
+        );
+
+        if (!ok) return;
+
+        const toastId = toast.loading(`Updating ${selectedJobs.length} job${selectedJobs.length === 1 ? "" : "s"}...`);
+
+        try {
+            setBulkUpdating(true);
+
+            const nowMillis = Date.now();
+            const updates = {
+                updatedAt: serverTimestamp(),
+                updatedAtMillis: nowMillis,
+            };
+
+            if (bulkOperationStatus) {
+                updates.operationStatus = bulkOperationStatus;
+            }
+
+            if (bulkBillingStatus) {
+                updates.billingStatus = bulkBillingStatus;
+            }
+
+            const writeChunkSize = 450;
+
+            for (let index = 0; index < selectedJobs.length; index += writeChunkSize) {
+                const chunk = selectedJobs.slice(index, index + writeChunkSize);
+                const batch = writeBatch(db);
+
+                chunk.forEach((job) => {
+                    batch.update(
+                        doc(db, "companies", recentlySelectedCompany, "workOrders", job.id),
+                        updates
+                    );
+                });
+
+                await batch.commit();
+            }
+
+            clearBatchSelection();
+            await Promise.all([fetchJobs(), fetchAllJobs()]);
+            toast.success("Selected jobs updated.", { id: toastId });
+        } catch (error) {
+            console.error("Error applying batch job status update:", error);
+            toast.error(error?.message || "Failed to update selected jobs.", { id: toastId });
+        } finally {
+            setBulkUpdating(false);
+        }
     };
 
     const uniqueJobsCount = useMemo(() => {
@@ -548,6 +702,7 @@ const Jobs = () => {
             case "Scheduled":
             case "Finished":
             case "Paid":
+            case "Comped":
                 return "bg-green-100 text-green-800";
             case "Invoiced":
                 return "bg-blue-100 text-blue-800";

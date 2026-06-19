@@ -185,7 +185,7 @@ const JobDetailView = () => {
 
   const billingStatusOptions = useMemo(
     () =>
-      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Expired", "Rejected"].map((s) => ({
+      ["Draft", "Estimate", "Accepted", "In Progress", "Invoiced", "Paid", "Comped", "Expired", "Rejected"].map((s) => ({
         value: s,
         label: s,
       })),
@@ -439,6 +439,12 @@ const JobDetailView = () => {
         description: "Payment is complete and the job should remain finished.",
       },
       {
+        status: "Comped",
+        operation: "Finished",
+        title: "7. Comped",
+        description: "The company absorbed the job cost or comped the work; no customer invoice is expected.",
+      },
+      {
         status: "Expired",
         operation: "Estimate Pending",
         title: "Expired",
@@ -498,6 +504,8 @@ const JobDetailView = () => {
       case "Invoiced":
         return currentOperationStatus !== "Finished" ? "Finished" : currentOperationStatus;
       case "Paid":
+        return "Finished";
+      case "Comped":
         return "Finished";
       case "Expired":
         return currentOperationStatus !== "Finished" ? "Estimate Pending" : currentOperationStatus;
@@ -1073,6 +1081,7 @@ const JobDetailView = () => {
       case "Scheduled":
       case "Finished":
       case "Paid":
+      case "Comped":
         return "bg-green-100 text-green-800";
       case "Invoiced":
         return "bg-blue-100 text-blue-800";
@@ -1101,6 +1110,7 @@ const JobDetailView = () => {
       case "Scheduled":
       case "Finished":
       case "Paid":
+      case "Comped":
         return "border-emerald-200 bg-emerald-50 text-emerald-700";
       case "Invoiced":
         return "border-blue-200 bg-blue-50 text-blue-700";
@@ -3619,6 +3629,10 @@ const JobDetailView = () => {
   const cancelJob = async (e) => {
     e.preventDefault();
     if (!requirePermission("24", "update jobs")) return;
+    if (!edit) {
+      toast.error("Click Edit before canceling this job.");
+      return;
+    }
 
     try {
       const previousBillingStatus = job.billingStatus || "";
@@ -3694,7 +3708,11 @@ const JobDetailView = () => {
 
   const deleteJob = async (e) => {
     e.preventDefault();
-    if (!requirePermission("24", "delete jobs")) return;
+    if (!requirePermission("26", "delete jobs")) return;
+    if (!edit) {
+      toast.error("Click Edit before deleting this job.");
+      return;
+    }
     if (!recentlySelectedCompany || !jobId) return;
 
     const ok = window.confirm(
@@ -6785,26 +6803,6 @@ const JobDetailView = () => {
                   )}
                   {can("24") && (
                     <button
-                      type="button"
-                      onClick={cancelJob}
-                      disabled={expiringJob || deletingJob}
-                      className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
-                    </button>
-                  )}
-                  {can("24") && (
-                    <button
-                      type="button"
-                      onClick={deleteJob}
-                      disabled={deletingJob || expiringJob}
-                      className="rounded-md border border-red-300 bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      {deletingJob ? "Deleting..." : "Delete Job"}
-                    </button>
-                  )}
-                  {can("24") && (
-                    <button
                       onClick={editJob}
                       className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                     >
@@ -8671,14 +8669,29 @@ const JobDetailView = () => {
           </button>
         </div>
       </div>
-      {edit && can("24") && (
-        <button
-          onClick={cancelJob}
-          disabled={expiringJob || deletingJob}
-          className="w-full px-4 py-2 text-sm font-medium text-rose-700 bg-rose-50 border border-rose-200 rounded-xl shadow-sm hover:bg-rose-100 transition disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
-        </button>
+      {edit && (can("24") || can("26")) && (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {can("24") && (
+            <button
+              type="button"
+              onClick={cancelJob}
+              disabled={expiringJob || deletingJob}
+              className="w-full rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-medium text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {expiringJob ? "Canceling..." : isJobExpired ? "Refresh Expired Note" : "Cancel Job"}
+            </button>
+          )}
+          {can("26") && (
+            <button
+              type="button"
+              onClick={deleteJob}
+              disabled={deletingJob || expiringJob}
+              className="w-full rounded-xl border border-red-300 bg-red-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {deletingJob ? "Deleting..." : "Delete Job"}
+            </button>
+          )}
+        </div>
       )}
       {showCreateTemplateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
@@ -8883,7 +8896,7 @@ const JobDetailView = () => {
               <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
                 <p className="text-sm font-semibold text-blue-900">Paired-status rules</p>
                 <p className="mt-1 text-sm text-blue-800">
-                  Billing Invoiced or Paid marks operation Finished. Billing Expired or Rejected moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced or paid.
+                  Billing Invoiced, Paid, or Comped marks operation Finished. Billing Expired or Rejected moves unfinished work back to Estimate Pending. Operation Finished leaves billing In Progress until invoiced, paid, or comped.
                 </p>
               </div>
 
