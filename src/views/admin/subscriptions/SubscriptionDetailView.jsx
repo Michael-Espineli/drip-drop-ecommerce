@@ -7,7 +7,7 @@ import toast from 'react-hot-toast';
 import { availableFeatures } from '../../../utils/features';
 
 const SubscriptionDetailView = () => {
-  const ADMIN_YELLOW = '#debf44';
+  const ADMIN_YELLOW = '#efb12f';
 
   const { subscriptionId } = useParams();
   const navigate = useNavigate();
@@ -125,18 +125,18 @@ const SubscriptionDetailView = () => {
   const label = 'block text-sm font-semibold text-slate-400';
   const input =
     `w-full bg-slate-900/70 border border-slate-800/60 rounded-md p-2 mt-1 text-slate-100 ` +
-    `placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[${ADMIN_YELLOW}]/30`;
+    `placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30`;
   const textarea =
     `w-full bg-slate-900/70 border border-slate-800/60 rounded-md p-2 mt-1 text-slate-100 ` +
-    `placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[${ADMIN_YELLOW}]/30`;
+    `placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30`;
   const monoBox =
     'text-base mt-1 p-2 bg-slate-900/70 border border-slate-800/60 rounded-md min-h-[42px] font-mono break-all';
   const readBox =
     'text-base mt-1 p-2 bg-slate-900/50 border border-slate-800/60 rounded-md';
   const btnPrimary =
-    `bg-[${ADMIN_YELLOW}] hover:bg-[${ADMIN_YELLOW}]/90 text-slate-950 font-bold py-3 px-6 rounded-lg transition`;
+    `bg-[#efb12f] hover:bg-[#efb12f]/90 text-slate-950 font-bold py-3 px-6 rounded-lg transition`;
   const btnOutline =
-    `bg-[${ADMIN_YELLOW}]/10 hover:bg-[${ADMIN_YELLOW}]/15 text-[${ADMIN_YELLOW}] font-bold py-3 px-6 rounded-lg transition ring-1 ring-[${ADMIN_YELLOW}]/30`;
+    `bg-[#efb12f]/10 hover:bg-[#efb12f]/15 text-[#efb12f] font-bold py-3 px-6 rounded-lg transition ring-1 ring-[#efb12f]/30`;
   const btnSecondary =
     'bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 px-6 rounded-lg transition';
   const btnCancel =
@@ -211,7 +211,7 @@ const SubscriptionDetailView = () => {
                     name="active"
                     checked={subscription.active}
                     onChange={handleInputChange}
-                    className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[${ADMIN_YELLOW}] focus:ring-[${ADMIN_YELLOW}]/30`}
+                    className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[#efb12f] focus:ring-[#efb12f]/30`}
                   />
                   <label className="ml-2 text-sm text-slate-300">Active</label>
                 </>
@@ -316,7 +316,7 @@ const SubscriptionDetailView = () => {
                             id={`no-limit-${index}`}
                             checked={feature.limit === -1}
                             onChange={(e) => handleNoLimitToggle(index, e.target.checked)}
-                            className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[${ADMIN_YELLOW}] focus:ring-[${ADMIN_YELLOW}]/30`}
+                            className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[#efb12f] focus:ring-[#efb12f]/30`}
                           />
                           <label htmlFor={`no-limit-${index}`} className="ml-2 text-sm font-medium text-slate-300">
                             No Limit

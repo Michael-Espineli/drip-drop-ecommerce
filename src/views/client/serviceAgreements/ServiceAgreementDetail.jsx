@@ -126,6 +126,8 @@ const ServiceAgreementDetail = () => {
   const [startingCheckout, setStartingCheckout] = useState(false);
   const [acceptanceNote, setAcceptanceNote] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const emailParam = queryParams.get('email') || '';
 
   useEffect(() => {
     if (!agreementId) {
@@ -185,11 +187,10 @@ const ServiceAgreementDetail = () => {
   }, [agreement?.billingSubscriptionId]);
 
   useEffect(() => {
-    const queryParams = new URLSearchParams(location.search);
     if (queryParams.get('stripeCheckout') === 'success') {
       toast.success('Payment setup returned from Stripe.');
     }
-  }, [location.search]);
+  }, [queryParams]);
 
   const lineItems = useMemo(
     () => (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []),
@@ -206,9 +207,11 @@ const ServiceAgreementDetail = () => {
   const isClosed = ['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey);
   const supersedesAgreementId = renewalPreviousAgreementId(agreement || {});
   const isSignedIn = Boolean(userId);
-  const redirectParam = encodeURIComponent(`/client/service-agreements/${agreementId}`);
+  const agreementReviewPath = `${location.pathname || `/customer/service-agreements/${agreementId}`}${location.search || ''}`;
+  const redirectParam = encodeURIComponent(agreementReviewPath);
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
-  const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${agreement?.email ? `&email=${encodeURIComponent(agreement.email)}` : ''}`;
+  const signUpEmail = agreement?.email || emailParam;
+  const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${signUpEmail ? `&email=${encodeURIComponent(signUpEmail)}` : ''}`;
   const canAccept = Boolean(isSignedIn && agreement && !isAccepted && !isClosed && !accepting);
   const effectiveSubscriptionId = billingSubscription?.id || agreement?.billingSubscriptionId;
   const subscriptionStatusKey = normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status);
@@ -317,10 +320,34 @@ const ServiceAgreementDetail = () => {
           <ArrowLeftIcon className="h-4 w-4" />
           Finance
         </Link>
-        <div className="rounded-lg border border-rose-200 bg-rose-50 p-8 text-center shadow-sm">
-          <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-rose-500" />
-          <p className="mt-3 font-semibold text-rose-800">{error || 'Service agreement not found.'}</p>
-        </div>
+        {!isSignedIn ? (
+          <div className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
+            <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-amber-500" />
+            <h1 className="mt-3 text-xl font-bold text-amber-950">Sign in to review this agreement</h1>
+            <p className="mt-2 text-sm text-amber-800">
+              Use the homeowner account for this email, or create one to review and accept the service agreement.
+            </p>
+            <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
+              <Link
+                to={signInPath}
+                className="inline-flex justify-center rounded-md bg-amber-600 px-4 py-2 text-sm font-bold text-white hover:bg-amber-700"
+              >
+                Sign In
+              </Link>
+              <Link
+                to={signUpPath}
+                className="inline-flex justify-center rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-bold text-amber-800 hover:bg-amber-100"
+              >
+                Create Account
+              </Link>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-lg border border-rose-200 bg-rose-50 p-8 text-center shadow-sm">
+            <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-rose-500" />
+            <p className="mt-3 font-semibold text-rose-800">{error || 'Service agreement not found.'}</p>
+          </div>
+        )}
       </div>
     );
   }

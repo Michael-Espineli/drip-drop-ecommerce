@@ -1,13 +1,13 @@
 import React, { useMemo, useState } from 'react';
 
-const ADMIN_YELLOW = '#debf44';
+const ADMIN_YELLOW = '#efb12f';
 
 const baseRows = [];
 
 const statusClassMap = {
-  New: 'bg-yellow-500/15 text-yellow-200 ring-yellow-500/30',
+  New: 'bg-[#efb12f]/15 text-[#efb12f] ring-[#efb12f]/30',
   Open: 'bg-blue-500/15 text-blue-200 ring-blue-500/30',
-  Pending: 'bg-orange-500/15 text-orange-200 ring-orange-500/30',
+  Pending: 'bg-[#efb12f]/15 text-[#efb12f] ring-[#efb12f]/30',
   Resolved: 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30',
   Deactivated: 'bg-red-500/15 text-red-200 ring-red-500/30',
 };
@@ -72,7 +72,7 @@ function AdminQueueTemplate({
         {primaryActionLabel && (
           <button
             type="button"
-            className="px-4 py-2 rounded-md font-semibold bg-[#debf44] text-slate-950 hover:bg-[#debf44]/90 transition"
+            className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
           >
             {primaryActionLabel}
           </button>
@@ -102,13 +102,13 @@ function AdminQueueTemplate({
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search"
-              className="w-full sm:w-72 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="w-full sm:w-72 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             />
 
             <select
               value={selectedFilter}
               onChange={(event) => setSelectedFilter(event.target.value)}
-              className="w-full sm:w-48 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="w-full sm:w-48 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             >
               {(filters || [{ label: 'All', value: 'all' }]).map((filter) => (
                 <option key={filter.value} value={filter.value}>

@@ -38,6 +38,20 @@
     background-color: var(--color-app-bg);
   }
 
+:root {
+    --admin-yellow: #efb12f;
+    --admin-dark-bg: #292929;
+    --admin-light-bg: #808080;
+    --admin-surface: #292929;
+    --admin-surface-soft: rgba(128, 128, 128, 0.16);
+    --admin-surface-softer: rgba(128, 128, 128, 0.1);
+    --admin-border: rgba(128, 128, 128, 0.35);
+    --admin-border-soft: rgba(128, 128, 128, 0.24);
+    --admin-text: #f7f7f7;
+    --admin-muted: #c7c7c7;
+    --admin-subtle: #a8a8a8;
+}
+
 .theme-dark {
     --color-app-bg: #050914;
     --color-page-bg: #070d1b;
@@ -92,6 +106,116 @@ body {
     .theme-shell {
         background: var(--color-app-bg);
         color: var(--color-text);
+    }
+
+    .admin-theme {
+        background: var(--admin-dark-bg);
+        color: var(--admin-text);
+    }
+
+    .admin-theme.bg-slate-900,
+    .admin-theme .bg-slate-900,
+    .admin-theme .bg-slate-950 {
+        background-color: var(--admin-surface);
+    }
+
+    .admin-theme .bg-slate-800,
+    .admin-theme .bg-slate-700 {
+        background-color: color-mix(in srgb, var(--admin-light-bg) 24%, transparent);
+    }
+
+    .admin-theme .bg-slate-900\/80,
+    .admin-theme .bg-slate-900\/70 {
+        background-color: color-mix(in srgb, var(--admin-light-bg) 22%, transparent);
+    }
+
+    .admin-theme .bg-slate-900\/60,
+    .admin-theme .bg-slate-900\/50,
+    .admin-theme .bg-slate-900\/40,
+    .admin-theme .bg-slate-900\/30 {
+        background-color: var(--admin-surface-soft);
+    }
+
+    .admin-theme .hover\:bg-slate-900:hover,
+    .admin-theme .hover\:bg-slate-800:hover,
+    .admin-theme .hover\:bg-slate-900\/70:hover,
+    .admin-theme .hover\:bg-slate-900\/60:hover,
+    .admin-theme .hover\:bg-slate-900\/50:hover {
+        background-color: color-mix(in srgb, var(--admin-light-bg) 28%, transparent);
+    }
+
+    .admin-theme .border-slate-800\/60,
+    .admin-theme .border-slate-700 {
+        border-color: var(--admin-border);
+    }
+
+    .admin-theme .divide-slate-800\/60 > :not([hidden]) ~ :not([hidden]) {
+        border-color: var(--admin-border);
+    }
+
+    .admin-theme .ring-slate-800\/80,
+    .admin-theme .ring-slate-800\/60,
+    .admin-theme .ring-slate-700,
+    .admin-theme .ring-slate-600 {
+        --tw-ring-color: var(--admin-border);
+    }
+
+    .admin-theme .text-slate-300,
+    .admin-theme .text-slate-400 {
+        color: var(--admin-muted);
+    }
+
+    .admin-theme .text-slate-500 {
+        color: var(--admin-subtle);
+    }
+
+    .admin-theme .placeholder\:text-slate-500::placeholder {
+        color: var(--admin-subtle);
+    }
+
+    .admin-theme .bg-yellow-400,
+    .admin-theme .bg-yellow-500\/15,
+    .admin-theme .bg-orange-500\/10,
+    .admin-theme .bg-orange-500\/15,
+    .admin-theme .bg-amber-500\/15 {
+        background-color: color-mix(in srgb, var(--admin-yellow) 16%, transparent);
+    }
+
+    .admin-theme .bg-yellow-400 {
+        background-color: var(--admin-yellow);
+    }
+
+    .admin-theme .hover\:bg-yellow-300:hover,
+    .admin-theme .hover\:bg-yellow-400\/15:hover,
+    .admin-theme .hover\:bg-orange-500\/20:hover {
+        background-color: color-mix(in srgb, var(--admin-yellow) 22%, transparent);
+    }
+
+    .admin-theme .text-yellow-200,
+    .admin-theme .text-yellow-300,
+    .admin-theme .text-orange-100,
+    .admin-theme .text-orange-200,
+    .admin-theme .text-amber-200,
+    .admin-theme .text-amber-300 {
+        color: var(--admin-yellow);
+    }
+
+    .admin-theme .ring-yellow-400\/30,
+    .admin-theme .ring-yellow-500\/30,
+    .admin-theme .ring-orange-400\/30,
+    .admin-theme .ring-orange-500\/20,
+    .admin-theme .ring-orange-500\/30,
+    .admin-theme .ring-amber-500\/30 {
+        --tw-ring-color: color-mix(in srgb, var(--admin-yellow) 35%, transparent);
+    }
+
+    .admin-theme .focus\:border-yellow-400\/50:focus {
+        border-color: color-mix(in srgb, var(--admin-yellow) 55%, transparent);
+    }
+
+    .admin-theme .focus\:ring-yellow-400\/30:focus,
+    .admin-theme .focus\:ring-yellow-500\/30:focus {
+        --tw-ring-color: color-mix(in srgb, var(--admin-yellow) 35%, transparent);
     }
 
     .theme-page {
@@ -301,9 +425,37 @@ body {
         color: var(--color-text) !important;
     }
 
+    .theme-dark .admin-theme,
+    .theme-dark .admin-theme.bg-slate-900,
+    .theme-dark .admin-theme .bg-slate-900,
+    .theme-dark .admin-theme .bg-slate-950 {
+        background-color: var(--admin-dark-bg) !important;
+        color: var(--admin-text) !important;
+    }
+
+    .theme-dark .admin-theme .bg-slate-900\/80,
+    .theme-dark .admin-theme .bg-slate-900\/70 {
+        background-color: color-mix(in srgb, var(--admin-light-bg) 22%, transparent) !important;
+    }
+
+    .theme-dark .admin-theme .bg-slate-900\/60,
+    .theme-dark .admin-theme .bg-slate-900\/50,
+    .theme-dark .admin-theme .bg-slate-900\/40,
+    .theme-dark .admin-theme .bg-slate-900\/30 {
+        background-color: var(--admin-surface-soft) !important;
+    }
+
     .theme-dark .hover\:bg-slate-800:hover,
     .theme-dark .hover\:bg-gray-800:hover {
         background-color: #1d304d !important;
+    }
+
+    .theme-dark .admin-theme .hover\:bg-slate-900:hover,
+    .theme-dark .admin-theme .hover\:bg-slate-800:hover,
+    .theme-dark .admin-theme .hover\:bg-slate-900\/70:hover,
+    .theme-dark .admin-theme .hover\:bg-slate-900\/60:hover,
+    .theme-dark .admin-theme .hover\:bg-slate-900\/50:hover {
+        background-color: color-mix(in srgb, var(--admin-light-bg) 28%, transparent) !important;
     }
 
     .theme-dark .text-black,

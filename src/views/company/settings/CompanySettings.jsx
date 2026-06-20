@@ -263,7 +263,7 @@ const NavigationOrderSettings = () => {
                                     Edit Navigation Order
                                 </h3>
                                 <p className="mt-1 text-sm text-slate-500">
-                                    Move each sidebar category into the order you want. Dashboard and Messages stay above Book Marks.
+                                    Move each sidebar category into the order you want. Manage Book Marks below.
                                 </p>
                             </div>
                             <button
@@ -277,7 +277,38 @@ const NavigationOrderSettings = () => {
                         </div>
 
                         <div className="max-h-[60vh] overflow-y-auto p-5">
-                            <div className="mb-5 rounded-md border border-slate-200 bg-slate-50 p-4">
+                            <div className="mb-5 divide-y divide-slate-100 rounded-md border border-slate-200">
+                                {categoryOrder.map((category, index) => (
+                                    <div key={category} className="flex items-center justify-between gap-3 p-3">
+                                        <div>
+                                            <p className="text-sm font-semibold text-slate-900">{category}</p>
+                                            <p className="text-xs text-slate-500">Position {index + 1}</p>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                type="button"
+                                                onClick={() => moveCategory(index, -1)}
+                                                disabled={index === 0 || isSaving}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${category} up`}
+                                            >
+                                                <ArrowUpIcon className="h-4 w-4" />
+                                            </button>
+                                            <button
+                                                type="button"
+                                                onClick={() => moveCategory(index, 1)}
+                                                disabled={index === categoryOrder.length - 1 || isSaving}
+                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                                                aria-label={`Move ${category} down`}
+                                            >
+                                                <ArrowDownIcon className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                                 <div className="mb-3 flex items-start gap-3">
                                     <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-white text-slate-600 shadow-sm ring-1 ring-slate-200">
                                         <BookmarkIcon className="h-5 w-5" />
@@ -285,7 +316,7 @@ const NavigationOrderSettings = () => {
                                     <div>
                                         <h4 className="text-sm font-semibold text-slate-900">{BOOKMARKS_SECTION_TITLE}</h4>
                                         <p className="mt-0.5 text-xs text-slate-500">
-                                            Select pages to show below Dashboard and Messages and above your ordered categories.
+                                            Select pages to show below Dashboard and Messages in your sidebar.
                                         </p>
                                     </div>
                                 </div>
@@ -324,37 +355,6 @@ const NavigationOrderSettings = () => {
                                         No bookmarkable pages are available for this user.
                                     </p>
                                 )}
-                            </div>
-
-                            <div className="divide-y divide-slate-100 rounded-md border border-slate-200">
-                                {categoryOrder.map((category, index) => (
-                                    <div key={category} className="flex items-center justify-between gap-3 p-3">
-                                        <div>
-                                            <p className="text-sm font-semibold text-slate-900">{category}</p>
-                                            <p className="text-xs text-slate-500">Position {index + 1}</p>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <button
-                                                type="button"
-                                                onClick={() => moveCategory(index, -1)}
-                                                disabled={index === 0 || isSaving}
-                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                                aria-label={`Move ${category} up`}
-                                            >
-                                                <ArrowUpIcon className="h-4 w-4" />
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => moveCategory(index, 1)}
-                                                disabled={index === categoryOrder.length - 1 || isSaving}
-                                                className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-                                                aria-label={`Move ${category} down`}
-                                            >
-                                                <ArrowDownIcon className="h-4 w-4" />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
                             </div>
                         </div>
 

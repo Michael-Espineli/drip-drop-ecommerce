@@ -27,6 +27,9 @@ const SERVICE_STOP_OPERATION_STATUS = {
 };
 
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
+const panelClass = 'rounded-lg border border-gray-200 bg-white p-5 shadow-sm';
+const actionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
+const secondaryActionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
 
 const isLeadServiceEstimateVisit = (visit = {}) => {
     const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
@@ -50,9 +53,24 @@ const isLeadServiceEstimateVisit = (visit = {}) => {
     );
 };
 
+const buildServiceAgreementDraftPath = ({
+    lead = {},
+    customerId = '',
+    serviceLocationId = '',
+    serviceStopId = '',
+} = {}) => {
+    const params = new URLSearchParams();
+    if (lead.id) params.set('leadId', lead.id);
+    if (customerId) params.set('customerId', customerId);
+    if (serviceLocationId) params.set('serviceLocationId', serviceLocationId);
+    if (serviceStopId) params.set('serviceStopId', serviceStopId);
+
+    return `/company/sales/agreements/new${params.toString() ? `?${params.toString()}` : ''}`;
+};
+
 const EstimateSnapshot = ({ estimate }) => {
     return (
-        <div className="bg-white p-6 rounded-2xl shadow-lg">
+        <div className={panelClass}>
             <h3 className="text-lg font-semibold text-gray-800 mb-4">Estimate Details</h3>
             <dl className="space-y-2">
                 <div>
@@ -79,7 +97,7 @@ const EstimateSnapshot = ({ estimate }) => {
 
             <Link
                 to={`/company/contract/detail/${estimate.id}`}
-                className="block w-full text-center mt-4 px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700"
+                className={`${actionButtonClass} mt-4`}
             >
                 View Estimate
             </Link>
@@ -105,7 +123,7 @@ const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) 
     const badge = getVisitBadge(existingVisit);
 
     return (
-        <div className="bg-white p-6 rounded-2xl shadow-lg">
+        <div className={panelClass}>
             <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
                 {badge && (
@@ -138,7 +156,7 @@ const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) 
 
                     <Link
                         to={`/company/serviceStops/detail/${existingVisit.id}`}
-                        className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
+                        className={actionButtonClass}
                     >
                         View Visit
                     </Link>
@@ -152,7 +170,7 @@ const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) 
                     <Link
                         to={schedulerPath}
                         state={schedulerState}
-                        className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium"
+                        className={actionButtonClass}
                     >
                         Create Service Estimate
                     </Link>
@@ -164,7 +182,7 @@ const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) 
 
 const PreEstimateVisitLockedCard = ({ lead }) => {
     return (
-        <div className="bg-white p-6 rounded-2xl shadow-lg">
+        <div className={panelClass}>
             <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-800">Service Estimate</h3>
                 <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">
@@ -503,6 +521,12 @@ export default function LeadDetail() {
         return `/company/serviceStops/createNew?${params.toString()}`;
     };
     const serviceEstimateSchedulerPath = buildServiceStopSchedulerPath('serviceAgreementEstimate');
+    const serviceAgreementDraftPath = buildServiceAgreementDraftPath({
+        lead,
+        customerId: linkedCustomerId,
+        serviceLocationId: linkedServiceLocationId,
+        serviceStopId: estimateVisit?.id || '',
+    });
 
     const handleCreateJobFromLead = () => {
         if (!linkedCustomerId) {
@@ -524,6 +548,15 @@ export default function LeadDetail() {
         navigate(serviceEstimateSchedulerPath, { state: leadContextState });
     };
 
+    const handleCreateServiceAgreementFromLead = () => {
+        if (!linkedCustomerId) {
+            toast.error('Create a customer before creating a service agreement from this lead.');
+            return;
+        }
+
+        navigate(serviceAgreementDraftPath, { state: leadContextState });
+    };
+
     const renderActions = () => {
         if (!linkedCustomerId) {
             if (!can("612")) return null;
@@ -531,7 +564,7 @@ export default function LeadDetail() {
             return (
                 <button
                     onClick={() => navigate(`/company/customers/create-from-lead/${lead.id}`)}
-                    className="w-full py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
+                    className={actionButtonClass}
                 >
                     Convert Lead to Customer
                 </button>
@@ -546,7 +579,7 @@ export default function LeadDetail() {
                     {can("22") && (
                         <button
                             onClick={handleCreateJobFromLead}
-                            className="w-full py-2.5 px-4 rounded-md text-white bg-indigo-600 hover:bg-indigo-700 font-medium"
+                            className={secondaryActionButtonClass}
                         >
                             Create Job
                         </button>
@@ -554,15 +587,15 @@ export default function LeadDetail() {
                     {can("242") && (
                         <button
                             onClick={handleScheduleEstimateVisitFromLead}
-                            className="w-full py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
+                            className={actionButtonClass}
                         >
                             Schedule Service Estimate
                         </button>
                     )}
                     {can("612") && (
                         <button
-                            onClick={() => navigate(`/company/recurring-contracts/createNew/${linkedCustomerId}`)}
-                            className="w-full py-2.5 px-4 rounded-md text-white bg-green-600 hover:bg-green-700 font-medium"
+                            onClick={handleCreateServiceAgreementFromLead}
+                            className={actionButtonClass}
                         >
                             Send Estimate
                         </button>
@@ -575,9 +608,10 @@ export default function LeadDetail() {
     };
 
     return (
-        <div className="p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen">
-            <div className="mx-auto">
-                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <Link to="/company/leads" className="text-sm font-medium text-gray-600 hover:text-gray-900">
                             &larr; Back to Leads
@@ -597,21 +631,13 @@ export default function LeadDetail() {
                                 Edit
                             </button>
                         )}
-                        {can("616") && (
-                            <button
-                                type="button"
-                                onClick={() => setShowDeleteModal(true)}
-                                className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
-                            >
-                                Delete
-                            </button>
-                        )}
                     </div>
-                </div>
+                    </div>
+                </section>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                    <div className="lg:col-span-2 space-y-8">
-                        <div className="bg-white p-8 rounded-2xl shadow-lg">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+                    <div className="space-y-6 lg:col-span-2">
+                        <div className={panelClass}>
                             <div className="flex items-center justify-between mb-6">
                                 <h1 className="text-3xl font-bold text-gray-900">{serviceName}</h1>
                                 <span className="px-3 py-1 text-sm font-semibold rounded-full bg-blue-100 text-blue-800">
@@ -619,7 +645,7 @@ export default function LeadDetail() {
                                 </span>
                             </div>
 
-                            <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 mb-6">
+                            <div className="mb-6 rounded-md border border-gray-200 bg-gray-50 p-4">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
                                         <div className="flex flex-wrap items-center gap-2">
@@ -670,7 +696,7 @@ export default function LeadDetail() {
                                 />
                             </div>
 
-                            <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 mb-6">
+                            <div className="mb-6 rounded-md border border-amber-200 bg-amber-50 p-4">
                                 <div className="flex items-center justify-between gap-3">
                                     <div>
                                         <div className="flex flex-wrap items-center gap-2">
@@ -746,7 +772,7 @@ export default function LeadDetail() {
                         </div>
 
                         {hasPublicIntakeDetails && (
-                            <div className="bg-white p-8 rounded-2xl shadow-lg">
+                            <div className={panelClass}>
                                 <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                     <div>
                                         <h3 className="text-xl font-bold text-gray-900">Public Intake Details</h3>
@@ -845,7 +871,7 @@ export default function LeadDetail() {
                                         <h4 className="text-base font-semibold text-gray-900">Pools & Spas</h4>
                                         <div className="mt-3 grid gap-3 md:grid-cols-2">
                                             {publicBodiesOfWater.map((body, index) => (
-                                                <div key={body.id || `public-body-${index}`} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                                <div key={body.id || `public-body-${index}`} className="rounded-md border border-gray-200 bg-gray-50 p-4">
                                                     <p className="font-semibold text-gray-900">{body.name || body.type || `Pool / Spa ${index + 1}`}</p>
                                                     <p className="mt-1 text-sm text-gray-600">
                                                         {[body.type, body.sizeCategory, body.gallons ? `${body.gallons} gal` : '', body.waterType, body.condition, body.material].filter(Boolean).join(' / ') || 'No pool details submitted'}
@@ -876,7 +902,7 @@ export default function LeadDetail() {
                             </div>
                         )}
 
-                        <div className="bg-white p-8 rounded-2xl shadow-lg">
+                        <div className={panelClass}>
                             <h3 className="text-xl font-bold text-gray-900 mb-6">Homeowner & Location</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div>
@@ -924,7 +950,7 @@ export default function LeadDetail() {
 
                     <div className="space-y-6">
                         {can("614") && (
-                            <div className="bg-white p-6 rounded-2xl shadow-lg">
+                            <div className={panelClass}>
                                 <h3 className="text-lg font-semibold text-gray-800 mb-4">Manage Status</h3>
                                 <select
                                     value={status}
@@ -954,14 +980,14 @@ export default function LeadDetail() {
                         ) : (
                             <>
                                 {linkedCustomerId && (
-                                    <div className="bg-white p-6 rounded-2xl shadow-lg">
+                                    <div className={panelClass}>
                                         <h3 className="text-lg font-semibold text-gray-800 mb-4">
                                             Associated Customer
                                         </h3>
                                         <p className="text-gray-800 mb-3">{customerName}</p>
                                         <Link
                                             to={`/company/customers/details/${linkedCustomerId}`}
-                                            className="block w-full text-center py-2.5 px-4 rounded-md text-white bg-blue-600 hover:bg-blue-700 font-medium"
+                                            className={actionButtonClass}
                                         >
                                             View Customer Profile
                                         </Link>
@@ -969,7 +995,7 @@ export default function LeadDetail() {
                                 )}
 
                                 {(can("612") || can("22") || can("242")) && (
-                                    <div className="bg-white p-6 rounded-2xl shadow-lg">
+                                    <div className={panelClass}>
                                         <h3 className="text-lg font-semibold text-gray-800 mb-4">
                                             {linkedCustomerId ? 'Next Steps' : 'Lead Conversion'}
                                         </h3>

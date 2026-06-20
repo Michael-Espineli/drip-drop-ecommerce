@@ -84,7 +84,7 @@ const RepairRequestDetail = () => {
         return null;
     }
 
-    const images = request.photoUrls.map(data => new DripDropStoredImage(data));
+    const images = (request.photoUrls || []).map(data => new DripDropStoredImage(data));
 
     return (
         <div className="bg-gray-100 min-h-screen">

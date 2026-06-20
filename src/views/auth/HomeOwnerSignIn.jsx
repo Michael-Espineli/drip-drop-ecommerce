@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { getAuth, signInWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, sendPasswordResetEmail, signInWithEmailAndPassword } from 'firebase/auth';
 import toast from 'react-hot-toast';
 import { Context } from "../../context/AuthContext";
 
@@ -8,6 +8,7 @@ export default function HomeOwnerSignIn() {
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [loading, setLoading] = useState(false);
+    const [resetLoading, setResetLoading] = useState(false);
     const auth = getAuth();
 
     const navigate = useNavigate();
@@ -76,6 +77,36 @@ export default function HomeOwnerSignIn() {
         }
     };
 
+    const handlePasswordReset = async () => {
+        const trimmedEmail = email.trim();
+
+        if (!trimmedEmail) {
+            toast.error('Enter your email address first.');
+            return;
+        }
+
+        setResetLoading(true);
+        try {
+            await sendPasswordResetEmail(auth, trimmedEmail);
+            toast.success('Password reset email sent.');
+        } catch (error) {
+            console.error("Firebase Password Reset Error:", error);
+            switch (error.code) {
+                case 'auth/invalid-email':
+                    toast.error('Please enter a valid email address.');
+                    break;
+                case 'auth/user-not-found':
+                    toast.error('No account found for that email address.');
+                    break;
+                default:
+                    toast.error('Unable to send reset email. Please try again.');
+                    break;
+            }
+        } finally {
+            setResetLoading(false);
+        }
+    };
+
     return (
         <div className="bg-gray-50 min-h-screen">
             <header className="py-6 px-4 sm:px-6 lg:px-8">
@@ -113,8 +144,13 @@ export default function HomeOwnerSignIn() {
                             />
 
                             <div className="text-sm text-right">
-                                <button type="button" className="font-medium text-blue-600 hover:text-blue-500">
-                                    Forgot your password?
+                                <button
+                                    type="button"
+                                    onClick={handlePasswordReset}
+                                    disabled={resetLoading}
+                                    className="font-medium text-blue-600 hover:text-blue-500 disabled:opacity-50"
+                                >
+                                    {resetLoading ? 'Sending reset email...' : 'Forgot your password?'}
                                 </button>
                             </div>
 

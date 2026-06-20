@@ -16,7 +16,7 @@ import { db } from '../../../utils/config';
 import { APP_LIVE_FEATURE_FLAG_ID, FeatureFlag } from '../../../utils/models/FeatureFlag';
 
 const MAX_FLAG_INDEX = 100;
-const ADMIN_YELLOW = '#debf44';
+const ADMIN_YELLOW = '#efb12f';
 const REAL_EMAILS_FLAG_ID = 'feature_flag_012';
 const LEGACY_REAL_EMAILS_FLAG_ID = 'feature_flag_005';
 const LEGACY_REAL_EMAILS_NAME = 'Turn on real emails';
@@ -315,7 +315,7 @@ function FeatureFlags() {
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search flags"
-              className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30 sm:w-64"
+              className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30 sm:w-64"
             />
 
             <button
@@ -349,7 +349,7 @@ function FeatureFlags() {
           </div>
           <div className="border border-slate-800/60 bg-slate-900/50 p-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">App Launch</p>
-            <p className={`text-2xl font-bold ${appLiveFlag?.enabled ? 'text-emerald-300' : 'text-amber-300'}`}>
+            <p className={`text-2xl font-bold ${appLiveFlag?.enabled ? 'text-emerald-300' : 'text-[#efb12f]'}`}>
               {appLiveFlag?.enabled ? 'Live' : 'Closed'}
             </p>
             <p className="mt-1 text-xs text-slate-500">
@@ -358,7 +358,7 @@ function FeatureFlags() {
           </div>
           <div className="border border-slate-800/60 bg-slate-900/50 p-3">
             <p className="text-xs uppercase tracking-wide text-slate-500">Real Emails</p>
-            <p className={`text-2xl font-bold ${realEmailsFlag?.enabled ? 'text-emerald-300' : 'text-amber-300'}`}>
+            <p className={`text-2xl font-bold ${realEmailsFlag?.enabled ? 'text-emerald-300' : 'text-[#efb12f]'}`}>
               {realEmailsFlag?.enabled ? 'On' : 'Test'}
             </p>
           </div>
@@ -401,7 +401,7 @@ function FeatureFlags() {
                       }}
                       placeholder="Unnamed feature flag"
                       disabled={savingFlagIds[flag.id]}
-                      className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                     {flag.description && (
                       <p className="mt-2 max-w-2xl text-xs leading-5 text-slate-500">
@@ -427,7 +427,7 @@ function FeatureFlags() {
                         }
                       }}
                       disabled={savingFlagIds[flag.id]}
-                      className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-yellow-500/30 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="w-full rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30 disabled:cursor-not-allowed disabled:opacity-60"
                     />
                     <p className="mt-2 text-xs text-slate-500">
                       {flag.releaseDate ? formatDate(flag.releaseDate) : 'Optional'}

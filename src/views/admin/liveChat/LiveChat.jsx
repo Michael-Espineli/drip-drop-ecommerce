@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 
-const ADMIN_YELLOW = '#debf44';
+const ADMIN_YELLOW = '#efb12f';
 
 function LiveChat() {
   const [searchTerm, setSearchTerm] = useState('');
@@ -40,7 +40,7 @@ function LiveChat() {
           </div>
           <div className="bg-slate-950 border border-slate-800/60 rounded-xl px-4 py-3 min-w-28">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Waiting</p>
-            <p className="mt-1 text-2xl font-extrabold text-orange-200">0</p>
+            <p className="mt-1 text-2xl font-extrabold text-[#efb12f]">0</p>
           </div>
           <div className="bg-slate-950 border border-slate-800/60 rounded-xl px-4 py-3 min-w-28">
             <p className="text-xs font-bold uppercase tracking-wider text-slate-500">Closed</p>
@@ -57,7 +57,7 @@ function LiveChat() {
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search conversations"
-              className="w-full px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="w-full px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             />
           </div>
 
@@ -122,12 +122,12 @@ function LiveChat() {
                 type="text"
                 disabled={!selectedConversation}
                 placeholder="Type a reply"
-                className="flex-1 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+                className="flex-1 px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
               />
               <button
                 type="button"
                 disabled={!selectedConversation}
-                className="px-4 py-2 rounded-md font-semibold bg-[#debf44] text-slate-950 hover:bg-[#debf44]/90 transition disabled:opacity-40"
+                className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition disabled:opacity-40"
               >
                 Send
               </button>

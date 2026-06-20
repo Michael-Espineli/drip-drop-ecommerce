@@ -63,7 +63,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
     const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0 });
-    const categoryLabel = (category) => category === 'Users' ? 'Users, Vendors & Fleet' : category;
+    const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
     const navigationSections = [

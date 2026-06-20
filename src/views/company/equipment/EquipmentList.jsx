@@ -2,7 +2,7 @@ import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { collection, doc, getDocs, orderBy, query, setDoc, updateDoc, where } from "firebase/firestore";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   EQUIPMENT_STATUS_OPTIONS,
   Equipment,
@@ -29,6 +29,24 @@ const EMPTY_TOP_COUNTS = {
   maintenance: 0,
   repair: 0,
   nonOperational: 0,
+};
+
+const DEFAULT_EQUIPMENT_FILTER = "maintenance";
+const EQUIPMENT_FILTER_PATH_SEGMENTS = {
+  all: "all-equipment",
+  maintenance: "needs-maintenance",
+  repair: "needs-repair",
+  nonOperational: "non-operational",
+};
+const EQUIPMENT_FILTER_ALIASES = {
+  all: "all",
+  "all-equipment": "all",
+  maintenance: "maintenance",
+  "needs-maintenance": "maintenance",
+  repair: "repair",
+  "needs-repair": "repair",
+  nonOperational: "nonOperational",
+  "non-operational": "nonOperational",
 };
 
 const CUSTOM_CATALOG_VALUE = "__custom__";
@@ -156,6 +174,12 @@ const getQuickStatusOption = (status) => {
   );
 };
 
+const getEquipmentFilterFromTab = (tabValue) =>
+  EQUIPMENT_FILTER_ALIASES[tabValue] || DEFAULT_EQUIPMENT_FILTER;
+
+const getEquipmentFilterPath = (filter) =>
+  EQUIPMENT_FILTER_PATH_SEGMENTS[filter] || EQUIPMENT_FILTER_PATH_SEGMENTS[DEFAULT_EQUIPMENT_FILTER];
+
 const TopFilterButton = ({ label, count, active, onClick }) => (
   <button
     onClick={onClick}
@@ -211,6 +235,7 @@ const EquipmentDetailLink = ({ equipment, children }) => (
 
 export default function EquipmentList() {
   const navigate = useNavigate();
+  const { tab } = useParams();
   const { recentlySelectedCompany } = useContext(Context);
   const { can } = useCompanyPermissions();
 
@@ -233,7 +258,7 @@ export default function EquipmentList() {
   const [equipmentError, setEquipmentError] = useState("");
 
   // all | maintenance | repair | nonOperational
-  const [topFilter, setTopFilter] = useState("maintenance");
+  const [topFilter, setTopFilter] = useState(() => getEquipmentFilterFromTab(tab));
   const [openActionMenuId, setOpenActionMenuId] = useState("");
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [activeQuickModal, setActiveQuickModal] = useState("");
@@ -273,6 +298,17 @@ export default function EquipmentList() {
   const [repairPartsReplaced, setRepairPartsReplaced] = useState([]);
   const [currentPart, setCurrentPart] = useState("");
   const [repairNotes, setRepairNotes] = useState("");
+
+  useEffect(() => {
+    const nextFilter = getEquipmentFilterFromTab(tab);
+    const canonicalTab = getEquipmentFilterPath(nextFilter);
+
+    setTopFilter(nextFilter);
+
+    if (tab !== canonicalTab) {
+      navigate(`/company/equipment/${canonicalTab}`, { replace: true });
+    }
+  }, [tab, navigate]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -551,6 +587,7 @@ export default function EquipmentList() {
 
   const handleTopFilterChange = (filter) => {
     setTopFilter(filter);
+    navigate(`/company/equipment/${getEquipmentFilterPath(filter)}`);
 
     if (filter === "maintenance") {
       setSortBy("nextServiceDate");

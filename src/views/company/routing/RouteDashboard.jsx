@@ -3,7 +3,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
 import { query, collection, getDocs, getDoc, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { ArrowDownIcon, ArrowUpIcon, ChevronLeftIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import {
+    ArrowDownIcon,
+    ArrowUpIcon,
+    BriefcaseIcon,
+    ChevronLeftIcon,
+    ChevronRightIcon,
+    ClipboardDocumentCheckIcon,
+    MapIcon,
+} from '@heroicons/react/24/outline';
 import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
@@ -28,6 +36,26 @@ const WEEK_STOP_BUCKETS = Object.freeze({
     routes: 'routes',
     jobs: 'jobs',
     estimates: 'estimates',
+});
+const SERVICE_STOP_KIND_META = Object.freeze({
+    [WEEK_STOP_BUCKETS.routes]: {
+        label: 'Route',
+        Icon: MapIcon,
+        badgeClassName: 'border-blue-200 bg-blue-50 text-blue-700',
+        rowClassName: 'border-l-blue-500',
+    },
+    [WEEK_STOP_BUCKETS.jobs]: {
+        label: 'Job',
+        Icon: BriefcaseIcon,
+        badgeClassName: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+        rowClassName: 'border-l-emerald-500',
+    },
+    [WEEK_STOP_BUCKETS.estimates]: {
+        label: 'Estimate',
+        Icon: ClipboardDocumentCheckIcon,
+        badgeClassName: 'border-violet-200 bg-violet-50 text-violet-700',
+        rowClassName: 'border-l-violet-500',
+    },
 });
 
 const getDateValue = (value) => {
@@ -424,6 +452,26 @@ const getServiceStopWeekBucket = (stop = {}) => {
     }
 
     return WEEK_STOP_BUCKETS.routes;
+};
+
+const getServiceStopKindMeta = (stop = {}) => (
+    SERVICE_STOP_KIND_META[getServiceStopWeekBucket(stop)] || SERVICE_STOP_KIND_META[WEEK_STOP_BUCKETS.routes]
+);
+
+const ServiceStopKindBadge = ({ stop, compact = false }) => {
+    const meta = getServiceStopKindMeta(stop);
+    const Icon = meta.Icon;
+
+    return (
+        <span
+            className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-bold ${meta.badgeClassName}`}
+            title={`${meta.label} service stop`}
+        >
+            <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+            {!compact && <span>{meta.label}</span>}
+            <span className="sr-only">{meta.label} service stop</span>
+        </span>
+    );
 };
 
 const pickCanonicalRoute = (routes) => (
@@ -2049,17 +2097,21 @@ const RouteDashboard = () => {
                         <p className="text-gray-500">Loading dashboard...</p>
                     </div>
                 ) : (
-                    <main className="grid grid-cols-1 gap-4 2xl:grid-cols-[minmax(0,1fr)_380px]">
-                        <div className="min-w-0 space-y-4">
+                    <main className="space-y-4">
                             <RouteWorkloadBoard
                                 routes={displayActiveRoutes}
                                 stops={serviceStops}
+                                now={now}
+                                technicians={technicians}
+                                fleetVehicles={fleetVehicles}
                                 selectedRouteId={selectedRouteId}
                                 selectedStopIds={selectedStopIds}
+                                vehicleUpdatingRouteId={vehicleUpdatingRouteId}
                                 onSelectRoute={setSelectedRouteId}
                                 onSelectRouteStops={toggleRouteUnfinishedStops}
                                 onToggleStop={toggleSelectedStop}
                                 onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
+                                onVehicleChange={updateRouteVehicle}
                             />
 
                             <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -2228,29 +2280,6 @@ const RouteDashboard = () => {
                                     onToggleStop={toggleSelectedStop}
                                 />
                             </section>
-                        </div>
-
-                        <aside className="space-y-4 2xl:sticky 2xl:top-4 2xl:self-start">
-                            <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-                                <h2 className="text-lg font-bold text-gray-800">Technician Overview</h2>
-                                <div className="mt-3 max-h-[70vh] space-y-3 overflow-y-auto pr-1">
-                                    {displayActiveRoutes.length > 0 ? displayActiveRoutes.map(route => (
-                                        <TechRouteCard
-                                            key={route.id}
-                                            route={route}
-                                            stops={serviceStops}
-                                            now={now}
-                                            technicians={technicians}
-                                            fleetVehicles={fleetVehicles}
-                                            onVehicleChange={updateRouteVehicle}
-                                            isVehicleUpdating={vehicleUpdatingRouteId === route.id}
-                                        />
-                                    )) : (
-                                        <p className="text-gray-500 pt-4">No active routes for this date.</p>
-                                    )}
-                                </div>
-                            </section>
-                        </aside>
                     </main>
                 )}
             </div>
@@ -2401,15 +2430,93 @@ const getRouteStatusClass = (status) => {
     }
 };
 
+const RouteSummaryDatum = ({ label, value, helper }) => (
+    <div className="min-w-0">
+        <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</p>
+        <p className="truncate text-sm font-bold text-gray-900">{value}</p>
+        {helper && <p className="truncate text-xs text-gray-500">{helper}</p>}
+    </div>
+);
+
+const RouteTechnicianSummary = ({
+    route,
+    stops,
+    now,
+    technicians,
+    fleetVehicles,
+    onVehicleChange,
+    isVehicleUpdating,
+}) => {
+    if (!route) return null;
+
+    const activeStop = stops.find(stop => {
+        const { start, end } = getStopTiming(stop);
+        return start && !end;
+    });
+    const activeStart = activeStop ? getStopTiming(activeStop).start : null;
+    const durationMinutes = getRouteDurationMinutes(route);
+    const vehicleOptions = buildVehicleOptionsForRoute(route, technicians, fleetVehicles);
+    const mileageText = route.distanceMiles ? `${Number(route.distanceMiles).toFixed(1)} mi` : 'N/A';
+    const durationText = activeStart
+        ? formatElapsedDuration(activeStart, now)
+        : durationMinutes
+            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
+            : 'N/A';
+
+    return (
+        <div className="mt-3 grid gap-3 border-t border-gray-200 pt-3 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="min-w-0 sm:col-span-2 xl:col-span-1">
+                <div className="mb-1 flex items-center justify-between gap-2">
+                    <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Vehicle</p>
+                    <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
+                        {routeVehicleSourceLabel(route)}
+                    </span>
+                </div>
+                <select
+                    value={routeVehicleSelectionValue(route)}
+                    onChange={(event) => onVehicleChange(route, event.target.value)}
+                    disabled={isVehicleUpdating}
+                    className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    {vehicleOptions.map(option => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+                <p className="mt-1 truncate text-xs text-gray-500">
+                    {routeVehicleSummary(route, fleetVehicles, technicians)}
+                </p>
+            </div>
+            <RouteSummaryDatum label="Mileage" value={mileageText} />
+            <RouteSummaryDatum
+                label={activeStart ? 'Timer' : 'Duration'}
+                value={durationText}
+                helper={activeStart ? `Started ${formatTimeValue(activeStart)}` : ''}
+            />
+            <RouteSummaryDatum
+                label="Active Stop"
+                value={activeStop?.customerName || 'None'}
+                helper={activeStop?.address?.streetAddress || ''}
+            />
+        </div>
+    );
+};
+
 const RouteWorkloadBoard = ({
     routes,
     stops,
+    now,
+    technicians,
+    fleetVehicles,
     selectedRouteId,
     selectedStopIds,
+    vehicleUpdatingRouteId,
     onSelectRoute,
     onSelectRouteStops,
     onToggleStop,
     onOpenStop,
+    onVehicleChange,
 }) => {
     const routeGroups = useMemo(() => {
         const routedStopIds = new Set();
@@ -2447,8 +2554,8 @@ const RouteWorkloadBoard = ({
         <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                    <h2 className="text-lg font-bold text-gray-800">Daily Routes</h2>
-                    <p className="text-sm text-gray-500">Dense dispatch view for route-level or individual stop moves.</p>
+                    <h2 className="text-lg font-bold text-gray-800">Daily Routes & Technicians</h2>
+                    <p className="text-sm text-gray-500">Route stops, technician status, vehicle assignment, and move tools in one dispatch view.</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                     <DetailPill label="Stops" value={stops.length} />
@@ -2458,7 +2565,7 @@ const RouteWorkloadBoard = ({
                 </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-2 2xl:grid-cols-3">
+            <div className="grid gap-3 xl:grid-cols-2">
                 {routeGroups.length ? routeGroups.map(group => {
                     const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
                     const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
@@ -2501,6 +2608,15 @@ const RouteWorkloadBoard = ({
                                         </button>
                                     )}
                                 </div>
+                                <RouteTechnicianSummary
+                                    route={group.route}
+                                    stops={group.stops}
+                                    now={now}
+                                    technicians={technicians}
+                                    fleetVehicles={fleetVehicles}
+                                    onVehicleChange={onVehicleChange}
+                                    isVehicleUpdating={vehicleUpdatingRouteId === group.route?.id}
+                                />
                             </div>
 
                             <div className="max-h-96 divide-y divide-gray-100 overflow-y-auto">
@@ -2509,11 +2625,12 @@ const RouteWorkloadBoard = ({
                                     const routeIndex = stop.routeStopIndex || index + 1;
                                     const isSelected = selectedStopIds.includes(stop.id);
                                     const movable = isStopMovable(stop);
+                                    const stopKindMeta = getServiceStopKindMeta(stop);
 
                                     return (
                                         <div
                                             key={stop.id}
-                                            className={`grid grid-cols-[2rem_minmax(0,1fr)_auto] items-center gap-2 px-3 py-2 ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                                            className={`grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-4 px-3 py-2 ${stopKindMeta.rowClassName} ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                                         >
                                             <button
                                                 type="button"
@@ -2539,6 +2656,7 @@ const RouteWorkloadBoard = ({
                                                     <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
                                                 </button>
                                             </span>
+                                            <ServiceStopKindBadge stop={stop} compact />
                                             <span
                                                 className={`h-2.5 w-2.5 rounded-full ${status.label === 'Finished'
                                                         ? 'bg-green-500'
@@ -3041,9 +3159,10 @@ const ActiveRouteDetailPanel = ({
                             const status = getStopDisplayStatus(stop);
                             const movable = isStopMovable(stop);
                             const isSelected = selectedStopIds.includes(stop.id);
+                            const stopKindMeta = getServiceStopKindMeta(stop);
 
                             return (
-                                <div key={stop.id} className="flex items-center gap-3 px-4 py-3">
+                                <div key={stop.id} className={`flex items-center gap-3 border-l-4 px-4 py-3 ${stopKindMeta.rowClassName}`}>
                                     {isEditingOrder && (
                                         <div className="flex shrink-0 gap-2">
                                             <button
@@ -3088,6 +3207,7 @@ const ActiveRouteDetailPanel = ({
                                         <p className="truncate font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</p>
                                         <p className="truncate text-sm text-gray-500">{stop.address?.streetAddress || 'No address'}</p>
                                     </button>
+                                    <ServiceStopKindBadge stop={stop} />
                                     <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-semibold ${status.className}`}>
                                         {status.label}
                                     </span>
@@ -3670,89 +3790,6 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
     return <div ref={mapRef} className="h-full min-h-[400px] w-full" />;
 };
 
-const TechRouteCard = ({
-    route,
-    stops,
-    now,
-    technicians,
-    fleetVehicles,
-    onVehicleChange,
-    isVehicleUpdating,
-}) => {
-    const getStatusClass = (status) => {
-        switch (status) {
-            case 'Finished':
-                return 'bg-green-100 text-green-800';
-            case 'In Progress':
-                return 'bg-blue-100 text-blue-800';
-            default:
-                return 'bg-yellow-100 text-yellow-800';
-        }
-    };
-
-    const routeStops = stops.filter(stop => route.serviceStopsIds?.includes(stop.id));
-    const activeStop = routeStops.find(stop => {
-        const { start, end } = getStopTiming(stop);
-        return start && !end;
-    });
-
-    const activeStart = activeStop ? getStopTiming(activeStop).start : null;
-    const durationMinutes = getRouteDurationMinutes(route);
-    const vehicleOptions = buildVehicleOptionsForRoute(route, technicians, fleetVehicles);
-
-    return (
-        <div className="border rounded-lg p-4 transition-all hover:shadow-md">
-            <div className="flex justify-between items-center mb-2">
-                <p className="font-bold text-gray-800">{route.techName}</p>
-                <span className={`text-xs font-semibold px-2.5 py-1 rounded-full ${getStatusClass(route.status)}`}>
-                    {route.status}
-                </span>
-            </div>
-
-            <div className="text-sm text-gray-600 space-y-1">
-                <p>Stops: {route.finishedStops} / {route.totalStops}</p>
-                <p>Mileage: {route.distanceMiles ? `${Number(route.distanceMiles).toFixed(1)} mi` : 'N/A'}</p>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Vehicle</p>
-                        <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-gray-500">
-                            {routeVehicleSourceLabel(route)}
-                        </span>
-                    </div>
-                    <select
-                        value={routeVehicleSelectionValue(route)}
-                        onChange={(event) => onVehicleChange(route, event.target.value)}
-                        disabled={isVehicleUpdating}
-                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                        {vehicleOptions.map(option => (
-                            <option key={option.value} value={option.value}>
-                                {option.label}
-                            </option>
-                        ))}
-                    </select>
-                    <p className="mt-2 text-xs text-gray-500">
-                        {routeVehicleSummary(route, fleetVehicles, technicians)}
-                    </p>
-                </div>
-
-                {activeStart ? (
-                    <>
-                        <p>Started: {formatTimeValue(activeStart)}</p>
-                        <p>Timer: {formatElapsedDuration(activeStart, now)}</p>
-                    </>
-                ) : (
-                    <p>
-                        Duration: {durationMinutes
-                            ? `${Math.floor(durationMinutes / 60)}h ${durationMinutes % 60}m`
-                            : 'N/A'}
-                    </p>
-                )}
-            </div>
-        </div>
-    );
-};
-
 const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggleStop }) => (
     <div className="overflow-x-auto">
         <table className="min-w-full divide-y divide-gray-200">
@@ -3760,6 +3797,7 @@ const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggle
                 <tr>
                     <th className='px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Move</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Customer</th>
+                    <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Type</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Address</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Technician</th>
                     <th className='px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider'>Status</th>
@@ -3804,6 +3842,10 @@ const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggle
                                 {stop.customerName}
                             </td>
 
+                            <td className='px-6 py-4 whitespace-nowrap'>
+                                <ServiceStopKindBadge stop={stop} />
+                            </td>
+
                             <td className='px-6 py-4 whitespace-nowrap text-sm text-gray-600'>
                                 {stop.address?.streetAddress || 'No Address'}
                             </td>
@@ -3829,7 +3871,7 @@ const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggle
                     );
                 }) : (
                     <tr>
-                        <td colSpan="7" className="text-center py-10 text-gray-500">
+                        <td colSpan="8" className="text-center py-10 text-gray-500">
                             No service stops for the selected date.
                         </td>
                     </tr>

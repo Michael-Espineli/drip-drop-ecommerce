@@ -31,7 +31,7 @@ const getSearchValue = (company) => [
 const StatusBadge = ({ tone = 'slate', children }) => {
   const tones = {
     green: 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30',
-    yellow: 'bg-yellow-500/15 text-yellow-200 ring-yellow-500/30',
+    yellow: 'bg-[#efb12f]/15 text-[#efb12f] ring-[#efb12f]/30',
     red: 'bg-red-500/15 text-red-200 ring-red-500/30',
     slate: 'bg-slate-800 text-slate-200 ring-slate-700',
   };
@@ -44,7 +44,7 @@ const StatusBadge = ({ tone = 'slate', children }) => {
 };
 
 function CompanyList() {
-  const ADMIN_YELLOW = '#debf44';
+  const ADMIN_YELLOW = '#efb12f';
 
   const [companyList, setCompanyList] = useState([]);
   const [summary, setSummary] = useState(initialSummary);
@@ -136,13 +136,13 @@ function CompanyList() {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search name, owner, email, phone, status"
-              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-yellow-400/50 focus:outline-none md:col-span-2"
+              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-[#efb12f]/50 focus:outline-none md:col-span-2"
             />
 
             <select
               value={hiddenFilter}
               onChange={(e) => setHiddenFilter(e.target.value)}
-              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 focus:border-yellow-400/50 focus:outline-none"
+              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 focus:border-[#efb12f]/50 focus:outline-none"
             >
               <option value="all">All Browse Visibility</option>
               <option value="visible">Visible In Browse</option>
@@ -152,7 +152,7 @@ function CompanyList() {
             <select
               value={verificationFilter}
               onChange={(e) => setVerificationFilter(e.target.value)}
-              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 focus:border-yellow-400/50 focus:outline-none"
+              className="rounded-md border border-slate-800/60 bg-slate-900/70 px-3 py-2 text-sm text-slate-100 focus:border-[#efb12f]/50 focus:outline-none"
             >
               <option value="all">All Verification</option>
               <option value="verified">Verified</option>

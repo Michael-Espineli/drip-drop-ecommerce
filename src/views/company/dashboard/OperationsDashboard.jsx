@@ -340,12 +340,12 @@ const OperationsDashboard = () => {
                     <StatTile icon={FaCheckCircle} label="In Progress" value={jobBuckets["In Progress"] || 0} helper="Jobs actively underway" to="/company/jobs" tone="emerald" />
                 </StatGroup>
 
-                <section className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-                    <div className="space-y-6">
+                <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
+                    <div className="space-y-4">
                         <ListCard title="Job Flow" helper="Operational statuses at a glance" to="/company/jobs">
                             <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
                                 {activeJobStatuses.map((status) => (
-                                    <div key={status} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                    <div key={status} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                                         <p className="text-2xl font-bold text-slate-950">{jobBuckets[status] || 0}</p>
                                         <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{status}</p>
                                     </div>
@@ -353,7 +353,7 @@ const OperationsDashboard = () => {
                             </div>
                         </ListCard>
 
-                        <div className="grid gap-6 lg:grid-cols-2">
+                        <div className="grid gap-4 lg:grid-cols-2">
                             <ListCard title="Needs Routing" helper="Accepted service agreements without a recurring stop match" to="/company/recurringServiceStop">
                                 {agreementsNeedRouting.length === 0 ? (
                                     <EmptyRow>No accepted service agreements waiting on recurring routing.</EmptyRow>
@@ -395,7 +395,7 @@ const OperationsDashboard = () => {
                             </ListCard>
                         </div>
 
-                        <div className="grid gap-6 lg:grid-cols-2">
+                        <div className="grid gap-4 lg:grid-cols-2">
                             <ListCard title="Upcoming Jobs" helper="Newest active work orders" to="/company/jobs">
                                 {upcomingJobs.length === 0 ? (
                                     <EmptyRow>No upcoming jobs.</EmptyRow>
@@ -430,7 +430,7 @@ const OperationsDashboard = () => {
                         </div>
                     </div>
 
-                    <aside className="space-y-6">
+                    <aside className="space-y-4">
                         <ListCard title="Equipment Due" helper="Maintenance and service attention" to="/company/equipment">
                             {dueEquipment.length === 0 ? (
                                 <EmptyRow>No equipment due right now.</EmptyRow>

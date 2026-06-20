@@ -450,6 +450,28 @@ const linkedJobIdForAgreement = (agreement = {}) => {
     return "";
 };
 
+const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
+    if (agreement.inspectionServiceStopId) return agreement.inspectionServiceStopId;
+    if (agreement.serviceAgreementEstimateServiceStopId) return agreement.serviceAgreementEstimateServiceStopId;
+    if (agreement.estimateServiceStopId) return agreement.estimateServiceStopId;
+    if (agreement.serviceStopId) return agreement.serviceStopId;
+    if (Array.isArray(agreement.serviceStopIds) && agreement.serviceStopIds.length) return agreement.serviceStopIds[0];
+    return "";
+};
+
+const inspectionReportUrlForAgreement = (agreement = {}, baseUrl = "") => {
+    const explicitUrl = (
+        agreement.inspectionReportUrl ||
+        agreement.serviceAgreementInspectionReportUrl ||
+        agreement.inspectionReport?.url ||
+        ""
+    );
+    if (explicitUrl) return explicitUrl;
+
+    const serviceStopId = linkedInspectionServiceStopIdForAgreement(agreement);
+    return serviceStopId ? buildUrl(baseUrl, `/serviceStop/detail/${serviceStopId}`) : "";
+};
+
 const syncLinkedJobForAgreementStatus = async ({
     agreement,
     status,
@@ -677,9 +699,24 @@ const normalizeAgreementLocation = (agreement) => {
     return firstLocation || {};
 };
 
+const numberedTermsText = (terms = []) => terms
+    .map((term) => String(term || "").trim())
+    .filter(Boolean)
+    .map((term, index) => `${index + 1}. ${term}`)
+    .join("\n");
+
+const stripNumberedTermsFromContent = (content = "", terms = []) => {
+    const text = String(content || "").trim();
+    const numberedTerms = numberedTermsText(terms).trim();
+
+    if (!text || !numberedTerms || !text.includes(numberedTerms)) return text;
+
+    return text.replace(numberedTerms, "").trim();
+};
+
 const buildAgreementTerms = (agreement) => {
     if (Array.isArray(agreement.termsList) && agreement.termsList.length > 0) {
-        return agreement.termsList
+        const termItems = agreement.termsList
             .filter(Boolean)
             .map((term, index) => {
                 if (typeof term === "string") {
@@ -695,6 +732,15 @@ const buildAgreementTerms = (agreement) => {
                 };
             })
             .filter((term) => term.description);
+        const intro = stripNumberedTermsFromContent(
+            agreement.terms,
+            termItems.map((term) => term.description)
+        );
+
+        return [
+            intro ? { title: "Agreement Terms", description: intro } : null,
+            ...termItems
+        ].filter(Boolean);
     }
 
     if (agreement.terms) {
@@ -794,6 +840,9 @@ const buildServiceAgreementTemplateData = ({
     companyData,
     agreementUrl,
     customerAccess = {},
+    includeInspectionReport = false,
+    inspectionReportUrl = "",
+    inspectionReportTitle = "Inspection Report",
 }) => {
     const companyName = agreement.companyName || companyData.name || companyData.companyName || "Your Pool Company";
     const location = normalizeAgreementLocation(agreement);
@@ -816,6 +865,14 @@ const buildServiceAgreementTemplateData = ({
         agreementStatus: labelize(agreement.status || "sent"),
         agreementUrl,
         ...customerAccess,
+        includeInspectionReport: Boolean(includeInspectionReport),
+        hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
+        inspectionReportUrl,
+        inspectionReportTitle,
+        inspectionReportCtaLabel: "View Inspection Report",
+        inspectionReportSummary: includeInspectionReport
+            ? "The company included the site inspection report gathered before preparing this service agreement."
+            : "",
         sentDate: formatDate(new Date()),
         expiresAt: formatDate(agreement.expiresAt),
         address01: location.streetAddress || "",
@@ -873,7 +930,8 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
     const payload = getCallableData(data);
     const companyId = payload.companyId;
     const agreementId = payload.agreementId;
-    const agreementBaseUrl = payload.agreementBaseUrl || process.env.SERVICE_AGREEMENT_BASE_URL || process.env.APP_BASE_URL || "";
+    const agreementBaseUrl = payload.agreementBaseUrl || process.env.SERVICE_AGREEMENT_BASE_URL || process.env.APP_BASE_URL || "https://dripdrop-poolapp.com";
+    const includeInspectionReport = payload.includeInspectionReport === true || payload.includeInspectionReport === "true";
     const templateId = process.env.SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID || process.env.SENDGRID_SERVICE_AGREEMENT_TEMPLATE_ID || DEFAULT_SERVICE_AGREEMENT_TEMPLATE_ID;
 
     if (!companyId) {
@@ -946,7 +1004,12 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
 
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
-    const agreementUrl = `${agreementBaseUrl.replace(/\/$/, "")}/client/service-agreements/${agreementId}`;
+    const agreementUrl = buildUrl(agreementBaseUrl, `/customer/service-agreements/${agreementId}`, {
+        email: agreement.email,
+    });
+    const inspectionReportUrl = includeInspectionReport
+        ? inspectionReportUrlForAgreement(agreement, agreementBaseUrl)
+        : "";
     const customerAccess = await buildCustomerAccessTemplateData({
         companyId,
         customerId: agreement.customerId || "",
@@ -961,6 +1024,8 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         companyData,
         agreementUrl,
         customerAccess,
+        includeInspectionReport,
+        inspectionReportUrl,
     });
 
     const msg = {
@@ -1010,6 +1075,9 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
             replyTo: replyToEmail,
             messageId,
             agreementUrl,
+            includeInspectionReport,
+            hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
+            inspectionReportUrl,
             customerActionUrl: customerAccess.customerActionUrl,
             customerPortalUrl: customerAccess.customerPortalUrl,
             claimAccountUrl: customerAccess.claimAccountUrl,
@@ -1037,6 +1105,9 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         message: "Service agreement email sent.",
         messageId,
         agreementUrl,
+        includeInspectionReport,
+        hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
+        inspectionReportUrl,
         to: emailDelivery.actualTo,
         intendedTo: emailDelivery.intendedTo,
         testMode: emailDelivery.testMode

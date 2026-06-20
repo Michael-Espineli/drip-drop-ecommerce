@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
-import { collection, onSnapshot } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import {
   FaArrowLeft,
@@ -112,6 +112,18 @@ const customerRelationshipId = (customer = {}) => (
   ''
 );
 
+const leadCustomerId = (lead = {}) => (
+  lead.companyCustomerId ||
+  lead.customerId ||
+  ''
+);
+
+const leadServiceLocationId = (lead = {}) => (
+  lead.companyServiceLocationId ||
+  lead.serviceLocationId ||
+  ''
+);
+
 const locationAddress = (location = {}) => {
   const address = location.address || location.billingAddress || {};
   return {
@@ -179,6 +191,7 @@ const selectStyles = {
 
 const CreateSalesAgreement = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const {
     recentlySelectedCompany,
     recentlySelectedCompanyName,
@@ -190,6 +203,10 @@ const CreateSalesAgreement = () => {
 
   const activeUser = currentUser || user || currentuser || {};
   const activeUserId = activeUser?.uid || activeUser?.id || '';
+  const sourceLeadId = searchParams.get('leadId') || '';
+  const sourceServiceStopId = searchParams.get('serviceStopId') || searchParams.get('inspectionServiceStopId') || '';
+  const queryCustomerId = searchParams.get('customerId') || '';
+  const queryServiceLocationId = searchParams.get('serviceLocationId') || '';
 
   const [customers, setCustomers] = useState([]);
   const [serviceLocations, setServiceLocations] = useState([]);
@@ -202,6 +219,9 @@ const CreateSalesAgreement = () => {
   const [selectedCatalogItemId, setSelectedCatalogItemId] = useState('');
   const [selectedCatalogQuantity, setSelectedCatalogQuantity] = useState('1');
   const [lineItems, setLineItems] = useState([]);
+  const [sourceLead, setSourceLead] = useState(null);
+  const [sourceServiceStop, setSourceServiceStop] = useState(null);
+  const [sourcePrefillApplied, setSourcePrefillApplied] = useState(false);
 
   const [form, setForm] = useState({
     title: '',
@@ -304,6 +324,81 @@ const CreateSalesAgreement = () => {
 
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
   }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    setSourcePrefillApplied(false);
+    setSourceLead(null);
+    setSourceServiceStop(null);
+
+    if (!recentlySelectedCompany || (!sourceLeadId && !sourceServiceStopId)) return undefined;
+
+    let isActive = true;
+
+    const loadSourceRecords = async () => {
+      try {
+        if (sourceLeadId) {
+          const leadSnap = await getDoc(doc(db, 'homeownerServiceRequests', sourceLeadId));
+          if (isActive && leadSnap.exists() && leadSnap.data().companyId === recentlySelectedCompany) {
+            setSourceLead({ id: leadSnap.id, ...leadSnap.data() });
+          }
+        }
+
+        if (sourceServiceStopId) {
+          const stopSnap = await getDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', sourceServiceStopId));
+          if (isActive && stopSnap.exists()) {
+            setSourceServiceStop({ id: stopSnap.id, ...stopSnap.data() });
+          }
+        }
+      } catch (error) {
+        console.error('Unable to load agreement source records', error);
+        if (isActive) toast.error('Failed to load the lead or survey context for this agreement.');
+      }
+    };
+
+    loadSourceRecords();
+
+    return () => {
+      isActive = false;
+    };
+  }, [recentlySelectedCompany, sourceLeadId, sourceServiceStopId]);
+
+  useEffect(() => {
+    if (sourcePrefillApplied) return;
+    if (!sourceLeadId && !sourceServiceStopId && !queryCustomerId && !queryServiceLocationId) return;
+
+    const customerId = queryCustomerId || leadCustomerId(sourceLead) || sourceServiceStop?.customerId || '';
+    const serviceLocationId = queryServiceLocationId || leadServiceLocationId(sourceLead) || sourceServiceStop?.serviceLocationId || '';
+    const selectedPrefillCustomer = customers.find((customer) => customer.id === customerId) || null;
+    const email = sourceLead?.homeownerEmail || selectedPrefillCustomer?.email || selectedPrefillCustomer?.billingEmail || '';
+    const customerName = selectedPrefillCustomer ? customerDisplayName(selectedPrefillCustomer) : sourceLead?.customerName || sourceServiceStop?.customerName || '';
+    const title = sourceLead?.serviceName
+      ? `${sourceLead.serviceName} Service Agreement`
+      : customerName
+        ? `${customerName} Service Agreement`
+        : '';
+    const description = sourceLead?.serviceDescription || sourceServiceStop?.description || '';
+
+    setForm((current) => ({
+      ...current,
+      customerId: current.customerId || customerId,
+      email: current.email || email,
+      serviceLocationIds: current.serviceLocationIds.length
+        ? current.serviceLocationIds
+        : serviceLocationId ? [serviceLocationId] : [],
+      title: current.title || title,
+      description: current.description || description,
+    }));
+    setSourcePrefillApplied(true);
+  }, [
+    customers,
+    queryCustomerId,
+    queryServiceLocationId,
+    sourceLead,
+    sourceLeadId,
+    sourcePrefillApplied,
+    sourceServiceStop,
+    sourceServiceStopId,
+  ]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -547,6 +642,12 @@ const CreateSalesAgreement = () => {
     setSaving(true);
 
     try {
+      const agreementSourceType = sourceServiceStopId
+        ? SalesAgreementSourceType.serviceAgreementSurvey
+        : sourceLeadId
+          ? SalesAgreementSourceType.lead
+          : SalesAgreementSourceType.manual;
+      const agreementSourceId = sourceServiceStopId || sourceLeadId || '';
       const agreement = new SalesAgreement({
         companyId: recentlySelectedCompany,
         companyName: selectedCompanyName,
@@ -558,8 +659,12 @@ const CreateSalesAgreement = () => {
         email: form.email.trim(),
         serviceLocationIds: form.serviceLocationIds,
         serviceLocationSnapshots: selectedLocations.map(serviceLocationSnapshot),
-        sourceType: SalesAgreementSourceType.manual,
-        sourceId: '',
+        sourceType: agreementSourceType,
+        sourceId: agreementSourceId,
+        leadId: sourceLeadId || sourceLead?.id || '',
+        serviceAgreementEstimateServiceStopId: sourceServiceStopId || '',
+        inspectionServiceStopId: sourceServiceStopId || '',
+        serviceStopIds: sourceServiceStopId ? [sourceServiceStopId] : [],
         title: form.title.trim(),
         description: form.description.trim(),
         terms: termsContent,
@@ -602,6 +707,33 @@ const CreateSalesAgreement = () => {
       });
 
       await saveSalesModel(db, 'agreements', agreement);
+
+      const linkUpdates = [];
+      if (sourceLeadId) {
+        linkUpdates.push(updateDoc(doc(db, 'homeownerServiceRequests', sourceLeadId), {
+          serviceAgreementId: agreement.id,
+          serviceAgreementTitle: agreement.title,
+          serviceAgreementStatus: agreement.status,
+          updatedAt: new Date(),
+        }));
+      }
+      if (sourceServiceStopId) {
+        linkUpdates.push(updateDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', sourceServiceStopId), {
+          serviceAgreementId: agreement.id,
+          serviceAgreementTitle: agreement.title,
+          leadId: sourceLeadId || sourceServiceStop?.leadId || '',
+        }));
+      }
+
+      if (linkUpdates.length) {
+        try {
+          await Promise.all(linkUpdates);
+        } catch (linkError) {
+          console.error('Agreement created but source records were not linked', linkError);
+          toast.error('Agreement created, but the lead or survey link could not be updated.');
+        }
+      }
+
       toast.success('Service agreement draft created.');
       navigate(`/company/sales/agreements/${agreement.id}`);
     } catch (error) {

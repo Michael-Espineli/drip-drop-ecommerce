@@ -60,7 +60,7 @@ const MainLayout = () => {
     }
     
     return (
-        <div className='theme-shell w-full'>
+        <div className={`theme-shell w-full ${accountType === 'Admin' ? 'admin-theme' : ''}`}>
             <Header
                 showSidebar={showSidebar}
                 setShowSidebar={setShowSidebar}
@@ -88,7 +88,7 @@ const MainLayout = () => {
                     </div>
 
                 ):(
-                    <div className="lg:ml-[260px]">
+                    <div className="lg:ml-[260px] admin-theme">
                         <div className="min-h-screen flex flex-col">
                             <main className="flex-grow">
                                 <Outlet />

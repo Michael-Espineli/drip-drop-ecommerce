@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext } from "react";
+import React, { useState, useEffect, useContext, useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
     doc,
@@ -29,6 +29,10 @@ import {
     saveStopDataRecord,
 } from "../../../utils/stopData";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+    SERVICE_STOP_TYPE_USE_CASES,
+    normalizeServiceStopTypeBucket,
+} from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -208,6 +212,264 @@ const getRouteStatusFromStops = (stops = [], existingRoute = null) => {
     return "Did Not Start";
 };
 
+const displayText = (value, fallback = "—") => {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === "boolean") return value ? "Yes" : "No";
+    if (typeof value === "number") return Number.isFinite(value) ? String(value) : fallback;
+
+    const text = String(value).trim();
+    return text || fallback;
+};
+
+const formatDateText = (value) => {
+    const date = getDateValue(value);
+    return date ? format(date, "PP") : "—";
+};
+
+const getServiceStopBucket = (stop = {}) => {
+    const currentStop = stop || {};
+    const values = [
+        currentStop.serviceStopTypeUseCaseRawValue,
+        currentStop.serviceStopTypeUseCase,
+        currentStop.typeUseCase,
+        currentStop.category,
+        currentStop.serviceStopCategory,
+        currentStop.serviceStopTypeCategory,
+        currentStop.stopPayBucketId,
+        currentStop.serviceStopBucketId,
+        currentStop.stopPayBucketLabel,
+        currentStop.serviceStopBucketLabel,
+        currentStop.serviceStopBucket,
+        currentStop.bucketId,
+        currentStop.bucketLabel,
+        currentStop.typeId,
+        currentStop.type,
+    ]
+        .map(normalizeServiceStopTypeBucket)
+        .filter(Boolean);
+
+    const hasValue = (...needles) => values.some((value) =>
+        needles.some((needle) => value === needle || value.includes(needle))
+    );
+
+    if (hasValue(
+        "serviceagreementestimate",
+        "serviceestimate",
+        "newserviceestimate",
+        "recurringserviceestimate",
+        "startup",
+        "startupservice",
+        "newpool"
+    )) {
+        return {
+            id: SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate,
+            label: "Service Agreement Estimate",
+            className: "border-emerald-200 bg-emerald-50 text-emerald-800",
+        };
+    }
+
+    if (currentStop.recurringServiceStopId || hasValue(
+        "recurringroute",
+        "recurringservicestop",
+        "weeklyroute",
+        "standardroute",
+        "poolroute",
+        "route",
+        "routes"
+    )) {
+        return {
+            id: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+            label: "Route",
+            className: "border-sky-200 bg-sky-50 text-sky-800",
+        };
+    }
+
+    if (hasValue("jobestimate", "estimateforjob", "bidvisit") || (currentStop.jobId && hasValue("estimate"))) {
+        return {
+            id: SERVICE_STOP_TYPE_USE_CASES.jobEstimate,
+            label: "Job Estimate",
+            className: "border-amber-200 bg-amber-50 text-amber-800",
+        };
+    }
+
+    if (currentStop.jobId || hasValue("jobvisit", "servicecall", "job")) {
+        return {
+            id: SERVICE_STOP_TYPE_USE_CASES.jobVisit,
+            label: "Job Visit",
+            className: "border-indigo-200 bg-indigo-50 text-indigo-800",
+        };
+    }
+
+    if (hasValue("customerrelationship", "customervisit", "followup", "courtesyvisit", "mistakefix")) {
+        return {
+            id: SERVICE_STOP_TYPE_USE_CASES.customerRelationship,
+            label: "Customer Relationship",
+            className: "border-violet-200 bg-violet-50 text-violet-800",
+        };
+    }
+
+    return {
+        id: SERVICE_STOP_TYPE_USE_CASES.unknown,
+        label: "Unknown",
+        className: "border-slate-200 bg-slate-50 text-slate-700",
+    };
+};
+
+const getWorkOrderTypeLabel = (stop = {}) => {
+    const currentStop = stop || {};
+
+    return displayText(
+        currentStop.workOrderType ||
+        currentStop.workOrderTypeName ||
+        currentStop.jobType ||
+        currentStop.jobTypeName ||
+        currentStop.payWorkTypeName ||
+        currentStop.workTypeName ||
+        currentStop.workType ||
+        currentStop.jobName,
+        currentStop.jobId ? "Job Visit" : "Not linked"
+    );
+};
+
+const getServiceStopTypeLabel = (stop = {}) => {
+    const currentStop = stop || {};
+
+    return displayText(
+        currentStop.serviceStopTypeName ||
+        currentStop.typeName ||
+        currentStop.type ||
+        currentStop.typeId,
+        "Not set"
+    );
+};
+
+const splitSurveyNotes = (notes = "") => {
+    const text = displayText(notes, "");
+    if (!text) return { locationNotes: "", findings: [] };
+
+    const marker = text.match(/\n\s*Survey Findings\s*\n/i);
+    if (!marker) return { locationNotes: text, findings: [] };
+
+    const markerIndex = marker.index || 0;
+    const locationNotes = text.slice(0, markerIndex).trim();
+    const findings = text
+        .slice(markerIndex + marker[0].length)
+        .split("\n")
+        .map((line) => line.trim().replace(/^\d+\.\s*/, ""))
+        .filter(Boolean);
+
+    return { locationNotes, findings };
+};
+
+const photoUrl = (photo) => {
+    if (!photo) return "";
+    if (typeof photo === "string") return photo;
+
+    return photo.url ||
+        photo.imageURL ||
+        photo.downloadURL ||
+        photo.photoUrl ||
+        photo.path ||
+        "";
+};
+
+const photoCaption = (photo, fallback) => {
+    if (!photo || typeof photo === "string") return fallback;
+    return photo.caption || photo.description || photo.name || fallback;
+};
+
+const isWebUrl = (value) => /^https?:\/\//i.test(String(value || ""));
+
+const getEquipmentTitle = (equipment = {}) => (
+    equipment.name ||
+    [equipment.make, equipment.model].filter(Boolean).join(" ") ||
+    equipment.type ||
+    "Unnamed Equipment"
+);
+
+const getBodyOfWaterTitle = (body = {}) => (
+    body.name ||
+    body.type ||
+    body.bodyOfWaterType ||
+    "Unnamed Body Of Water"
+);
+
+const getEquipmentSurveyFindings = (equipmentList = []) => (
+    equipmentList
+        .map((equipment) => {
+            const statusText = displayText(
+                equipment.status ||
+                equipment.operationStatus ||
+                equipment.equipmentStatus,
+                ""
+            );
+            const normalizedStatus = normalizeServiceStopTypeBucket(statusText);
+            const needsService = Boolean(
+                equipment.needsService ||
+                equipment.needsRepair ||
+                equipment.serviceRecommended ||
+                equipment.repairRecommended
+            );
+            const flaggedStatus = [
+                "needsservice",
+                "needsrepair",
+                "repair",
+                "maintenance",
+                "notoperational",
+                "nonoperational",
+                "offline",
+                "failed",
+            ].some((value) => normalizedStatus.includes(value));
+
+            if (!needsService && !flaggedStatus) return null;
+
+            return {
+                id: equipment.id,
+                title: getEquipmentTitle(equipment),
+                status: statusText || "Needs attention",
+                notes: equipment.notes || equipment.serviceNotes || equipment.recommendationNotes || "",
+            };
+        })
+        .filter(Boolean)
+);
+
+const SurveyPhotoGrid = ({ photos = [], title }) => {
+    const normalizedPhotos = photos
+        .map((photo, index) => ({
+            url: photoUrl(photo),
+            caption: photoCaption(photo, `${title || "Photo"} ${index + 1}`),
+        }))
+        .filter((photo) => photo.url);
+
+    if (!normalizedPhotos.length) return null;
+
+    return (
+        <div className="mt-4">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</p>
+            <div className="mt-2 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                {normalizedPhotos.map((photo, index) => (
+                    isWebUrl(photo.url) ? (
+                        <img
+                            key={`${photo.url}-${index}`}
+                            src={photo.url}
+                            alt={photo.caption}
+                            className="h-28 w-full rounded-md border border-slate-200 object-cover"
+                        />
+                    ) : (
+                        <div
+                            key={`${photo.url}-${index}`}
+                            className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600"
+                        >
+                            <p className="font-semibold text-slate-700">{photo.caption}</p>
+                            <p className="mt-1 break-all">{photo.url}</p>
+                        </div>
+                    )
+                ))}
+            </div>
+        </div>
+    );
+};
+
 const ServiceStopDetails = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
@@ -217,6 +479,7 @@ const ServiceStopDetails = () => {
     const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
     const [companyUsers, setCompanyUsers] = useState([]);
+    const [serviceLocation, setServiceLocation] = useState(null);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
     const [readingTemplates, setReadingTemplates] = useState([]);
@@ -281,7 +544,39 @@ const ServiceStopDetails = () => {
                 const docSnap = await getDoc(docRef);
 
                 if (docSnap.exists()) {
-                    const stopData = ServiceStop.fromFirestore(docSnap);
+                    const rawStopData = docSnap.data();
+                    const mappedStopData = ServiceStop.fromFirestore(docSnap);
+                    const stopData = {
+                        ...mappedStopData,
+                        category: rawStopData.category || "",
+                        serviceStopCategory: rawStopData.serviceStopCategory || "",
+                        serviceStopTypeCategory: rawStopData.serviceStopTypeCategory || "",
+                        serviceStopTypeUseCaseRawValue: rawStopData.serviceStopTypeUseCaseRawValue || "",
+                        serviceStopTypeUseCase: rawStopData.serviceStopTypeUseCase || "",
+                        typeUseCase: rawStopData.typeUseCase || "",
+                        serviceStopBucket: rawStopData.serviceStopBucket || "",
+                        serviceStopBucketId: rawStopData.serviceStopBucketId || "",
+                        serviceStopBucketLabel: rawStopData.serviceStopBucketLabel || "",
+                        bucketId: rawStopData.bucketId || "",
+                        bucketLabel: rawStopData.bucketLabel || "",
+                        stopPayBucketId: rawStopData.stopPayBucketId || "",
+                        stopPayBucketLabel: rawStopData.stopPayBucketLabel || "",
+                        workOrderType: rawStopData.workOrderType || "",
+                        workOrderTypeName: rawStopData.workOrderTypeName || "",
+                        jobType: rawStopData.jobType || "",
+                        jobTypeName: rawStopData.jobTypeName || "",
+                        payWorkTypeName: rawStopData.payWorkTypeName || "",
+                        workTypeName: rawStopData.workTypeName || "",
+                        workType: rawStopData.workType || "",
+                        serviceStopTypeName: rawStopData.serviceStopTypeName || "",
+                        typeName: rawStopData.typeName || "",
+                        defaultWorkTypeIds: Array.isArray(rawStopData.defaultWorkTypeIds)
+                            ? rawStopData.defaultWorkTypeIds
+                            : [],
+                        photoUrls: Array.isArray(rawStopData.photoUrls)
+                            ? rawStopData.photoUrls
+                            : mappedStopData.photoUrls,
+                    };
                     setServiceStop(stopData);
                     setEditForm({
                         serviceDate: formatDateInput(stopData.serviceDate),
@@ -355,10 +650,26 @@ const ServiceStopDetails = () => {
                             ),
                             where("serviceLocationId", "==", stopData.serviceLocationId)
                         );
-                        const [bodyOfWaterSnapshot, equipmentSnapshot] = await Promise.all([
+                        const serviceLocationRef = doc(
+                            db,
+                            "companies",
+                            recentlySelectedCompany,
+                            "serviceLocations",
+                            stopData.serviceLocationId
+                        );
+                        const [bodyOfWaterSnapshot, equipmentSnapshot, serviceLocationSnapshot] = await Promise.all([
                             getDocs(bodyOfWaterQuery),
                             getDocs(equipmentQuery),
+                            getDoc(serviceLocationRef),
                         ]);
+                        setServiceLocation(
+                            serviceLocationSnapshot.exists()
+                                ? {
+                                    id: serviceLocationSnapshot.id,
+                                    ...serviceLocationSnapshot.data(),
+                                }
+                                : null
+                        );
                         setBodiesOfWater(
                             bodyOfWaterSnapshot.docs.map((doc) => ({
                                 id: doc.id,
@@ -372,6 +683,7 @@ const ServiceStopDetails = () => {
                             }))
                         );
                     } else {
+                        setServiceLocation(null);
                         setBodiesOfWater([]);
                         setEquipmentList([]);
                     }
@@ -383,6 +695,10 @@ const ServiceStopDetails = () => {
                         serviceLocationId: stopData.serviceLocationId || "",
                     }));
                 } else {
+                    setServiceStop(null);
+                    setServiceLocation(null);
+                    setBodiesOfWater([]);
+                    setEquipmentList([]);
                     console.log("No such document!");
                 }
             } catch (error) {
@@ -437,6 +753,19 @@ const ServiceStopDetails = () => {
     }, [dosageTemplates, readingTemplates, selectedBodyOfWaterId, stopDataRecords]);
 
     const selectedStopDataRecord = stopDataRecords.find((record) => record.bodyOfWaterId === selectedBodyOfWaterId) || null;
+    const bodyOfWaterById = useMemo(() => (
+        new Map(bodiesOfWater.map((body) => [body.id, body]))
+    ), [bodiesOfWater]);
+    const serviceStopBucket = useMemo(() => getServiceStopBucket(serviceStop), [serviceStop]);
+    const isServiceAgreementEstimate = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate;
+    const surveyNotes = useMemo(() => splitSurveyNotes(
+        serviceLocation?.notes ||
+        serviceLocation?.locationNotes ||
+        serviceStop?.serviceLocationNotes ||
+        serviceStop?.description ||
+        ""
+    ), [serviceLocation, serviceStop]);
+    const equipmentSurveyFindings = useMemo(() => getEquipmentSurveyFindings(equipmentList), [equipmentList]);
 
     const saveStopData = async () => {
         if (!requirePermission("244", "update service stops")) return;
@@ -518,8 +847,8 @@ const ServiceStopDetails = () => {
 
     const Field = ({ label, value, children }) => (
         <div className="space-y-1">
-            <p className="text-sm font-semibold text-gray-600">{label}</p>
-            {children ? children : <p className="text-gray-800">{value || "—"}</p>}
+            <p className="text-sm font-semibold text-slate-600">{label}</p>
+            {children ? children : <p className="text-slate-800">{value || "—"}</p>}
         </div>
     );
 
@@ -1330,13 +1659,13 @@ const ServiceStopDetails = () => {
 
     if (loading) {
         return (
-            <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-                <div className="mx-auto">
-                    <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+                <div className="w-full">
+                    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="animate-pulse space-y-4">
-                            <div className="h-6 bg-gray-200 rounded w-1/3" />
-                            <div className="h-4 bg-gray-200 rounded w-1/2" />
-                            <div className="h-40 bg-gray-200 rounded" />
+                            <div className="h-6 w-1/3 rounded bg-slate-200" />
+                            <div className="h-4 w-1/2 rounded bg-slate-200" />
+                            <div className="h-40 rounded bg-slate-200" />
                         </div>
                     </div>
                 </div>
@@ -1346,15 +1675,15 @@ const ServiceStopDetails = () => {
 
     if (!serviceStop) {
         return (
-            <div className="flex justify-center items-center h-screen bg-gray-50">
-                <p className="text-lg text-gray-600">Service stop not found.</p>
+            <div className="flex h-screen items-center justify-center bg-slate-50">
+                <p className="text-lg text-slate-600">Service stop not found.</p>
             </div>
         );
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
-            <div className="mx-auto">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
                 <div className="flex justify-between items-center mb-6">
                     <div>
                         <Link
@@ -1363,27 +1692,27 @@ const ServiceStopDetails = () => {
                         >
                             &larr; Back to Service Stops
                         </Link>
-                        <h2 className="text-3xl font-bold text-gray-800">Service Stop Details</h2>
-                        <p className="text-sm text-gray-500">#{serviceStop.internalId || "—"}</p>
+                        <h2 className="text-3xl font-bold text-slate-800">Service Stop Details</h2>
+                        <p className="text-sm text-slate-500">#{serviceStop.internalId || "—"}</p>
                     </div>
                     {editEnabled && can("246") && (
                         <button
                             type="button"
                             onClick={() => setShowDeleteConfirm(true)}
-                            className="px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-sm font-semibold text-red-700 hover:bg-red-100 transition"
+                            className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
                         >
                             Delete
                         </button>
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
                     <div className="lg:col-span-2 space-y-6">
-                        <div className="bg-white shadow-lg rounded-xl p-6">
+                        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex justify-between items-start gap-4">
                                 <div>
-                                    <h3 className="text-xl font-bold text-gray-800">Stop Information</h3>
-                                    <p className="text-sm text-gray-600 mt-1">Core service stop details</p>
+                                    <h3 className="text-xl font-bold text-slate-800">Stop Information</h3>
+                                    <p className="text-sm text-slate-600 mt-1">Core service stop details</p>
                                 </div>
 
                                 <span
@@ -1393,6 +1722,23 @@ const ServiceStopDetails = () => {
                                 >
                                     {serviceStop.operationStatus || "—"}
                                 </span>
+                            </div>
+
+                            <div className="mt-5 grid grid-cols-1 gap-4 border-y border-slate-200 py-4 md:grid-cols-3">
+                                <div>
+                                    <p className="text-sm font-semibold text-slate-600">Bucket</p>
+                                    <span className={`mt-1 inline-flex rounded-full border px-3 py-1 text-sm font-semibold ${serviceStopBucket.className}`}>
+                                        {serviceStopBucket.label}
+                                    </span>
+                                </div>
+                                <Field label="Work Order Type" value={getWorkOrderTypeLabel(serviceStop)} />
+                                <Field label="Service Stop Type" value={getServiceStopTypeLabel(serviceStop)} />
+                                {serviceStop.typeId && (
+                                    <div className="md:col-span-3">
+                                        <p className="text-sm font-semibold text-slate-600">Service Stop Type ID</p>
+                                        <p className="mt-1 break-all text-sm text-slate-700">{serviceStop.typeId}</p>
+                                    </div>
+                                )}
                             </div>
 
                             <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1408,7 +1754,7 @@ const ServiceStopDetails = () => {
                                             {serviceStop.recurringServiceStopId}
                                         </Link>
                                     ) : (
-                                        <p className="text-gray-800">—</p>
+                                        <p className="text-slate-800">—</p>
                                     )}
                                 </Field>
 
@@ -1436,7 +1782,7 @@ const ServiceStopDetails = () => {
                                             {serviceStop.jobInternalId || "Open Job"}
                                         </Link>
                                     ) : (
-                                        <p className="text-gray-800">—</p>
+                                        <p className="text-slate-800">—</p>
                                     )}
                                 </Field>
 
@@ -1450,23 +1796,238 @@ const ServiceStopDetails = () => {
                             </div>
                         </div>
 
-                        {(serviceStop.includeReadings || serviceStop.includeDosages || readingTemplates.length || dosageTemplates.length) && (
-                            <div className="bg-white shadow-lg rounded-xl p-6">
+                        {isServiceAgreementEstimate && (
+                            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                     <div>
-                                        <h3 className="text-xl font-bold text-gray-800">Stop Data</h3>
-                                        <p className="text-sm text-gray-600 mt-1">Readings, dosages, and observations for this service stop.</p>
+                                        <h3 className="text-xl font-bold text-slate-800">Service Agreement Survey Report</h3>
+                                        <p className="mt-1 text-sm text-slate-600">
+                                            Technician-gathered setup, sales, water, and equipment details for the initial report.
+                                        </p>
+                                    </div>
+                                    <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                        Agreement Estimate
+                                    </span>
+                                </div>
+
+                                <div className="mt-5 grid grid-cols-1 gap-4 border-y border-slate-200 py-4 md:grid-cols-3">
+                                    <Field label="Location Name" value={serviceLocation?.nickName || serviceLocation?.name || serviceStop.customerName} />
+                                    <Field label="Gate Code" value={serviceLocation?.gateCode || serviceLocation?.accessCode} />
+                                    <Field label="Technician" value={serviceStop.tech} />
+                                    <Field label="Survey Date" value={formatDateText(serviceStop.serviceDate)} />
+                                    <Field label="Customer" value={serviceStop.customerName} />
+                                    <Field label="Address" value={`${serviceStop.address?.streetAddress || ""}${serviceStop.address?.city ? `, ${serviceStop.address.city}` : ""}${serviceStop.address?.state ? `, ${serviceStop.address.state}` : ""}`} />
+                                </div>
+
+                                <div className="mt-5">
+                                    <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Service Location Notes</h4>
+                                    <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">
+                                        {surveyNotes.locationNotes || "No location notes captured."}
+                                    </p>
+                                    <SurveyPhotoGrid
+                                        title="Location Photos"
+                                        photos={serviceLocation?.photoUrls || serviceLocation?.photos || serviceLocation?.serviceLocationPhotos || []}
+                                    />
+                                </div>
+
+                                {(surveyNotes.findings.length > 0 || equipmentSurveyFindings.length > 0) && (
+                                    <div className="mt-6 border-t border-slate-200 pt-5">
+                                        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Suggested Repairs & Changes</h4>
+                                        <div className="mt-3 space-y-3">
+                                            {surveyNotes.findings.map((finding, index) => (
+                                                <div key={`${finding}-${index}`} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                                                    {finding}
+                                                </div>
+                                            ))}
+                                            {equipmentSurveyFindings.map((finding) => (
+                                                <div key={finding.id || finding.title} className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                                                    <p className="font-semibold">{finding.title}</p>
+                                                    <p className="mt-1">Status: {finding.status}</p>
+                                                    {finding.notes && <p className="mt-1 whitespace-pre-line">{finding.notes}</p>}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="mt-6 border-t border-slate-200 pt-5">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Body Of Water Details</h4>
+                                        <span className="text-xs font-semibold text-slate-500">{bodiesOfWater.length}</span>
+                                    </div>
+                                    {bodiesOfWater.length ? (
+                                        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            {bodiesOfWater.map((body) => (
+                                                <div key={body.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <p className="font-semibold text-slate-900">{getBodyOfWaterTitle(body)}</p>
+                                                            <p className="mt-1 text-sm text-slate-500">{displayText(body.type || body.bodyOfWaterType || body.waterType, "Pool")}</p>
+                                                        </div>
+                                                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                            {displayText(body.status || body.operationStatus, "Active")}
+                                                        </span>
+                                                    </div>
+                                                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                                        <Field label="Material" value={body.material || body.surfaceMaterial} />
+                                                        <Field label="Shape" value={body.shape} />
+                                                        <Field label="Gallons" value={body.gallons || body.capacityGallons || body.volume} />
+                                                        <Field label="Sanitizer" value={body.sanitizer || body.sanitizerType} />
+                                                        <Field label="Length" value={body.length} />
+                                                        <Field label="Width" value={body.width} />
+                                                        <Field label="Shallow Depth" value={body.shallowEndDepth || body.shallowDepth} />
+                                                        <Field label="Deep Depth" value={body.deepEndDepth || body.deepDepth} />
+                                                    </div>
+                                                    {(body.notes || body.description) && (
+                                                        <p className="mt-4 whitespace-pre-line text-sm leading-6 text-slate-700">{body.notes || body.description}</p>
+                                                    )}
+                                                    <SurveyPhotoGrid title="Water Photos" photos={body.photoUrls || body.photos || body.bodyOfWaterPhotos || []} />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No body of water information was captured for this survey.
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-6 border-t border-slate-200 pt-5">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Equipment Information</h4>
+                                        <span className="text-xs font-semibold text-slate-500">{equipmentList.length}</span>
+                                    </div>
+                                    {equipmentList.length ? (
+                                        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                            {equipmentList.map((equipment) => (
+                                                <div key={equipment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                                    <div className="flex items-start justify-between gap-3">
+                                                        <div>
+                                                            <p className="font-semibold text-slate-900">{getEquipmentTitle(equipment)}</p>
+                                                            <p className="mt-1 text-sm text-slate-500">{displayText(equipment.type || equipment.equipmentType, "Equipment")}</p>
+                                                        </div>
+                                                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                            {displayText(equipment.status || equipment.operationStatus || equipment.equipmentStatus, "Operational")}
+                                                        </span>
+                                                    </div>
+                                                    <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+                                                        <Field label="Make" value={equipment.make || equipment.manufacturer} />
+                                                        <Field label="Model" value={equipment.model} />
+                                                        <Field label="Catalog Match" value={equipment.catalogMatchName || equipment.catalogMatch || equipment.catalogModelName} />
+                                                        <Field label="Needs Service" value={displayText(equipment.needsService || equipment.needsRepair, "No")} />
+                                                        <Field label="Last Service" value={formatDateText(equipment.lastServiceDate || equipment.lastServicedAt)} />
+                                                        <Field label="Next Service" value={formatDateText(equipment.nextServiceDate || equipment.nextScheduledServiceDate)} />
+                                                        <Field label="Clean Pressure" value={equipment.cleanFilterPressure || equipment.cleanPressure} />
+                                                        <Field label="Current Pressure" value={equipment.currentFilterPressure || equipment.currentPressure} />
+                                                    </div>
+                                                    {(equipment.notes || equipment.serviceNotes || equipment.recommendationNotes) && (
+                                                        <p className="mt-4 whitespace-pre-line text-sm leading-6 text-slate-700">
+                                                            {equipment.notes || equipment.serviceNotes || equipment.recommendationNotes}
+                                                        </p>
+                                                    )}
+                                                    <SurveyPhotoGrid title="Equipment Photos" photos={equipment.photoUrls || equipment.photos || equipment.equipmentPhotos || []} />
+                                                </div>
+                                            ))}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No equipment information was captured for this survey.
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="mt-6 border-t border-slate-200 pt-5">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Captured Readings & Dosages</h4>
+                                        <span className="text-xs font-semibold text-slate-500">{stopDataRecords.length}</span>
+                                    </div>
+                                    {stopDataRecords.length ? (
+                                        <div className="mt-3 space-y-3">
+                                            {stopDataRecords.map((record) => {
+                                                const body = bodyOfWaterById.get(record.bodyOfWaterId);
+                                                const observations = Array.isArray(record.observation)
+                                                    ? record.observation
+                                                    : Array.isArray(record.observations)
+                                                        ? record.observations
+                                                        : [];
+
+                                                return (
+                                                    <div key={record.id || record.bodyOfWaterId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                                        <p className="font-semibold text-slate-900">{body ? getBodyOfWaterTitle(body) : "Stop Data"}</p>
+                                                        <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                                                            <div>
+                                                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Readings</p>
+                                                                {(record.readings || []).length ? (
+                                                                    <div className="mt-2 space-y-1 text-sm text-slate-700">
+                                                                        {(record.readings || []).map((reading, index) => (
+                                                                            <p key={`${reading.templateId || reading.name || "reading"}-${index}`}>
+                                                                                <span className="font-medium">{reading.name || reading.templateName || reading.readingName || "Reading"}:</span>{" "}
+                                                                                {displayText(reading.amount || reading.value)}
+                                                                                {reading.UOM || reading.uom ? ` ${reading.UOM || reading.uom}` : ""}
+                                                                            </p>
+                                                                        ))}
+                                                                    </div>
+                                                                ) : (
+                                                                    <p className="mt-2 text-sm text-slate-500">No readings captured.</p>
+                                                                )}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Dosages</p>
+                                                                {(record.dosages || []).length ? (
+                                                                    <div className="mt-2 space-y-1 text-sm text-slate-700">
+                                                                        {(record.dosages || []).map((dosage, index) => (
+                                                                            <p key={`${dosage.templateId || dosage.name || "dosage"}-${index}`}>
+                                                                                <span className="font-medium">{dosage.name || dosage.templateName || dosage.dosageName || "Dosage"}:</span>{" "}
+                                                                                {displayText(dosage.amount || dosage.value)}
+                                                                                {dosage.UOM || dosage.uom ? ` ${dosage.UOM || dosage.uom}` : ""}
+                                                                            </p>
+                                                                        ))}
+                                                                    </div>
+                                                                ) : (
+                                                                    <p className="mt-2 text-sm text-slate-500">No dosages captured.</p>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                        {observations.length > 0 && (
+                                                            <div className="mt-4">
+                                                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Observations</p>
+                                                                <ul className="mt-2 space-y-1 text-sm text-slate-700">
+                                                                    {observations.map((observation, index) => (
+                                                                        <li key={`${observation}-${index}`}>{observation}</li>
+                                                                    ))}
+                                                                </ul>
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : (
+                                        <div className="mt-3 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                            No readings, dosages, or observations have been saved for this survey.
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
+                        {(serviceStop.includeReadings || serviceStop.includeDosages || readingTemplates.length || dosageTemplates.length) && (
+                            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div>
+                                        <h3 className="text-xl font-bold text-slate-800">Stop Data</h3>
+                                        <p className="text-sm text-slate-600 mt-1">Readings, dosages, and observations for this service stop.</p>
                                     </div>
                                     <div className="flex flex-col items-start gap-2 sm:items-end">
                                         <span className="rounded-full bg-cyan-50 px-3 py-1 text-xs font-semibold text-cyan-700">
                                             {selectedStopDataRecord ? "Saved" : "Not saved"}
                                         </span>
-                                        <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                        <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
                                             <input
                                                 type="checkbox"
                                                 checked={showManualStopData}
                                                 onChange={(event) => setShowManualStopData(event.target.checked)}
-                                                className="h-4 w-4 rounded border-gray-300 text-cyan-600"
+                                                className="h-4 w-4 rounded border-slate-300 text-cyan-600"
                                             />
                                             Manually input stop data
                                         </label>
@@ -1477,13 +2038,13 @@ const ServiceStopDetails = () => {
                                     bodiesOfWater.length ? (
                                     <div className="mt-5 space-y-5">
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Body of Water
                                             </label>
                                             <select
                                                 value={selectedBodyOfWaterId}
                                                 onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                             >
                                                 {bodiesOfWater.map((body) => (
                                                     <option key={body.id} value={body.id}>
@@ -1496,15 +2057,15 @@ const ServiceStopDetails = () => {
                                         {serviceStop.includeReadings !== false && readingTemplates.length > 0 && (
                                             <div>
                                                 <div className="mb-3 flex items-center justify-between gap-3">
-                                                    <h4 className="font-semibold text-gray-800">Readings</h4>
-                                                    <span className="text-xs font-semibold text-gray-500">
+                                                    <h4 className="font-semibold text-slate-800">Readings</h4>
+                                                    <span className="text-xs font-semibold text-slate-500">
                                                         {Object.values(readingDrafts).filter(Boolean).length}/{readingTemplates.length}
                                                     </span>
                                                 </div>
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                     {readingTemplates.map((template) => (
-                                                        <label key={template.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                                                            <span className="block text-sm font-semibold text-gray-700">
+                                                        <label key={template.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            <span className="block text-sm font-semibold text-slate-700">
                                                                 {template.name || "Reading"}
                                                             </span>
                                                             <div className="mt-2 flex items-center gap-2">
@@ -1517,11 +2078,11 @@ const ServiceStopDetails = () => {
                                                                             [template.id]: event.target.value,
                                                                         }))
                                                                     }
-                                                                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm"
+                                                                    className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                                                                     placeholder="Amount"
                                                                 />
                                                                 {template.UOM && (
-                                                                    <span className="shrink-0 text-xs font-semibold text-gray-500">
+                                                                    <span className="shrink-0 text-xs font-semibold text-slate-500">
                                                                         {template.UOM}
                                                                     </span>
                                                                 )}
@@ -1535,15 +2096,15 @@ const ServiceStopDetails = () => {
                                         {serviceStop.includeDosages !== false && dosageTemplates.length > 0 && (
                                             <div>
                                                 <div className="mb-3 flex items-center justify-between gap-3">
-                                                    <h4 className="font-semibold text-gray-800">Dosages</h4>
-                                                    <span className="text-xs font-semibold text-gray-500">
+                                                    <h4 className="font-semibold text-slate-800">Dosages</h4>
+                                                    <span className="text-xs font-semibold text-slate-500">
                                                         {Object.values(dosageDrafts).filter(Boolean).length}/{dosageTemplates.length}
                                                     </span>
                                                 </div>
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                                     {dosageTemplates.map((template) => (
-                                                        <label key={template.id} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                                                            <span className="block text-sm font-semibold text-gray-700">
+                                                        <label key={template.id} className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
+                                                            <span className="block text-sm font-semibold text-slate-700">
                                                                 {template.name || "Dosage"}
                                                             </span>
                                                             <div className="mt-2 flex items-center gap-2">
@@ -1556,11 +2117,11 @@ const ServiceStopDetails = () => {
                                                                             [template.id]: event.target.value,
                                                                         }))
                                                                     }
-                                                                    className="min-w-0 flex-1 rounded-md border border-gray-300 bg-white px-2 py-1.5 text-sm"
+                                                                    className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
                                                                     placeholder="Amount"
                                                                 />
                                                                 {template.UOM && (
-                                                                    <span className="shrink-0 text-xs font-semibold text-gray-500">
+                                                                    <span className="shrink-0 text-xs font-semibold text-slate-500">
                                                                         {template.UOM}
                                                                     </span>
                                                                 )}
@@ -1572,12 +2133,12 @@ const ServiceStopDetails = () => {
                                         )}
 
                                         <label className="block">
-                                            <span className="block text-sm font-semibold text-gray-600 mb-1">Observations</span>
+                                            <span className="block text-sm font-semibold text-slate-600 mb-1">Observations</span>
                                             <textarea
                                                 value={observationDraft}
                                                 onChange={(event) => setObservationDraft(event.target.value)}
                                                 rows={3}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                                                 placeholder="One observation per line"
                                             />
                                         </label>
@@ -1587,20 +2148,20 @@ const ServiceStopDetails = () => {
                                                 type="button"
                                                 onClick={saveStopData}
                                                 disabled={savingStopData || !selectedBodyOfWaterId}
-                                                className="rounded-lg bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                className="rounded-md bg-cyan-600 px-4 py-2 text-sm font-semibold text-white hover:bg-cyan-700 disabled:cursor-not-allowed disabled:opacity-50"
                                             >
                                                 {savingStopData ? "Saving..." : "Save Stop Data"}
                                             </button>
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
+                                    <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500">
                                         Add a body of water to this service location before recording stop data.
                                     </div>
                                     )
                                 ) : (
-                                    <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-5 text-sm text-gray-600">
-                                        <p className="font-semibold text-gray-800">
+                                    <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-5 text-sm text-slate-600">
+                                        <p className="font-semibold text-slate-800">
                                             {stopDataRecords.length
                                                 ? `${stopDataRecords.length} stop data record${stopDataRecords.length === 1 ? "" : "s"} saved`
                                                 : "No stop data entered"}
@@ -1614,15 +2175,15 @@ const ServiceStopDetails = () => {
                         )}
 
                         {serviceStop.photoUrls?.length > 0 && (
-                            <div className="bg-white shadow-lg rounded-xl p-6">
-                                <h3 className="text-xl font-bold mb-4 text-gray-800">Photos</h3>
+                            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                                <h3 className="text-xl font-bold mb-4 text-slate-800">Photos</h3>
                                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                     {serviceStop.photoUrls.map((photo, index) => (
                                         <img
                                             key={index}
-                                            src={photo.url}
-                                            alt={`Service stop photo ${index + 1}`}
-                                            className="rounded-lg w-full h-40 object-cover"
+                                            src={photoUrl(photo)}
+                                            alt={`Service stop ${index + 1}`}
+                                            className="h-40 w-full rounded-md border border-slate-200 object-cover"
                                         />
                                     ))}
                                 </div>
@@ -1632,18 +2193,18 @@ const ServiceStopDetails = () => {
 
                     <div className="space-y-6">
                         {(can("244") || can("246")) && (
-                            <div className="bg-white shadow-lg rounded-xl p-6">
+                            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                                 <div className="flex items-start justify-between gap-3">
                                     <div>
-                                        <h3 className="text-xl font-bold text-gray-800">Admin Edit</h3>
-                                        <p className="text-sm text-gray-600">Scheduling, technician, description, and completion controls</p>
+                                        <h3 className="text-xl font-bold text-slate-800">Admin Edit</h3>
+                                        <p className="text-sm text-slate-600">Scheduling, technician, description, and completion controls</p>
                                     </div>
-                                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
+                                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
                                         <input
                                             type="checkbox"
                                             checked={editEnabled}
                                             onChange={(event) => toggleEditEnabled(event.target.checked)}
-                                            className="h-4 w-4 rounded border-gray-300 text-blue-600"
+                                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
                                         />
                                         Edit enabled
                                     </label>
@@ -1654,25 +2215,25 @@ const ServiceStopDetails = () => {
                                         {can("244") && (
                                             <form onSubmit={saveServiceStopEdits} className="space-y-4">
                                                 <div>
-                                                    <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                    <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                         Scheduled Date
                                                     </label>
                                                     <input
                                                         type="date"
                                                         value={editForm.serviceDate}
                                                         onChange={(event) => handleEditFieldChange("serviceDate", event.target.value)}
-                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                        className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                     />
                                                 </div>
 
                                                 <div>
-                                                    <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                    <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                         Technician
                                                     </label>
                                                     <select
                                                         value={editForm.techId}
                                                         onChange={(event) => handleEditFieldChange("techId", event.target.value)}
-                                                        className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2"
+                                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                                     >
                                                         <option value="">Select technician</option>
                                                         {companyUsers.map((user) => (
@@ -1684,14 +2245,14 @@ const ServiceStopDetails = () => {
                                                 </div>
 
                                                 <label className="block">
-                                                    <span className="block text-sm font-semibold text-gray-600 mb-1">
+                                                    <span className="block text-sm font-semibold text-slate-600 mb-1">
                                                         Description
                                                     </span>
                                                     <textarea
                                                         value={editForm.description}
                                                         onChange={(event) => handleEditFieldChange("description", event.target.value)}
                                                         rows={4}
-                                                        className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
                                                         placeholder="Service stop description"
                                                     />
                                                 </label>
@@ -1699,7 +2260,7 @@ const ServiceStopDetails = () => {
                                                 <button
                                                     type="submit"
                                                     disabled={savingEdit}
-                                                    className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    className="w-full rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     {savingEdit ? "Saving..." : "Save Changes"}
                                                 </button>
@@ -1712,7 +2273,7 @@ const ServiceStopDetails = () => {
                                                     type="button"
                                                     onClick={openManualFinishConfirm}
                                                     disabled={finishingStop || (isServiceStopFinished(serviceStop) && isFinishedStatus(serviceStop.operationStatus))}
-                                                    className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                    className="rounded-md bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                                                 >
                                                     {finishingStop ? "Finishing..." : "Finish Service Stop Manually"}
                                                 </button>
@@ -1722,7 +2283,7 @@ const ServiceStopDetails = () => {
                                                 <button
                                                     type="button"
                                                     onClick={() => setShowDeleteConfirm(true)}
-                                                    className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
+                                                    className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
                                                 >
                                                     Delete Service Stop
                                                 </button>
@@ -1730,18 +2291,18 @@ const ServiceStopDetails = () => {
                                         </div>
                                     </div>
                                 ) : (
-                                    <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-600">
+                                    <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                                         Enable editing to change scheduling, finish manually, add tasks, or delete this stop.
                                     </div>
                                 )}
                             </div>
                         )}
 
-                        <div className="bg-white shadow-lg rounded-xl p-6">
+                        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="mb-4 flex items-start justify-between gap-3">
                                 <div>
-                                    <h3 className="text-xl font-bold text-gray-800">Service Stop Tasks</h3>
-                                    <p className="text-sm text-gray-600">
+                                    <h3 className="text-xl font-bold text-slate-800">Service Stop Tasks</h3>
+                                    <p className="text-sm text-slate-600">
                                         Tasks completed or assigned for this stop
                                     </p>
                                 </div>
@@ -1749,7 +2310,7 @@ const ServiceStopDetails = () => {
                                 {editEnabled && !showAddTask && can("244") && (
                                     <button
                                         onClick={() => setShowAddTask(true)}
-                                        className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition"
+                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
                                     >
                                         Add Task
                                     </button>
@@ -1759,30 +2320,30 @@ const ServiceStopDetails = () => {
                             {editEnabled && showAddTask && (
                                 <form
                                     onSubmit={saveNewTask}
-                                    className="mb-6 rounded-xl border border-gray-200 bg-gray-50 p-4 space-y-4"
+                                    className="mb-6 space-y-4 rounded-lg border border-slate-200 bg-slate-50 p-4"
                                 >
                                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Task Name
                                             </label>
                                             <input
                                                 type="text"
                                                 value={newTask.name}
                                                 onChange={(e) => handleTaskFieldChange("name", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="Brush walls"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Type
                                             </label>
                                             <select
                                                 value={newTask.type}
                                                 onChange={(e) => handleTaskFieldChange("type", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                             >
                                                 <option value="">Select task type</option>
                                                 {jobTaskTypeOptions.map((type) => (
@@ -1794,13 +2355,13 @@ const ServiceStopDetails = () => {
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Status
                                             </label>
                                             <select
                                                 value={newTask.status}
                                                 onChange={(e) => handleTaskFieldChange("status", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                             >
                                                 <option value="Not Finished">Not Finished</option>
                                                 <option value="Finished">Finished</option>
@@ -1810,13 +2371,13 @@ const ServiceStopDetails = () => {
 
                                         {["Fill Water", "Empty Water"].includes(newTask.type) && (
                                             <div>
-                                                <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                     Body of Water
                                                 </label>
                                                 <select
                                                     value={newTask.bodyOfWaterId}
                                                     onChange={(e) => handleTaskFieldChange("bodyOfWaterId", e.target.value)}
-                                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                                 >
                                                     <option value="">Select body of water</option>
                                                     {bodiesOfWater.map((body) => (
@@ -1830,13 +2391,13 @@ const ServiceStopDetails = () => {
 
                                         {taskNeedsEquipment(newTask.type) && (
                                             <div>
-                                                <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                                <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                     Equipment
                                                 </label>
                                                 <select
                                                     value={newTask.equipmentId}
                                                     onChange={(e) => handleTaskFieldChange("equipmentId", e.target.value)}
-                                                    className="w-full rounded-lg border border-gray-300 px-3 py-2 bg-white"
+                                                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
                                                 >
                                                     <option value="">Select equipment</option>
                                                     {equipmentList.map((equipment) => (
@@ -1849,7 +2410,7 @@ const ServiceStopDetails = () => {
                                         )}
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Contracted Rate (cents)
                                             </label>
                                             <input
@@ -1859,13 +2420,13 @@ const ServiceStopDetails = () => {
                                                 onChange={(e) =>
                                                     handleTaskFieldChange("contractedRate", e.target.value)
                                                 }
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="2500"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Estimated Time (mins)
                                             </label>
                                             <input
@@ -1875,13 +2436,13 @@ const ServiceStopDetails = () => {
                                                 onChange={(e) =>
                                                     handleTaskFieldChange("estimatedTime", e.target.value)
                                                 }
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="30"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Actual Time (mins)
                                             </label>
                                             <input
@@ -1889,39 +2450,39 @@ const ServiceStopDetails = () => {
                                                 min="0"
                                                 value={newTask.actualTime}
                                                 onChange={(e) => handleTaskFieldChange("actualTime", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="0"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Worker Name
                                             </label>
                                             <input
                                                 type="text"
                                                 value={newTask.workerName}
                                                 onChange={(e) => handleTaskFieldChange("workerName", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="Tech name"
                                             />
                                         </div>
 
                                         <div>
-                                            <label className="block text-sm font-semibold text-gray-600 mb-1">
+                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
                                                 Worker Type
                                             </label>
                                             <input
                                                 type="text"
                                                 value={newTask.workerType}
                                                 onChange={(e) => handleTaskFieldChange("workerType", e.target.value)}
-                                                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                                                className="w-full rounded-md border border-slate-300 px-3 py-2"
                                                 placeholder="employee"
                                             />
                                         </div>
                                     </div>
 
-                                    <label className="flex items-center gap-2 text-sm text-gray-700">
+                                    <label className="flex items-center gap-2 text-sm text-slate-700">
                                         <input
                                             type="checkbox"
                                             checked={newTask.customerApproval}
@@ -1933,7 +2494,7 @@ const ServiceStopDetails = () => {
                                     </label>
 
                                     {!!serviceStop.recurringServiceStopId && (
-                                        <label className="flex items-center gap-2 text-sm text-gray-700">
+                                        <label className="flex items-center gap-2 text-sm text-slate-700">
                                             <input
                                                 type="checkbox"
                                                 checked={newTask.addToRecurringServiceStop}
@@ -1952,7 +2513,7 @@ const ServiceStopDetails = () => {
                                         <button
                                             type="submit"
                                             disabled={savingTask}
-                                            className="px-4 py-2 bg-blue-600 text-white text-sm font-semibold rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+                                            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
                                         >
                                             {savingTask ? "Saving..." : "Save Task"}
                                         </button>
@@ -1963,7 +2524,7 @@ const ServiceStopDetails = () => {
                                                 setShowAddTask(false);
                                                 resetTaskForm();
                                             }}
-                                            className="px-4 py-2 bg-gray-200 text-gray-800 text-sm font-semibold rounded-lg hover:bg-gray-300 transition"
+                                            className="rounded-md bg-slate-200 px-4 py-2 text-sm font-semibold text-slate-800 transition hover:bg-slate-300"
                                         >
                                             Cancel
                                         </button>
@@ -1976,14 +2537,14 @@ const ServiceStopDetails = () => {
                                     {taskList.map((task) => (
                                         <div
                                             key={task.id}
-                                            className="rounded-xl border border-gray-200 p-4 hover:bg-gray-50 transition"
+                                            className="rounded-lg border border-slate-200 p-4 transition hover:bg-slate-50"
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div>
-                                                    <p className="font-semibold text-gray-900">
+                                                    <p className="font-semibold text-slate-900">
                                                         {task.name || "Unnamed Task"}
                                                     </p>
-                                                    <p className="text-sm text-gray-500 mt-1">
+                                                    <p className="text-sm text-slate-500 mt-1">
                                                         {task.type || "—"}
                                                     </p>
                                                 </div>
@@ -2002,7 +2563,7 @@ const ServiceStopDetails = () => {
                                                     <button
                                                         type="button"
                                                         onClick={() => markTaskFinished(task)}
-                                                        className="px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-semibold hover:bg-green-700 transition"
+                                                        className="rounded-md bg-green-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-green-700"
                                                     >
                                                         Mark Finished
                                                     </button>
@@ -2010,47 +2571,47 @@ const ServiceStopDetails = () => {
                                             )}
 
                                             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Contracted Rate</p>
-                                                    <p className="font-medium text-gray-800">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Contracted Rate</p>
+                                                    <p className="font-medium text-slate-800">
                                                         {formatCurrencyFromCents(task.contractedRate)}
                                                     </p>
                                                 </div>
 
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Estimated Time</p>
-                                                    <p className="font-medium text-gray-800">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Estimated Time</p>
+                                                    <p className="font-medium text-slate-800">
                                                         {formatMinutes(task.estimatedTime)}
                                                     </p>
                                                 </div>
 
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Actual Time</p>
-                                                    <p className="font-medium text-gray-800">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Actual Time</p>
+                                                    <p className="font-medium text-slate-800">
                                                         {formatMinutes(task.actualTime)}
                                                     </p>
                                                 </div>
 
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Customer Approval</p>
-                                                    <p className="font-medium text-gray-800">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Customer Approval</p>
+                                                    <p className="font-medium text-slate-800">
                                                         {yesNo(task.customerApproval)}
                                                     </p>
                                                 </div>
 
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Worker</p>
-                                                    <p className="font-medium text-gray-800">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Worker</p>
+                                                    <p className="font-medium text-slate-800">
                                                         {task.workerName || "—"}
                                                     </p>
                                                     {task.workerType && (
-                                                        <p className="text-xs text-gray-500 mt-1">{task.workerType}</p>
+                                                        <p className="text-xs text-slate-500 mt-1">{task.workerType}</p>
                                                     )}
                                                 </div>
 
-                                                <div className="rounded-lg bg-gray-50 px-3 py-2">
-                                                    <p className="text-gray-500">Worker ID</p>
-                                                    <p className="font-medium text-gray-800 break-all">
+                                                <div className="rounded-lg bg-slate-50 px-3 py-2">
+                                                    <p className="text-slate-500">Worker ID</p>
+                                                    <p className="font-medium text-slate-800 break-all">
                                                         {task.workerId || "—"}
                                                     </p>
                                                 </div>
@@ -2059,7 +2620,7 @@ const ServiceStopDetails = () => {
                                     ))}
                                 </div>
                             ) : (
-                                <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-6 text-gray-500">
+                                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-slate-500">
                                     No tasks for this service stop.
                                 </div>
                             )}
@@ -2157,9 +2718,9 @@ const ServiceStopDetails = () => {
             )}
             {showDeleteConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-                    <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
-                        <h3 className="text-xl font-bold text-gray-900">Delete Service Stop</h3>
-                        <p className="mt-3 text-sm text-gray-600">
+                    <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+                        <h3 className="text-xl font-bold text-slate-900">Delete Service Stop</h3>
+                        <p className="mt-3 text-sm text-slate-600">
                             This will delete this service stop and its tasks/readings history. This cannot be undone.
                         </p>
                         <div className="mt-6 flex justify-end gap-3">
@@ -2167,7 +2728,7 @@ const ServiceStopDetails = () => {
                                 type="button"
                                 onClick={() => setShowDeleteConfirm(false)}
                                 disabled={deleting}
-                                className="px-4 py-2 rounded-lg bg-gray-100 text-sm font-semibold text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+                                className="rounded-md bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
                             >
                                 Cancel
                             </button>
@@ -2175,7 +2736,7 @@ const ServiceStopDetails = () => {
                                 type="button"
                                 onClick={handleDeleteServiceStop}
                                 disabled={deleting}
-                                className="px-4 py-2 rounded-lg bg-red-600 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
                             >
                                 {deleting ? "Deleting..." : "Delete"}
                             </button>

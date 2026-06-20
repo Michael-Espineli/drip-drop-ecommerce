@@ -579,13 +579,6 @@ function Estimates() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Link
-                to="/company/contracts"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaFileContract className="text-xs" />
-                Contracts
-              </Link>
               {can('622') && (
                 <>
                   <Link

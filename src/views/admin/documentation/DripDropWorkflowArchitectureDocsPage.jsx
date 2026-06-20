@@ -1,5 +1,5 @@
 export default function DripDropWorkflowArchitectureDocsPage() {
-    const ADMIN_YELLOW = '#debf44';
+    const ADMIN_YELLOW = '#efb12f';
     const sections = [
         {
             title: '1. Job Lifecycle',
@@ -408,7 +408,7 @@ export default function DripDropWorkflowArchitectureDocsPage() {
                                 )}
 
                                 {section.important && (
-                                    <div className="mt-6 rounded-lg border border-[#debf44]/30 bg-[#debf44]/10 p-5">
+                                    <div className="mt-6 rounded-lg border border-[#efb12f]/30 bg-[#efb12f]/10 p-5">
                                         <p className="text-sm font-semibold uppercase tracking-wide" style={{ color: ADMIN_YELLOW }}>
                                             Important Rule
                                         </p>
@@ -440,7 +440,7 @@ function StatCard({ title, value }) {
 }
 
 function StatusGroup({ title, items }) {
-    const ADMIN_YELLOW = '#debf44';
+    const ADMIN_YELLOW = '#efb12f';
 
     return (
         <div className="rounded-lg border border-slate-800/60 bg-slate-900/60 p-5">

@@ -33,7 +33,8 @@ const reportCategories = [
 ];
 
 const reportCatalog = [
-  { value: "readings", label: "Readings Summary", status: "Ready", source: "stopData readings", category: "operations" },
+  { value: "funReadingsDosages", label: "Fun Readings & Dosages", status: "Ready", source: "daily reading and dosage ranges", category: "operations" },
+  { value: "readings", label: "Readings & Dosages Summary", status: "Ready", source: "stopData readings and dosages", category: "operations" },
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
   { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
   { value: "pnlPerPool", label: "PNL Per Pool", status: "Ready", source: "service agreements, labor, chemicals", category: "performance" },
@@ -47,7 +48,7 @@ const reportCatalog = [
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
-const fixedGroupingReportTypes = new Set(["readingHealth", "readingPerformance", "pnlPerPool"]);
+const fixedGroupingReportTypes = new Set(["funReadingsDosages", "readingHealth", "readingPerformance", "pnlPerPool"]);
 
 const readingPerformanceViewOptions = [
   { value: "users", label: "Users" },
@@ -164,6 +165,18 @@ const templateName = (item, templatesById, fallback) =>
   item.name || templatesById.get(item.templateId)?.name || templatesById.get(item.universalTemplateId)?.name || fallback;
 
 const valueWithUnit = (item) => [item.amount ?? "", item.UOM || item.uom || ""].filter(Boolean).join(" ").trim() || "-";
+
+const reportItemUnit = (item = {}, template = {}) =>
+  item.UOM || item.uom || template.UOM || template.uom || "";
+
+const formatDecimal = (value, digits = 2) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "-";
+  return number.toLocaleString(undefined, {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+};
 
 const customerDisplayName = (customer = {}) => {
   if (!customer) return "";
@@ -1099,6 +1112,86 @@ const escapeHtml = (value) =>
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
 
+const printableAverageLineChartSvg = (item = {}, chartRange = {}) => {
+  const points = Array.isArray(item.chartPoints) ? item.chartPoints : [];
+  if (!points.length) return `<div class="empty-chart">No chart data</div>`;
+
+  const width = 640;
+  const height = 240;
+  const margin = { top: 18, right: 18, bottom: 34, left: 48 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const values = points.map((point) => point.average).filter(Number.isFinite);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(Math.abs(rawMax) * 0.1, 1) : (rawMax - rawMin) * 0.12;
+  const yMin = rawMin - padding;
+  const yMax = rawMax + padding;
+  const yRange = yMax - yMin || 1;
+  const start = dateFromValue(chartRange.start) || dateFromValue(points[0]?.date);
+  const end = dateFromValue(chartRange.end) || dateFromValue(points[points.length - 1]?.date);
+  const startTime = start?.getTime() || 0;
+  const endTime = end?.getTime() || startTime;
+  const timeRange = endTime - startTime;
+  const lineColor = item.type === "Dosage" ? "#0f766e" : "#2563eb";
+  const xForPoint = (point, index) => {
+    if (timeRange <= 0) {
+      return points.length === 1
+        ? margin.left + plotWidth / 2
+        : margin.left + (index / (points.length - 1)) * plotWidth;
+    }
+
+    const pointDate = dateFromValue(point.date);
+    const ratio = pointDate ? (pointDate.getTime() - startTime) / timeRange : index / Math.max(points.length - 1, 1);
+    return margin.left + Math.min(Math.max(ratio, 0), 1) * plotWidth;
+  };
+  const yForValue = (value) => margin.top + (1 - ((value - yMin) / yRange)) * plotHeight;
+  const ticks = Array.from({ length: 4 }, (_, index) => yMin + (yRange / 3) * index).reverse();
+  const linePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${xForPoint(point, index)} ${yForValue(point.average)}`)
+    .join(" ");
+  const xLabels = [
+    start ? format(start, "M/d") : points[0]?.dateLabel,
+    end ? format(end, "M/d") : points[points.length - 1]?.dateLabel,
+  ].filter(Boolean);
+
+  const tickHtml = ticks.map((tick) => {
+    const y = yForValue(tick);
+    return `
+      <g>
+        <line x1="${margin.left}" x2="${width - margin.right}" y1="${y}" y2="${y}" stroke="#e2e8f0" stroke-width="1" />
+        <text x="${margin.left - 8}" y="${y + 4}" text-anchor="end" font-size="11" fill="#64748b">${escapeHtml(formatDecimal(tick))}</text>
+      </g>
+    `;
+  }).join("");
+  const pointHtml = points.map((point, index) => {
+    const x = xForPoint(point, index);
+    const y = yForValue(point.average);
+    return `<circle cx="${x}" cy="${y}" r="4.5" fill="#ffffff" stroke="${lineColor}" stroke-width="2.5" />`;
+  }).join("");
+  const labelHtml = xLabels.map((label, index) => `
+    <text
+      x="${index === 0 ? margin.left : width - margin.right}"
+      y="${height - 10}"
+      text-anchor="${index === 0 ? "start" : "end"}"
+      font-size="11"
+      fill="#64748b"
+    >${escapeHtml(label)}</text>
+  `).join("");
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="print-chart-svg" role="img" aria-label="${escapeHtml(item.name || "Average chart")}">
+      <rect x="0" y="0" width="${width}" height="${height}" rx="8" fill="#f8fafc" />
+      ${tickHtml}
+      <line x1="${margin.left}" x2="${margin.left}" y1="${margin.top}" y2="${height - margin.bottom}" stroke="#cbd5e1" />
+      <line x1="${margin.left}" x2="${width - margin.right}" y1="${height - margin.bottom}" y2="${height - margin.bottom}" stroke="#cbd5e1" />
+      ${points.length > 1 ? `<path d="${linePath}" fill="none" stroke="${lineColor}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />` : ""}
+      ${pointHtml}
+      ${labelHtml}
+    </svg>
+  `;
+};
+
 const printableReportHtml = (reportData) => {
   const exportTitle = reportExportTitle(reportData);
   const statsHtml = reportStatsForExport(reportData)
@@ -1129,6 +1222,28 @@ const printableReportHtml = (reportData) => {
         </table>
       </section>
     `)
+    .join("");
+
+  const chartSectionsHtml = (reportData.chartSections || [])
+    .map((section) => {
+      const items = (section.items || []).filter((item) => item.chartPoints?.length);
+      if (!items.length) return "";
+
+      return `
+        <section class="chart-section">
+          <h2>${escapeHtml(section.title || "Charts")}</h2>
+          <div class="chart-grid">
+            ${items.map((item) => `
+              <article class="chart-card">
+                <h3>${escapeHtml(item.name || "Chart")}</h3>
+                <p>Avg ${escapeHtml(formatDecimal(item.average))}${item.unit ? ` ${escapeHtml(item.unit)}` : ""} | Low ${escapeHtml(formatDecimal(item.low))} | High ${escapeHtml(formatDecimal(item.high))}</p>
+                ${printableAverageLineChartSvg(item, reportData.chartRange || {})}
+              </article>
+            `).join("")}
+          </div>
+        </section>
+      `;
+    })
     .join("");
 
   const groupsHtml = (reportData.groups || [])
@@ -1176,13 +1291,20 @@ const printableReportHtml = (reportData) => {
           .stat strong { display: block; font-size: 18px; margin-top: 4px; }
           .stat small { color: #64748b; display: block; margin-top: 2px; }
           .summary-section { margin-bottom: 20px; }
+          .chart-section { margin-bottom: 20px; }
+          .chart-grid { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .chart-card { border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; break-inside: avoid; }
+          .chart-card h3 { font-size: 13px; margin: 0; }
+          .chart-card p { color: #64748b; font-size: 10px; margin: 3px 0 8px; }
+          .print-chart-svg { display: block; width: 100%; }
+          .empty-chart { border: 1px dashed #cbd5e1; border-radius: 6px; color: #64748b; font-size: 11px; padding: 24px; text-align: center; }
           section { break-inside: avoid; margin-top: 18px; }
           h2 { font-size: 16px; margin-bottom: 8px; }
           table { border-collapse: collapse; font-size: 11px; width: 100%; }
           th { background: #f1f5f9; color: #475569; font-size: 10px; text-align: left; text-transform: uppercase; }
           th, td { border: 1px solid #cbd5e1; padding: 6px; vertical-align: top; }
           .footer td { background: #f8fafc; font-weight: 700; }
-          @media print { body { margin: 18px; } .stats { grid-template-columns: repeat(2, 1fr); } }
+          @media print { body { margin: 18px; } .stats { grid-template-columns: repeat(2, 1fr); } .chart-grid { grid-template-columns: 1fr; } }
         </style>
       </head>
       <body>
@@ -1190,6 +1312,7 @@ const printableReportHtml = (reportData) => {
         <div class="generated">Generated ${escapeHtml(format(new Date(), "MM/dd/yyyy h:mm a"))}</div>
         <div class="stats">${statsHtml}</div>
         ${summarySectionsHtml}
+        ${chartSectionsHtml}
         ${groupsHtml}
       </body>
     </html>
@@ -1217,67 +1340,319 @@ const exportReportPdf = (reportData) => {
   }, 250);
 };
 
-const buildReadingReport = ({ stopData, readingTemplates, mode, groupBy }) => {
+const buildReadingReport = ({ stopData, readingTemplates, dosageTemplates = [], mode, groupBy }) => {
   const readingTemplatesById = templateMap(readingTemplates, "readingsTemplateId");
+  const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
   const groups = new Map();
-  const overall = { visits: 0, readings: 0 };
+  const overall = { visits: 0, readings: 0, dosages: 0 };
+  const templateForItem = (item, templatesById) =>
+    templatesById.get(item.templateId) ||
+    templatesById.get(item.universalTemplateId) ||
+    templatesById.get(item.readingsTemplateId) ||
+    templatesById.get(item.dosageTemplateId) ||
+    {};
+  const addSummaryRow = (rows, item, templatesById, fallback) => {
+    const template = templateForItem(item, templatesById);
+    const name = templateName(item, templatesById, fallback);
+    const unit = reportItemUnit(item, template);
+    const rowKey = [name, unit].filter(Boolean).join("|");
+    const value = toNumber(item.amount ?? item.value ?? item.quantity);
+    const existingRow = rows.find((row) => row.rowKey === rowKey);
+
+    if (existingRow) {
+      existingRow.count += 1;
+      existingRow.total += value;
+      existingRow.min = Math.min(existingRow.min, value);
+      existingRow.max = Math.max(existingRow.max, value);
+      return;
+    }
+
+    rows.push({ rowKey, name, unit, count: 1, total: value, min: value, max: value });
+  };
+  const summaryGroupName = (baseGroup, label) =>
+    groupBy === "company" ? label : `${baseGroup.name} - ${label}`;
 
   stopData.forEach((stop) => {
     const readings = Array.isArray(stop.readings) ? stop.readings : [];
-    if (!readings.length && mode === "summary") return;
+    const dosages = Array.isArray(stop.dosages) ? stop.dosages : [];
+    if (!readings.length && !dosages.length && mode === "summary") return;
 
-    const group = ensureGroup(groups, groupKey(stop, groupBy));
-    addMetric(group, "visits", 1);
-    addMetric(group, "readings", readings.length);
     overall.visits += 1;
     overall.readings += readings.length;
+    overall.dosages += dosages.length;
+
+    const baseGroup = groupKey(stop, groupBy);
 
     if (mode === "summary") {
+      const readingsGroup = ensureGroup(groups, {
+        id: `${baseGroup.id}-readings`,
+        name: summaryGroupName(baseGroup, "Readings"),
+      });
+      const dosagesGroup = ensureGroup(groups, {
+        id: `${baseGroup.id}-dosages`,
+        name: summaryGroupName(baseGroup, "Dosages"),
+      });
+
+      if (readings.length) {
+        addMetric(readingsGroup, "visits", 1);
+        addMetric(readingsGroup, "readings", readings.length);
+      }
       readings.forEach((reading) => {
-        const name = templateName(reading, readingTemplatesById, "Reading");
-        const value = toNumber(reading.amount);
-        const row = group.rows.find((item) => item.name === name);
-        if (row) {
-          row.count += 1;
-          row.total += value;
-          row.min = Math.min(row.min, value);
-          row.max = Math.max(row.max, value);
-        } else {
-          group.rows.push({ name, count: 1, total: value, min: value, max: value });
-        }
+        addSummaryRow(readingsGroup.rows, reading, readingTemplatesById, "Reading");
+      });
+
+      if (dosages.length) {
+        addMetric(dosagesGroup, "visits", 1);
+        addMetric(dosagesGroup, "dosages", dosages.length);
+      }
+      dosages.forEach((dosage) => {
+        addSummaryRow(dosagesGroup.rows, dosage, dosageTemplatesById, "Dosage");
       });
     } else {
+      const group = ensureGroup(groups, baseGroup);
+      addMetric(group, "visits", 1);
+      addMetric(group, "readings", readings.length);
+      addMetric(group, "dosages", dosages.length);
       group.rows.push({
         date: shortDate(stop.date),
         customer: stop.customerName || "-",
         worker: stop.userName || stop.techName || stop.tech || "-",
-        values: readings.map((reading) => `${templateName(reading, readingTemplatesById, "Reading")}: ${valueWithUnit(reading)}`).join(", ") || "-",
+        readings: readings.map((reading) => `${templateName(reading, readingTemplatesById, "Reading")}: ${valueWithUnit(reading)}`).join(", ") || "-",
+        dosages: dosages.map((dosage) => `${templateName(dosage, dosageTemplatesById, "Dosage")}: ${valueWithUnit(dosage)}`).join(", ") || "-",
       });
     }
   });
 
+  const resultGroups = [...groups.values()]
+    .map((group) => ({
+      ...group,
+      rows: [...group.rows].sort((a, b) => (a.name || a.date || "").localeCompare(b.name || b.date || "")),
+    }))
+    .filter((group) => group.rows.length);
+
   return {
-    title: "Readings Report",
+    title: "Readings & Dosages Report",
     stats: [
       numberMetric("Service Visits", overall.visits),
       numberMetric("Readings", overall.readings),
-      numberMetric("Templates", readingTemplates.length),
+      numberMetric("Dosages", overall.dosages),
+      numberMetric("Templates", readingTemplates.length + dosageTemplates.length),
     ],
     columns: mode === "summary"
       ? [
-          { key: "name", label: "Reading" },
-          { key: "count", label: "Count", align: "right" },
-          { key: "average", label: "Average", align: "right", render: (row) => (row.count ? (row.total / row.count).toFixed(2) : "0") },
-          { key: "min", label: "Low", align: "right", render: (row) => row.min.toFixed(2) },
-          { key: "max", label: "High", align: "right", render: (row) => row.max.toFixed(2) },
+          { key: "name", label: "Name" },
+          { key: "average", label: "Average", align: "right", render: (row) => formatDecimal(row.count ? row.total / row.count : 0) },
+          { key: "min", label: "Low", align: "right", render: (row) => formatDecimal(row.min) },
+          { key: "max", label: "High", align: "right", render: (row) => formatDecimal(row.max) },
+          { key: "unit", label: "Unit" },
         ]
       : [
           { key: "date", label: "Date" },
           { key: "customer", label: "Customer" },
           { key: "worker", label: "Worker" },
-          { key: "values", label: "Readings" },
+          { key: "readings", label: "Readings" },
+          { key: "dosages", label: "Dosages" },
         ],
-    groups: [...groups.values()],
+    groups: resultGroups,
+  };
+};
+
+const createDailyRangeAccumulator = ({ type, item, template, templatesById, fallback, date }) => {
+  const templateId = template?.id || template?.readingsTemplateId || template?.dosageTemplateId || "";
+  const itemId = item.templateId || item.universalTemplateId || item.readingsTemplateId || item.dosageTemplateId || item.id || "";
+  const name = templateName(item, templatesById, fallback);
+  const unit = reportItemUnit(item, template);
+
+  return {
+    id: [type, templateId || itemId || name, unit].filter(Boolean).join("-"),
+    type,
+    name,
+    unit,
+    count: 0,
+    total: 0,
+    min: Infinity,
+    max: -Infinity,
+    firstDate: date,
+    daily: new Map(),
+  };
+};
+
+const addDailyRangeValue = (summary, date, value) => {
+  const dateKey = format(date, "yyyy-MM-dd");
+  const existingDay = summary.daily.get(dateKey) || {
+    id: `${summary.id}-${dateKey}`,
+    dateKey,
+    date,
+    dateLabel: format(date, "M/d"),
+    count: 0,
+    total: 0,
+    low: Infinity,
+    high: -Infinity,
+  };
+
+  existingDay.count += 1;
+  existingDay.total += value;
+  existingDay.low = Math.min(existingDay.low, value);
+  existingDay.high = Math.max(existingDay.high, value);
+  summary.daily.set(dateKey, existingDay);
+
+  summary.count += 1;
+  summary.total += value;
+  summary.min = Math.min(summary.min, value);
+  summary.max = Math.max(summary.max, value);
+  if (!summary.firstDate || date < summary.firstDate) summary.firstDate = date;
+};
+
+const serializeDailyRangeSummary = (summary) => {
+  const average = summary.count ? summary.total / summary.count : 0;
+  const chartPoints = [...summary.daily.values()]
+    .sort((a, b) => a.date.getTime() - b.date.getTime())
+    .map((day) => ({
+      id: day.id,
+      dateKey: day.dateKey,
+      dateLabel: day.dateLabel,
+      date: day.date,
+      count: day.count,
+      average: day.count ? day.total / day.count : 0,
+      low: day.low === Infinity ? 0 : day.low,
+      high: day.high === -Infinity ? 0 : day.high,
+    }));
+
+  return {
+    id: summary.id,
+    type: summary.type,
+    name: summary.name,
+    unit: summary.unit,
+    count: summary.count,
+    average,
+    low: summary.min === Infinity ? 0 : summary.min,
+    high: summary.max === -Infinity ? 0 : summary.max,
+    chartPoints,
+  };
+};
+
+const buildFunReadingsDosagesReport = ({
+  stopData,
+  readingTemplates,
+  dosageTemplates,
+  dateRangeStart,
+  dateRangeEnd,
+}) => {
+  const readingTemplatesById = templateMap(readingTemplates, "readingsTemplateId");
+  const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
+  const readingSummaries = new Map();
+  const dosageSummaries = new Map();
+  let readingCount = 0;
+  let dosageCount = 0;
+
+  const addValue = ({ map, type, item, templatesById, fallback, date }) => {
+    const value = parseReadingNumber(item.amount ?? item.value ?? item.quantity);
+    if (!Number.isFinite(value)) return;
+
+    const template =
+      templatesById.get(item.templateId) ||
+      templatesById.get(item.universalTemplateId) ||
+      templatesById.get(item.readingsTemplateId) ||
+      templatesById.get(item.dosageTemplateId) ||
+      {};
+    const key = [
+      type,
+      template.id || item.templateId || item.universalTemplateId || item.readingsTemplateId || item.dosageTemplateId || item.name || fallback,
+      reportItemUnit(item, template),
+    ].filter(Boolean).join("-");
+
+    if (!map.has(key)) {
+      map.set(key, createDailyRangeAccumulator({ type, item, template, templatesById, fallback, date }));
+    }
+
+    addDailyRangeValue(map.get(key), date, value);
+  };
+
+  stopData.forEach((stop) => {
+    const date = dateFromValue(stop.date);
+    if (!date) return;
+
+    (Array.isArray(stop.readings) ? stop.readings : []).forEach((reading) => {
+      addValue({
+        map: readingSummaries,
+        type: "Reading",
+        item: reading,
+        templatesById: readingTemplatesById,
+        fallback: "Reading",
+        date,
+      });
+      if (Number.isFinite(parseReadingNumber(reading.amount ?? reading.value ?? reading.quantity))) readingCount += 1;
+    });
+
+    (Array.isArray(stop.dosages) ? stop.dosages : []).forEach((dosage) => {
+      addValue({
+        map: dosageSummaries,
+        type: "Dosage",
+        item: dosage,
+        templatesById: dosageTemplatesById,
+        fallback: "Dosage",
+        date,
+      });
+      if (Number.isFinite(parseReadingNumber(dosage.amount ?? dosage.value ?? dosage.quantity))) dosageCount += 1;
+    });
+  });
+
+  const sortSummaryRows = (rows) =>
+    rows.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name) || a.unit.localeCompare(b.unit));
+  const readingRows = sortSummaryRows([...readingSummaries.values()].map(serializeDailyRangeSummary));
+  const dosageRows = sortSummaryRows([...dosageSummaries.values()].map(serializeDailyRangeSummary));
+  const displayRows = (rows) => rows.map((row) => ({
+    ...row,
+    averageDisplay: formatDecimal(row.average),
+    lowDisplay: formatDecimal(row.low),
+    highDisplay: formatDecimal(row.high),
+  }));
+  const readingTableRows = displayRows(readingRows);
+  const dosageTableRows = displayRows(dosageRows);
+
+  return {
+    title: "Fun Readings & Dosages",
+    stats: [
+      numberMetric("Service Visits", stopData.length),
+      numberMetric("Readings", readingCount),
+      numberMetric("Dosages", dosageCount),
+      numberMetric("Daily Series", readingRows.length + dosageRows.length),
+    ],
+    columns: [
+      { key: "name", label: "Name" },
+      { key: "averageDisplay", label: "Average", align: "right" },
+      { key: "lowDisplay", label: "Low", align: "right" },
+      { key: "highDisplay", label: "High", align: "right" },
+      { key: "unit", label: "Unit" },
+    ],
+    groups: [
+      {
+        id: "readings-summary",
+        name: "Readings",
+        metrics: {
+          Series: readingRows.length,
+          Values: readingCount,
+        },
+        rows: readingTableRows,
+      },
+      {
+        id: "dosages-summary",
+        name: "Dosages",
+        metrics: {
+          Series: dosageRows.length,
+          Values: dosageCount,
+        },
+        rows: dosageTableRows,
+      },
+    ],
+    chartSections: [
+      { id: "reading-charts", title: "Reading Charts", items: readingRows },
+      { id: "dosage-charts", title: "Dosage Charts", items: dosageRows },
+    ],
+    chartRange: {
+      start: dateRangeStart,
+      end: dateRangeEnd,
+    },
   };
 };
 
@@ -3313,6 +3688,145 @@ const SummarySectionsView = ({ sections = [] }) => {
   );
 };
 
+const AverageLineChart = ({ item, chartRange }) => {
+  const points = Array.isArray(item?.chartPoints) ? item.chartPoints : [];
+  if (!points.length) {
+    return (
+      <div className="mt-3 flex aspect-[16/7] items-center justify-center rounded-md border border-dashed border-slate-200 text-sm text-slate-500">
+        No chart data
+      </div>
+    );
+  }
+
+  const width = 640;
+  const height = 240;
+  const margin = { top: 18, right: 18, bottom: 34, left: 48 };
+  const plotWidth = width - margin.left - margin.right;
+  const plotHeight = height - margin.top - margin.bottom;
+  const values = points.map((point) => point.average).filter(Number.isFinite);
+  const rawMin = Math.min(...values);
+  const rawMax = Math.max(...values);
+  const padding = rawMin === rawMax ? Math.max(Math.abs(rawMax) * 0.1, 1) : (rawMax - rawMin) * 0.12;
+  const yMin = rawMin - padding;
+  const yMax = rawMax + padding;
+  const yRange = yMax - yMin || 1;
+  const start = dateFromValue(chartRange?.start) || dateFromValue(points[0]?.date);
+  const end = dateFromValue(chartRange?.end) || dateFromValue(points[points.length - 1]?.date);
+  const startTime = start?.getTime() || 0;
+  const endTime = end?.getTime() || startTime;
+  const timeRange = endTime - startTime;
+  const lineColor = item.type === "Dosage" ? "#0f766e" : "#2563eb";
+  const xForPoint = (point, index) => {
+    if (timeRange <= 0) {
+      return points.length === 1
+        ? margin.left + plotWidth / 2
+        : margin.left + (index / (points.length - 1)) * plotWidth;
+    }
+
+    const pointDate = dateFromValue(point.date);
+    const ratio = pointDate ? (pointDate.getTime() - startTime) / timeRange : index / Math.max(points.length - 1, 1);
+    return margin.left + Math.min(Math.max(ratio, 0), 1) * plotWidth;
+  };
+  const yForValue = (value) => margin.top + (1 - ((value - yMin) / yRange)) * plotHeight;
+  const ticks = Array.from({ length: 4 }, (_, index) => yMin + (yRange / 3) * index).reverse();
+  const xLabels = [
+    start ? format(start, "M/d") : points[0]?.dateLabel,
+    end ? format(end, "M/d") : points[points.length - 1]?.dateLabel,
+  ].filter(Boolean);
+  const linePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${xForPoint(point, index)} ${yForValue(point.average)}`)
+    .join(" ");
+
+  return (
+    <div className="mt-3">
+      <svg viewBox={`0 0 ${width} ${height}`} className="block aspect-[16/6] w-full overflow-visible">
+        <rect x="0" y="0" width={width} height={height} rx="8" fill="#f8fafc" />
+        {ticks.map((tick) => {
+          const y = yForValue(tick);
+          return (
+            <g key={tick}>
+              <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth="1" />
+              <text x={margin.left - 8} y={y + 4} textAnchor="end" fontSize="11" fill="#64748b">
+                {formatDecimal(tick)}
+              </text>
+            </g>
+          );
+        })}
+        <line x1={margin.left} x2={margin.left} y1={margin.top} y2={height - margin.bottom} stroke="#cbd5e1" />
+        <line x1={margin.left} x2={width - margin.right} y1={height - margin.bottom} y2={height - margin.bottom} stroke="#cbd5e1" />
+
+        {points.length > 1 ? (
+          <path d={linePath} fill="none" stroke={lineColor} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+        ) : null}
+        {points.map((point, index) => {
+          const x = xForPoint(point, index);
+          const averageY = yForValue(point.average);
+          return (
+            <g key={point.id}>
+              <title>
+                {`${point.dateLabel}: average ${formatDecimal(point.average)}${item.unit ? ` ${item.unit}` : ""}`}
+              </title>
+              <circle cx={x} cy={averageY} r="4.5" fill="#ffffff" stroke={lineColor} strokeWidth="2.5" />
+            </g>
+          );
+        })}
+
+        {xLabels.map((label, index) => (
+          <text
+            key={`${label}-${index}`}
+            x={index === 0 ? margin.left : width - margin.right}
+            y={height - 10}
+            textAnchor={index === 0 ? "start" : "end"}
+            fontSize="11"
+            fill="#64748b"
+          >
+            {label}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+};
+
+const ChartSectionsView = ({ sections = [], chartRange }) => {
+  const populatedSections = sections
+    .map((section) => ({
+      ...section,
+      items: (section.items || []).filter((item) => item.chartPoints?.length),
+    }))
+    .filter((section) => section.items.length);
+
+  if (!populatedSections.length) return null;
+
+  return (
+    <div className="grid gap-4">
+      {populatedSections.map((section) => (
+        <section key={section.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+          <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">{section.title}</h3>
+          <div className="mt-3 grid gap-3 2xl:grid-cols-2">
+            {section.items.map((item) => (
+              <article key={item.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="break-words text-sm font-bold text-slate-900">{item.name}</h4>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Avg {formatDecimal(item.average)}{item.unit ? ` ${item.unit}` : ""} | Low {formatDecimal(item.low)} | High {formatDecimal(item.high)}
+                    </p>
+                  </div>
+                  <span className="rounded-md bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-600">
+                    {item.count.toLocaleString()} pts
+                  </span>
+                </div>
+                <AverageLineChart item={item} chartRange={chartRange} />
+              </article>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+};
+
 const GeneratedReportView = ({ data }) => {
   const [collapsedGroupIds, setCollapsedGroupIds] = useState(new Set());
 
@@ -3368,9 +3882,10 @@ const GeneratedReportView = ({ data }) => {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         <SummarySectionsView sections={data.summarySections || []} />
+        <ChartSectionsView sections={data.chartSections || []} chartRange={data.chartRange} />
 
         {data.groups.length ? (
-          <div className={`${data.summarySections?.length ? "mt-4 " : ""}grid gap-3`}>
+          <div className={`${data.summarySections?.length || data.chartSections?.length ? "mt-4 " : ""}grid gap-3`}>
             {data.groups.map((group) => (
               <div key={group.id} className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -3849,6 +4364,7 @@ const Reports = () => {
       };
 
       const builders = {
+        funReadingsDosages: buildFunReadingsDosagesReport,
         readings: buildReadingReport,
         readingHealth: buildReadingHealthReport,
         readingPerformance: buildReadingPerformanceReport,

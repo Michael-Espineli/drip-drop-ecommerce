@@ -17,7 +17,7 @@ import toast from "react-hot-toast";
 import { getCallableAuthPayload } from "../../../utils/callableAuth";
 
 const CompanyDetailView = () => {
-  const ADMIN_YELLOW = "#debf44";
+  const ADMIN_YELLOW = "#efb12f";
 
   const { user, name } = useContext(Context);
   const { companyId } = useParams();
@@ -260,11 +260,11 @@ const CompanyDetailView = () => {
     "underline underline-offset-4 hover:opacity-90";
   const input =
     `w-full px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 ` +
-    `focus:outline-none focus:ring-2 focus:ring-[${ADMIN_YELLOW}]/30`;
+    `focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30`;
   const btnPrimary =
-    `w-full px-4 py-2 rounded-md font-semibold bg-[${ADMIN_YELLOW}] text-slate-950 hover:bg-[${ADMIN_YELLOW}]/90 transition`;
+    `w-full px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition`;
   const btnAccent =
-    `w-full px-4 py-2 rounded-md font-semibold bg-[${ADMIN_YELLOW}]/10 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/30 hover:bg-[${ADMIN_YELLOW}]/15 transition`;
+    `w-full px-4 py-2 rounded-md font-semibold bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition`;
 
   return (
     <div className={pageWrap}>
@@ -284,12 +284,12 @@ const CompanyDetailView = () => {
               <div className={text}>
                 <span className={label}>Verification:</span>{" "}
                 {company.needToVerify ? (
-                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-orange-500/15 text-orange-200 ring-1 ring-orange-400/30">
+                  <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#efb12f]/15 text-[#efb12f] ring-1 ring-[#efb12f]/30">
                     Pending
                   </span>
                 ) : company.verified ? (
                   <span
-                    className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[${ADMIN_YELLOW}]/15 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/30`}
+                    className={`ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#efb12f]/15 text-[#efb12f] ring-1 ring-[#efb12f]/30`}
                   >
                     Verified
                   </span>
@@ -396,7 +396,7 @@ const CompanyDetailView = () => {
                   <span
                     key={item}
                     className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold
-                      bg-[${ADMIN_YELLOW}]/10 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/25`}
+                      bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/25`}
                   >
                     {item}
                   </span>
@@ -472,7 +472,7 @@ const CompanyDetailView = () => {
                     type="checkbox"
                     checked={needsResolved}
                     onChange={(e) => updateResolved(e)}
-                    className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[${ADMIN_YELLOW}] focus:ring-[${ADMIN_YELLOW}]/30`}
+                    className={`h-4 w-4 rounded border-slate-700 bg-slate-900 text-[#efb12f] focus:ring-[#efb12f]/30`}
                   />
                 </div>
 
@@ -482,7 +482,7 @@ const CompanyDetailView = () => {
                       <li
                         key={index}
                         className={`text-xs font-semibold px-2.5 py-0.5 rounded-full
-                          bg-[${ADMIN_YELLOW}]/10 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/25`}
+                          bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/25`}
                       >
                         {item}
                       </li>
@@ -512,11 +512,11 @@ const CompanyDetailView = () => {
                   {item.needsResolution && (
                     <div className="mt-2 text-xs">
                       {item.resolved ? (
-                        <span className={`text-[${ADMIN_YELLOW}]`}>
+                        <span className={`text-[#efb12f]`}>
                           Resolved by {item.resolverName} on {item.formattedResolvedDate}
                         </span>
                       ) : (
-                        <span className="text-orange-200">Not Resolved Yet</span>
+                        <span className="text-[#efb12f]">Not Resolved Yet</span>
                       )}
                     </div>
                   )}
@@ -529,7 +529,7 @@ const CompanyDetailView = () => {
                         <span
                           key={`${t}-${i}`}
                           className={`text-xs font-semibold px-2.5 py-0.5 rounded-full
-                            bg-[${ADMIN_YELLOW}]/10 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/25`}
+                            bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/25`}
                         >
                           {t}
                         </span>

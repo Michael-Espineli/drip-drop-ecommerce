@@ -37,8 +37,13 @@ import { Context } from '../../../context/AuthContext';
 import { db, functions } from '../../../utils/config';
 import {
   SalesAgreement,
+  SalesCatalogBillingBehavior,
+  SalesCatalogItem,
+  SalesCatalogItemType,
+  SalesCatalogSourceType,
   SalesAgreementChemicalBillingMode,
   SalesAgreementPnlChemicalCostMode,
+  SalesInvoiceLineItem,
   SalesAgreementStatus,
   SalesAutopayStatus,
   salesCollectionNames,
@@ -46,7 +51,11 @@ import {
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
-import { saveSalesModel } from '../../../utils/sales/salesFirestore';
+import {
+  salesCatalogCollection,
+  saveSalesCatalogItem,
+  saveSalesModel,
+} from '../../../utils/sales/salesFirestore';
 import { AgreementBillingType, getAgreementBillingType } from '../../../utils/sales/agreementRouting';
 import {
   billingFrequencyForAgreement,
@@ -56,6 +65,16 @@ import {
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
 import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
+import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
+import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
+import {
+  deleteContractTerm,
+  getTerms,
+  listenTermsTemplates,
+  saveContractTerm,
+  updateTermsTemplate,
+} from '../../../utils/terms/termsTemplateFirestore';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -153,38 +172,213 @@ const statusTone = {
   canceled: 'bg-slate-100 text-slate-500 border-slate-200',
 };
 
-const pnlChemicalCostModeOptions = [
-  { value: SalesAgreementPnlChemicalCostMode.includeAll, label: 'Include Chemical Costs' },
-  { value: SalesAgreementPnlChemicalCostMode.excludeAll, label: 'Exclude Chemical Costs' },
-  { value: SalesAgreementPnlChemicalCostMode.excludeSelected, label: 'Exclude Selected Chemicals' },
-];
-
 const chemicalBillingModeOptions = [
   { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
   { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
   { value: SalesAgreementChemicalBillingMode.mixed, label: 'Mixed Chemical Billing' },
 ];
 
-const pnlChemicalCostModeLabel = (value) => (
-  pnlChemicalCostModeOptions.find((option) => option.value === value)?.label || pnlChemicalCostModeOptions[0].label
-);
+const ChemicalBillingMixedSelectionMode = Object.freeze({
+  separatelyBilled: 'separatelyBilled',
+  included: 'included',
+});
+
+const mixedChemicalBillingSelectionOptions = [
+  {
+    value: ChemicalBillingMixedSelectionMode.separatelyBilled,
+    label: 'Select dosages excluded and billed separately',
+  },
+  {
+    value: ChemicalBillingMixedSelectionMode.included,
+    label: 'Select dosages included in service',
+  },
+];
 
 const normalizeCommaList = (value) => (
   Array.from(new Set(
-    String(value || '')
-      .split(/[\n,]/)
-      .map((item) => item.trim())
+    (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+      .map((item) => String(item || '').trim())
       .filter(Boolean)
   ))
 );
 
-const listToInput = (value) => (
-  Array.isArray(value) ? value.join(', ') : String(value || '')
+const inferMixedChemicalBillingSelectionMode = (agreement = {}) => {
+  const includedSelections = [
+    ...normalizeCommaList(agreement?.includedChemicalIds),
+    ...normalizeCommaList(agreement?.includedChemicalKeywords),
+  ];
+  const separatelyBilledSelections = [
+    ...normalizeCommaList(agreement?.separatelyBilledChemicalIds),
+    ...normalizeCommaList(agreement?.separatelyBilledChemicalKeywords),
+  ];
+
+  if (includedSelections.length > 0 && separatelyBilledSelections.length === 0) {
+    return ChemicalBillingMixedSelectionMode.included;
+  }
+
+  return ChemicalBillingMixedSelectionMode.separatelyBilled;
+};
+
+const dosageTemplateKeys = (template = {}) => (
+  [
+    template.id,
+    template.templateId,
+    template.dosageTemplateId,
+    template.universalTemplateId,
+  ].map((value) => String(value || '').trim()).filter(Boolean)
 );
 
-const listDisplay = (value) => (
-  Array.isArray(value) && value.length > 0 ? value.join(', ') : ''
+const ChemicalDosagePicker = ({
+  id,
+  label,
+  selectedIds = [],
+  dosageTemplates = [],
+  loading = false,
+  onChange,
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const normalizedSelectedIds = normalizeCommaList(selectedIds);
+  const selectedSet = new Set(normalizedSelectedIds);
+  const templateById = new Map();
+
+  dosageTemplates.forEach((template) => {
+    dosageTemplateKeys(template).forEach((key) => templateById.set(key, template));
+  });
+
+  const filteredTemplates = dosageTemplates.filter((template) => (
+    dosageLabel(template).toLowerCase().includes(searchTerm.trim().toLowerCase())
+  ));
+
+  const toggleSelection = (dosageId) => {
+    const nextIds = selectedSet.has(dosageId)
+      ? normalizedSelectedIds.filter((currentId) => currentId !== dosageId)
+      : [...normalizedSelectedIds, dosageId];
+
+    onChange(nextIds);
+  };
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <label className="text-sm font-semibold text-slate-700" htmlFor={id}>
+          {label}
+        </label>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          {normalizedSelectedIds.length} selected
+        </span>
+      </div>
+
+      {normalizedSelectedIds.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {normalizedSelectedIds.map((dosageId) => {
+            const template = templateById.get(dosageId);
+            return (
+              <span
+                key={dosageId}
+                className="inline-flex max-w-full items-center gap-2 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800"
+              >
+                <span className="truncate">{template ? dosageLabel(template) : dosageId}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleSelection(dosageId)}
+                  className="text-blue-500 transition hover:text-rose-600"
+                  aria-label={`Remove ${template ? dosageLabel(template) : dosageId}`}
+                >
+                  <FaTimes className="text-[10px]" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      <input
+        id={id}
+        type="search"
+        value={searchTerm}
+        onChange={(event) => setSearchTerm(event.target.value)}
+        className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+        placeholder="Search dosage templates"
+      />
+
+      <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-slate-50">
+        {loading ? (
+          <div className="p-3 text-sm text-slate-500">Loading dosage templates...</div>
+        ) : filteredTemplates.length ? (
+          filteredTemplates.map((template) => {
+            const dosageId = dosageTemplateKeys(template)[0];
+            if (!dosageId) return null;
+
+            return (
+              <label
+                key={dosageId}
+                className="flex cursor-pointer items-start gap-3 border-b border-slate-200 px-3 py-2 text-sm last:border-b-0 hover:bg-blue-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(dosageId)}
+                  onChange={() => toggleSelection(dosageId)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold text-slate-900">{dosageLabel(template)}</span>
+                  {template.chemType && (
+                    <span className="block truncate text-xs text-slate-500">{template.chemType}</span>
+                  )}
+                </span>
+              </label>
+            );
+          })
+        ) : (
+          <div className="p-3 text-sm text-slate-500">
+            No dosage templates found.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const termDescription = (term) => {
+  if (typeof term === 'string') return term;
+  return getTermDescription(term);
+};
+
+const termLineId = () => `term_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
+const normalizeAgreementTerms = (terms = []) => {
+  if (!Array.isArray(terms)) return [];
+
+  return terms
+    .map((term, index) => ({
+      id: typeof term === 'object' && term?.id ? term.id : `agreement_term_${index}`,
+      description: termDescription(term),
+    }))
+    .filter((term) => term.description.trim());
+};
+
+const termsToStrings = (terms = []) => (
+  normalizeAgreementTerms(terms)
+    .map((term) => term.description.trim())
+    .filter(Boolean)
 );
+
+const numberedTermsText = (terms = []) => (
+  terms
+    .map((term) => String(term || '').trim())
+    .filter(Boolean)
+    .map((term, index) => `${index + 1}. ${term}`)
+    .join('\n')
+);
+
+const stripNumberedTermsFromContent = (content = '', terms = []) => {
+  const text = String(content || '').trim();
+  const numberedTerms = numberedTermsText(terms).trim();
+
+  if (!text || !numberedTerms || !text.includes(numberedTerms)) return text;
+
+  return text.replace(numberedTerms, '').trim();
+};
 
 const StatusBadge = ({ status }) => {
   const key = normalizeStatus(status);
@@ -232,18 +426,23 @@ const createEditDraft = (agreement) => ({
   paymentTerms: agreement?.paymentTerms || 'dueOnReceipt',
   pnlIncludeInReports: agreement?.pnlIncludeInReports !== false,
   pnlChemicalCostMode: agreement?.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
-  pnlExcludedChemicalKeywords: listToInput(agreement?.pnlExcludedChemicalKeywords),
-  pnlExcludedChemicalIds: listToInput(agreement?.pnlExcludedChemicalIds),
+  pnlExcludedChemicalKeywords: normalizeCommaList(agreement?.pnlExcludedChemicalKeywords),
+  pnlExcludedChemicalIds: normalizeCommaList(agreement?.pnlExcludedChemicalIds),
   pnlExcludeCustomerPurchasedChemicals: agreement?.pnlExcludeCustomerPurchasedChemicals !== false,
   chemicalBillingMode: agreement?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
-  includedChemicalKeywords: listToInput(agreement?.includedChemicalKeywords),
-  includedChemicalIds: listToInput(agreement?.includedChemicalIds),
-  separatelyBilledChemicalKeywords: listToInput(agreement?.separatelyBilledChemicalKeywords),
-  separatelyBilledChemicalIds: listToInput(agreement?.separatelyBilledChemicalIds),
-  customerPurchasedChemicalKeywords: listToInput(agreement?.customerPurchasedChemicalKeywords),
-  customerPurchasedChemicalIds: listToInput(agreement?.customerPurchasedChemicalIds),
+  includedChemicalKeywords: normalizeCommaList(agreement?.includedChemicalKeywords),
+  includedChemicalIds: normalizeCommaList(agreement?.includedChemicalIds),
+  separatelyBilledChemicalKeywords: normalizeCommaList(agreement?.separatelyBilledChemicalKeywords),
+  separatelyBilledChemicalIds: normalizeCommaList(agreement?.separatelyBilledChemicalIds),
+  customerPurchasedChemicalKeywords: normalizeCommaList(agreement?.customerPurchasedChemicalKeywords),
+  customerPurchasedChemicalIds: normalizeCommaList(agreement?.customerPurchasedChemicalIds),
+  chemicalBillingMixedSelectionMode: agreement?.chemicalBillingMixedSelectionMode || inferMixedChemicalBillingSelectionMode(agreement),
   chemicalBillingNotes: agreement?.chemicalBillingNotes || '',
   terms: agreement?.terms || '',
+  termsTemplateId: agreement?.termsTemplateId || '',
+  termsTemplateName: agreement?.termsTemplateName || '',
+  termsTemplateDescription: agreement?.termsTemplateDescription || '',
+  termsList: normalizeAgreementTerms(agreement?.termsList),
   lineItems: (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []).map((item, index) => ({
     id: item.id || `line_${index}`,
     catalogItemId: item.catalogItemId || '',
@@ -277,6 +476,17 @@ const blankLineItem = () => ({
   metadata: {},
 });
 
+const initialCatalogItemDraft = {
+  name: '',
+  description: '',
+  type: SalesCatalogItemType.recurringService,
+  billingBehavior: SalesCatalogBillingBehavior.recurring,
+  unitAmount: '',
+  unitCost: '',
+  defaultQuantity: '1',
+  taxable: false,
+};
+
 const acceptanceSourceLabel = (source) => {
   if (source === 'internalManual') return 'Internal manual acceptance';
   if (source === 'customerOffline') return 'Customer told us offline';
@@ -288,11 +498,13 @@ const SalesAgreementDetail = () => {
   const { agreementId } = useParams();
   const navigate = useNavigate();
   const { dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+  const { can, requirePermission } = useCompanyPermissions();
   const [agreement, setAgreement] = useState(null);
   const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+  const [includeInspectionReport, setIncludeInspectionReport] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
@@ -306,6 +518,20 @@ const SalesAgreementDetail = () => {
   const [creatingBilling, setCreatingBilling] = useState(false);
   const [creatingRenewal, setCreatingRenewal] = useState(false);
   const [startingStripeCheckout, setStartingStripeCheckout] = useState(false);
+  const [termsTemplates, setTermsTemplates] = useState([]);
+  const [loadingTermsTemplates, setLoadingTermsTemplates] = useState(false);
+  const [applyingTermsTemplate, setApplyingTermsTemplate] = useState(false);
+  const [updatingTermsTemplate, setUpdatingTermsTemplate] = useState(false);
+  const [dosageTemplates, setDosageTemplates] = useState([]);
+  const [loadingDosageTemplates, setLoadingDosageTemplates] = useState(false);
+  const [catalogItems, setCatalogItems] = useState([]);
+  const [loadingCatalogItems, setLoadingCatalogItems] = useState(false);
+  const [selectedCatalogItemId, setSelectedCatalogItemId] = useState('');
+  const [selectedCatalogQuantity, setSelectedCatalogQuantity] = useState('1');
+  const [showCatalogItemSelector, setShowCatalogItemSelector] = useState(false);
+  const [showCreateCatalogItem, setShowCreateCatalogItem] = useState(false);
+  const [catalogItemDraft, setCatalogItemDraft] = useState(initialCatalogItemDraft);
+  const [savingCatalogItem, setSavingCatalogItem] = useState(false);
 
   useEffect(() => {
     if (!agreementId) {
@@ -340,6 +566,11 @@ const SalesAgreementDetail = () => {
   }, [agreementId]);
 
   useEffect(() => {
+    if (!agreement?.id) return;
+    setIncludeInspectionReport(Boolean(agreement.emailDelivery?.includeInspectionReport));
+  }, [agreement?.emailDelivery?.includeInspectionReport, agreement?.id]);
+
+  useEffect(() => {
     if (!agreement?.billingSubscriptionId) {
       setBillingSubscription(null);
       return undefined;
@@ -357,6 +588,94 @@ const SalesAgreementDetail = () => {
     );
   }, [agreement?.billingSubscriptionId]);
 
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setTermsTemplates([]);
+      setLoadingTermsTemplates(false);
+      return undefined;
+    }
+
+    setLoadingTermsTemplates(true);
+
+    return listenTermsTemplates(
+      recentlySelectedCompany,
+      (templates) => {
+        setTermsTemplates(templates);
+        setLoadingTermsTemplates(false);
+      },
+      (templateError) => {
+        console.error('Unable to load terms templates for agreement editor', templateError);
+        toast.error('Failed to load terms templates.');
+        setTermsTemplates([]);
+        setLoadingTermsTemplates(false);
+      }
+    );
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setCatalogItems([]);
+      setSelectedCatalogItemId('');
+      setLoadingCatalogItems(false);
+      return undefined;
+    }
+
+    setLoadingCatalogItems(true);
+
+    return onSnapshot(
+      salesCatalogCollection(db, recentlySelectedCompany),
+      (snapshot) => {
+        const items = snapshot.docs
+          .map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }))
+          .filter((item) => item.active !== false)
+          .sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')));
+
+        setCatalogItems(items);
+        setSelectedCatalogItemId((current) => (
+          current && items.some((item) => item.id === current)
+            ? current
+            : items[0]?.id || ''
+        ));
+        setLoadingCatalogItems(false);
+      },
+      (catalogError) => {
+        console.error('Unable to load sales catalog for agreement editor', catalogError);
+        toast.error('Failed to load sales catalog items.');
+        setCatalogItems([]);
+        setSelectedCatalogItemId('');
+        setLoadingCatalogItems(false);
+      }
+    );
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setDosageTemplates([]);
+      setLoadingDosageTemplates(false);
+      return undefined;
+    }
+
+    setLoadingDosageTemplates(true);
+
+    return onSnapshot(
+      collection(db, 'companies', recentlySelectedCompany, 'settings', 'dosages', 'dosages'),
+      (snapshot) => {
+        const templates = snapshot.docs.map((templateDoc) => ({
+          id: templateDoc.id,
+          ...templateDoc.data(),
+        }));
+        setDosageTemplates(sortDosageTemplates(templates));
+        setLoadingDosageTemplates(false);
+      },
+      (dosageError) => {
+        console.error('Unable to load dosage templates for agreement editor', dosageError);
+        toast.error('Failed to load dosage templates.');
+        setDosageTemplates([]);
+        setLoadingDosageTemplates(false);
+      }
+    );
+  }, [recentlySelectedCompany]);
+
   const companyMismatch = Boolean(
     agreement &&
     recentlySelectedCompany &&
@@ -372,7 +691,15 @@ const SalesAgreementDetail = () => {
     () => (Array.isArray(agreement?.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : []),
     [agreement]
   );
-  const hasTerms = Boolean(agreement?.terms || (Array.isArray(agreement?.termsList) && agreement.termsList.length));
+  const agreementTermsList = useMemo(
+    () => termsToStrings(agreement?.termsList),
+    [agreement?.termsList]
+  );
+  const agreementTermsIntro = useMemo(
+    () => stripNumberedTermsFromContent(agreement?.terms, agreementTermsList),
+    [agreement?.terms, agreementTermsList]
+  );
+  const hasTerms = Boolean(agreementTermsIntro || agreementTermsList.length);
   const subtotalAmountCents = agreement?.subtotalAmountCents ?? lineItems.reduce(
     (total, item) => total + (Number(item.totalAmountCents) || 0),
     0
@@ -407,6 +734,40 @@ const SalesAgreementDetail = () => {
       totalAmountCents: subtotal,
     };
   }, [editDraft]);
+  const selectedEditTermsTemplate = useMemo(
+    () => termsTemplates.find((template) => template.id === editDraft?.termsTemplateId) || null,
+    [editDraft?.termsTemplateId, termsTemplates]
+  );
+  const selectedEditCatalogItem = useMemo(
+    () => catalogItems.find((item) => item.id === selectedCatalogItemId) || null,
+    [catalogItems, selectedCatalogItemId]
+  );
+  const dosageTemplateById = useMemo(() => {
+    const nextMap = new Map();
+    dosageTemplates.forEach((template) => {
+      dosageTemplateKeys(template).forEach((key) => nextMap.set(key, template));
+    });
+    return nextMap;
+  }, [dosageTemplates]);
+  const chemicalSelectionDisplay = (ids = [], keywords = []) => {
+    const labels = normalizeCommaList(ids).map((chemicalId) => {
+      const template = dosageTemplateById.get(chemicalId);
+      return template ? dosageLabel(template) : chemicalId;
+    });
+    return [...labels, ...normalizeCommaList(keywords)].join(', ');
+  };
+  const separatelyBilledChemicalDisplay = chemicalSelectionDisplay(
+    agreement?.separatelyBilledChemicalIds,
+    agreement?.separatelyBilledChemicalKeywords
+  );
+  const includedChemicalDisplay = chemicalSelectionDisplay(
+    agreement?.includedChemicalIds,
+    agreement?.includedChemicalKeywords
+  );
+  const customerPurchasedChemicalDisplay = chemicalSelectionDisplay(
+    agreement?.customerPurchasedChemicalIds,
+    agreement?.customerPurchasedChemicalKeywords
+  );
 
   const readinessItems = [
     {
@@ -683,11 +1044,14 @@ const SalesAgreementDetail = () => {
         companyId: agreement.companyId,
         agreementId: agreement.id,
         agreementBaseUrl: window.location.origin,
+        includeInspectionReport,
         ...authPayload,
       });
 
       if (result.data?.testMode) {
         toast.success(`Test email sent to ${result.data.to}. Customer email saved as ${result.data.intendedTo}.`);
+      } else if (includeInspectionReport && !result.data?.hasInspectionReport) {
+        toast.success('Service agreement sent. No linked inspection report was found yet.');
       } else {
         toast.success(result.data?.message || 'Service agreement email sent.');
       }
@@ -708,6 +1072,11 @@ const SalesAgreementDetail = () => {
   const closeEditor = () => {
     setEditing(false);
     setEditDraft(null);
+    setApplyingTermsTemplate(false);
+    setUpdatingTermsTemplate(false);
+    setShowCatalogItemSelector(false);
+    setShowCreateCatalogItem(false);
+    setCatalogItemDraft(initialCatalogItemDraft);
   };
 
   const updateEditField = (field, value) => {
@@ -715,6 +1084,56 @@ const SalesAgreementDetail = () => {
       ...current,
       [field]: value,
     }));
+  };
+
+  const updateChemicalBillingMode = (value) => {
+    setEditDraft((current) => {
+      if (!current) return current;
+
+      const mixedSelectionMode = current.chemicalBillingMixedSelectionMode
+        || ChemicalBillingMixedSelectionMode.separatelyBilled;
+      const isMixed = value === SalesAgreementChemicalBillingMode.mixed;
+      const keepIncludedSelections = isMixed
+        && mixedSelectionMode === ChemicalBillingMixedSelectionMode.included;
+      const keepSeparatelyBilledSelections = isMixed
+        && mixedSelectionMode === ChemicalBillingMixedSelectionMode.separatelyBilled;
+
+      return {
+        ...current,
+        chemicalBillingMode: value,
+        includedChemicalKeywords: keepIncludedSelections ? current.includedChemicalKeywords : [],
+        includedChemicalIds: keepIncludedSelections ? current.includedChemicalIds : [],
+        separatelyBilledChemicalKeywords: keepSeparatelyBilledSelections ? current.separatelyBilledChemicalKeywords : [],
+        separatelyBilledChemicalIds: keepSeparatelyBilledSelections ? current.separatelyBilledChemicalIds : [],
+        customerPurchasedChemicalKeywords: [],
+        customerPurchasedChemicalIds: [],
+      };
+    });
+  };
+
+  const updateChemicalBillingMixedSelectionMode = (value) => {
+    setEditDraft((current) => {
+      if (!current) return current;
+
+      return {
+        ...current,
+        chemicalBillingMixedSelectionMode: value,
+        includedChemicalKeywords: value === ChemicalBillingMixedSelectionMode.included
+          ? current.includedChemicalKeywords
+          : [],
+        includedChemicalIds: value === ChemicalBillingMixedSelectionMode.included
+          ? current.includedChemicalIds
+          : [],
+        separatelyBilledChemicalKeywords: value === ChemicalBillingMixedSelectionMode.separatelyBilled
+          ? current.separatelyBilledChemicalKeywords
+          : [],
+        separatelyBilledChemicalIds: value === ChemicalBillingMixedSelectionMode.separatelyBilled
+          ? current.separatelyBilledChemicalIds
+          : [],
+        customerPurchasedChemicalKeywords: [],
+        customerPurchasedChemicalIds: [],
+      };
+    });
   };
 
   const updateEditLineItem = (lineItemId, field, value) => {
@@ -738,6 +1157,241 @@ const SalesAgreementDetail = () => {
       ...current,
       lineItems: current.lineItems.filter((item) => item.id !== lineItemId),
     }));
+  };
+
+  const catalogLineItemDraft = (catalogItem, quantityValue) => {
+    const quantity = Math.max(Number(quantityValue || catalogItem.defaultQuantity || 1), 0);
+    const unitAmountCents = Number(catalogItem.unitAmountCents || 0);
+    const lineItem = new SalesInvoiceLineItem({
+      catalogItemId: catalogItem.id,
+      sourceType: catalogItem.sourceType || '',
+      sourceId: catalogItem.sourceId || '',
+      name: catalogItem.name || '',
+      description: catalogItem.description || '',
+      quantity,
+      unitAmountCents,
+      totalAmountCents: Math.round(unitAmountCents * quantity),
+      taxable: Boolean(catalogItem.taxable),
+      type: catalogItem.type || '',
+      stripeProductId: catalogItem.stripeProductId || '',
+      stripePriceId: catalogItem.stripePriceId || '',
+      metadata: {
+        billingBehavior: catalogItem.billingBehavior || SalesCatalogBillingBehavior.oneTime,
+        currency: catalogItem.currency || 'usd',
+      },
+    });
+
+    return {
+      id: lineItem.id,
+      catalogItemId: lineItem.catalogItemId,
+      sourceType: lineItem.sourceType,
+      sourceId: lineItem.sourceId,
+      name: lineItem.name,
+      description: lineItem.description,
+      quantity: String(lineItem.quantity || 1),
+      unitAmount: centsToInput(lineItem.unitAmountCents),
+      taxable: lineItem.taxable,
+      type: lineItem.type,
+      stripeProductId: lineItem.stripeProductId,
+      stripePriceId: lineItem.stripePriceId,
+      metadata: lineItem.metadata,
+    };
+  };
+
+  const addCatalogLineItem = (catalogItem = selectedEditCatalogItem, quantityValue = selectedCatalogQuantity) => {
+    if (!catalogItem) {
+      toast.error('Select a catalog item first.');
+      return;
+    }
+
+    const quantity = Math.max(Number(quantityValue || catalogItem.defaultQuantity || 1), 0);
+    if (!quantity) {
+      toast.error('Quantity must be greater than zero.');
+      return;
+    }
+
+    setEditDraft((current) => ({
+      ...current,
+      lineItems: [
+        ...(current.lineItems || []),
+        catalogLineItemDraft(catalogItem, quantity),
+      ],
+    }));
+    setSelectedCatalogQuantity(String(catalogItem.defaultQuantity || 1));
+  };
+
+  const updateCatalogItemDraftField = (field, value) => {
+    setCatalogItemDraft((current) => ({
+      ...current,
+      [field]: value,
+    }));
+  };
+
+  const resetCatalogItemDraft = () => {
+    setCatalogItemDraft(initialCatalogItemDraft);
+    setShowCreateCatalogItem(false);
+  };
+
+  const createCatalogItemFromAgreement = async () => {
+    if (!recentlySelectedCompany || savingCatalogItem) return;
+
+    if (!catalogItemDraft.name.trim()) {
+      toast.error('Catalog item name is required.');
+      return;
+    }
+
+    setSavingCatalogItem(true);
+
+    try {
+      const catalogItem = new SalesCatalogItem({
+        companyId: recentlySelectedCompany,
+        name: catalogItemDraft.name.trim(),
+        description: catalogItemDraft.description.trim(),
+        type: catalogItemDraft.type,
+        billingBehavior: catalogItemDraft.billingBehavior,
+        sourceType: SalesCatalogSourceType.manual,
+        sourceId: '',
+        unitAmountCents: moneyInputToCents(catalogItemDraft.unitAmount),
+        unitCostCents: moneyInputToCents(catalogItemDraft.unitCost),
+        defaultQuantity: Math.max(Number(catalogItemDraft.defaultQuantity || 1), 1),
+        taxable: Boolean(catalogItemDraft.taxable),
+        active: true,
+        currency: 'usd',
+        stripeConnectedAccountId,
+      });
+
+      await saveSalesCatalogItem(db, recentlySelectedCompany, catalogItem);
+      setCatalogItems((current) => (
+        current.some((item) => item.id === catalogItem.id)
+          ? current
+          : [...current, catalogItem].sort((left, right) => String(left.name || '').localeCompare(String(right.name || '')))
+      ));
+      setSelectedCatalogItemId(catalogItem.id);
+      addCatalogLineItem(catalogItem, catalogItem.defaultQuantity);
+      resetCatalogItemDraft();
+      toast.success('Catalog item created and added to this agreement.');
+    } catch (catalogError) {
+      console.error('Unable to create sales catalog item from agreement', catalogError);
+      toast.error(catalogError.message || 'Failed to create catalog item.');
+    } finally {
+      setSavingCatalogItem(false);
+    }
+  };
+
+  const applyTermsTemplate = async (templateId) => {
+    if (!editDraft || applyingTermsTemplate) return;
+
+    const template = termsTemplates.find((item) => item.id === templateId) || null;
+
+    if (!templateId) {
+      setEditDraft((current) => ({
+        ...current,
+        termsTemplateId: '',
+        termsTemplateName: '',
+        termsTemplateDescription: '',
+        terms: '',
+      }));
+      return;
+    }
+
+    if (!template || !recentlySelectedCompany) {
+      toast.error('Select a saved terms template.');
+      return;
+    }
+
+    setApplyingTermsTemplate(true);
+
+    try {
+      const templateTerms = await getTerms(recentlySelectedCompany, template.id);
+      setEditDraft((current) => ({
+        ...current,
+        termsTemplateId: template.id,
+        termsTemplateName: template.name || '',
+        termsTemplateDescription: template.description || '',
+        terms: template.content || '',
+        termsList: normalizeAgreementTerms(templateTerms),
+      }));
+    } catch (templateError) {
+      console.error('Unable to apply terms template', templateError);
+      toast.error('Failed to apply terms template.');
+    } finally {
+      setApplyingTermsTemplate(false);
+    }
+  };
+
+  const updateEditTermLine = (termId, value) => {
+    setEditDraft((current) => ({
+      ...current,
+      termsList: (current.termsList || []).map((term) => (
+        term.id === termId ? { ...term, description: value } : term
+      )),
+    }));
+  };
+
+  const addEditTermLine = () => {
+    setEditDraft((current) => ({
+      ...current,
+      termsList: [
+        ...(current.termsList || []),
+        { id: termLineId(), description: '' },
+      ],
+    }));
+  };
+
+  const removeEditTermLine = (termId) => {
+    setEditDraft((current) => ({
+      ...current,
+      termsList: (current.termsList || []).filter((term) => term.id !== termId),
+    }));
+  };
+
+  const updateSourceTermsTemplate = async () => {
+    if (!editDraft?.termsTemplateId || !recentlySelectedCompany || updatingTermsTemplate) return;
+    if (!requirePermission("884", "update terms templates")) return;
+
+    const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
+    const confirmed = window.confirm(
+      `Update "${templateName}" with the current default content and terms lines from this agreement?`
+    );
+    if (!confirmed) return;
+
+    const nextTermsList = (editDraft.termsList || [])
+      .map((term) => ({
+        id: term.id || termLineId(),
+        description: String(term.description || '').trim(),
+      }))
+      .filter((term) => term.description);
+
+    setUpdatingTermsTemplate(true);
+
+    try {
+      const existingTerms = await getTerms(recentlySelectedCompany, editDraft.termsTemplateId);
+      const nextTermIds = new Set(nextTermsList.map((term) => term.id));
+      const removedTerms = existingTerms.filter((term) => !nextTermIds.has(term.id));
+
+      await updateTermsTemplate(recentlySelectedCompany, editDraft.termsTemplateId, {
+        content: editDraft.terms.trim(),
+      });
+      await Promise.all([
+        ...nextTermsList.map((term) => saveContractTerm(
+          recentlySelectedCompany,
+          editDraft.termsTemplateId,
+          new ContractTerm(term)
+        )),
+        ...removedTerms.map((term) => deleteContractTerm(
+          recentlySelectedCompany,
+          editDraft.termsTemplateId,
+          term.id
+        )),
+      ]);
+
+      toast.success('Terms template updated from this agreement.');
+    } catch (templateError) {
+      console.error('Unable to update source terms template', templateError);
+      toast.error(templateError.message || 'Failed to update terms template.');
+    } finally {
+      setUpdatingTermsTemplate(false);
+    }
   };
 
   const saveEdit = async () => {
@@ -766,6 +1420,9 @@ const SalesAgreementDetail = () => {
         };
       })
       .filter((item) => item.name && item.quantity > 0);
+    const nextTermsList = (editDraft.termsList || [])
+      .map((term) => String(term.description || '').trim())
+      .filter(Boolean);
 
     if (!editDraft.title.trim() || !editDraft.email.trim() || nextLineItems.length === 0) {
       toast.error('Add a title, customer email, and at least one priced line item.');
@@ -779,15 +1436,40 @@ const SalesAgreementDetail = () => {
       const nextStatus = previousStatusKey === normalizeStatus(SalesAgreementStatus.draft)
         ? SalesAgreementStatus.draft
         : SalesAgreementStatus.revised;
+      const selectedChemicalBillingMode = editDraft.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
+      const selectedMixedChemicalBillingMode = editDraft.chemicalBillingMixedSelectionMode
+        || ChemicalBillingMixedSelectionMode.separatelyBilled;
+      const shouldPersistIncludedChemicalSelections = selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+        && selectedMixedChemicalBillingMode === ChemicalBillingMixedSelectionMode.included;
+      const shouldPersistSeparatelyBilledChemicalSelections = selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+        && selectedMixedChemicalBillingMode === ChemicalBillingMixedSelectionMode.separatelyBilled;
       const chemicalBillingFields = {
-        chemicalBillingMode: editDraft.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
-        includedChemicalKeywords: normalizeCommaList(editDraft.includedChemicalKeywords),
-        includedChemicalIds: normalizeCommaList(editDraft.includedChemicalIds),
-        separatelyBilledChemicalKeywords: normalizeCommaList(editDraft.separatelyBilledChemicalKeywords),
-        separatelyBilledChemicalIds: normalizeCommaList(editDraft.separatelyBilledChemicalIds),
-        customerPurchasedChemicalKeywords: normalizeCommaList(editDraft.customerPurchasedChemicalKeywords),
-        customerPurchasedChemicalIds: normalizeCommaList(editDraft.customerPurchasedChemicalIds),
+        chemicalBillingMode: selectedChemicalBillingMode,
+        chemicalBillingMixedSelectionMode: selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+          ? selectedMixedChemicalBillingMode
+          : '',
+        includedChemicalKeywords: shouldPersistIncludedChemicalSelections
+          ? normalizeCommaList(editDraft.includedChemicalKeywords)
+          : [],
+        includedChemicalIds: shouldPersistIncludedChemicalSelections
+          ? normalizeCommaList(editDraft.includedChemicalIds)
+          : [],
+        separatelyBilledChemicalKeywords: shouldPersistSeparatelyBilledChemicalSelections
+          ? normalizeCommaList(editDraft.separatelyBilledChemicalKeywords)
+          : [],
+        separatelyBilledChemicalIds: shouldPersistSeparatelyBilledChemicalSelections
+          ? normalizeCommaList(editDraft.separatelyBilledChemicalIds)
+          : [],
+        customerPurchasedChemicalKeywords: [],
+        customerPurchasedChemicalIds: [],
         chemicalBillingNotes: editDraft.chemicalBillingNotes.trim(),
+      };
+      const pnlReportingFields = {
+        pnlIncludeInReports: editDraft.pnlIncludeInReports !== false,
+        pnlChemicalCostMode: SalesAgreementPnlChemicalCostMode.includeAll,
+        pnlExcludedChemicalKeywords: [],
+        pnlExcludedChemicalIds: [],
+        pnlExcludeCustomerPurchasedChemicals: true,
       };
 
       await updateDoc(doc(db, salesCollectionNames.agreements, agreement.id), {
@@ -804,14 +1486,13 @@ const SalesAgreementDetail = () => {
         billingFrequencyCount: Math.max(Number(editDraft.billingFrequencyCount) || 1, 1),
         rateType: editDraft.rateType,
         paymentTerms: editDraft.paymentTerms,
-        pnlIncludeInReports: editDraft.pnlIncludeInReports !== false,
-        pnlChemicalCostMode: editDraft.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
-        pnlExcludedChemicalKeywords: normalizeCommaList(editDraft.pnlExcludedChemicalKeywords),
-        pnlExcludedChemicalIds: normalizeCommaList(editDraft.pnlExcludedChemicalIds),
-        pnlExcludeCustomerPurchasedChemicals: editDraft.pnlExcludeCustomerPurchasedChemicals !== false,
+        ...pnlReportingFields,
         ...chemicalBillingFields,
         terms: editDraft.terms.trim(),
-        termsList: [],
+        termsTemplateId: editDraft.termsTemplateId || '',
+        termsTemplateName: editDraft.termsTemplateName || selectedEditTermsTemplate?.name || '',
+        termsTemplateDescription: editDraft.termsTemplateDescription || selectedEditTermsTemplate?.description || '',
+        termsList: nextTermsList,
         lineItems: nextLineItems,
         rateAmountCents: editTotals.totalAmountCents,
         subtotalAmountCents: editTotals.subtotalAmountCents,
@@ -834,6 +1515,7 @@ const SalesAgreementDetail = () => {
         await updateDoc(doc(db, salesCollectionNames.billingSubscriptions, billingSubscription.id), {
           ...chemicalBillingFields,
           'agreementSnapshot.chemicalBillingMode': chemicalBillingFields.chemicalBillingMode,
+          'agreementSnapshot.chemicalBillingMixedSelectionMode': chemicalBillingFields.chemicalBillingMixedSelectionMode,
           'agreementSnapshot.includedChemicalKeywords': chemicalBillingFields.includedChemicalKeywords,
           'agreementSnapshot.includedChemicalIds': chemicalBillingFields.includedChemicalIds,
           'agreementSnapshot.separatelyBilledChemicalKeywords': chemicalBillingFields.separatelyBilledChemicalKeywords,
@@ -841,6 +1523,10 @@ const SalesAgreementDetail = () => {
           'agreementSnapshot.customerPurchasedChemicalKeywords': chemicalBillingFields.customerPurchasedChemicalKeywords,
           'agreementSnapshot.customerPurchasedChemicalIds': chemicalBillingFields.customerPurchasedChemicalIds,
           'agreementSnapshot.chemicalBillingNotes': chemicalBillingFields.chemicalBillingNotes,
+          'agreementSnapshot.terms': editDraft.terms.trim(),
+          'agreementSnapshot.termsList': nextTermsList,
+          'agreementSnapshot.termsTemplateId': editDraft.termsTemplateId || '',
+          'agreementSnapshot.termsTemplateName': editDraft.termsTemplateName || selectedEditTermsTemplate?.name || '',
           updatedAt: serverTimestamp(),
         });
       }
@@ -1032,19 +1718,24 @@ const SalesAgreementDetail = () => {
     }
   };
 
+  const editChemicalBillingMode = editDraft?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
+  const editChemicalBillingMixedSelectionMode = editDraft?.chemicalBillingMixedSelectionMode
+    || ChemicalBillingMixedSelectionMode.separatelyBilled;
+
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  Feature Flag 004
-                </span>
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {recentlySelectedCompanyName || agreement?.companyName || 'Selected company'}
-                </span>
+                <Link
+                  to="/company/sales/agreements"
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                >
+                  <FaArrowLeft className="text-xs" />
+                  Back to agreements
+                </Link>
                 {agreement?.status && <StatusBadge status={agreement.status} />}
               </div>
               <div className="mt-3 flex items-center gap-2">
@@ -1067,67 +1758,78 @@ const SalesAgreementDetail = () => {
               </p>
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              <Link
-                to="/company/sales/agreements"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaArrowLeft className="text-xs" />
-                Agreements
-              </Link>
-              <button
-                type="button"
-                onClick={createRenewalAgreement}
-                disabled={!canCreateRenewal}
-                className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaCopy className="text-xs" />
-                {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
-              </button>
-              <button
-                type="button"
-                onClick={openEditor}
-                disabled={!agreement || companyMismatch || savingEdit}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaEdit className="text-xs" />
-                Edit Service Agreement
-              </button>
-              <button
-                type="button"
-                onClick={() => setConfirmingAcceptance(true)}
-                disabled={!canMarkAccepted}
-                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaUserCheck className="text-xs" />
-                Mark Accepted
-              </button>
-              {isRecurringAgreement && !hasRecurringRouteSetup && (
-                <Link
-                  to={recurringSetupUrl}
-                  aria-disabled={!canScheduleRecurringRoute}
-                  onClick={(event) => {
-                    if (!canScheduleRecurringRoute) event.preventDefault();
-                  }}
-                  className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
-                    canScheduleRecurringRoute
-                      ? 'bg-slate-950 text-white hover:bg-slate-800'
-                      : 'cursor-not-allowed bg-slate-300 text-slate-500'
-                  }`}
+            <div className="flex flex-col gap-3 lg:items-end">
+              <div className="flex flex-wrap gap-2 lg:justify-end">
+                <button
+                  type="button"
+                  onClick={createRenewalAgreement}
+                  disabled={!canCreateRenewal}
+                  className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  <FaRoute className="text-xs" />
-                  Schedule Route
-                </Link>
-              )}
-              <button
-                type="button"
-                onClick={sendAgreementEmail}
-                disabled={!canSend}
-                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaEnvelope className="text-xs" />
-                {sending ? 'Sending...' : 'Send Email'}
-              </button>
+                  <FaCopy className="text-xs" />
+                  {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
+                </button>
+                <button
+                  type="button"
+                  onClick={openEditor}
+                  disabled={!agreement || companyMismatch || savingEdit}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaEdit className="text-xs" />
+                  Edit Service Agreement
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingAcceptance(true)}
+                  disabled={!canMarkAccepted}
+                  className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaUserCheck className="text-xs" />
+                  Mark Accepted
+                </button>
+                {isRecurringAgreement && !hasRecurringRouteSetup && (
+                  <Link
+                    to={recurringSetupUrl}
+                    aria-disabled={!canScheduleRecurringRoute}
+                    onClick={(event) => {
+                      if (!canScheduleRecurringRoute) event.preventDefault();
+                    }}
+                    className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
+                      canScheduleRecurringRoute
+                        ? 'bg-slate-950 text-white hover:bg-slate-800'
+                        : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                    }`}
+                  >
+                    <FaRoute className="text-xs" />
+                    Schedule Route
+                  </Link>
+                )}
+                <button
+                  type="button"
+                  onClick={sendAgreementEmail}
+                  disabled={!canSend}
+                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaEnvelope className="text-xs" />
+                  {sending ? 'Sending...' : 'Send Email'}
+                </button>
+              </div>
+
+              <label className="inline-flex max-w-md items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={includeInspectionReport}
+                  onChange={(event) => setIncludeInspectionReport(event.target.checked)}
+                  disabled={sending}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                />
+                <span>
+                  Include inspection report
+                  <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                    Adds the linked site inspection report to the service agreement email when one is available.
+                  </span>
+                </span>
+              </label>
             </div>
           </div>
         </section>
@@ -1312,9 +2014,20 @@ const SalesAgreementDetail = () => {
                   {agreement.termsTemplateName && (
                     <p className="mb-3 font-semibold text-slate-900">{agreement.termsTemplateName}</p>
                   )}
-                  {agreement.terms ? (
-                    <p className="whitespace-pre-wrap">{agreement.terms}</p>
-                  ) : (
+                  {agreementTermsIntro && (
+                    <p className="whitespace-pre-wrap">{agreementTermsIntro}</p>
+                  )}
+                  {agreementTermsList.length > 0 && (
+                    <div className={agreementTermsIntro ? 'mt-4 space-y-2 border-t border-slate-200 pt-4' : 'space-y-2'}>
+                      {agreementTermsList.map((term, index) => (
+                        <p key={`${term}_${index}`} className="flex gap-2">
+                          <span className="font-semibold text-slate-500">{index + 1}.</span>
+                          <span>{term}</span>
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  {!agreementTermsIntro && agreementTermsList.length === 0 && (
                     <p className="text-slate-500">No terms snapshot saved.</p>
                   )}
                 </div>
@@ -1329,19 +2042,21 @@ const SalesAgreementDetail = () => {
                     <ReadinessRow key={item.title} {...item} />
                   ))}
                 </div>
-                <p className="mt-4 text-sm text-slate-500">
-                  The SendGrid template id must also be configured on the backend as
-                  {' '}<span className="font-semibold">SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID</span>.
-                </p>
               </section>
 
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Billing Summary</h2>
+                <h2 className="text-lg font-bold text-slate-950">Service Summary</h2>
                 <dl className="mt-4 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">Service Frequency</dt>
                     <dd className="font-semibold text-slate-900">{formatServiceFrequency(agreement)}</dd>
                   </div>
+                </dl>
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <h2 className="text-lg font-bold text-slate-950">Billing Summary</h2>
+                <dl className="mt-4 space-y-3 text-sm">
                   <div className="flex items-center justify-between gap-3">
                     <dt className="text-slate-500">Billing Frequency</dt>
                     <dd className="font-semibold text-slate-900">{formatBillingFrequency(agreement)}</dd>
@@ -1359,40 +2074,22 @@ const SalesAgreementDetail = () => {
                       <dt className="text-slate-500">Chemical Billing</dt>
                       <dd className="text-right font-semibold text-slate-900">{chemicalBillingLabel(agreement)}</dd>
                     </div>
-                    {listDisplay(agreement.separatelyBilledChemicalKeywords) && (
+                    {separatelyBilledChemicalDisplay && (
                       <div>
                         <dt className="text-slate-500">Billed Separately</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.separatelyBilledChemicalKeywords)}</dd>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{separatelyBilledChemicalDisplay}</dd>
                       </div>
                     )}
-                    {listDisplay(agreement.separatelyBilledChemicalIds) && (
-                      <div>
-                        <dt className="text-slate-500">Billed IDs</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.separatelyBilledChemicalIds)}</dd>
-                      </div>
-                    )}
-                    {listDisplay(agreement.includedChemicalKeywords) && (
+                    {includedChemicalDisplay && (
                       <div>
                         <dt className="text-slate-500">Included Chemicals</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.includedChemicalKeywords)}</dd>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{includedChemicalDisplay}</dd>
                       </div>
                     )}
-                    {listDisplay(agreement.includedChemicalIds) && (
-                      <div>
-                        <dt className="text-slate-500">Included IDs</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.includedChemicalIds)}</dd>
-                      </div>
-                    )}
-                    {listDisplay(agreement.customerPurchasedChemicalKeywords) && (
+                    {customerPurchasedChemicalDisplay && (
                       <div>
                         <dt className="text-slate-500">Customer Purchased</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.customerPurchasedChemicalKeywords)}</dd>
-                      </div>
-                    )}
-                    {listDisplay(agreement.customerPurchasedChemicalIds) && (
-                      <div>
-                        <dt className="text-slate-500">Customer Purchased IDs</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{listDisplay(agreement.customerPurchasedChemicalIds)}</dd>
+                        <dd className="mt-1 break-words font-semibold text-slate-900">{customerPurchasedChemicalDisplay}</dd>
                       </div>
                     )}
                     {agreement.chemicalBillingNotes && (
@@ -1409,26 +2106,12 @@ const SalesAgreementDetail = () => {
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-slate-500">PNL Chemicals</dt>
-                      <dd className="text-right font-semibold text-slate-900">
-                        {pnlChemicalCostModeLabel(agreement.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll)}
-                      </dd>
+                      <dd className="text-right font-semibold text-slate-900">Based on Billing</dd>
                     </div>
                     <div className="flex items-center justify-between gap-3">
                       <dt className="text-slate-500">Customer Purchased</dt>
-                      <dd className="font-semibold text-slate-900">{agreement.pnlExcludeCustomerPurchasedChemicals === false ? 'Included' : 'Ignored'}</dd>
+                      <dd className="font-semibold text-slate-900">Ignored</dd>
                     </div>
-                    {(Array.isArray(agreement.pnlExcludedChemicalKeywords) && agreement.pnlExcludedChemicalKeywords.length > 0) && (
-                      <div>
-                        <dt className="text-slate-500">Excluded Keywords</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{agreement.pnlExcludedChemicalKeywords.join(', ')}</dd>
-                      </div>
-                    )}
-                    {(Array.isArray(agreement.pnlExcludedChemicalIds) && agreement.pnlExcludedChemicalIds.length > 0) && (
-                      <div>
-                        <dt className="text-slate-500">Excluded IDs</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{agreement.pnlExcludedChemicalIds.join(', ')}</dd>
-                      </div>
-                    )}
                   </div>
                   <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
                     <dt className="text-slate-500">Subtotal</dt>
@@ -1673,8 +2356,9 @@ const SalesAgreementDetail = () => {
       </div>
 
       {editing && editDraft && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-2xl">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-4">
+          <div className="mx-auto flex min-h-full w-full max-w-[1500px] flex-col gap-4 xl:flex-row xl:items-start xl:justify-center">
+            <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-2xl">
             <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
               <div>
                 <h2 className="text-xl font-bold text-slate-950">Edit Service Agreement</h2>
@@ -1685,7 +2369,7 @@ const SalesAgreementDetail = () => {
               <button
                 type="button"
                 onClick={closeEditor}
-                disabled={savingEdit}
+                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem}
                 className="rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
                 aria-label="Close editor"
               >
@@ -1775,8 +2459,8 @@ const SalesAgreementDetail = () => {
               </section>
 
               <section>
-                <h3 className="text-base font-bold text-slate-950">Service & Billing</h3>
-                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <h3 className="text-base font-bold text-slate-950">Service</h3>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2">
                   <div>
                     <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCadence">
                       Service Frequency
@@ -1806,7 +2490,12 @@ const SalesAgreementDetail = () => {
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     />
                   </div>
+                </div>
+              </section>
 
+              <section>
+                <h3 className="text-base font-bold text-slate-950">Billing</h3>
+                <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <div>
                     <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementBillingFrequency">
                       Billing Frequency
@@ -1870,153 +2559,108 @@ const SalesAgreementDetail = () => {
                     </select>
                   </div>
                 </div>
-              </section>
 
-              <section>
-                <h3 className="text-base font-bold text-slate-950">Chemical Billing</h3>
-                <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingMode">
-                      Billing Treatment
-                    </label>
-                    <select
-                      id="agreementChemicalBillingMode"
-                      value={editDraft.chemicalBillingMode}
-                      onChange={(event) => updateEditField('chemicalBillingMode', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h4 className="text-sm font-bold text-slate-950">Chemical Billing</h4>
+                    <Link
+                      to="/company/readingsAndDosages"
+                      className="text-sm font-semibold text-blue-700 hover:text-blue-800"
                     >
-                      {chemicalBillingModeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
+                      Manage Dosages
+                    </Link>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingNotes">
-                      Chemical Billing Notes
-                    </label>
-                    <input
-                      id="agreementChemicalBillingNotes"
-                      type="text"
-                      value={editDraft.chemicalBillingNotes}
-                      onChange={(event) => updateEditField('chemicalBillingNotes', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="tabs supplied by customer, phosphate billed separately"
-                    />
+                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingMode">
+                        Billing Treatment
+                      </label>
+                      <select
+                        id="agreementChemicalBillingMode"
+                        value={editChemicalBillingMode}
+                        onChange={(event) => updateChemicalBillingMode(event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        {chemicalBillingModeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingNotes">
+                        Chemical Billing Notes
+                      </label>
+                      <input
+                        id="agreementChemicalBillingNotes"
+                        type="text"
+                        value={editDraft.chemicalBillingNotes}
+                        onChange={(event) => updateEditField('chemicalBillingNotes', event.target.value)}
+                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        placeholder="tabs supplied by customer, phosphate billed separately"
+                      />
+                    </div>
                   </div>
 
-                  {editDraft.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementSeparatelyBilledChemicalKeywords">
-                          Separately Billed Keywords
-                        </label>
-                        <input
-                          id="agreementSeparatelyBilledChemicalKeywords"
-                          type="text"
-                          value={editDraft.separatelyBilledChemicalKeywords}
-                          onChange={(event) => updateEditField('separatelyBilledChemicalKeywords', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="phosphate, salt, stabilizer"
-                        />
+                  <div className="mt-3">
+                    {editChemicalBillingMode === SalesAgreementChemicalBillingMode.includedAll && (
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                        All dosage templates are included in service. No chemical selections are needed.
                       </div>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementSeparatelyBilledChemicalIds">
-                          Separately Billed IDs
-                        </label>
-                        <input
-                          id="agreementSeparatelyBilledChemicalIds"
-                          type="text"
-                          value={editDraft.separatelyBilledChemicalIds}
-                          onChange={(event) => updateEditField('separatelyBilledChemicalIds', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="database item or dosage template ids"
-                        />
-                      </div>
-                    </>
-                  )}
+                    )}
 
-                  {editDraft.chemicalBillingMode !== SalesAgreementChemicalBillingMode.includedAll && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementIncludedChemicalKeywords">
-                          Included Chemical Keywords
-                        </label>
-                        <input
-                          id="agreementIncludedChemicalKeywords"
-                          type="text"
-                          value={editDraft.includedChemicalKeywords}
-                          onChange={(event) => updateEditField('includedChemicalKeywords', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="chlorine, acid"
-                        />
+                    {editChemicalBillingMode === SalesAgreementChemicalBillingMode.billAllSeparately && (
+                      <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                        All dosage templates are billed separately. No chemical selections are needed.
                       </div>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementIncludedChemicalIds">
-                          Included Chemical IDs
-                        </label>
-                        <input
-                          id="agreementIncludedChemicalIds"
-                          type="text"
-                          value={editDraft.includedChemicalIds}
-                          onChange={(event) => updateEditField('includedChemicalIds', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="database item or dosage template ids"
-                        />
+                    )}
+
+                    {editChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <div className="rounded-md border border-slate-200 bg-white p-3">
+                          <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementChemicalBillingMixedSelectionMode">
+                            Mixed Billing Selection
+                          </label>
+                          <select
+                            id="agreementChemicalBillingMixedSelectionMode"
+                            value={editChemicalBillingMixedSelectionMode}
+                            onChange={(event) => updateChemicalBillingMixedSelectionMode(event.target.value)}
+                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          >
+                            {mixedChemicalBillingSelectionOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        {editChemicalBillingMixedSelectionMode === ChemicalBillingMixedSelectionMode.included ? (
+                          <ChemicalDosagePicker
+                            id="agreementIncludedChemicalIds"
+                            label="Included Dosages"
+                            selectedIds={editDraft.includedChemicalIds}
+                            dosageTemplates={dosageTemplates}
+                            loading={loadingDosageTemplates}
+                            onChange={(nextIds) => updateEditField('includedChemicalIds', nextIds)}
+                          />
+                        ) : (
+                          <ChemicalDosagePicker
+                            id="agreementSeparatelyBilledChemicalIds"
+                            label="Excluded / Separately Billed Dosages"
+                            selectedIds={editDraft.separatelyBilledChemicalIds}
+                            dosageTemplates={dosageTemplates}
+                            loading={loadingDosageTemplates}
+                            onChange={(nextIds) => updateEditField('separatelyBilledChemicalIds', nextIds)}
+                          />
+                        )}
                       </div>
-                    </>
-                  )}
-
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCustomerPurchasedChemicalKeywords">
-                      Customer-Purchased Keywords
-                    </label>
-                    <input
-                      id="agreementCustomerPurchasedChemicalKeywords"
-                      type="text"
-                      value={editDraft.customerPurchasedChemicalKeywords}
-                      onChange={(event) => updateEditField('customerPurchasedChemicalKeywords', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="tabs, trichlor"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementCustomerPurchasedChemicalIds">
-                      Customer-Purchased IDs
-                    </label>
-                    <input
-                      id="agreementCustomerPurchasedChemicalIds"
-                      type="text"
-                      value={editDraft.customerPurchasedChemicalIds}
-                      onChange={(event) => updateEditField('customerPurchasedChemicalIds', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      placeholder="database item or dosage template ids"
-                    />
+                    )}
                   </div>
                 </div>
-              </section>
 
-              <section>
-                <h3 className="text-base font-bold text-slate-950">PNL Treatment</h3>
-                <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlChemicalCostMode">
-                      Chemical Costs
-                    </label>
-                    <select
-                      id="agreementPnlChemicalCostMode"
-                      value={editDraft.pnlChemicalCostMode}
-                      onChange={(event) => updateEditField('pnlChemicalCostMode', event.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                      {pnlChemicalCostModeOptions.map((option) => (
-                        <option key={option.value} value={option.value}>{option.label}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <h4 className="text-sm font-bold text-slate-950">Reporting</h4>
+                  <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
                     <label className="flex items-start gap-3 font-semibold text-slate-700">
                       <input
                         type="checkbox"
@@ -2026,61 +2670,21 @@ const SalesAgreementDetail = () => {
                       />
                       Agreement revenue in PNL
                     </label>
-                    <label className="flex items-start gap-3 font-semibold text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={editDraft.pnlExcludeCustomerPurchasedChemicals !== false}
-                        onChange={(event) => updateEditField('pnlExcludeCustomerPurchasedChemicals', event.target.checked)}
-                        className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                      />
-                      Ignore customer-purchased chemicals
-                    </label>
+                    <div className="rounded-md border border-slate-200 bg-white px-3 py-2 font-semibold text-slate-700">
+                      Chemical PNL follows billing settings
+                    </div>
                   </div>
-
-                  {editDraft.pnlChemicalCostMode === SalesAgreementPnlChemicalCostMode.excludeSelected && (
-                    <>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlExcludedChemicalKeywords">
-                          Excluded Chemical Keywords
-                        </label>
-                        <input
-                          id="agreementPnlExcludedChemicalKeywords"
-                          type="text"
-                          value={editDraft.pnlExcludedChemicalKeywords}
-                          onChange={(event) => updateEditField('pnlExcludedChemicalKeywords', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="tabs, trichlor, acid"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementPnlExcludedChemicalIds">
-                          Excluded Chemical IDs
-                        </label>
-                        <input
-                          id="agreementPnlExcludedChemicalIds"
-                          type="text"
-                          value={editDraft.pnlExcludedChemicalIds}
-                          onChange={(event) => updateEditField('pnlExcludedChemicalIds', event.target.value)}
-                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          placeholder="database item or dosage template ids"
-                        />
-                      </div>
-                    </>
-                  )}
                 </div>
               </section>
 
               <section>
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="text-base font-bold text-slate-950">Line Items</h3>
-                  <button
-                    type="button"
-                    onClick={addEditLineItem}
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    <FaPlus className="text-xs" />
-                    Add Item
-                  </button>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">Line Items</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Customer-facing pricing rows for this service agreement.
+                    </p>
+                  </div>
                 </div>
 
                 <div className="mt-3 space-y-3">
@@ -2141,6 +2745,90 @@ const SalesAgreementDetail = () => {
                   )}
                 </div>
 
+                <div className="mt-4 rounded-md border border-slate-200 bg-white p-3">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <h4 className="text-sm font-bold text-slate-950">Add Line Item</h4>
+                      <p className="mt-1 text-sm text-slate-500">
+                        Add pricing from the Sales Catalog or create a one-off manual row.
+                      </p>
+                    </div>
+                    <div className="flex flex-col gap-2 sm:flex-row">
+                      <button
+                        type="button"
+                        onClick={() => setShowCatalogItemSelector((current) => !current)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Catalog Item
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          addEditLineItem();
+                          setShowCatalogItemSelector(false);
+                        }}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Manual Item
+                      </button>
+                    </div>
+                  </div>
+
+                  {showCatalogItemSelector && (
+                    <div className="mt-3 grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 lg:grid-cols-[minmax(0,1fr)_120px_auto_auto]">
+                      <select
+                        value={selectedCatalogItemId}
+                        onChange={(event) => {
+                          const nextItemId = event.target.value;
+                          const nextItem = catalogItems.find((item) => item.id === nextItemId);
+                          setSelectedCatalogItemId(nextItemId);
+                          setSelectedCatalogQuantity(String(nextItem?.defaultQuantity || 1));
+                        }}
+                        disabled={loadingCatalogItems}
+                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                        aria-label="Select sales catalog item"
+                      >
+                        <option value="">
+                          {loadingCatalogItems ? 'Loading catalog...' : catalogItems.length ? 'Select catalog item' : 'No catalog items yet'}
+                        </option>
+                        {catalogItems.map((item) => (
+                          <option key={item.id} value={item.id}>
+                            {item.name} - {formatCurrency(item.unitAmountCents)} - {labelize(item.billingBehavior)}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={selectedCatalogQuantity}
+                        onChange={(event) => setSelectedCatalogQuantity(event.target.value)}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        aria-label="Catalog item quantity"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => addCatalogLineItem()}
+                        disabled={!selectedEditCatalogItem}
+                        className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Add Selected
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowCreateCatalogItem(true)}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-50"
+                      >
+                        <FaPlus className="text-xs" />
+                        Create Catalog Item
+                      </button>
+                    </div>
+                  )}
+                </div>
+
                 <div className="mt-4 flex justify-end">
                   <div className="w-full max-w-xs rounded-md border border-slate-200 bg-slate-50 p-4 text-sm">
                     <div className="flex justify-between gap-3">
@@ -2156,15 +2844,116 @@ const SalesAgreementDetail = () => {
               </section>
 
               <section>
-                <label className="block text-base font-bold text-slate-950" htmlFor="agreementTerms">
-                  Terms
-                </label>
-                <textarea
-                  id="agreementTerms"
-                  value={editDraft.terms}
-                  onChange={(event) => updateEditField('terms', event.target.value)}
-                  className="mt-3 min-h-[220px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                />
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-950">Terms</h3>
+                    <p className="mt-1 text-sm text-slate-500">
+                      Select a saved template, then add or adjust lines for this agreement only.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Link
+                      to="/company/settings/terms-templates"
+                      className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    >
+                      Manage Templates
+                    </Link>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementTermsTemplate">
+                    Terms Template
+                  </label>
+                  <select
+                    id="agreementTermsTemplate"
+                    value={editDraft.termsTemplateId || ''}
+                    onChange={(event) => applyTermsTemplate(event.target.value)}
+                    disabled={loadingTermsTemplates || applyingTermsTemplate}
+                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                  >
+                    <option value="">
+                      {loadingTermsTemplates ? 'Loading templates...' : 'No template selected'}
+                    </option>
+                    {editDraft.termsTemplateId && !selectedEditTermsTemplate && (
+                      <option value={editDraft.termsTemplateId}>
+                        {editDraft.termsTemplateName || 'Current template'}
+                      </option>
+                    )}
+                    {termsTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                  {applyingTermsTemplate && (
+                    <p className="mt-2 text-sm text-slate-500">Applying template terms...</p>
+                  )}
+                </div>
+
+                <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Template Default Content</p>
+                  {editDraft.terms ? (
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-slate-700">{editDraft.terms}</p>
+                  ) : (
+                    <p className="mt-2 text-sm text-slate-500">
+                      No default content saved for this agreement template.
+                    </p>
+                  )}
+                </div>
+
+                <div className="mt-2 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={updateSourceTermsTemplate}
+                    disabled={!can("884") || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
+                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from these lines'}
+                  </button>
+                </div>
+
+                <div className="mt-4 flex items-center justify-between gap-3">
+                  <h4 className="text-sm font-bold text-slate-950">Terms Lines</h4>
+                  <button
+                    type="button"
+                    onClick={addEditTermLine}
+                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  >
+                    <FaPlus className="text-xs" />
+                    Add Line
+                  </button>
+                </div>
+
+                <div className="mt-3 space-y-3">
+                  {(editDraft.termsList || []).map((term, index) => (
+                    <div key={term.id} className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 sm:grid-cols-[2rem_minmax(0,1fr)_auto]">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-sm font-bold text-slate-500">
+                        {index + 1}
+                      </div>
+                      <textarea
+                        value={term.description}
+                        onChange={(event) => updateEditTermLine(term.id, event.target.value)}
+                        rows={2}
+                        placeholder="Agreement term line"
+                        className="min-h-[72px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeEditTermLine(term.id)}
+                        className="inline-flex h-9 items-center justify-center rounded-md border border-rose-200 bg-white px-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+
+                  {(!editDraft.termsList || editDraft.termsList.length === 0) && (
+                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                      Select a template or add agreement-specific terms lines.
+                    </div>
+                  )}
+                </div>
               </section>
             </div>
 
@@ -2185,7 +2974,7 @@ const SalesAgreementDetail = () => {
               <button
                 type="button"
                 onClick={closeEditor}
-                disabled={savingEdit}
+                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
               >
                 <FaTimes className="text-xs" />
@@ -2194,14 +2983,178 @@ const SalesAgreementDetail = () => {
               <button
                 type="button"
                 onClick={saveEdit}
-                disabled={savingEdit}
+                disabled={savingEdit || applyingTermsTemplate || updatingTermsTemplate || savingCatalogItem}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaSave className="text-xs" />
-                {savingEdit ? 'Saving...' : 'Save Changes'}
+                {savingEdit ? 'Saving...' : applyingTermsTemplate ? 'Applying...' : updatingTermsTemplate ? 'Updating Template...' : savingCatalogItem ? 'Creating Catalog Item...' : 'Save Changes'}
               </button>
             </div>
           </div>
+
+          {showCreateCatalogItem && (
+            <div className="w-full max-w-xl rounded-lg bg-white shadow-2xl xl:sticky xl:top-4 xl:max-h-[92vh] xl:overflow-y-auto">
+              <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-950">Create Sales Catalog Item</h2>
+                  <p className="mt-1 text-sm text-slate-500">
+                    Add a reusable catalog item, then attach it to this agreement.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={resetCatalogItemDraft}
+                  disabled={savingCatalogItem}
+                  className="rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
+                  aria-label="Close catalog item creator"
+                >
+                  <FaTimes />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-5">
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogItemName">
+                    Item Name
+                  </label>
+                  <input
+                    id="newCatalogItemName"
+                    type="text"
+                    value={catalogItemDraft.name}
+                    onChange={(event) => updateCatalogItemDraftField('name', event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    placeholder="Weekly pool service"
+                  />
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogItemType">
+                      Type
+                    </label>
+                    <select
+                      id="newCatalogItemType"
+                      value={catalogItemDraft.type}
+                      onChange={(event) => updateCatalogItemDraftField('type', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {Object.values(SalesCatalogItemType).map((option) => (
+                        <option key={option} value={option}>{labelize(option)}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogBillingBehavior">
+                      Billing
+                    </label>
+                    <select
+                      id="newCatalogBillingBehavior"
+                      value={catalogItemDraft.billingBehavior}
+                      onChange={(event) => updateCatalogItemDraftField('billingBehavior', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                      {Object.values(SalesCatalogBillingBehavior).map((option) => (
+                        <option key={option} value={option}>{labelize(option)}</option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogUnitAmount">
+                      Unit Price
+                    </label>
+                    <input
+                      id="newCatalogUnitAmount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={catalogItemDraft.unitAmount}
+                      onChange={(event) => updateCatalogItemDraftField('unitAmount', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogUnitCost">
+                      Unit Cost
+                    </label>
+                    <input
+                      id="newCatalogUnitCost"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={catalogItemDraft.unitCost}
+                      onChange={(event) => updateCatalogItemDraftField('unitCost', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogDefaultQuantity">
+                      Default Qty
+                    </label>
+                    <input
+                      id="newCatalogDefaultQuantity"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value={catalogItemDraft.defaultQuantity}
+                      onChange={(event) => updateCatalogItemDraftField('defaultQuantity', event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    />
+                  </div>
+                </div>
+
+                <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={catalogItemDraft.taxable}
+                    onChange={(event) => updateCatalogItemDraftField('taxable', event.target.checked)}
+                    className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  Taxable
+                </label>
+
+                <div>
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="newCatalogItemDescription">
+                    Description
+                  </label>
+                  <textarea
+                    id="newCatalogItemDescription"
+                    rows={3}
+                    value={catalogItemDraft.description}
+                    onChange={(event) => updateCatalogItemDraftField('description', event.target.value)}
+                    className="mt-1 min-h-[96px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    placeholder="Customer-facing description for this catalog item"
+                  />
+                </div>
+              </div>
+
+              <div className="sticky bottom-0 flex flex-col gap-2 border-t border-slate-200 bg-white p-5 sm:flex-row sm:justify-end">
+                <button
+                  type="button"
+                  onClick={resetCatalogItemDraft}
+                  disabled={savingCatalogItem}
+                  className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={createCatalogItemFromAgreement}
+                  disabled={savingCatalogItem}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaSave className="text-xs" />
+                  {savingCatalogItem ? 'Creating...' : 'Create & Add'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
         </div>
       )}
 

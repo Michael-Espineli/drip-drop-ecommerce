@@ -44,12 +44,62 @@ service firebase.storage {
       return isCompanyAdmin(companyId) || hasCompanyRolePermission(companyId, "264");
     }
 
+    function canReadRepairRequestAttachment(companyId) {
+      return hasCompanyAccess(companyId);
+    }
+
+    function canWriteRepairRequestAttachment(companyId) {
+      return hasCompanyAccess(companyId);
+    }
+
+    function isRepairRequestImageUpload() {
+      return request.resource != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches("image/.*");
+    }
+
+    function isCompanyImageUpload() {
+      return request.resource != null
+        && request.resource.size < 10 * 1024 * 1024
+        && request.resource.contentType.matches("image/.*");
+    }
+
     match /users/{userId}/profile/{allPaths=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
     }
 
     match /repair-requests/{userId}/{allPaths=**} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /repair-request/{repairRequestId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn() && isRepairRequestImageUpload();
+    }
+
+    match /companies/{companyId}/repairRequests/{repairRequestId}/{allPaths=**} {
+      allow read: if canReadRepairRequestAttachment(companyId);
+      allow write: if canWriteRepairRequestAttachment(companyId) && isRepairRequestImageUpload();
+    }
+
+    match /companies/{companyId}/serviceLocations/{serviceLocationId}/{allPaths=**} {
+      allow read: if hasCompanyAccess(companyId);
+      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+    }
+
+    match /companies/{companyId}/bodiesOfWater/{bodyOfWaterId}/{allPaths=**} {
+      allow read: if hasCompanyAccess(companyId);
+      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+    }
+
+    match /companies/{companyId}/equipment/{equipmentId}/{allPaths=**} {
+      allow read: if hasCompanyAccess(companyId);
+      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
+    }
+
+    match /companies/{companyId}/serviceStops/{serviceStopId}/{allPaths=**} {
+      allow read: if hasCompanyAccess(companyId);
+      allow write: if hasCompanyAccess(companyId) && isCompanyImageUpload();
     }
 
     match /companies/{companyId}/receipts/{allPaths=**} {

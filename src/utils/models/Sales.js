@@ -37,6 +37,8 @@ export const SalesAgreementSourceType = {
   recurringService: 'recurringService',
   oneOffJob: 'oneOffJob',
   workOffer: 'workOffer',
+  lead: 'lead',
+  serviceAgreementSurvey: 'serviceAgreementSurvey',
   manual: 'manual',
 };
 
@@ -278,6 +280,10 @@ export class SalesAgreement {
     serviceLocationIds = [],
     sourceType = SalesAgreementSourceType.manual,
     sourceId = '',
+    leadId = '',
+    serviceAgreementEstimateServiceStopId = '',
+    inspectionServiceStopId = '',
+    serviceStopIds = [],
     title = '',
     description = '',
     terms = '',
@@ -370,6 +376,10 @@ export class SalesAgreement {
     this.serviceLocationIds = serviceLocationIds;
     this.sourceType = sourceType;
     this.sourceId = sourceId;
+    this.leadId = leadId;
+    this.serviceAgreementEstimateServiceStopId = serviceAgreementEstimateServiceStopId;
+    this.inspectionServiceStopId = inspectionServiceStopId || serviceAgreementEstimateServiceStopId;
+    this.serviceStopIds = Array.isArray(serviceStopIds) ? serviceStopIds.filter(Boolean) : normalizeSalesList(serviceStopIds);
     this.title = title;
     this.description = description;
     this.terms = terms;

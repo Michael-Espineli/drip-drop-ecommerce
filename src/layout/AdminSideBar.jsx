@@ -8,7 +8,7 @@ import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../utils/config';
 
 const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
-  const ADMIN_YELLOW = '#debf44';
+  const ADMIN_YELLOW = '#efb12f';
 
   const auth = getAuth();
   const { role, recentlySelectedCompany, user, handleLogout } = useContext(Context);
@@ -161,7 +161,7 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
                           className={`group w-full px-3 py-2 rounded-md flex justify-between items-center gap-3 font-medium transition-all
                             ${
                               isActive
-                                ? `bg-slate-900/80 ring-1 ring-[${ADMIN_YELLOW}]/30 shadow-[0_0_0_1px_rgba(222,191,68,0.10)]`
+                                ? `bg-slate-900/80 ring-1 ring-[#efb12f]/30 shadow-[0_0_0_1px_rgba(239,177,47,0.10)]`
                                 : 'hover:bg-slate-900/60 text-slate-200'
                             }`}
                         >
@@ -186,7 +186,7 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
                           {count > 0 && (
                             <span
                               className={`text-xs font-semibold px-2.5 py-0.5 rounded-full
-                                bg-[${ADMIN_YELLOW}]/15 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/30`}
+                                bg-[#efb12f]/15 text-[#efb12f] ring-1 ring-[#efb12f]/30`}
                             >
                               {count}
                             </span>

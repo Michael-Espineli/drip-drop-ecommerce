@@ -6,7 +6,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        adminYellow: "#debf44",
+        adminYellow: "#efb12f",
       },
     },
   },

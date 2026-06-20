@@ -8,7 +8,7 @@ import { Context } from '../../../context/AuthContext';
 const functions = getFunctions();
 
 function SubscriptionList() {
-  const ADMIN_YELLOW = '#debf44';
+  const ADMIN_YELLOW = '#efb12f';
 
   const { stripeConnectedAccountId, user } = useContext(Context);
   const [subscriptionList, setSubscriptionList] = useState([]);
@@ -61,9 +61,9 @@ function SubscriptionList() {
   const card =
     'w-full bg-slate-950 p-4 rounded-xl text-slate-100 border border-slate-800/60 shadow-2xl';
   const btnPrimary =
-    `inline-flex items-center px-4 py-2 rounded-md font-semibold bg-[${ADMIN_YELLOW}] text-slate-950 hover:bg-[${ADMIN_YELLOW}]/90 transition`;
+    `inline-flex items-center px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition`;
   const btnOutline =
-    `inline-flex items-center px-3 py-1.5 rounded-md font-semibold bg-[${ADMIN_YELLOW}]/10 text-[${ADMIN_YELLOW}] ring-1 ring-[${ADMIN_YELLOW}]/30 hover:bg-[${ADMIN_YELLOW}]/15 transition`;
+    `inline-flex items-center px-3 py-1.5 rounded-md font-semibold bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition`;
 
   return (
     <div className={pageWrap}>

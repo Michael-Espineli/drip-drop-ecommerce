@@ -2,10 +2,9 @@ import { allNav } from './allNav';
 
 export const DEFAULT_COMPANY_CATEGORY_ORDER = [
     'Operations',
-    'Routing',
+    'Management',
     'Finance',
     'Marketing',
-    'Users',
     'Migration',
     'Settings',
 ];
@@ -38,10 +37,14 @@ const DEFAULT_CATEGORY_ORDER = [
 ];
 
 const normalizeCategoryOrder = (categoryOrderOverride, fallbackOrder = DEFAULT_CATEGORY_ORDER) => {
-    const sourceOrder = Array.isArray(categoryOrderOverride) && categoryOrderOverride.length > 0
+    const fallbackCategories = new Set(fallbackOrder);
+    const overrideOrder = Array.isArray(categoryOrderOverride)
+        ? categoryOrderOverride.filter((category) => fallbackCategories.has(category))
+        : [];
+    const sourceOrder = overrideOrder.length > 0
         ? [
-            ...categoryOrderOverride,
-            ...fallbackOrder.filter((category) => !categoryOrderOverride.includes(category)),
+            ...overrideOrder,
+            ...fallbackOrder.filter((category) => !overrideOrder.includes(category)),
         ]
         : fallbackOrder;
     const seen = new Set();

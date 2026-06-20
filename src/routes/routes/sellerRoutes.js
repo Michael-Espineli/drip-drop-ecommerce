@@ -256,6 +256,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/equipment/:tab',
+        element: <EquipmentList />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/equipment/detail/:equipmentId',
         element: <EquipmentDetail />,
         ability: ['Admin', 'Seller'],

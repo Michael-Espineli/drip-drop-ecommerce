@@ -55,7 +55,7 @@ const formatDate = (value) => {
 const formatCount = (value) => Number(value || 0).toLocaleString();
 
 const AdminDashboard = () => {
-  const ADMIN_YELLOW = '#debf44';
+  const ADMIN_YELLOW = '#efb12f';
 
   const { recentlySelectedCompany } = useContext(Context);
   const selectedCompanyId = recentlySelectedCompany?.id || recentlySelectedCompany;
@@ -366,7 +366,7 @@ const AdminDashboard = () => {
 
         <Link
           to="/admin/subscriptions"
-          className="px-4 py-2 rounded-md font-semibold bg-[#debf44] text-slate-950 hover:bg-[#debf44]/90 transition"
+          className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
         >
           Manage Subscriptions
         </Link>
@@ -382,7 +382,7 @@ const AdminDashboard = () => {
               </div>
               <div className={statHint}>Total companies in Firestore</div>
             </div>
-            <div className="p-3 rounded-lg bg-[#debf44]/10 ring-1 ring-[#debf44]/30">
+            <div className="p-3 rounded-lg bg-[#efb12f]/10 ring-1 ring-[#efb12f]/30">
               <FaUsers style={{ color: ADMIN_YELLOW }} />
             </div>
           </div>
@@ -408,8 +408,8 @@ const AdminDashboard = () => {
               <div className={statValue}>{unverifiedCompanyCount}</div>
               <div className={statHint}>where verified == false</div>
             </div>
-            <div className="p-3 rounded-lg bg-orange-500/10 ring-1 ring-orange-500/20">
-              <FaUsers className="text-orange-200" />
+            <div className="p-3 rounded-lg bg-[#efb12f]/10 ring-1 ring-[#efb12f]/20">
+              <FaUsers className="text-[#efb12f]" />
             </div>
           </div>
         </div>
@@ -421,7 +421,7 @@ const AdminDashboard = () => {
               <div className={statValue}>{subscriptionCount}</div>
               <div className={statHint}>Total plans configured</div>
             </div>
-            <div className="p-3 rounded-lg bg-[#debf44]/10 ring-1 ring-[#debf44]/30">
+            <div className="p-3 rounded-lg bg-[#efb12f]/10 ring-1 ring-[#efb12f]/30">
               <MdCurrencyExchange style={{ color: ADMIN_YELLOW }} />
             </div>
           </div>
@@ -441,7 +441,7 @@ const AdminDashboard = () => {
         </div>
         <div className={`${subCard} p-4`}>
           <div className={statTitle}>Open Billing Jobs</div>
-          <div className="text-2xl font-extrabold text-orange-200">{jobCount}</div>
+          <div className="text-2xl font-extrabold text-[#efb12f]">{jobCount}</div>
         </div>
         <div className={`${subCard} p-4`}>
           <div className={statTitle}>Total Sales (placeholder)</div>
@@ -460,7 +460,7 @@ const AdminDashboard = () => {
             <button
               type="button"
               onClick={(e) => sendServiceReportOnFinish(e)}
-              className="px-3 py-2 rounded-md bg-[#debf44]/10 text-[#debf44] ring-1 ring-[#debf44]/30 hover:bg-[#debf44]/15 transition"
+              className="px-3 py-2 rounded-md bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition"
             >
               Tester Function
             </button>
@@ -565,9 +565,9 @@ const AdminDashboard = () => {
             )}
 
             {item.title === 'Complaints' && (
-              <div className="mt-4 rounded-lg border border-orange-500/20 bg-orange-500/10 px-3 py-3">
-                <p className="text-sm font-semibold text-orange-100">Unhandled complaint counter</p>
-                <p className="mt-1 text-xs text-orange-100/70">
+              <div className="mt-4 rounded-lg border border-[#efb12f]/20 bg-[#efb12f]/10 px-3 py-3">
+                <p className="text-sm font-semibold text-[#efb12f]">Unhandled complaint counter</p>
+                <p className="mt-1 text-xs text-[#efb12f]/70">
                   Placeholder count is ready for the complaints data source.
                 </p>
               </div>

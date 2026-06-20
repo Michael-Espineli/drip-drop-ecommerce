@@ -7,10 +7,10 @@ import {
   updateAppErrorStatus,
 } from '../../../utils/errorReporting';
 
-const ADMIN_YELLOW = '#debf44';
+const ADMIN_YELLOW = '#efb12f';
 
 const statusClassMap = {
-  New: 'bg-yellow-500/15 text-yellow-200 ring-yellow-500/30',
+  New: 'bg-[#efb12f]/15 text-[#efb12f] ring-[#efb12f]/30',
   Investigating: 'bg-blue-500/15 text-blue-200 ring-blue-500/30',
   Resolved: 'bg-emerald-500/15 text-emerald-200 ring-emerald-500/30',
   Ignored: 'bg-slate-700 text-slate-200 ring-slate-600',
@@ -18,7 +18,7 @@ const statusClassMap = {
 
 const severityClassMap = {
   info: 'bg-slate-700 text-slate-200 ring-slate-600',
-  warning: 'bg-amber-500/15 text-amber-200 ring-amber-500/30',
+  warning: 'bg-[#efb12f]/15 text-[#efb12f] ring-[#efb12f]/30',
   error: 'bg-red-500/15 text-red-200 ring-red-500/30',
   critical: 'bg-fuchsia-500/15 text-fuchsia-200 ring-fuchsia-500/30',
 };
@@ -146,7 +146,7 @@ function AppErrors() {
         <button
           type="button"
           onClick={loadErrors}
-          className="px-4 py-2 rounded-md font-semibold bg-[#debf44] text-slate-950 hover:bg-[#debf44]/90 transition"
+          className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
         >
           Refresh
         </button>
@@ -175,12 +175,12 @@ function AppErrors() {
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search errors"
-              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             />
             <select
               value={selectedStatus}
               onChange={(event) => setSelectedStatus(event.target.value)}
-              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             >
               <option value="all">All Statuses</option>
               {APP_ERROR_STATUS_OPTIONS.map((status) => (
@@ -190,7 +190,7 @@ function AppErrors() {
             <select
               value={selectedSeverity}
               onChange={(event) => setSelectedSeverity(event.target.value)}
-              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+              className="px-3 py-2 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
             >
               <option value="all">All Severities</option>
               {APP_ERROR_SEVERITY_OPTIONS.map((severity) => (
@@ -259,7 +259,7 @@ function AppErrors() {
                     <select
                       value={error.status || 'New'}
                       onChange={(event) => handleStatusChange(error.id, event.target.value)}
-                      className="mt-3 w-full px-2 py-1 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#debf44]/30"
+                      className="mt-3 w-full px-2 py-1 rounded-md bg-slate-900/70 border border-slate-800/60 text-slate-100 focus:outline-none focus:ring-2 focus:ring-[#efb12f]/30"
                     >
                       {APP_ERROR_STATUS_OPTIONS.map((status) => (
                         <option key={status} value={status}>{status}</option>

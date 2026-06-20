@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useContext } from "react";
 import { useNavigate, Link, useParams } from "react-router-dom";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { collection, getDocs, query, where, orderBy, setDoc, doc, getDoc, updateDoc } from "firebase/firestore";
 import { REPAIR_REQUEST_STATUS, RepairRequest } from "../../../utils/models/RepairRequest";
 import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS } from "../../../utils/models/Equipment";
@@ -8,6 +8,7 @@ import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { buildCompanyRepairRequestPhotoPath, uploadRepairRequestPhoto } from "../../../utils/repairRequestPhotos";
 
 const CreateNewRepairRequest = () => {
   const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
@@ -29,6 +30,7 @@ const CreateNewRepairRequest = () => {
 
   const [description, setDescription] = useState("");
   const [photos, setPhotos] = useState([]);
+  const [saving, setSaving] = useState(false);
 
   // -----------------------------
   // Load customers if no param
@@ -277,6 +279,7 @@ const CreateNewRepairRequest = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!requirePermission("32", "create repair requests")) return;
+    if (saving) return;
 
     if (!recentlySelectedCompany) {
       alert("Please select a company before creating a repair request.");
@@ -294,6 +297,7 @@ const CreateNewRepairRequest = () => {
     }
 
     try {
+      setSaving(true);
       const repairRequestId = "com_rr_" + uuidv4();
       const requesterName = [
         dataBaseUser?.firstName,
@@ -305,8 +309,18 @@ const CreateNewRepairRequest = () => {
         || user.email
         || "Internal";
 
-      // Placeholder until photo upload is implemented
-      const photoUrls = [];
+      const photoUrls = await Promise.all(
+        photos.map((file) => uploadRepairRequestPhoto({
+          storage,
+          file,
+          path: buildCompanyRepairRequestPhotoPath({
+            companyId: recentlySelectedCompany,
+            repairRequestId,
+            file,
+          }),
+          description: file.name,
+        }))
+      );
 
       const newRepairRequest = new RepairRequest({
         id: repairRequestId,
@@ -342,6 +356,8 @@ const CreateNewRepairRequest = () => {
     } catch (error) {
       console.error("Error creating repair request: ", error);
       alert("Failed to create repair request.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -513,6 +529,7 @@ const CreateNewRepairRequest = () => {
                         id="file-upload"
                         name="file-upload"
                         type="file"
+                        accept="image/*"
                         className="sr-only"
                         onChange={handlePhotoChange}
                         multiple
@@ -536,9 +553,10 @@ const CreateNewRepairRequest = () => {
           <div className="flex justify-end pt-4">
             <button
               type="submit"
-              className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
+              disabled={saving}
+              className="py-2 px-6 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Submit Request
+              {saving ? "Submitting..." : "Submit Request"}
             </button>
           </div>
         </form>

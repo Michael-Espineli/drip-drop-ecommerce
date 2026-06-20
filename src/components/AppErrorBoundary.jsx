@@ -27,14 +27,14 @@ class AppErrorBoundary extends React.Component {
       return (
         <div className="min-h-screen bg-slate-900 px-6 py-10 text-slate-100">
           <div className="mx-auto max-w-2xl rounded-xl border border-slate-800/60 bg-slate-950 p-6 shadow-2xl">
-            <h1 className="text-2xl font-extrabold text-[#debf44]">Something went wrong</h1>
+            <h1 className="text-2xl font-extrabold text-[#efb12f]">Something went wrong</h1>
             <p className="mt-2 text-sm text-slate-400">
               The error was sent to the Admin Errors console with page, user, company, and stack details.
             </p>
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="mt-5 rounded-md bg-[#debf44] px-4 py-2 font-semibold text-slate-950 transition hover:bg-[#debf44]/90"
+              className="mt-5 rounded-md bg-[#efb12f] px-4 py-2 font-semibold text-slate-950 transition hover:bg-[#efb12f]/90"
             >
               Reload app
             </button>

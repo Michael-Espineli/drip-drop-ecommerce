@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where } from 'firebase/firestore';
-import { db } from '../../../utils/config';
+import { db, storage } from '../../../utils/config';
 import {
   REPAIR_REQUEST_STATUS,
   REPAIR_REQUEST_STATUS_OPTIONS,
@@ -15,6 +15,11 @@ import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { displayRecordReference, linkedReferenceText } from '../../../utils/displayReferences';
+import {
+  buildCompanyRepairRequestPhotoPath,
+  getRepairRequestPhotoUrl,
+  uploadRepairRequestPhoto,
+} from '../../../utils/repairRequestPhotos';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
@@ -40,6 +45,8 @@ const RepairRequestDetailView = () => {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [connectingJob, setConnectingJob] = useState(false);
+  const [photoFiles, setPhotoFiles] = useState([]);
+  const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const repairRequestJobIdsKey = (repairRequest?.jobIds || []).join("|");
 
   const getRequestRef = (path = sourcePath) => (
@@ -302,6 +309,47 @@ const RepairRequestDetailView = () => {
     }
   };
 
+  const handlePhotoSelection = (event) => {
+    setPhotoFiles(Array.from(event.target.files || []));
+  };
+
+  const handleAddPhotos = async () => {
+    if (!photoFiles.length || uploadingPhotos) return;
+    if (!requirePermission("34", "update repair requests")) return;
+
+    try {
+      setUploadingPhotos(true);
+
+      const uploadedPhotos = await Promise.all(
+        photoFiles.map((file) => uploadRepairRequestPhoto({
+          storage,
+          file,
+          path: buildCompanyRepairRequestPhotoPath({
+            companyId: recentlySelectedCompany,
+            repairRequestId: repairRequest.id,
+            file,
+          }),
+          description: file.name,
+        }))
+      );
+
+      await updateDoc(getRequestRef(), {
+        photoUrls: arrayUnion(...uploadedPhotos),
+      });
+
+      setRepairRequest((prev) => ({
+        ...prev,
+        photoUrls: [...(prev?.photoUrls || []), ...uploadedPhotos],
+      }));
+      setPhotoFiles([]);
+    } catch (error) {
+      console.error("Error adding repair request photos:", error);
+      alert("Failed to add photos to this repair request.");
+    } finally {
+      setUploadingPhotos(false);
+    }
+  };
+
   const handleConnectExistingJob = async () => {
     if (!selectedJobId || !repairRequest?.id || connectingJob) return;
     if (!requirePermission("34", "update repair requests")) return;
@@ -386,9 +434,9 @@ const RepairRequestDetailView = () => {
   const availableJobsById = new Map(availableJobs.map((job) => [job.id, job]));
 
   return (
-    <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-      <div className="max-w-screen-xl mx-auto">
-        <div className="flex justify-between items-center mb-6">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <div className="flex justify-between items-center">
           <div>
             <Link
               to={"/company/repair-requests"}
@@ -399,16 +447,16 @@ const RepairRequestDetailView = () => {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2 space-y-6">
-            <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-xl font-bold text-gray-800">Request Details</h3>
               </div>
 
               <div className="space-y-6">
                 {/* Description (always editable) */}
-                <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Description</p>
 
@@ -430,7 +478,7 @@ const RepairRequestDetailView = () => {
                   </div>
 
                   <textarea
-                    className="mt-2 w-full min-h-[120px] p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white"
+                    className="mt-2 w-full min-h-[120px] rounded-md border border-slate-300 bg-white p-3 focus:border-blue-500 focus:ring-blue-500"
                     placeholder="Add repair request description..."
                     value={descriptionDraft}
                     onChange={(e) => setDescriptionDraft(e.target.value)}
@@ -444,17 +492,51 @@ const RepairRequestDetailView = () => {
                 </div>
 
                 <div>
-                  <h4 className="font-semibold mb-2 text-gray-800">Attached Photos</h4>
+                  <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <h4 className="font-semibold text-gray-800">Attached Photos</h4>
+                    {can("34") && (
+                      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                        <label className="inline-flex cursor-pointer items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-slate-50">
+                          Select Photos
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="sr-only"
+                            onChange={handlePhotoSelection}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={handleAddPhotos}
+                          disabled={!photoFiles.length || uploadingPhotos}
+                          className={[
+                            "rounded-md px-3 py-2 text-sm font-semibold transition",
+                            photoFiles.length && !uploadingPhotos
+                              ? "bg-slate-900 text-white hover:bg-slate-800"
+                              : "bg-gray-100 text-gray-400 cursor-not-allowed",
+                          ].join(" ")}
+                        >
+                          {uploadingPhotos ? "Uploading..." : "Add Photos"}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {photoFiles.length > 0 && (
+                    <p className="mb-3 text-xs font-semibold text-gray-500">
+                      {photoFiles.length} file{photoFiles.length > 1 ? "s" : ""} selected
+                    </p>
+                  )}
                   {photoUrls.length > 0 ? (
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       {photoUrls.map((photo, index) => {
-                        const photoSrc = typeof photo === 'string' ? photo : photo?.url;
+                        const photoSrc = getRepairRequestPhotoUrl(photo);
                         return photoSrc ? (
                           <img
                             key={index}
                             src={photoSrc}
                             alt={`Repair photo ${index + 1}`}
-                            className="rounded-lg w-full h-auto object-cover"
+                            className="rounded-md w-full h-auto object-cover"
                           />
                         ) : null;
                       })}
@@ -487,11 +569,11 @@ const RepairRequestDetailView = () => {
           </div>
 
           <div className="space-y-6">
-            <div className="bg-white shadow-lg rounded-xl p-6 space-y-4">
+            <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               {can("22") && (
                 <button
                   onClick={handleCreateJob}
-                  className="w-full py-3 px-4 bg-blue-600 text-white font-bold rounded-lg shadow-md hover:bg-blue-700 transition"
+                  className="w-full rounded-md bg-blue-600 px-4 py-3 font-bold text-white transition hover:bg-blue-700"
                 >
                   Create Job from Request
                 </button>
@@ -508,7 +590,7 @@ const RepairRequestDetailView = () => {
                     value={selectedJobId}
                     onChange={(event) => setSelectedJobId(event.target.value)}
                     disabled={loadingJobs || connectingJob || connectableJobs.length === 0}
-                    className="w-full rounded-lg border border-gray-300 p-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                    className="w-full rounded-md border border-slate-300 p-2 text-sm disabled:bg-gray-100 disabled:text-gray-400"
                   >
                     <option value="">
                       {loadingJobs
@@ -529,7 +611,7 @@ const RepairRequestDetailView = () => {
                     onClick={handleConnectExistingJob}
                     disabled={!selectedJobId || connectingJob}
                     className={[
-                      "w-full rounded-lg px-4 py-2 text-sm font-bold transition",
+                      "w-full rounded-md px-4 py-2 text-sm font-bold transition",
                       selectedJobId && !connectingJob
                         ? "bg-slate-900 text-white hover:bg-slate-800"
                         : "bg-gray-100 text-gray-400 cursor-not-allowed",
@@ -543,7 +625,7 @@ const RepairRequestDetailView = () => {
               {can("36") && (
                 <button
                   onClick={handleDelete}
-                  className="w-full px-4 py-2 text-sm font-medium text-red-700 bg-red-50 border border-red-200 rounded-xl shadow-sm hover:bg-red-100 transition"
+                  className="w-full rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
                   type="button"
                 >
                   Delete Request
@@ -551,7 +633,7 @@ const RepairRequestDetailView = () => {
               )}
             </div>
 
-            <div className="bg-white shadow-lg rounded-xl p-6">
+            <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h3 className="text-xl font-bold text-gray-800 mb-4">Information</h3>
               <div className="space-y-3 text-gray-700">
                 <div>
@@ -562,7 +644,7 @@ const RepairRequestDetailView = () => {
                       value={formData.status}
                       onChange={handleStatusChange}
                       disabled={!can("34") || savingStatus}
-                      className="p-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 disabled:text-gray-400"
+                      className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
                     >
                       {REPAIR_REQUEST_STATUS_OPTIONS.map((status) => (
                         <option key={status} value={status}>{status}</option>
@@ -623,7 +705,7 @@ const RepairRequestDetailView = () => {
                         value={connectedEquipmentStatus}
                         onChange={handleConnectedEquipmentStatusChange}
                         disabled={!can("34") || savingEquipmentStatus}
-                        className="p-2 border border-gray-300 rounded-lg bg-white disabled:bg-gray-100 disabled:text-gray-400"
+                        className="rounded-md border border-slate-300 bg-white p-2 disabled:bg-gray-100 disabled:text-gray-400"
                       >
                         {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
                           <option key={statusOption} value={statusOption}>
