@@ -17,7 +17,6 @@ const Company = lazy(() => import("../../views/public/Company"))
 const Companies = lazy(() => import("../../views/public/Companies"))
 const CompanyPublicProfile = lazy(() => import("../../views/public/CompanyPublicProfile"))
 const PrivacyPolicy = lazy(() => import("../../views/public/PrivacyPolicy"))
-const Terms = lazy(() => import("../../views/public/Terms"))
 const Info = lazy(() => import("../../views/public/Info"))
 const Contact = lazy(() => import("../../views/public/Contact"))
 const Feedback = lazy(() => import("../../views/public/Feedback"))
@@ -26,6 +25,8 @@ const SuccessfulSubscription = lazy(() => import("../../views/SuccessfulSubscrip
 const ClientAccountInviteLanding = lazy(() => import("../../views/client/ClientAccountInviteLanding"))
 const PublicServiceRequest = lazy(() => import("../../views/public/PublicServiceRequest"))
 const PublicServiceRequestVerification = lazy(() => import("../../views/public/PublicServiceRequestVerification"))
+const PublicServiceAgreementLanding = lazy(() => import("../../views/public/PublicServiceAgreementLanding"))
+const PublicServiceAgreementInspectionReport = lazy(() => import("../../views/public/PublicServiceAgreementInspectionReport"))
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
 
@@ -123,6 +124,16 @@ const publicRoutes = [
   {
     path: "/service-request/verify/:verificationId",
     element: <PublicServiceRequestVerification />,
+  }
+  ,
+  {
+    path: "/customer/service-agreements/:agreementId/inspection-report",
+    element: <PublicServiceAgreementInspectionReport />,
+  }
+  ,
+  {
+    path: "/customer/service-agreements/:agreementId",
+    element: <PublicServiceAgreementLanding />,
   }
   ,
   {

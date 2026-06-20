@@ -758,6 +758,15 @@ const ServiceStopDetails = () => {
     ), [bodiesOfWater]);
     const serviceStopBucket = useMemo(() => getServiceStopBucket(serviceStop), [serviceStop]);
     const isServiceAgreementEstimate = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate;
+    const serviceAgreementSurveyDraftPath = useMemo(() => {
+        const params = new URLSearchParams();
+        if (serviceStop?.leadId) params.set("leadId", serviceStop.leadId);
+        if (serviceStop?.customerId) params.set("customerId", serviceStop.customerId);
+        if (serviceStop?.serviceLocationId) params.set("serviceLocationId", serviceStop.serviceLocationId);
+        if (serviceStopId) params.set("serviceStopId", serviceStopId);
+
+        return `/company/sales/agreements/new${params.toString() ? `?${params.toString()}` : ""}`;
+    }, [serviceStop, serviceStopId]);
     const surveyNotes = useMemo(() => splitSurveyNotes(
         serviceLocation?.notes ||
         serviceLocation?.locationNotes ||
@@ -1805,9 +1814,19 @@ const ServiceStopDetails = () => {
                                             Technician-gathered setup, sales, water, and equipment details for the initial report.
                                         </p>
                                     </div>
-                                    <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                        Agreement Estimate
-                                    </span>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        {can("612") && (
+                                            <Link
+                                                to={serviceAgreementSurveyDraftPath}
+                                                className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                                            >
+                                                Create Service Agreement
+                                            </Link>
+                                        )}
+                                        <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                            Agreement Estimate
+                                        </span>
+                                    </div>
                                 </div>
 
                                 <div className="mt-5 grid grid-cols-1 gap-4 border-y border-slate-200 py-4 md:grid-cols-3">

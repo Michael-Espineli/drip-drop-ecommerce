@@ -106,6 +106,7 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
         autopayStatus,
         autopayEnabled: autopayIsActive,
         manualBillingEnabled: !stripeManagedBilling,
+        manualBillingAutoSendEnabled: !stripeManagedBilling,
         manualBillingStatus: autopayIsActive
             ? 'disabledAutopayActive'
             : stripeManagedBilling
@@ -144,6 +145,7 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
             billingCollectionMethod: updateData.billingCollectionMethod,
             autopayStatus: updateData.autopayStatus,
             manualBillingEnabled: updateData.manualBillingEnabled,
+            manualBillingAutoSendEnabled: updateData.manualBillingAutoSendEnabled,
             customerCanPayImmediately: false,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
@@ -344,6 +346,7 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         subscriptionUpdate.autopayStatus = 'active';
         subscriptionUpdate.autopayEnabled = true;
         subscriptionUpdate.manualBillingEnabled = false;
+        subscriptionUpdate.manualBillingAutoSendEnabled = false;
         subscriptionUpdate.manualBillingStatus = 'disabledAutopayActive';
         subscriptionUpdate.manualBillingReason = 'stripeAutopayActive';
         subscriptionUpdate.lastPaymentAt = admin.firestore.FieldValue.serverTimestamp();
@@ -364,6 +367,7 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         subscriptionUpdate.autopayStatus = 'pastDue';
         subscriptionUpdate.autopayEnabled = false;
         subscriptionUpdate.manualBillingEnabled = false;
+        subscriptionUpdate.manualBillingAutoSendEnabled = false;
         subscriptionUpdate.manualBillingStatus = 'disabledStripeBillingActive';
         subscriptionUpdate.manualBillingReason = 'stripePaymentFailed';
         subscriptionUpdate.lastPaymentFailedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -383,6 +387,9 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
             manualBillingEnabled: subscriptionUpdate.manualBillingEnabled !== undefined
                 ? subscriptionUpdate.manualBillingEnabled
                 : subscription.manualBillingEnabled !== false,
+            manualBillingAutoSendEnabled: subscriptionUpdate.manualBillingAutoSendEnabled !== undefined
+                ? subscriptionUpdate.manualBillingAutoSendEnabled
+                : subscription.manualBillingAutoSendEnabled === true,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         };
 

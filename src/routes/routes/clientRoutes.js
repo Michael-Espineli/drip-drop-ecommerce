@@ -247,12 +247,6 @@ export const clientRoutes = [
         role: 'Client'
     },
     {
-        path: '/customer/service-agreements/:agreementId',
-        element: <ServiceAgreementDetail />,
-        ability: ['Admin', 'Client'],
-        role: 'Client'
-    },
-    {
         path: '/client/finance',
         element: <ClientFinance />,
         ability: ['Admin', 'Client'],

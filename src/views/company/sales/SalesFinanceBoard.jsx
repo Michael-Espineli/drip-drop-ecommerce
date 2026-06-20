@@ -26,6 +26,7 @@ import {
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import {
   createManualSubscriptionInvoice,
+  getSubscriptionBillingPeriodPreview,
   invoiceBalanceCents,
   recordManualSalesPayment,
 } from '../../../utils/sales/manualBilling';
@@ -854,6 +855,7 @@ const SubscriptionsTable = ({
           <th className="px-5 py-3">Amount</th>
           <th className="px-5 py-3">Agreement</th>
           <th className="px-5 py-3">Current Period</th>
+          <th className="px-5 py-3">Next Invoice</th>
           <th className="px-5 py-3">Stripe</th>
           <th className="px-5 py-3">Status</th>
           <th className="px-5 py-3"></th>
@@ -869,6 +871,7 @@ const SubscriptionsTable = ({
           const workflowLabel = isStripeManagedBilling ? 'Automatic Stripe billing' : 'Manual invoices until autopay';
           const canCheckout = !isStripeManagedBilling && Number(subscription.amountCents || 0) > 0 && Boolean(subscription.stripeConnectedAccountId);
           const canCreateInvoice = manualBillingAllowed && Number(subscription.amountCents || 0) > 0;
+          const manualInvoicePreview = getSubscriptionBillingPeriodPreview(subscription);
 
           return (
             <tr key={subscription.id} className="transition hover:bg-slate-50">
@@ -896,6 +899,13 @@ const SubscriptionsTable = ({
               </td>
               <td className="px-5 py-4 text-slate-600">
                 {formatDate(subscription.currentPeriodStart)} - {formatDate(subscription.currentPeriodEnd)}
+              </td>
+              <td className="px-5 py-4">
+                <p className="font-semibold text-slate-900">{formatDate(manualInvoicePreview.invoiceSendAt || subscription.manualBillingNextInvoiceAt)}</p>
+                <p className="mt-1 text-xs text-slate-500">Due {formatDate(subscription.manualBillingNextDueDate || manualInvoicePreview.dueDate)}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  Auto send {subscription.manualBillingAutoSendEnabled ? 'on' : 'off'}
+                </p>
               </td>
               <td className="px-5 py-4">
                 <p className="max-w-44 truncate text-xs text-slate-500">{subscription.stripeSubscriptionId || 'Not created'}</p>

@@ -128,6 +128,8 @@ const ServiceAgreementDetail = () => {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const emailParam = queryParams.get('email') || '';
+  const accessTokenParam = queryParams.get('accessToken') || queryParams.get('reviewToken') || '';
+  const isCustomerEmailReview = location.pathname.startsWith('/customer/service-agreements/');
 
   useEffect(() => {
     if (!agreementId) {
@@ -138,6 +140,53 @@ const ServiceAgreementDetail = () => {
 
     setLoading(true);
     setError('');
+
+    if (isCustomerEmailReview && !userId) {
+      if (!accessTokenParam) {
+        setAgreement(null);
+        setError('Open the review link from the service agreement email, or sign in with the recipient account.');
+        setLoading(false);
+        return undefined;
+      }
+
+      let isActive = true;
+
+      const loadPublicAgreement = async () => {
+        try {
+          const getPublicAgreement = httpsCallable(functions, 'getPublicServiceAgreement');
+          const result = await getPublicAgreement({
+            agreementId,
+            email: emailParam,
+            accessToken: accessTokenParam,
+          });
+
+          if (!isActive) return;
+
+          const nextAgreement = result.data?.agreement;
+          if (!nextAgreement) {
+            setAgreement(null);
+            setError('Service agreement not found.');
+            return;
+          }
+
+          setAgreement(nextAgreement);
+        } catch (publicError) {
+          console.error('Unable to load public service agreement', publicError);
+          if (isActive) {
+            setAgreement(null);
+            setError(publicError.message || 'Unable to verify this service agreement link.');
+          }
+        } finally {
+          if (isActive) setLoading(false);
+        }
+      };
+
+      loadPublicAgreement();
+
+      return () => {
+        isActive = false;
+      };
+    }
 
     return onSnapshot(
       doc(db, salesCollectionNames.agreements, agreementId),
@@ -166,11 +215,11 @@ const ServiceAgreementDetail = () => {
         setLoading(false);
       }
     );
-  }, [agreementId, userEmail, userId]);
+  }, [accessTokenParam, agreementId, emailParam, isCustomerEmailReview, userEmail, userId]);
 
   useEffect(() => {
     const subscriptionId = agreement?.billingSubscriptionId;
-    if (!subscriptionId) {
+    if (!userId || !subscriptionId) {
       setBillingSubscription(null);
       return undefined;
     }
@@ -184,7 +233,7 @@ const ServiceAgreementDetail = () => {
         console.error('Unable to load billing subscription', snapshotError);
       }
     );
-  }, [agreement?.billingSubscriptionId]);
+  }, [agreement?.billingSubscriptionId, userId]);
 
   useEffect(() => {
     if (queryParams.get('stripeCheckout') === 'success') {
@@ -212,7 +261,16 @@ const ServiceAgreementDetail = () => {
   const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
   const signUpEmail = agreement?.email || emailParam;
   const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${signUpEmail ? `&email=${encodeURIComponent(signUpEmail)}` : ''}`;
-  const canAccept = Boolean(isSignedIn && agreement && !isAccepted && !isClosed && !accepting);
+  const reviewBackPath = isSignedIn ? '/client/finance' : '/';
+  const reviewBackLabel = isSignedIn ? 'Finance' : 'Drip Drop';
+  const canAcceptFromEmailLink = Boolean(!isSignedIn && isCustomerEmailReview && accessTokenParam);
+  const canAccept = Boolean(
+    agreement &&
+    !isAccepted &&
+    !isClosed &&
+    !accepting &&
+    (isSignedIn || canAcceptFromEmailLink)
+  );
   const effectiveSubscriptionId = billingSubscription?.id || agreement?.billingSubscriptionId;
   const subscriptionStatusKey = normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status);
   const hasActiveStripeSubscription = ['active', 'trialing'].includes(subscriptionStatusKey);
@@ -227,8 +285,8 @@ const ServiceAgreementDetail = () => {
   );
 
   const acceptAgreement = async () => {
-    if (!isSignedIn) {
-      toast.error('Sign in with the customer email on this agreement before accepting.');
+    if (!isSignedIn && !canAcceptFromEmailLink) {
+      toast.error('Open the service agreement from the email link before accepting.');
       return;
     }
 
@@ -242,15 +300,32 @@ const ServiceAgreementDetail = () => {
     setAccepting(true);
 
     try {
-      const acceptCallable = httpsCallable(functions, 'acceptSalesServiceAgreement');
-      const authPayload = await getCallableAuthPayload();
+      const acceptCallable = httpsCallable(
+        functions,
+        isSignedIn ? 'acceptSalesServiceAgreement' : 'acceptPublicSalesServiceAgreement'
+      );
+      const authPayload = isSignedIn ? await getCallableAuthPayload() : {};
       const result = await acceptCallable({
         ...authPayload,
         agreementId: agreement.id,
+        email: emailParam || agreement.email || '',
+        accessToken: accessTokenParam,
         acceptanceNote,
       });
 
       toast.success('Service agreement accepted.');
+      if (!isSignedIn) {
+        setAgreement((current) => ({
+          ...(current || agreement),
+          status: SalesAgreementStatus.accepted,
+          acceptedAt: new Date().toISOString(),
+          acceptedByEmail: emailParam || agreement.email || '',
+          acceptedSource: 'emailLink',
+          billingSubscriptionId: result.data?.billingSubscriptionId || current?.billingSubscriptionId || '',
+          billingFlowStatus: result.data?.nextAction ? 'pendingPaymentMethod' : current?.billingFlowStatus,
+          billingFlowNextAction: result.data?.nextAction || current?.billingFlowNextAction,
+        }));
+      }
 
       if (result.data?.customerCanPayImmediately) {
         setBillingSubscription((current) => ({
@@ -316,16 +391,20 @@ const ServiceAgreementDetail = () => {
   if (error || !agreement) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
-        <Link to="/client/finance" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+        <Link to={reviewBackPath} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
           <ArrowLeftIcon className="h-4 w-4" />
-          Finance
+          {reviewBackLabel}
         </Link>
         {!isSignedIn ? (
           <div className="mx-auto max-w-xl rounded-lg border border-amber-200 bg-amber-50 p-8 text-center shadow-sm">
             <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-amber-500" />
-            <h1 className="mt-3 text-xl font-bold text-amber-950">Sign in to review this agreement</h1>
+            <h1 className="mt-3 text-xl font-bold text-amber-950">
+              {isCustomerEmailReview ? 'We could not verify this agreement link' : 'Sign in to review this agreement'}
+            </h1>
             <p className="mt-2 text-sm text-amber-800">
-              Use the homeowner account for this email, or create one to review and accept the service agreement.
+              {isCustomerEmailReview
+                ? error || 'Open the latest agreement email link, or sign in with the customer account for this agreement.'
+                : 'Use the homeowner account for this email, or create one to review and accept the service agreement.'}
             </p>
             <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
               <Link
@@ -356,9 +435,9 @@ const ServiceAgreementDetail = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Link to="/client/finance" className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+          <Link to={reviewBackPath} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
-            Finance
+            {reviewBackLabel}
           </Link>
           <h1 className="text-3xl font-bold text-slate-950">{agreement.title || 'Service Agreement'}</h1>
           <p className="mt-1 text-sm text-slate-500">
@@ -380,6 +459,15 @@ const ServiceAgreementDetail = () => {
               </p>
             </div>
           </div>
+        </div>
+      )}
+
+      {!isSignedIn && isCustomerEmailReview && (
+        <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50 p-4 text-sm text-blue-800">
+          <p className="font-bold">Reviewing as a guest</p>
+          <p className="mt-1">
+            You can review and accept this agreement without an account. Sign in or create a homeowner account when you want portal access and billing setup.
+          </p>
         </div>
       )}
 
@@ -521,19 +609,21 @@ const ServiceAgreementDetail = () => {
             {!isAccepted && !isClosed && (
               <div className="mt-5 space-y-4">
                 {!isSignedIn && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                    <p className="font-semibold">Sign in required</p>
-                    <p className="mt-1">Use the customer account or create one with the email on this agreement before accepting.</p>
+                  <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+                    <p className="font-semibold">Secure email link</p>
+                    <p className="mt-1">
+                      This private email link lets you review and accept the agreement. Sign in or create a homeowner account when you want portal access and billing setup.
+                    </p>
                     <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                       <Link
                         to={signInPath}
-                        className="inline-flex justify-center rounded-md bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700"
+                        className="inline-flex justify-center rounded-md bg-blue-600 px-3 py-2 text-xs font-bold text-white hover:bg-blue-700"
                       >
                         Sign In
                       </Link>
                       <Link
                         to={signUpPath}
-                        className="inline-flex justify-center rounded-md border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100"
+                        className="inline-flex justify-center rounded-md border border-blue-300 bg-white px-3 py-2 text-xs font-bold text-blue-800 hover:bg-blue-100"
                       >
                         Create Account
                       </Link>

@@ -5,6 +5,7 @@ const { defineSecret } = require('firebase-functions/params');
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
+const { sendSalesInvoiceEmailForAutomation } = require("../sendGrid/general");
 
 // Initialize admin SDK if not already done
 if (admin.apps.length === 0) {
@@ -14,6 +15,10 @@ if (admin.apps.length === 0) {
 const db = getFirestore();
 const mySecret = defineSecret('stripe_secret_key');
 const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+const salesCollectionNames = {
+  billingSubscriptions: "salesBillingSubscriptions",
+  invoices: "salesInvoices",
+};
 
 /**
  * Runs every Sunday at 00:00 America/New_York (explicit).
@@ -742,6 +747,411 @@ async function findRoutesContainingRss({ db, companyId, rssId }) {
 
   return routesSnap.docs;
 }
+
+// --------- SALES MANUAL RECURRING INVOICES ---------
+
+function normalizeSalesStatus(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function toDate(value, fallback = new Date()) {
+  if (!value) return fallback === null ? null : new Date(fallback);
+  if (typeof value.toDate === "function") return value.toDate();
+  if (typeof value._seconds === "number") return new Date(value._seconds * 1000);
+  if (typeof value.seconds === "number") return new Date(value.seconds * 1000);
+  if (typeof value === "number") return new Date(value);
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return parsed;
+  return fallback === null ? null : new Date(fallback);
+}
+
+function startOfDay(value) {
+  const date = toDate(value);
+  date.setHours(0, 0, 0, 0);
+  return date;
+}
+
+function toTimestamp(value) {
+  return Timestamp.fromDate(startOfDay(value));
+}
+
+function dateKey(value) {
+  return startOfDay(value).toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function addBillingInterval(value, interval = "month", intervalCount = 1) {
+  const date = startOfDay(value);
+  const count = Math.max(Number(intervalCount || 1), 1);
+  const key = normalizeSalesStatus(interval);
+
+  if (key.includes("day")) date.setDate(date.getDate() + count);
+  else if (key.includes("week")) date.setDate(date.getDate() + (count * 7));
+  else if (key.includes("year")) date.setFullYear(date.getFullYear() + count);
+  else date.setMonth(date.getMonth() + count);
+
+  return date;
+}
+
+function addBillingIntervalDateTime(value, interval = "month", intervalCount = 1) {
+  const date = toDate(value);
+  const count = Math.max(Number(intervalCount || 1), 1);
+  const key = normalizeSalesStatus(interval);
+
+  if (key.includes("day")) date.setDate(date.getDate() + count);
+  else if (key.includes("week")) date.setDate(date.getDate() + (count * 7));
+  else if (key.includes("year")) date.setFullYear(date.getFullYear() + count);
+  else date.setMonth(date.getMonth() + count);
+
+  return date;
+}
+
+function paymentTermsDueDays(paymentTerms = "") {
+  const key = normalizeSalesStatus(paymentTerms);
+  if (key === "net7") return 7;
+  if (key === "net14") return 14;
+  if (key === "net30") return 30;
+  return 0;
+}
+
+function dueDateForTerms(paymentTerms, baseDate = new Date()) {
+  const date = startOfDay(baseDate);
+  date.setDate(date.getDate() + paymentTermsDueDays(paymentTerms));
+  return date;
+}
+
+function copySubscriptionLineItems(subscription = {}) {
+  const sourceItems = Array.isArray(subscription.lineItems) ? subscription.lineItems : [];
+  const lineItems = sourceItems
+    .map((item) => {
+      const quantity = Math.max(Number(item.quantity || 1), 0);
+      const unitAmountCents = Number(item.unitAmountCents || 0);
+      const totalAmountCents = Number(item.totalAmountCents || Math.round(unitAmountCents * quantity));
+
+      return {
+        id: item.id || item.catalogItemId || `sili_${uuidv4()}`,
+        catalogItemId: item.catalogItemId || "",
+        sourceType: item.sourceType || "recurringService",
+        sourceId: item.sourceId || item.catalogItemId || "",
+        name: item.name || item.description || "Recurring service",
+        description: item.description || "",
+        quantity,
+        unitAmountCents,
+        totalAmountCents,
+        taxable: Boolean(item.taxable),
+        type: item.type || "recurringService",
+        stripeProductId: item.stripeProductId || "",
+        stripePriceId: item.stripePriceId || "",
+        metadata: item.metadata || {},
+      };
+    })
+    .filter((item) => item.name && item.quantity > 0);
+
+  if (lineItems.length) return lineItems;
+
+  const amountCents = Number(subscription.amountCents || 0);
+  return amountCents > 0
+    ? [{
+      id: `sili_${uuidv4()}`,
+      catalogItemId: "",
+      sourceType: "recurringService",
+      sourceId: subscription.agreementId || subscription.id || "",
+      name: subscription.agreementSnapshot?.title || "Recurring service",
+      description: subscription.serviceCadence || subscription.rateType || "",
+      quantity: 1,
+      unitAmountCents: amountCents,
+      totalAmountCents: amountCents,
+      taxable: false,
+      type: "recurringService",
+      stripeProductId: "",
+      stripePriceId: "",
+      metadata: {},
+    }]
+    : [];
+}
+
+function getManualBillingPeriod(subscription = {}) {
+  const fallbackDate =
+    subscription.currentPeriodStart ||
+    subscription.agreementSnapshot?.acceptedAt ||
+    subscription.createdAt ||
+    new Date();
+  const invoiceSendAt = toDate(
+    subscription.manualBillingNextInvoiceAt ||
+    subscription.manualBillingNextPeriodStart ||
+    fallbackDate
+  );
+  const start = startOfDay(subscription.manualBillingNextPeriodStart || fallbackDate);
+  const interval = subscription.interval || "month";
+  const intervalCount = Math.max(Number(subscription.intervalCount || 1), 1);
+  const existingEnd = toDate(subscription.manualBillingNextPeriodEnd || subscription.currentPeriodEnd, null);
+  const end = existingEnd && existingEnd.getTime() > start.getTime()
+    ? startOfDay(existingEnd)
+    : addBillingInterval(start, interval, intervalCount);
+  const nextPeriodStart = end;
+  const nextPeriodEnd = addBillingInterval(end, interval, intervalCount);
+  const nextInvoiceAt = addBillingIntervalDateTime(invoiceSendAt, interval, intervalCount);
+  const dueDate = dueDateForTerms(subscription.paymentTerms, invoiceSendAt);
+
+  return {
+    invoiceSendAt,
+    periodStart: start,
+    periodEnd: end,
+    nextPeriodStart,
+    nextPeriodEnd,
+    nextInvoiceAt,
+    nextDueDate: dueDateForTerms(subscription.paymentTerms, nextInvoiceAt),
+    dueDate,
+    invoiceId: `si_${subscription.id}_${dateKey(start)}`,
+    invoiceNumber: `REC-${dateKey(start)}-${String(subscription.id || "").slice(-6).toUpperCase()}`,
+  };
+}
+
+function shouldSkipScheduledManualInvoice(subscription = {}, now = new Date()) {
+  const statusKey = normalizeSalesStatus(subscription.status);
+  const stripeStatusKey = normalizeSalesStatus(subscription.stripeStatus);
+  const activeStripeStates = new Set(["active", "trialing"]);
+  const stripeManagedStates = new Set(["active", "trialing", "pastdue", "unpaid", "paused"]);
+  const invoiceAt = toDate(
+    subscription.manualBillingNextInvoiceAt ||
+    subscription.manualBillingNextPeriodStart ||
+    subscription.currentPeriodStart ||
+    subscription.createdAt,
+    null
+  );
+
+  if (subscription.manualBillingAutoSendEnabled !== true) return "autoSendDisabled";
+  if (subscription.manualBillingEnabled === false) return "manualBillingDisabled";
+  if (statusKey === "canceled" || statusKey === "superseded" || statusKey === "paused") return "subscriptionNotBillable";
+  if (subscription.autopayEnabled === true) return "autopayEnabled";
+  if (subscription.billingCollectionMethod === "automaticStripe") return "stripeManagedBilling";
+  if (activeStripeStates.has(stripeStatusKey)) return "stripeAutopayActive";
+  if (subscription.stripeSubscriptionId && stripeManagedStates.has(stripeStatusKey)) return "stripeSubscriptionManaged";
+  if (Number(subscription.amountCents || 0) <= 0 && (!Array.isArray(subscription.lineItems) || !subscription.lineItems.length)) return "missingAmount";
+  if (invoiceAt && invoiceAt.getTime() > now.getTime()) return "notDueYet";
+
+  return "";
+}
+
+async function createScheduledManualSubscriptionInvoice(db, subscription = {}) {
+  if (!subscription?.id) throw new Error("Missing billing subscription id.");
+  if (!subscription.companyId) throw new Error("Billing subscription is missing a company id.");
+  if (!subscription.customerId) throw new Error("Billing subscription is missing a customer.");
+
+  const period = getManualBillingPeriod(subscription);
+  const lineItems = copySubscriptionLineItems(subscription);
+  const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
+  const totalAmountCents = subtotalAmountCents;
+
+  if (totalAmountCents <= 0 || !lineItems.length) {
+    throw new Error("Billing subscription needs an amount or line items before an invoice can be created.");
+  }
+
+  const invoiceRef = db.collection(salesCollectionNames.invoices).doc(period.invoiceId);
+  const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscription.id);
+  let created = false;
+  let shouldSendEmail = false;
+
+  await db.runTransaction(async (transaction) => {
+    const invoiceSnap = await transaction.get(invoiceRef);
+    const now = FieldValue.serverTimestamp();
+    const receiptDeliveryMethod = subscription.receiptDeliveryMethod || subscription.invoiceDeliveryMethod || "email";
+    const receiptsEnabled = subscription.receiptsEnabled !== false;
+
+    if (!invoiceSnap.exists) {
+      created = true;
+      shouldSendEmail = ["email", "customerPortal"].includes(subscription.invoiceDeliveryMethod || "email");
+
+      transaction.set(invoiceRef, {
+        id: period.invoiceId,
+        companyId: subscription.companyId,
+        companyName: subscription.companyName || "",
+        customerId: subscription.customerId || "",
+        customerUserId: subscription.customerUserId || null,
+        relationshipId: subscription.relationshipId || subscription.customerCompanyRelationshipId || "",
+        customerCompanyRelationshipId: subscription.customerCompanyRelationshipId || subscription.relationshipId || "",
+        customerName: subscription.customerName || "",
+        email: subscription.email || "",
+        serviceLocationIds: Array.isArray(subscription.serviceLocationIds) ? subscription.serviceLocationIds : [],
+        serviceLocationSnapshots: Array.isArray(subscription.serviceLocationSnapshots) ? subscription.serviceLocationSnapshots : [],
+        agreementId: subscription.agreementId || "",
+        jobId: "",
+        billingProfileId: subscription.billingProfileId || "",
+        billingSubscriptionId: subscription.id,
+        stripeConnectedAccountId: subscription.stripeConnectedAccountId || "",
+        invoiceNumber: period.invoiceNumber,
+        type: "subscription",
+        sourceType: "scheduledManualBillingSubscription",
+        status: "open",
+        deliveryMethod: subscription.invoiceDeliveryMethod || "email",
+        billingCollectionMethod: subscription.billingCollectionMethod || "manualUntilAutopay",
+        autopayStatus: subscription.autopayStatus || (subscription.stripeConnectedAccountId ? "available" : "unavailable"),
+        receiptDeliveryMethod,
+        receiptsEnabled,
+        currency: subscription.currency || "usd",
+        scheduledSendAt: Timestamp.fromDate(period.invoiceSendAt),
+        billingPeriodStart: toTimestamp(period.periodStart),
+        billingPeriodEnd: toTimestamp(period.periodEnd),
+        dueDate: toTimestamp(period.dueDate),
+        subtotalAmountCents,
+        discountAmountCents: 0,
+        taxAmountCents: 0,
+        totalAmountCents,
+        amountPaidCents: 0,
+        amountDueCents: totalAmountCents,
+        writeOffAmountCents: 0,
+        memo: subscription.manualInvoiceMemo || "",
+        lineItems,
+        recurringManualInvoice: true,
+        manualBilling: {
+          generatedFromSubscriptionId: subscription.id,
+          periodStartKey: dateKey(period.periodStart),
+          interval: subscription.interval || "month",
+          intervalCount: Math.max(Number(subscription.intervalCount || 1), 1),
+          autoGenerated: true,
+        },
+        createdByUserId: "scheduled-manual-invoice",
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      const invoiceData = invoiceSnap.data() || {};
+      shouldSendEmail = ["email", "customerPortal"].includes(invoiceData.deliveryMethod || subscription.invoiceDeliveryMethod || "email") && !invoiceData.sentAt;
+    }
+
+    transaction.set(subscriptionRef, {
+      manualBillingLastInvoiceId: period.invoiceId,
+      manualBillingLastInvoiceNumber: period.invoiceNumber,
+      manualBillingLastInvoiceAt: now,
+      manualBillingLastInvoiceDueDate: toTimestamp(period.dueDate),
+      manualBillingLastPeriodStart: toTimestamp(period.periodStart),
+      manualBillingLastPeriodEnd: toTimestamp(period.periodEnd),
+      manualBillingNextPeriodStart: toTimestamp(period.nextPeriodStart),
+      manualBillingNextPeriodEnd: toTimestamp(period.nextPeriodEnd),
+      manualBillingNextInvoiceAt: Timestamp.fromDate(period.nextInvoiceAt),
+      manualBillingNextDueDate: toTimestamp(period.nextDueDate),
+      billingCollectionMethod: subscription.billingCollectionMethod || "manualUntilAutopay",
+      manualBillingEnabled: true,
+      manualBillingAutoSendEnabled: true,
+      manualBillingStatus: created ? "invoiceCreated" : "invoiceAlreadyExisted",
+      manualBillingReason: subscription.manualBillingReason || "scheduledManualRecurringInvoice",
+      manualBillingUpdatedAt: now,
+      manualBillingLastAutoRunAt: now,
+      manualBillingLastAutoRunStatus: created ? "created" : "alreadyExisted",
+      receiptDeliveryMethod,
+      receiptsEnabled,
+      lastBillingSource: "scheduledManualRecurringInvoice",
+      updatedAt: now,
+    }, { merge: true });
+  });
+
+  return {
+    invoiceId: period.invoiceId,
+    invoiceNumber: period.invoiceNumber,
+    created,
+    shouldSendEmail,
+    period,
+  };
+}
+
+exports.hourlySalesManualInvoiceSend = onSchedule(
+  { schedule: "every 60 minutes", timeZone: "America/New_York" },
+  async () => {
+    const db = getFirestore();
+    const now = new Date();
+    const snapshot = await db
+      .collection(salesCollectionNames.billingSubscriptions)
+      .where("manualBillingEnabled", "==", true)
+      .limit(1000)
+      .get();
+
+    let processedCount = 0;
+    let createdCount = 0;
+    let sentCount = 0;
+    let skippedCount = 0;
+    let failedCount = 0;
+
+    for (const docSnap of snapshot.docs) {
+      const subscription = { id: docSnap.id, ...docSnap.data() };
+      const skipReason = shouldSkipScheduledManualInvoice(subscription, now);
+
+      if (skipReason) {
+        skippedCount += 1;
+        continue;
+      }
+
+      processedCount += 1;
+      let invoiceResult = null;
+
+      try {
+        const result = await createScheduledManualSubscriptionInvoice(db, subscription);
+        invoiceResult = result;
+        if (result.created) createdCount += 1;
+
+        if (!result.shouldSendEmail) {
+          await docSnap.ref.set({
+            manualBillingLastAutoRunStatus: result.created ? "invoiceCreatedEmailSkipped" : "invoiceAlreadyExistedEmailSkipped",
+            manualBillingLastAutoRunAt: FieldValue.serverTimestamp(),
+          }, { merge: true });
+          continue;
+        }
+
+        const sendResult = await sendSalesInvoiceEmailForAutomation({
+          companyId: subscription.companyId,
+          invoiceId: result.invoiceId,
+        });
+
+        sentCount += 1;
+        await docSnap.ref.set({
+          manualBillingStatus: "invoiceSent",
+          manualBillingLastAutoRunStatus: "sent",
+          manualBillingLastInvoiceEmailSentAt: FieldValue.serverTimestamp(),
+          manualBillingLastInvoiceEmailTo: sendResult.to || "",
+          manualBillingLastInvoiceEmailIntendedTo: sendResult.intendedTo || subscription.email || "",
+          manualBillingLastEmailError: "",
+          manualBillingUpdatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+      } catch (error) {
+        failedCount += 1;
+        const retryAt = new Date(Date.now() + 60 * 60 * 1000);
+        const retryPatch = invoiceResult?.period
+          ? {
+            manualBillingNextPeriodStart: toTimestamp(invoiceResult.period.periodStart),
+            manualBillingNextPeriodEnd: toTimestamp(invoiceResult.period.periodEnd),
+            manualBillingNextInvoiceAt: Timestamp.fromDate(retryAt),
+            manualBillingNextDueDate: toTimestamp(invoiceResult.period.dueDate),
+          }
+          : {};
+
+        console.error("Scheduled manual invoice failed", {
+          billingSubscriptionId: subscription.id,
+          companyId: subscription.companyId,
+          error: error.message,
+        });
+        await docSnap.ref.set({
+          manualBillingStatus: "autoSendFailed",
+          manualBillingLastAutoRunStatus: "failed",
+          manualBillingLastAutoRunAt: FieldValue.serverTimestamp(),
+          manualBillingLastEmailError: error.message || "Scheduled invoice failed.",
+          manualBillingUpdatedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+          ...retryPatch,
+        }, { merge: true });
+      }
+    }
+
+    console.log("Hourly sales manual invoice send finished", {
+      scannedCount: snapshot.size,
+      processedCount,
+      createdCount,
+      sentCount,
+      skippedCount,
+      failedCount,
+    });
+
+    return null;
+  }
+);
 
 // --------- TRIGGERS ---------
 

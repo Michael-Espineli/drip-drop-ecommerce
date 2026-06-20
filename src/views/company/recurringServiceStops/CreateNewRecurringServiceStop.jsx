@@ -12,6 +12,7 @@ import Select from 'react-select';
 import DatePicker from "react-datepicker";
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
+import { FaMapMarkerAlt } from 'react-icons/fa';
 import 'react-datepicker/dist/react-datepicker.css';
 import {
     debugServiceStopTypeWrite,
@@ -21,6 +22,7 @@ import {
     suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { addRecurringServiceStopToPlannedRoute } from '../../../utils/recurringRouteSync';
+import MapComponent from '../../components/MapComponent';
 
 const functions = getFunctions();
 
@@ -39,6 +41,18 @@ const cadenceToFrequencyOption = (cadence = "") => {
     if (normalized.includes("bi") || normalized.includes("2 week")) return { value: "Bi-Weekly", label: "Bi-Weekly" };
     if (normalized.includes("month")) return { value: "Monthly", label: "Monthly" };
     return { value: "Weekly", label: "Weekly" };
+};
+
+const formatServiceLocationAddress = (address = {}) => [
+    address.streetAddress,
+    [address.city, address.state, address.zip || address.zipCode].filter(Boolean).join(' '),
+].filter(Boolean).join(', ');
+
+const getMapCoordinate = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+
+    const coordinate = Number(value);
+    return Number.isFinite(coordinate) ? coordinate : null;
 };
 
 const CreateNewRecurringServiceStop = () => {
@@ -102,6 +116,13 @@ const CreateNewRecurringServiceStop = () => {
                 .sort((a, b) => a.label.localeCompare(b.label)),
         [companyServiceStopTypes]
     );
+    const selectedLocationAddress = serviceLocation?.address || {};
+    const selectedLocationAddressLine = formatServiceLocationAddress(selectedLocationAddress);
+    const selectedLocationLatitude = getMapCoordinate(selectedLocationAddress.latitude);
+    const selectedLocationLongitude = getMapCoordinate(selectedLocationAddress.longitude);
+    const hasSelectedLocationMap = selectedLocationLatitude !== null
+        && selectedLocationLongitude !== null
+        && (selectedLocationLatitude !== 0 || selectedLocationLongitude !== 0);
 
     // =============================
     // iOS helper -> React helper
@@ -445,48 +466,120 @@ const CreateNewRecurringServiceStop = () => {
     };
 
     return (
-        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
-            <div className="max-w-4xl mx-auto bg-white p-8 rounded-2xl shadow-lg">
-                <div>
-                    <h1 className='text-3xl font-bold text-gray-800 mb-6'>Add New Recurring Service Stop</h1>
-                    <p className="text-gray-600 mt-1">Assign the customer, route schedule, technician, and service stop type.</p>
-                </div>
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-5">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <h1 className="text-3xl font-bold text-slate-950">Add New Recurring Service Stop</h1>
+                    <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                        Assign the customer, route schedule, technician, and service stop type.
+                    </p>
+                </section>
 
-                <form onSubmit={createNewStop} className="space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
-                        <SelectField label="Service Location" value={serviceLocation} options={serviceLocationList} onChange={setServiceLocation} placeholder="Select a Service Location" isDisabled={!customer} />
-                        <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
-                        <SelectField label="Service Stop Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Service Stop Type" />
-                        <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
-                        <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />
+                <form onSubmit={createNewStop} className="space-y-5">
+                    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                            <SelectField label="Customer" value={customer} options={customerList} onChange={handleCustomerChange} placeholder="Select a Customer" isDisabled={!!customerId && customerId !== 'NA'} isLoading={isLoading} />
+                            <SelectField label="Service Location" value={serviceLocation} options={serviceLocationList} onChange={setServiceLocation} placeholder="Select a Service Location" isDisabled={!customer} />
+                            <SelectField label="Assigned Technician" value={tech} options={techList} onChange={setTech} placeholder="Assign a Technician" />
+                            <SelectField label="Service Stop Type" value={selectedServiceStopType} options={serviceStopTypeOptions} onChange={setSelectedServiceStopType} placeholder="Select a Service Stop Type" />
+                            <SelectField label="Day of Week" value={dayOfWeek} options={dayOptions} onChange={setDayOfWeek} placeholder="Select a Day" />
+                            <SelectField label="Frequency" value={frequency} options={frequencyOptions} onChange={setFrequency} placeholder="Select Frequency" />
 
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">Start Date</label>
-                            <DatePicker selected={startDate} onChange={setStartDate} className="w-full p-2 border border-gray-300 rounded-md shadow-sm" />
+                            <div>
+                                <label className="mb-2 block text-sm font-semibold text-slate-700">Start Date</label>
+                                <DatePicker
+                                    selected={startDate}
+                                    onChange={setStartDate}
+                                    wrapperClassName="w-full"
+                                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                />
+                            </div>
+
+                            {!noEndDate && (
+                                <div>
+                                    <label className="mb-2 block text-sm font-semibold text-slate-700">End Date</label>
+                                    <DatePicker
+                                        selected={endDate}
+                                        onChange={setEndDate}
+                                        minDate={startDate}
+                                        wrapperClassName="w-full"
+                                        className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </div>
+                            )}
                         </div>
-                    </div>
 
-                    <div className="flex items-center space-x-4">
-                        <input type="checkbox" id="no-end-date" checked={noEndDate} onChange={(e) => setNoEndDate(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" />
-                        <label htmlFor="no-end-date" className="text-sm font-medium text-gray-700">No End Date</label>
-                    </div>
+                        <label className="mt-4 flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                            <input
+                                type="checkbox"
+                                id="no-end-date"
+                                checked={noEndDate}
+                                onChange={(e) => setNoEndDate(e.target.checked)}
+                                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            No End Date
+                        </label>
 
-                    {!noEndDate && (
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-2">End Date</label>
-                            <DatePicker selected={endDate} onChange={setEndDate} minDate={startDate} className="w-full p-2 border border-gray-300 rounded-md shadow-sm" />
+                        <div className="mt-4">
+                            <label htmlFor="description" className="block text-sm font-semibold text-slate-700">Description</label>
+                            <textarea
+                                id="description"
+                                value={description}
+                                onChange={(e) => setDescription(e.target.value)}
+                                rows={3}
+                                className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                            />
                         </div>
+                    </section>
+
+                    {serviceLocation && (
+                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="flex items-start gap-3">
+                                <span className="rounded-md bg-blue-50 p-2 text-blue-700">
+                                    <FaMapMarkerAlt className="text-sm" />
+                                </span>
+                                <div className="min-w-0">
+                                    <h2 className="text-lg font-bold text-slate-950">Location Preview</h2>
+                                    <p className="mt-1 text-sm font-semibold text-slate-900">
+                                        {serviceLocation.nickName || serviceLocation.label || 'Selected Service Location'}
+                                    </p>
+                                    <p className="mt-1 text-sm text-slate-600">
+                                        {selectedLocationAddressLine || 'No address saved for this location.'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            {hasSelectedLocationMap ? (
+                                <div className="mt-4 overflow-hidden rounded-md border border-slate-200">
+                                    <MapComponent
+                                        latitude={selectedLocationLatitude}
+                                        longitude={selectedLocationLongitude}
+                                        zoom={15}
+                                        height="260px"
+                                    />
+                                </div>
+                            ) : (
+                                <div className="mt-4 rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                    No map coordinates are saved for this service location yet.
+                                </div>
+                            )}
+                        </section>
                     )}
 
-                    <div>
-                        <label htmlFor="description" className="block text-sm font-medium text-gray-700">Description</label>
-                        <textarea id="description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"></textarea>
-                    </div>
-
-                    <div className="flex justify-end pt-4 space-x-4">
-                        <button type="button" onClick={() => navigate('/company/recurringServiceStop')} className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition'>Cancel</button>
-                        <button type="submit" className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition'>Add Stop</button>
+                    <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                        <button
+                            type="button"
+                            onClick={() => navigate('/company/recurringServiceStop')}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            type="submit"
+                            className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                        >
+                            Add Stop
+                        </button>
                     </div>
                 </form>
             </div>
@@ -496,8 +589,8 @@ const CreateNewRecurringServiceStop = () => {
 
 // A reusable Select component for cleaner code
 const SelectField = ({ label, ...props }) => (
-    <div>
-        <label className="block text-sm font-medium text-gray-700 mb-2">{label}</label>
+    <div className="min-w-0">
+        <label className="mb-2 block text-sm font-semibold text-slate-700">{label}</label>
         <Select classNamePrefix="react-select" {...props} />
     </div>
 );

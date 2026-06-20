@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 const THEME_STORAGE_KEY = "dripDropThemePreference";
+const DEFAULT_THEME_PREFERENCE = "light";
 const ThemeContext = createContext(null);
 
 const getSystemTheme = () => {
@@ -9,19 +10,26 @@ const getSystemTheme = () => {
 };
 
 const normalizePreference = (value) => (
-  value === "dark" || value === "light" || value === "system" ? value : "system"
+  value === "dark" || value === "light" || value === "system" ? value : DEFAULT_THEME_PREFERENCE
 );
 
 const resolveTheme = (preference, systemTheme) => (
   preference === "system" ? systemTheme : normalizePreference(preference)
 );
 
+const getInitialThemePreference = () => {
+  if (typeof window === "undefined") return DEFAULT_THEME_PREFERENCE;
+
+  const storedPreference = window.localStorage.getItem(THEME_STORAGE_KEY);
+
+  return storedPreference === "system"
+    ? DEFAULT_THEME_PREFERENCE
+    : normalizePreference(storedPreference);
+};
+
 export const ThemeProvider = ({ children }) => {
   const [systemTheme, setSystemTheme] = useState(getSystemTheme);
-  const [themePreference, setThemePreference] = useState(() => {
-    if (typeof window === "undefined") return "system";
-    return normalizePreference(window.localStorage.getItem(THEME_STORAGE_KEY));
-  });
+  const [themePreference, setThemePreference] = useState(getInitialThemePreference);
 
   const resolvedTheme = resolveTheme(themePreference, systemTheme);
   const isDarkMode = resolvedTheme === "dark";

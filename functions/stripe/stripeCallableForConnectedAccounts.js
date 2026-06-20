@@ -208,6 +208,24 @@ const userCanAccessSalesRecord = async ({ auth, record }) => {
   return false;
 };
 
+const publicAgreementLinkCanAccess = ({ agreement, accessToken, email }) => {
+  const savedAccessToken = String(agreement?.emailDelivery?.reviewAccessToken || '').trim();
+  const requestedAccessToken = String(accessToken || '').trim();
+
+  if (!savedAccessToken || !requestedAccessToken || savedAccessToken !== requestedAccessToken) {
+    return false;
+  }
+
+  const requestedEmail = normalizeEmail(email);
+  const agreementEmail = normalizeEmail(agreement.email || agreement.customerEmail || agreement.billingEmail);
+
+  if (requestedEmail && agreementEmail && requestedEmail !== agreementEmail) {
+    return false;
+  }
+
+  return true;
+};
+
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
 const renewalPreviousAgreementId = (agreement = {}) => (
@@ -234,6 +252,7 @@ const supersededSubscriptionUpdates = (subscription = {}, timestamp) => {
   return {
     supersededAt: timestamp,
     manualBillingEnabled: false,
+    manualBillingAutoSendEnabled: false,
     manualBillingStatus: 'disabledSupersededAgreement',
     manualBillingReason: 'agreementSuperseded',
     nextAction: keepStripeManagedStatus ? 'reviewStripeSubscriptionAfterRenewal' : 'agreementSuperseded',
@@ -489,6 +508,9 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     nextAction: canStartStripeCheckout ? 'collectPaymentMethod' : 'connectStripeAccount',
     customerCanPayImmediately: canStartStripeCheckout,
     manualBillingEnabled: true,
+    manualBillingAutoSendEnabled: true,
+    manualBillingNextInvoiceAt: agreement.manualBillingNextInvoiceAt || agreement.firstInvoiceSendAt || agreement.startDate || admin.firestore.Timestamp.now(),
+    manualBillingNextDueDate: null,
     manualBillingStatus: 'readyToInvoice',
     manualBillingReason: canStartStripeCheckout ? 'autopayNotSetup' : 'stripeUnavailable',
     receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod || 'email',
@@ -580,6 +602,7 @@ const buildStripeSubscriptionUpdateData = ({ stripeSubscription, connectedAccoun
     autopayStatus,
     autopayEnabled: autopayIsActive,
     manualBillingEnabled: !stripeManagedBilling,
+    manualBillingAutoSendEnabled: !stripeManagedBilling,
     manualBillingStatus: autopayIsActive
       ? 'disabledAutopayActive'
       : stripeManagedBilling
@@ -632,6 +655,7 @@ const syncSalesSubscriptionRecordFromStripe = async ({
       billingCollectionMethod: updateData.billingCollectionMethod,
       autopayStatus: updateData.autopayStatus,
       manualBillingEnabled: updateData.manualBillingEnabled,
+      manualBillingAutoSendEnabled: updateData.manualBillingAutoSendEnabled,
       customerCanPayImmediately: false,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     };
@@ -843,6 +867,11 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
           ? existingSubscription.manualBillingEnabled !== false
           : !existingStripeManagedBilling
         : subscriptionDraft.manualBillingEnabled,
+      manualBillingAutoSendEnabled: hasStripeSubscription
+        ? existingStripeManagedBilling
+          ? false
+          : existingSubscription.manualBillingAutoSendEnabled === true
+        : subscriptionDraft.manualBillingAutoSendEnabled,
       manualBillingStatus: hasStripeSubscription
         ? existingSubscription.manualBillingStatus || (
           existingAutopayActive
@@ -920,6 +949,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         billingCollectionMethod: nextSubscription.billingCollectionMethod,
         autopayStatus: nextSubscription.autopayStatus,
         manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       },
       billingSubscriptionId: subscriptionDraft.id,
       billingFlowStatus: nextSubscription.status,
@@ -928,6 +958,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       billingCollectionMethod: nextSubscription.billingCollectionMethod,
       autopayStatus: nextSubscription.autopayStatus,
       manualBillingEnabled: nextSubscription.manualBillingEnabled,
+      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       customerUserId: freshAgreement.customerUserId || callableAuth.uid,
       customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
       agreementHistoryGroupId: historyGroupId,
@@ -974,6 +1005,292 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     agreement,
     status: 'accepted',
     actorUserId: callableAuth.uid,
+    actorUserName: acceptedByName,
+    timestamp: acceptedAt,
+  });
+
+  return {
+    status: 'success',
+    agreementId,
+    billingSubscriptionId: subscriptionDraft.id,
+    customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
+    nextAction: subscriptionDraft.nextAction,
+  };
+});
+
+exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) => {
+  const receivedData = getCallableData(data);
+  const agreementId = receivedData.agreementId;
+  const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
+  const email = receivedData.email || '';
+  const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
+
+  if (!agreementId) {
+    throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
+  }
+
+  if (!accessToken) {
+    throw new functions.https.HttpsError('invalid-argument', 'Open the service agreement from the email link before accepting.');
+  }
+
+  const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
+  const agreementSnap = await agreementRef.get();
+
+  if (!agreementSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+  }
+
+  const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
+  if (!publicAgreementLinkCanAccess({ agreement, accessToken, email })) {
+    throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+  }
+
+  const statusKey = normalizeStatus(agreement.status);
+  if (['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey)) {
+    throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+  }
+
+  const companyDoc = await db.collection('companies').doc(agreement.companyId).get();
+  const companyData = companyDoc.exists ? companyDoc.data() : {};
+  const stripeConnectedAccountId = agreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
+  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement, stripeConnectedAccountId });
+  const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
+  const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
+  const acceptedByEmail = normalizeEmail(email || agreement.email || agreement.customerEmail || agreement.billingEmail);
+  const acceptedByName = agreement.customerName || acceptedByEmail || 'Customer';
+  const acceptedByUserId = agreement.customerUserId || '';
+
+  await db.runTransaction(async (transaction) => {
+    const [freshAgreementSnap, subscriptionSnap] = await Promise.all([
+      transaction.get(agreementRef),
+      transaction.get(subscriptionRef),
+    ]);
+
+    if (!freshAgreementSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+    }
+
+    const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
+      throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+    }
+
+    const existingSubscription = subscriptionSnap.exists
+      ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
+      : null;
+    const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
+    const existingStatusKey = normalizeStatus(existingSubscription?.stripeStatus || existingSubscription?.status);
+    const existingAutopayActive = hasStripeSubscription && ['active', 'trialing'].includes(existingStatusKey);
+    const existingStripeManagedBilling = hasStripeSubscription && ['active', 'trialing', 'pastdue', 'unpaid', 'paused'].includes(existingStatusKey);
+    const nextSubscription = {
+      ...subscriptionDraft,
+      ...existingSubscription,
+      companyId: subscriptionDraft.companyId,
+      customerId: subscriptionDraft.customerId,
+      customerUserId: subscriptionDraft.customerUserId || existingSubscription?.customerUserId || null,
+      relationshipId: subscriptionDraft.relationshipId,
+      customerCompanyRelationshipId: subscriptionDraft.customerCompanyRelationshipId,
+      customerName: subscriptionDraft.customerName,
+      email: subscriptionDraft.email || acceptedByEmail,
+      serviceLocationIds: subscriptionDraft.serviceLocationIds,
+      agreementId: subscriptionDraft.agreementId,
+      billingProfileId: subscriptionDraft.billingProfileId,
+      stripeConnectedAccountId: subscriptionDraft.stripeConnectedAccountId,
+      billingCollectionMethod: hasStripeSubscription
+        ? existingSubscription.billingCollectionMethod || (
+          existingStripeManagedBilling ? 'automaticStripe' : subscriptionDraft.billingCollectionMethod
+        )
+        : subscriptionDraft.billingCollectionMethod,
+      status: hasStripeSubscription ? existingSubscription.status : subscriptionDraft.status,
+      stripeStatus: hasStripeSubscription ? existingSubscription.stripeStatus : subscriptionDraft.stripeStatus,
+      autopayStatus: hasStripeSubscription
+        ? existingSubscription.autopayStatus || (
+          existingAutopayActive
+            ? 'active'
+            : existingStatusKey === 'pastdue' || existingStatusKey === 'unpaid'
+              ? 'pastDue'
+              : subscriptionDraft.autopayStatus
+        )
+        : subscriptionDraft.autopayStatus,
+      autopayEnabled: hasStripeSubscription
+        ? existingAutopayActive || Boolean(existingSubscription.autopayEnabled)
+        : subscriptionDraft.autopayEnabled,
+      amountCents: subscriptionDraft.amountCents,
+      currency: subscriptionDraft.currency,
+      interval: subscriptionDraft.interval,
+      intervalCount: subscriptionDraft.intervalCount,
+      billingFrequency: subscriptionDraft.billingFrequency,
+      billingFrequencyCount: subscriptionDraft.billingFrequencyCount,
+      serviceCadence: subscriptionDraft.serviceCadence,
+      serviceCadenceCount: subscriptionDraft.serviceCadenceCount,
+      serviceDaysOfWeek: subscriptionDraft.serviceDaysOfWeek,
+      serviceFrequencyLabel: subscriptionDraft.serviceFrequencyLabel,
+      previousAgreementId: subscriptionDraft.previousAgreementId,
+      supersedesAgreementId: subscriptionDraft.supersedesAgreementId,
+      agreementHistoryGroupId: subscriptionDraft.agreementHistoryGroupId,
+      agreementVersion: subscriptionDraft.agreementVersion,
+      rateType: subscriptionDraft.rateType,
+      paymentTerms: subscriptionDraft.paymentTerms,
+      invoiceDeliveryMethod: subscriptionDraft.invoiceDeliveryMethod,
+      lineItems: subscriptionDraft.lineItems,
+      chemicalBillingMode: subscriptionDraft.chemicalBillingMode,
+      includedChemicalIds: subscriptionDraft.includedChemicalIds,
+      includedChemicalKeywords: subscriptionDraft.includedChemicalKeywords,
+      separatelyBilledChemicalIds: subscriptionDraft.separatelyBilledChemicalIds,
+      separatelyBilledChemicalKeywords: subscriptionDraft.separatelyBilledChemicalKeywords,
+      customerPurchasedChemicalIds: subscriptionDraft.customerPurchasedChemicalIds,
+      customerPurchasedChemicalKeywords: subscriptionDraft.customerPurchasedChemicalKeywords,
+      chemicalBillingNotes: subscriptionDraft.chemicalBillingNotes,
+      agreementSnapshot: {
+        ...subscriptionDraft.agreementSnapshot,
+        acceptedAt,
+      },
+      checkoutStatus: hasStripeSubscription ? existingSubscription.checkoutStatus : subscriptionDraft.checkoutStatus,
+      nextAction: hasStripeSubscription ? existingSubscription.nextAction : subscriptionDraft.nextAction,
+      customerCanPayImmediately: hasStripeSubscription ? existingSubscription.customerCanPayImmediately : subscriptionDraft.customerCanPayImmediately,
+      manualBillingEnabled: hasStripeSubscription
+        ? existingSubscription.manualBillingEnabled !== undefined
+          ? existingSubscription.manualBillingEnabled !== false
+          : !existingStripeManagedBilling
+        : subscriptionDraft.manualBillingEnabled,
+      manualBillingAutoSendEnabled: hasStripeSubscription
+        ? existingStripeManagedBilling
+          ? false
+          : existingSubscription.manualBillingAutoSendEnabled === true
+        : subscriptionDraft.manualBillingAutoSendEnabled,
+      manualBillingStatus: hasStripeSubscription
+        ? existingSubscription.manualBillingStatus || (
+          existingAutopayActive
+            ? 'disabledAutopayActive'
+            : existingStripeManagedBilling
+              ? 'disabledStripeBillingActive'
+              : subscriptionDraft.manualBillingStatus
+        )
+        : subscriptionDraft.manualBillingStatus,
+      manualBillingReason: hasStripeSubscription
+        ? existingSubscription.manualBillingReason || (
+          existingAutopayActive
+            ? 'stripeAutopayActive'
+            : existingStripeManagedBilling
+              ? 'stripeAutopayNeedsAttention'
+              : subscriptionDraft.manualBillingReason
+        )
+        : subscriptionDraft.manualBillingReason,
+      receiptDeliveryMethod: existingSubscription?.receiptDeliveryMethod || subscriptionDraft.receiptDeliveryMethod,
+      receiptsEnabled: existingSubscription?.receiptsEnabled !== false && subscriptionDraft.receiptsEnabled !== false,
+      lastBillingSource: existingSubscription?.lastBillingSource || subscriptionDraft.lastBillingSource,
+      stripeReadiness: subscriptionDraft.stripeReadiness,
+      createdAt: existingSubscription?.createdAt || acceptedAt,
+      updatedAt: acceptedAt,
+    };
+    const previousAgreementId = renewalPreviousAgreementId(freshAgreement);
+    const historyGroupId = agreementHistoryGroupId(freshAgreement);
+    let previousAgreementRef = null;
+    let previousAgreement = null;
+    let previousSubscriptionRef = null;
+    let previousSubscription = null;
+
+    if (previousAgreementId && previousAgreementId !== freshAgreement.id) {
+      previousAgreementRef = db.collection(salesCollectionNames.agreements).doc(previousAgreementId);
+      const previousAgreementSnap = await transaction.get(previousAgreementRef);
+      if (previousAgreementSnap.exists) {
+        previousAgreement = { id: previousAgreementSnap.id, ...previousAgreementSnap.data() };
+        if (previousAgreement.billingSubscriptionId) {
+          previousSubscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(previousAgreement.billingSubscriptionId);
+          const previousSubscriptionSnap = await transaction.get(previousSubscriptionRef);
+          if (previousSubscriptionSnap.exists) {
+            previousSubscription = { id: previousSubscriptionSnap.id, ...previousSubscriptionSnap.data() };
+          }
+        }
+      }
+    }
+
+    transaction.set(subscriptionRef, nextSubscription, { merge: true });
+    transaction.set(agreementRef, {
+      status: 'accepted',
+      acceptedAt,
+      acceptedByUserId,
+      acceptedByUserName: acceptedByName,
+      acceptedByEmail,
+      acceptedSource: 'emailLink',
+      acceptedNote: acceptanceNote,
+      acceptedSnapshot: {
+        agreementId: freshAgreement.id,
+        title: freshAgreement.title || 'Service Agreement',
+        totalAmountCents: Number(freshAgreement.totalAmountCents || freshAgreement.rateAmountCents || 0),
+        lineItems: Array.isArray(freshAgreement.lineItems) ? freshAgreement.lineItems : [],
+        terms: freshAgreement.terms || '',
+        termsList: Array.isArray(freshAgreement.termsList) ? freshAgreement.termsList : [],
+        acceptedAt,
+        acceptedByUserId,
+        acceptedByUserName: acceptedByName,
+        acceptedByEmail,
+        previousAgreementId: previousAgreementId || '',
+        supersedesAgreementId: previousAgreementId || '',
+        agreementHistoryGroupId: historyGroupId,
+        agreementVersion: String(freshAgreement.agreementVersion || 1),
+        billingSubscriptionId: subscriptionDraft.id,
+        billingFlowStatus: nextSubscription.status,
+        billingFlowNextAction: nextSubscription.nextAction,
+        billingCollectionMethod: nextSubscription.billingCollectionMethod,
+        autopayStatus: nextSubscription.autopayStatus,
+        manualBillingEnabled: nextSubscription.manualBillingEnabled,
+        manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      },
+      billingSubscriptionId: subscriptionDraft.id,
+      billingFlowStatus: nextSubscription.status,
+      billingFlowNextAction: nextSubscription.nextAction,
+      billingFlowUpdatedAt: acceptedAt,
+      billingCollectionMethod: nextSubscription.billingCollectionMethod,
+      autopayStatus: nextSubscription.autopayStatus,
+      manualBillingEnabled: nextSubscription.manualBillingEnabled,
+      manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
+      customerUserId: freshAgreement.customerUserId || null,
+      customerCanPayImmediately: nextSubscription.customerCanPayImmediately,
+      agreementHistoryGroupId: historyGroupId,
+      agreementVersion: Math.max(Number(freshAgreement.agreementVersion || 1), 1),
+      activatedAt: freshAgreement.activatedAt || acceptedAt,
+      startDate: freshAgreement.startDate || acceptedAt,
+      ...(previousAgreementId
+        ? {
+          previousAgreementId,
+          supersedesAgreementId: previousAgreementId,
+          previousAgreementEndedAt: acceptedAt,
+        }
+        : {}),
+      operationsSetupStatus: freshAgreement.operationsSetupStatus || 'needsRecurringServiceStop',
+      operationsSetupReason: freshAgreement.operationsSetupReason || 'acceptedServiceAgreement',
+      operationsSetupUpdatedAt: acceptedAt,
+      updatedAt: acceptedAt,
+    }, { merge: true });
+
+    if (previousAgreementRef && previousAgreement) {
+      transaction.set(previousAgreementRef, {
+        status: 'superseded',
+        endDate: freshAgreement.startDate || acceptedAt,
+        supersededAt: acceptedAt,
+        supersededByAgreementId: freshAgreement.id,
+        supersededByAgreementTitle: freshAgreement.title || 'Service Agreement',
+        agreementHistoryGroupId: historyGroupId,
+        updatedAt: acceptedAt,
+        statusChangedAt: acceptedAt,
+        statusChangeReason: 'Superseded by accepted renewal agreement.',
+      }, { merge: true });
+    }
+
+    if (previousSubscriptionRef && previousSubscription) {
+      transaction.set(previousSubscriptionRef, {
+        ...supersededSubscriptionUpdates(previousSubscription, acceptedAt),
+        supersededByAgreementId: freshAgreement.id,
+        supersededByBillingSubscriptionId: subscriptionDraft.id,
+      }, { merge: true });
+    }
+  });
+
+  await syncLinkedJobForAgreementStatus({
+    agreement,
+    status: 'accepted',
+    actorUserId: acceptedByUserId || 'email-link',
     actorUserName: acceptedByName,
     timestamp: acceptedAt,
   });
@@ -1088,6 +1405,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       autopayStatus: 'checkoutStarted',
       autopayEnabled: false,
       manualBillingEnabled: subscription.manualBillingEnabled !== false,
+      manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
       manualBillingStatus: subscription.manualBillingStatus || 'readyToInvoice',
       manualBillingReason: 'autopayCheckoutStarted',
       nextAction: 'completeCheckout',
@@ -1116,6 +1434,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
         billingCollectionMethod: 'manualUntilAutopay',
         autopayStatus: 'checkoutStarted',
         manualBillingEnabled: subscription.manualBillingEnabled !== false,
+        manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }

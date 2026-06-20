@@ -329,7 +329,7 @@ export default function Leads() {
                                             <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead)}</td>
                                             <td className="px-6 py-4 whitespace-nowrap">{renderLinkStatus(lead)}</td>
                                             <td className="px-6 py-4 whitespace-nowrap">
-                                                {can("242") && (
+                                                {can("612") && (
                                                     <button
                                                         type="button"
                                                         onClick={(event) => {

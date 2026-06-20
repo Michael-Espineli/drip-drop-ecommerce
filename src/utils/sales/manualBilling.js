@@ -56,6 +56,19 @@ const addInterval = (value, interval = 'month', intervalCount = 1) => {
   return date;
 };
 
+const addIntervalDateTime = (value, interval = 'month', intervalCount = 1) => {
+  const date = toDate(value);
+  const count = Math.max(Number(intervalCount || 1), 1);
+  const key = normalizeStatus(interval);
+
+  if (key.includes('day')) date.setDate(date.getDate() + count);
+  else if (key.includes('week')) date.setDate(date.getDate() + (count * 7));
+  else if (key.includes('year')) date.setFullYear(date.getFullYear() + count);
+  else date.setMonth(date.getMonth() + count);
+
+  return date;
+};
+
 const paymentTermsDueDays = (paymentTerms = '') => {
   const key = normalizeStatus(paymentTerms);
   if (key === 'net7') return 7;
@@ -64,8 +77,8 @@ const paymentTermsDueDays = (paymentTerms = '') => {
   return 0;
 };
 
-const dueDateForTerms = (paymentTerms) => {
-  const date = startOfDay(new Date());
+const dueDateForTerms = (paymentTerms, baseDate = new Date()) => {
+  const date = startOfDay(baseDate);
   date.setDate(date.getDate() + paymentTermsDueDays(paymentTerms));
   return date;
 };
@@ -131,12 +144,19 @@ export const invoiceBalanceCents = (invoice = {}) => {
 };
 
 export const getSubscriptionBillingPeriodPreview = (subscription = {}) => {
-  const start = startOfDay(
-    subscription.manualBillingNextPeriodStart ||
+  const fallbackStart =
     subscription.currentPeriodStart ||
     subscription.agreementSnapshot?.acceptedAt ||
     subscription.createdAt ||
-    new Date()
+    new Date();
+  const invoiceSendAt = toDate(
+    subscription.manualBillingNextInvoiceAt ||
+    subscription.manualBillingNextPeriodStart ||
+    fallbackStart
+  );
+  const start = startOfDay(
+    subscription.manualBillingNextPeriodStart ||
+    fallbackStart
   );
   const interval = subscription.interval || 'month';
   const intervalCount = Math.max(Number(subscription.intervalCount || 1), 1);
@@ -146,10 +166,13 @@ export const getSubscriptionBillingPeriodPreview = (subscription = {}) => {
     : addInterval(start, interval, intervalCount);
 
   return {
+    invoiceSendAt,
     periodStart: start,
     periodEnd: end,
     nextPeriodStart: end,
     nextPeriodEnd: addInterval(end, interval, intervalCount),
+    nextInvoiceAt: addIntervalDateTime(invoiceSendAt, interval, intervalCount),
+    dueDate: dueDateForTerms(subscription.paymentTerms, invoiceSendAt),
     invoiceId: `si_${subscription.id}_${dateKey(start)}`,
     invoiceNumber: `REC-${dateKey(start)}-${String(subscription.id || '').slice(-6).toUpperCase()}`,
   };
@@ -221,7 +244,7 @@ export const createManualSubscriptionInvoice = async (db, subscription = {}, opt
       currency: subscription.currency || 'usd',
       billingPeriodStart: toTimestamp(period.periodStart),
       billingPeriodEnd: toTimestamp(period.periodEnd),
-      dueDate: toTimestamp(dueDateForTerms(subscription.paymentTerms)),
+      dueDate: toTimestamp(period.dueDate),
       subtotalAmountCents,
       discountAmountCents: 0,
       taxAmountCents: 0,
@@ -251,6 +274,8 @@ export const createManualSubscriptionInvoice = async (db, subscription = {}, opt
       manualBillingLastPeriodEnd: toTimestamp(period.periodEnd),
       manualBillingNextPeriodStart: toTimestamp(period.nextPeriodStart),
       manualBillingNextPeriodEnd: toTimestamp(period.nextPeriodEnd),
+      manualBillingNextInvoiceAt: Timestamp.fromDate(period.nextInvoiceAt),
+      manualBillingNextDueDate: toTimestamp(dueDateForTerms(subscription.paymentTerms, period.nextInvoiceAt)),
       billingCollectionMethod,
       manualBillingEnabled: true,
       manualBillingStatus: 'invoiceCreated',

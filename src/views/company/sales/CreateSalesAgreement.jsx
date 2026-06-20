@@ -221,6 +221,7 @@ const CreateSalesAgreement = () => {
   const [lineItems, setLineItems] = useState([]);
   const [sourceLead, setSourceLead] = useState(null);
   const [sourceServiceStop, setSourceServiceStop] = useState(null);
+  const [sourceContextLoaded, setSourceContextLoaded] = useState(false);
   const [sourcePrefillApplied, setSourcePrefillApplied] = useState(false);
 
   const [form, setForm] = useState({
@@ -329,8 +330,12 @@ const CreateSalesAgreement = () => {
     setSourcePrefillApplied(false);
     setSourceLead(null);
     setSourceServiceStop(null);
+    setSourceContextLoaded(false);
 
-    if (!recentlySelectedCompany || (!sourceLeadId && !sourceServiceStopId)) return undefined;
+    if (!recentlySelectedCompany || (!sourceLeadId && !sourceServiceStopId)) {
+      setSourceContextLoaded(true);
+      return undefined;
+    }
 
     let isActive = true;
 
@@ -352,6 +357,8 @@ const CreateSalesAgreement = () => {
       } catch (error) {
         console.error('Unable to load agreement source records', error);
         if (isActive) toast.error('Failed to load the lead or survey context for this agreement.');
+      } finally {
+        if (isActive) setSourceContextLoaded(true);
       }
     };
 
@@ -364,6 +371,7 @@ const CreateSalesAgreement = () => {
 
   useEffect(() => {
     if (sourcePrefillApplied) return;
+    if (!sourceContextLoaded) return;
     if (!sourceLeadId && !sourceServiceStopId && !queryCustomerId && !queryServiceLocationId) return;
 
     const customerId = queryCustomerId || leadCustomerId(sourceLead) || sourceServiceStop?.customerId || '';
@@ -393,6 +401,7 @@ const CreateSalesAgreement = () => {
     customers,
     queryCustomerId,
     queryServiceLocationId,
+    sourceContextLoaded,
     sourceLead,
     sourceLeadId,
     sourcePrefillApplied,

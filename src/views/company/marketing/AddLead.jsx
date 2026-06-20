@@ -1,6 +1,6 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
@@ -30,6 +30,8 @@ const AddLead = () => {
     const isEditing = Boolean(routeLeadId);
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [loading, setLoading] = useState(isEditing);
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deletingLead, setDeletingLead] = useState(false);
 
     const [formData, setFormData] = useState(initialFormData);
 
@@ -179,6 +181,23 @@ const AddLead = () => {
             setIsSubmitting(false);
         }
     };
+
+    const handleDeleteLead = async () => {
+        if (!isEditing || !routeLeadId) return;
+        if (!requirePermission("616", "delete leads")) return;
+
+        setDeletingLead(true);
+        try {
+            await deleteDoc(doc(db, 'homeownerServiceRequests', routeLeadId));
+            toast.success('Lead deleted.');
+            navigate('/company/leads');
+        } catch (error) {
+            console.error('Error deleting lead:', error);
+            toast.error('Failed to delete lead.');
+            setDeletingLead(false);
+            setShowDeleteModal(false);
+        }
+    };
     const inputClasses = "w-full rounded-md border border-slate-300 py-2 pl-10 pr-3 text-slate-900 placeholder-slate-500 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 sm:text-sm";
     const textInputClasses = "mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 sm:text-sm";
     const returnPath = isEditing ? `/company/leads/${routeLeadId}` : '/company/leads';
@@ -270,15 +289,56 @@ const AddLead = () => {
                             )}
                         </section>
 
-                        <div className="flex justify-end">
-                            <button type="button" onClick={() => navigate(returnPath)} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">Cancel</button>
-                            <button type="submit" disabled={isSubmitting} className="ml-3 inline-flex justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
-                                {isSubmitting ? (isEditing ? 'Saving Lead...' : 'Adding Lead...') : (isEditing ? 'Save Lead' : 'Add Lead')}
-                            </button>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            {isEditing ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowDeleteModal(true)}
+                                    disabled={isSubmitting || deletingLead}
+                                    className="inline-flex justify-center rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Delete Lead
+                                </button>
+                            ) : <span />}
+                            <div className="flex justify-end gap-3">
+                                <button type="button" onClick={() => navigate(returnPath)} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50">Cancel</button>
+                                <button type="submit" disabled={isSubmitting || deletingLead} className="inline-flex justify-center rounded-md border border-transparent bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700 disabled:opacity-50">
+                                    {isSubmitting ? (isEditing ? 'Saving Lead...' : 'Adding Lead...') : (isEditing ? 'Save Lead' : 'Add Lead')}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </form>
             </div>
+
+            {showDeleteModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                    <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+                        <h3 className="text-xl font-bold text-slate-950">Delete Lead</h3>
+                        <p className="mt-2 text-sm text-slate-600">
+                            Delete this lead permanently? Linked customers, jobs, service stops, and agreements will stay in place.
+                        </p>
+                        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteModal(false)}
+                                disabled={deletingLead}
+                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleDeleteLead}
+                                disabled={deletingLead}
+                                className="inline-flex justify-center rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {deletingLead ? 'Deleting...' : 'Delete Lead'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

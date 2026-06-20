@@ -10,7 +10,27 @@ Recommended template data:
   "agreementTitle": "Monthly Residential Pool Service",
   "agreementNumber": "SA-10024",
   "agreementStatus": "Pending Review",
-  "agreementUrl": "https://app.dripdrop-poolapp.com/customer/agreements/...",
+  "agreementUrl": "https://app.dripdrop-poolapp.com/customer/service-agreements/...?...&accessToken=...",
+  "reviewRequiresAccount": false,
+  "acceptanceRequiresAccount": false,
+  "reviewAccessText": "No account is required to review the agreement from this email link.",
+  "accountAccessText": "Create or connect a homeowner account when you want portal access and billing setup.",
+  "includeInspectionReport": true,
+  "hasInspectionReport": true,
+  "inspectionReportUrl": "https://app.dripdrop-poolapp.com/customer/service-agreements/.../inspection-report?...&accessToken=...",
+  "inspectionReportTitle": "Inspection Report",
+  "inspectionReportCtaLabel": "View Inspection Report",
+  "inspectionReportSummary": "The company included the site inspection report gathered before preparing this service agreement.",
+  "customerActionUrl": "https://app.dripdrop-poolapp.com/customer/service-agreements/...",
+  "customerPortalUrl": "",
+  "claimAccountUrl": "https://app.dripdrop-poolapp.com/client/claim-account/...",
+  "homeownerSignInUrl": "https://app.dripdrop-poolapp.com/homeownerSignIn",
+  "homeownerSignUpUrl": "https://app.dripdrop-poolapp.com/homeownerSignUp?email=...",
+  "primaryCustomerUrl": "https://app.dripdrop-poolapp.com/client/claim-account/...",
+  "shouldShowClaimAccountLink": true,
+  "deliveryMode": "test",
+  "intendedCustomerEmail": "jane@example.com",
+  "actualRecipientEmail": "mespineli@dripdrop-poolapp.com",
   "sentDate": "June 2, 2026",
   "expiresAt": "June 16, 2026",
   "address01": "123 Main St",
@@ -315,7 +335,7 @@ Recommended template data:
                             <p class="header-eyebrow">Service Agreement</p>
                             <h1 class="header-title">{{companyName}} sent you a service agreement</h1>
                             <p class="header-copy">
-                                Hi {{customer}}, please review the service details, pricing, and terms below.
+                                Hi {{customer}}, please review the service details, pricing, and terms below. This private email link lets you review and accept the agreement even if you do not have a homeowner account yet.
                             </p>
                         </td>
                     </tr>
@@ -324,13 +344,41 @@ Recommended template data:
                         <td class="content">
                             <div class="section">
                                 <p class="body-copy">
-                                    This agreement covers service at the property listed below. You can review the full agreement and accept it online when you are ready.
+                                    This agreement covers service at the property listed below. You can review and accept the full agreement from the private link in this email.
                                 </p>
                             </div>
 
                             <div class="section cta-wrap">
                                 <a href="{{agreementUrl}}" class="cta-button">Review Service Agreement</a>
                             </div>
+
+                            <div class="section">
+                                <div class="fallback-note">
+                                    {{#if reviewAccessText}}{{reviewAccessText}}{{else}}No account is required to review the agreement from this email link.{{/if}}
+                                    <br>
+                                    {{#if accountAccessText}}{{accountAccessText}}{{else}}Create or connect a homeowner account when you want portal access and billing setup.{{/if}}
+                                    {{#if shouldShowClaimAccountLink}}
+                                    <br><br>
+                                    Need to connect your homeowner account?
+                                    <a href="{{claimAccountUrl}}" style="color:#1D4ED8;font-weight:700;">Connect account</a>.
+                                    {{/if}}
+                                </div>
+                            </div>
+
+                            {{#if includeInspectionReport}}
+                            <div class="section">
+                                <h2 class="section-title">{{inspectionReportTitle}}</h2>
+                                <div class="fallback-note">
+                                    {{#if hasInspectionReport}}
+                                    {{#if inspectionReportSummary}}{{inspectionReportSummary}}{{else}}The company included the site inspection report gathered before preparing this service agreement.{{/if}}
+                                    <br><br>
+                                    <a href="{{inspectionReportUrl}}" style="color:#1D4ED8;font-weight:700;">{{inspectionReportCtaLabel}}</a>
+                                    {{else}}
+                                    The company selected the inspection report option, but no linked report is available yet.
+                                    {{/if}}
+                                </div>
+                            </div>
+                            {{/if}}
 
                             <div class="section">
                                 <h2 class="section-title">Agreement Summary</h2>
@@ -467,7 +515,7 @@ Recommended template data:
 
                             <div class="section">
                                 <div class="fallback-note">
-                                    If you do not use the customer portal, you can reply to this email or contact {{companyName}} directly to review the agreement.
+                                    If you have questions before accepting, reply to this email or contact {{companyName}} directly.
                                 </div>
                             </div>
 

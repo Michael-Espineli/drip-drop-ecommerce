@@ -53,14 +53,14 @@ const MainLayout = () => {
 
     if (isAccountingWorkspace) {
         return (
-            <div className="theme-shell min-h-screen w-full">
+            <div className="theme-shell company-theme min-h-screen w-full">
                 <Outlet />
             </div>
         );
     }
     
     return (
-        <div className={`theme-shell w-full ${accountType === 'Admin' ? 'admin-theme' : ''}`}>
+        <div className={`theme-shell w-full ${accountType === 'Admin' ? 'admin-theme' : ''} ${accountType === 'Company' ? 'company-theme' : ''} ${accountType === 'Client' ? 'client-theme' : ''}`}>
             <Header
                 showSidebar={showSidebar}
                 setShowSidebar={setShowSidebar}

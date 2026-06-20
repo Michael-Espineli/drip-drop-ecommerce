@@ -74,6 +74,8 @@ const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApi
 //send Grid
 const sendGridGeneral = require('./sendGrid/general');
 exports.sendServiceAgreementEmail = sendGridGeneral.sendServiceAgreementEmail;
+exports.getPublicServiceAgreement = sendGridGeneral.getPublicServiceAgreement;
+exports.getPublicServiceAgreementInspectionReport = sendGridGeneral.getPublicServiceAgreementInspectionReport;
 exports.sendServiceReportOnFinish = sendGridGeneral.sendServiceReportOnFinish;
 exports.sendJobEstimateEmail = sendGridGeneral.sendJobEstimateEmail;
 exports.sendInvoiceEmail = sendGridGeneral.sendInvoiceEmail;
@@ -153,6 +155,7 @@ exports.getUpcomingInvoice = stripeGeneral.getUpcomingInvoice;
 const connectedAcctFunc = require('./stripe/stripeCallableForConnectedAccounts');
 exports.verifyConnectedAccountBillingReadiness = connectedAcctFunc.verifyConnectedAccountBillingReadiness;
 exports.acceptSalesServiceAgreement = connectedAcctFunc.acceptSalesServiceAgreement;
+exports.acceptPublicSalesServiceAgreement = connectedAcctFunc.acceptPublicSalesServiceAgreement;
 exports.createSalesBillingSubscriptionCheckoutSession = connectedAcctFunc.createSalesBillingSubscriptionCheckoutSession;
 exports.syncSalesBillingSubscriptionFromStripe = connectedAcctFunc.syncSalesBillingSubscriptionFromStripe;
 exports.cancelSalesBillingSubscription = connectedAcctFunc.cancelSalesBillingSubscription;
@@ -172,6 +175,7 @@ exports.setUpConnectedAccountCustomer = connectedAcctFunc.setUpConnectedAccountC
 //send Grid
 const timeBasedGeneral = require('./timeBased/general');
 exports.weeklySundayRSSCreate = timeBasedGeneral.weeklySundayRSSCreate;
+exports.hourlySalesManualInvoiceSend = timeBasedGeneral.hourlySalesManualInvoiceSend;
 exports.onRssCreated = timeBasedGeneral.onRssCreated;
 exports.onRssUpdated = timeBasedGeneral.onRssUpdated;
 exports.onRssDeleted = timeBasedGeneral.onRssDeleted;

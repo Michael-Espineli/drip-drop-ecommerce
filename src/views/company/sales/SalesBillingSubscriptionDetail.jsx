@@ -79,16 +79,59 @@ const formatDate = (value) => {
   }).format(new Date(millis));
 };
 
+const formatDateTime = (value) => {
+  const millis = toMillis(value);
+  if (!millis) return 'Not set';
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(millis));
+};
+
 const toInputDate = (value) => {
   const millis = toMillis(value);
   if (!millis) return '';
   return new Date(millis).toISOString().split('T')[0];
 };
 
+const toInputDateTime = (value) => {
+  const millis = toMillis(value);
+  if (!millis) return '';
+  const date = new Date(millis);
+  const localDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
+  return localDate.toISOString().slice(0, 16);
+};
+
 const dateFromInput = (value) => {
   if (!value) return null;
   const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+};
+
+const dateTimeFromInput = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : Timestamp.fromDate(date);
+};
+
+const paymentTermsDueDays = (paymentTerms = '') => {
+  const key = normalizeStatus(paymentTerms);
+  if (key === 'net7') return 7;
+  if (key === 'net14') return 14;
+  if (key === 'net30') return 30;
+  return 0;
+};
+
+const dueDateTimestampForTerms = (paymentTerms, baseTimestamp) => {
+  const millis = toMillis(baseTimestamp);
+  if (!millis) return null;
+  const date = new Date(millis);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + paymentTermsDueDays(paymentTerms));
+  return Timestamp.fromDate(date);
 };
 
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
@@ -173,6 +216,8 @@ const createDraft = (subscription) => ({
   nextAction: subscription?.nextAction || 'collectPaymentMethod',
   currentPeriodStart: toInputDate(subscription?.currentPeriodStart),
   currentPeriodEnd: toInputDate(subscription?.currentPeriodEnd),
+  manualBillingAutoSendEnabled: subscription?.manualBillingAutoSendEnabled === true,
+  manualBillingNextInvoiceAt: toInputDateTime(subscription?.manualBillingNextInvoiceAt || subscription?.manualBillingNextPeriodStart || subscription?.currentPeriodStart),
   cancelAtPeriodEnd: Boolean(subscription?.cancelAtPeriodEnd),
   customerCanPayImmediately: Boolean(subscription?.customerCanPayImmediately),
   applicationFeePercent: subscription?.applicationFeePercent === null || subscription?.applicationFeePercent === undefined
@@ -343,6 +388,7 @@ const SalesBillingSubscriptionDetail = () => {
     const applicationFeePercent = draft.applicationFeePercent === ''
       ? null
       : Number(draft.applicationFeePercent);
+    const manualBillingNextInvoiceAt = dateTimeFromInput(draft.manualBillingNextInvoiceAt);
 
     if (amountCents < 0) {
       toast.error('Amount cannot be negative.');
@@ -351,6 +397,11 @@ const SalesBillingSubscriptionDetail = () => {
 
     if (applicationFeePercent !== null && (!Number.isFinite(applicationFeePercent) || applicationFeePercent < 0)) {
       toast.error('Application fee percent must be a positive number.');
+      return;
+    }
+
+    if (draft.manualBillingAutoSendEnabled && !manualBillingNextInvoiceAt) {
+      toast.error('Choose when the next recurring invoice should be sent.');
       return;
     }
 
@@ -375,6 +426,10 @@ const SalesBillingSubscriptionDetail = () => {
         nextAction: draft.nextAction.trim() || 'collectPaymentMethod',
         currentPeriodStart: dateFromInput(draft.currentPeriodStart),
         currentPeriodEnd: dateFromInput(draft.currentPeriodEnd),
+        manualBillingAutoSendEnabled: Boolean(draft.manualBillingAutoSendEnabled),
+        manualBillingNextInvoiceAt,
+        manualBillingNextDueDate: dueDateTimestampForTerms(draft.paymentTerms, manualBillingNextInvoiceAt),
+        manualBillingScheduleUpdatedAt: serverTimestamp(),
         cancelAtPeriodEnd: Boolean(draft.cancelAtPeriodEnd),
         customerCanPayImmediately: Boolean(draft.customerCanPayImmediately),
         applicationFeePercent,
@@ -740,6 +795,7 @@ const SalesBillingSubscriptionDetail = () => {
                     <TextInput label="Next Action" value={draft.nextAction} onChange={(value) => updateDraft('nextAction', value)} />
                     <TextInput label="Current Period Start" value={draft.currentPeriodStart} onChange={(value) => updateDraft('currentPeriodStart', value)} type="date" />
                     <TextInput label="Current Period End" value={draft.currentPeriodEnd} onChange={(value) => updateDraft('currentPeriodEnd', value)} type="date" />
+                    <TextInput label="Next Invoice Send" value={draft.manualBillingNextInvoiceAt} onChange={(value) => updateDraft('manualBillingNextInvoiceAt', value)} type="datetime-local" />
                     <TextInput label="Application Fee Percent" value={draft.applicationFeePercent} onChange={(value) => updateDraft('applicationFeePercent', value)} type="number" min="0" step="0.01" />
                     <label className="space-y-1.5 md:col-span-2">
                       <span className="text-sm font-semibold text-slate-700">Service Locations</span>
@@ -749,6 +805,14 @@ const SalesBillingSubscriptionDetail = () => {
                         className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                         placeholder="Comma separated location references"
                       />
+                    </label>
+                    <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={draft.manualBillingAutoSendEnabled}
+                        onChange={(event) => updateDraft('manualBillingAutoSendEnabled', event.target.checked)}
+                      />
+                      Auto-send recurring invoices until autopay is active
                     </label>
                     <label className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm font-semibold text-slate-700">
                       <input
@@ -779,6 +843,8 @@ const SalesBillingSubscriptionDetail = () => {
                     <Field label="Payment Terms" value={labelize(subscription.paymentTerms)} />
                     <Field label="Invoice Delivery" value={labelize(subscription.invoiceDeliveryMethod)} />
                     <Field label="Next Action" value={labelize(subscription.nextAction)} />
+                    <Field label="Next Invoice Sends" value={formatDateTime(manualInvoicePreview?.invoiceSendAt || subscription.manualBillingNextInvoiceAt)} />
+                    <Field label="Next Invoice Due" value={formatDate(subscription.manualBillingNextDueDate || manualInvoicePreview?.dueDate)} />
                     <Field label="Customer Can Pay" value={subscription.customerCanPayImmediately ? 'Ready' : 'No'} />
                     <Field label="Current Period" value={`${formatDate(subscription.currentPeriodStart)} - ${formatDate(subscription.currentPeriodEnd)}`} />
                     <Field label="Cancel At Period End" value={subscription.cancelAtPeriodEnd ? 'Yes' : 'No'} />
@@ -828,6 +894,9 @@ const SalesBillingSubscriptionDetail = () => {
                 <dl className="mt-4 space-y-4">
                   <Field label="Manual Status" value={labelize(subscription.manualBillingStatus || (manualBillingAllowed ? 'readyToInvoice' : 'disabled'))} />
                   <Field label="Reason" value={labelize(subscription.manualBillingReason || (manualBillingAllowed ? 'manualUntilAutopay' : 'automaticBilling'))} />
+                  <Field label="Auto Send" value={subscription.manualBillingAutoSendEnabled ? 'Enabled' : 'Disabled'} />
+                  <Field label="Next Invoice Sends" value={formatDateTime(manualInvoicePreview?.invoiceSendAt || subscription.manualBillingNextInvoiceAt)} />
+                  <Field label="Next Invoice Due" value={formatDate(subscription.manualBillingNextDueDate || manualInvoicePreview?.dueDate)} />
                   <Field label="Next Invoice Period" value={manualInvoicePreview ? `${formatDate(manualInvoicePreview.periodStart)} - ${formatDate(manualInvoicePreview.periodEnd)}` : 'Not set'} />
                   <Field label="Invoice Number" value={manualInvoicePreview?.invoiceNumber} />
                   <Field label="Last Manual Invoice">
@@ -838,6 +907,7 @@ const SalesBillingSubscriptionDetail = () => {
                     ) : 'Not created'}
                   </Field>
                   <Field label="Last Generated" value={formatDate(subscription.manualBillingLastInvoiceAt)} />
+                  <Field label="Last Auto Run" value={formatDateTime(subscription.manualBillingLastAutoRunAt)} />
                 </dl>
                 <button
                   type="button"

@@ -8,9 +8,13 @@ This is the current backend email surface area and the matching Dynamic Template
 
 - Template file: `docs/sendgrid-service-agreement-template.html`
 - Callable: `sendServiceAgreementEmail`
+- Public review callable: `getPublicServiceAgreement`
+- Public inspection report callable: `getPublicServiceAgreementInspectionReport`
 - Backend template id source: `SEND_GRID_SERVICE_AGREEMENT_TEMPLATE_ID` or `SENDGRID_SERVICE_AGREEMENT_TEMPLATE_ID`
 - Current fallback id: `d-866f4368544048aeabf108413f8b8c52`
-- Notes: Current web job estimates create a sales agreement snapshot and send through this flow, so this template also covers one-time job estimates as long as the agreement title/line items/terms are populated as estimate content.
+- Customer review route: use `{{agreementUrl}}`; the backend builds `/customer/service-agreements/:agreementId?email=...&accessToken=...`.
+- Inspection report variables: `includeInspectionReport`, `hasInspectionReport`, `inspectionReportUrl`, `inspectionReportTitle`, `inspectionReportCtaLabel`, `inspectionReportSummary`. Linked service stop reports should use `/customer/service-agreements/:agreementId/inspection-report?email=...&accessToken=...`.
+- Notes: Current web job estimates create a sales agreement snapshot and send through this flow, so this template also covers one-time job estimates as long as the agreement title/line items/terms are populated as estimate content. The customer email link allows no-account review and acceptance through `getPublicServiceAgreement` and `acceptPublicSalesServiceAgreement`; portal access and billing setup still prompt sign-in or account creation.
 
 ### Service Stop Report / Weekly Service Report
 
@@ -63,4 +67,3 @@ Several newer templates may receive these fields:
 - `deliveryMode`
 - `intendedCustomerEmail`
 - `actualRecipientEmail`
-

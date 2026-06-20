@@ -432,6 +432,28 @@ const formatDate = (value) => {
     });
 };
 
+const serializeDateValue = (value) => {
+    if (!value) return null;
+    if (typeof value.toDate === "function") return value.toDate().toISOString();
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === "number" || typeof value === "string") return value;
+    return null;
+};
+
+const serializePublicValue = (value) => {
+    if (value === null || value === undefined) return value;
+    if (typeof value.toDate === "function") return value.toDate().toISOString();
+    if (value instanceof Date) return value.toISOString();
+    if (Array.isArray(value)) return value.map(serializePublicValue);
+    if (typeof value === "object") {
+        return Object.entries(value).reduce((next, [key, entry]) => ({
+            ...next,
+            [key]: serializePublicValue(entry),
+        }), {});
+    }
+    return value;
+};
+
 const labelize = (value) => {
     if (!value) return "";
     return String(value)
@@ -470,6 +492,27 @@ const inspectionReportUrlForAgreement = (agreement = {}, baseUrl = "") => {
 
     const serviceStopId = linkedInspectionServiceStopIdForAgreement(agreement);
     return serviceStopId ? buildUrl(baseUrl, `/serviceStop/detail/${serviceStopId}`) : "";
+};
+
+const publicInspectionReportUrlForAgreement = ({
+    agreement = {},
+    baseUrl = "",
+    agreementId = "",
+    email = "",
+    accessToken = "",
+}) => {
+    const explicitUrl = (
+        agreement.inspectionReportUrl ||
+        agreement.serviceAgreementInspectionReportUrl ||
+        agreement.inspectionReport?.url ||
+        ""
+    );
+    if (explicitUrl) return explicitUrl;
+
+    const serviceStopId = linkedInspectionServiceStopIdForAgreement(agreement);
+    return serviceStopId && agreementId && accessToken
+        ? buildUrl(baseUrl, `/customer/service-agreements/${agreementId}/inspection-report`, { email, accessToken })
+        : "";
 };
 
 const syncLinkedJobForAgreementStatus = async ({
@@ -864,6 +907,12 @@ const buildServiceAgreementTemplateData = ({
         agreementNumber: agreement.id || "",
         agreementStatus: labelize(agreement.status || "sent"),
         agreementUrl,
+        reviewRequiresAccount: false,
+        acceptanceRequiresAccount: false,
+        reviewAccessText: "No account is required to review the agreement from this email link.",
+        accountAccessText: customerAccess.hasLinkedCustomerAccount
+            ? "Sign in to your homeowner account when you want portal access and billing setup."
+            : "Create or connect a homeowner account when you want portal access and billing setup.",
         ...customerAccess,
         includeInspectionReport: Boolean(includeInspectionReport),
         hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
@@ -916,6 +965,248 @@ const buildServiceAgreementTemplateData = ({
         legalUrl: process.env.LEGAL_URL || "https://dripdrop-poolapp.com/legal"
     };
 };
+
+const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
+    const agreementEmail = agreement.email || agreement.customerEmail || agreement.billingEmail || "";
+    const accessToken = options.accessToken || agreement.emailDelivery?.reviewAccessToken || "";
+    const inspectionReportUrl = publicInspectionReportUrlForAgreement({
+        agreement,
+        baseUrl: options.baseUrl || "",
+        agreementId: agreement.id || "",
+        email: agreementEmail,
+        accessToken,
+    });
+    const includeInspectionReport = agreement.emailDelivery?.includeInspectionReport === true;
+
+    return {
+        id: agreement.id || "",
+        companyId: agreement.companyId || "",
+        companyName: agreement.companyName || "",
+        customerId: agreement.customerId || "",
+        customerName: agreement.customerName || "",
+        email: agreementEmail,
+        title: agreement.title || "Service Agreement",
+        description: agreement.description || "",
+        status: agreement.status || "",
+        serviceLocationIds: Array.isArray(agreement.serviceLocationIds) ? agreement.serviceLocationIds : [],
+        serviceLocationSnapshots: Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [],
+        lineItems: Array.isArray(agreement.lineItems) ? agreement.lineItems : [],
+        terms: agreement.terms || "",
+        termsList: Array.isArray(agreement.termsList) ? agreement.termsList : [],
+        termsTemplateName: agreement.termsTemplateName || "",
+        totalAmountCents: Number(agreement.totalAmountCents || agreement.rateAmountCents || 0),
+        rateAmountCents: Number(agreement.rateAmountCents || agreement.totalAmountCents || 0),
+        subtotalAmountCents: Number(agreement.subtotalAmountCents || 0),
+        taxAmountCents: Number(agreement.taxAmountCents || 0),
+        rateType: agreement.rateType || "",
+        serviceCadence: agreement.serviceCadence || "",
+        serviceCadenceCount: Number(agreement.serviceCadenceCount || 1),
+        serviceFrequencyLabel: agreement.serviceFrequencyLabel || "",
+        billingFrequency: agreement.billingFrequency || "",
+        billingFrequencyCount: Number(agreement.billingFrequencyCount || 1),
+        paymentTerms: agreement.paymentTerms || "",
+        invoiceDeliveryMethod: agreement.invoiceDeliveryMethod || "",
+        chemicalBillingMode: agreement.chemicalBillingMode || "",
+        includedChemicalKeywords: Array.isArray(agreement.includedChemicalKeywords) ? agreement.includedChemicalKeywords : [],
+        includedChemicalIds: Array.isArray(agreement.includedChemicalIds) ? agreement.includedChemicalIds : [],
+        separatelyBilledChemicalKeywords: Array.isArray(agreement.separatelyBilledChemicalKeywords) ? agreement.separatelyBilledChemicalKeywords : [],
+        separatelyBilledChemicalIds: Array.isArray(agreement.separatelyBilledChemicalIds) ? agreement.separatelyBilledChemicalIds : [],
+        customerPurchasedChemicalKeywords: Array.isArray(agreement.customerPurchasedChemicalKeywords) ? agreement.customerPurchasedChemicalKeywords : [],
+        customerPurchasedChemicalIds: Array.isArray(agreement.customerPurchasedChemicalIds) ? agreement.customerPurchasedChemicalIds : [],
+        chemicalBillingNotes: agreement.chemicalBillingNotes || "",
+        includeInspectionReport,
+        hasInspectionReport: includeInspectionReport && Boolean(inspectionReportUrl),
+        inspectionReportUrl,
+        inspectionReportTitle: agreement.emailDelivery?.inspectionReportTitle || "Inspection Report",
+        inspectionReportSummary: includeInspectionReport
+            ? "The company included the site inspection report gathered before preparing this service agreement."
+            : "",
+        startDate: serializeDateValue(agreement.startDate),
+        expiresAt: serializeDateValue(agreement.expiresAt),
+        sentAt: serializeDateValue(agreement.sentAt),
+        createdAt: serializeDateValue(agreement.createdAt),
+        acceptedAt: serializeDateValue(agreement.acceptedAt),
+        acceptedByUserName: agreement.acceptedByUserName || "",
+        acceptedByEmail: agreement.acceptedByEmail || "",
+        supersedesAgreementId: agreement.supersedesAgreementId || "",
+        previousAgreementId: agreement.previousAgreementId || "",
+        renewalSourceAgreementId: agreement.renewalSourceAgreementId || "",
+        billingSubscriptionId: agreement.billingSubscriptionId || "",
+        billingFlowStatus: agreement.billingFlowStatus || "",
+        billingFlowNextAction: agreement.billingFlowNextAction || "",
+        customerCanPayImmediately: agreement.customerCanPayImmediately === true,
+    };
+};
+
+const loadPublicServiceAgreementForToken = async ({
+    agreementId = "",
+    accessToken = "",
+    email = "",
+} = {}) => {
+    if (!agreementId) {
+        throw new HttpsError("invalid-argument", "Missing agreementId.");
+    }
+
+    if (!accessToken) {
+        throw new HttpsError("invalid-argument", "Open the review link from the service agreement email.");
+    }
+
+    const agreementDoc = await db.collection("salesAgreements").doc(agreementId).get();
+
+    if (!agreementDoc.exists) {
+        throw new HttpsError("not-found", "Service agreement not found.");
+    }
+
+    const agreement = {
+        id: agreementDoc.id,
+        ...agreementDoc.data()
+    };
+    const requestedEmail = normalizeEmail(email);
+    const agreementEmail = normalizeEmail(agreement.email || agreement.customerEmail || agreement.billingEmail);
+    const savedAccessToken = String(agreement.emailDelivery?.reviewAccessToken || "").trim();
+
+    if (!savedAccessToken || savedAccessToken !== accessToken) {
+        throw new HttpsError("permission-denied", "This service agreement review link is invalid or has been replaced by a newer email.");
+    }
+
+    if (requestedEmail && agreementEmail && agreementEmail !== requestedEmail) {
+        throw new HttpsError("permission-denied", "This email address does not match the service agreement recipient.");
+    }
+
+    if (normalizeStatusKey(agreement.status) === "draft") {
+        throw new HttpsError("failed-precondition", "This service agreement has not been sent yet.");
+    }
+
+    return agreement;
+};
+
+const docToPublicData = (docSnap) => (
+    docSnap?.exists
+        ? {
+            id: docSnap.id,
+            ...serializePublicValue(docSnap.data() || {}),
+        }
+        : null
+);
+
+const docsToPublicData = (querySnapshot) => (
+    querySnapshot.docs.map((docSnap) => ({
+        id: docSnap.id,
+        ...serializePublicValue(docSnap.data() || {}),
+    }))
+);
+
+const buildPublicInspectionReportSnapshot = async (agreement = {}) => {
+    if (agreement.emailDelivery?.includeInspectionReport !== true) {
+        throw new HttpsError("failed-precondition", "This service agreement email did not include an inspection report.");
+    }
+
+    const companyId = agreement.companyId || "";
+    const serviceStopId = linkedInspectionServiceStopIdForAgreement(agreement);
+
+    if (!companyId || !serviceStopId) {
+        throw new HttpsError("not-found", "No linked inspection report was found for this service agreement.");
+    }
+
+    const companyRef = db.collection("companies").doc(companyId);
+    const serviceStopRef = companyRef.collection("serviceStops").doc(serviceStopId);
+    const [companyDoc, serviceStopDoc] = await Promise.all([
+        companyRef.get(),
+        serviceStopRef.get(),
+    ]);
+
+    if (!serviceStopDoc.exists) {
+        throw new HttpsError("not-found", "Inspection service stop not found.");
+    }
+
+    const serviceStopData = {
+        id: serviceStopDoc.id,
+        ...serviceStopDoc.data(),
+    };
+    const mainCompanyId = serviceStopData.mainCompanyId || companyId;
+    const stopDataSnapshot = await db
+        .collection("companies")
+        .doc(mainCompanyId)
+        .collection("stopData")
+        .where("serviceStopId", "==", serviceStopId)
+        .get();
+    const stopDataRecords = docsToPublicData(stopDataSnapshot);
+    const serviceLocationId = (
+        serviceStopData.serviceLocationId ||
+        stopDataRecords[0]?.serviceLocationId ||
+        agreement.serviceLocationIds?.[0] ||
+        ""
+    );
+
+    let serviceLocation = null;
+    let bodiesOfWater = [];
+    let equipment = [];
+
+    if (serviceLocationId) {
+        const [serviceLocationDoc, bodyOfWaterSnapshot, equipmentSnapshot] = await Promise.all([
+            companyRef.collection("serviceLocations").doc(serviceLocationId).get(),
+            companyRef.collection("bodiesOfWater").where("serviceLocationId", "==", serviceLocationId).get(),
+            companyRef.collection("equipment").where("serviceLocationId", "==", serviceLocationId).get(),
+        ]);
+
+        serviceLocation = docToPublicData(serviceLocationDoc);
+        bodiesOfWater = docsToPublicData(bodyOfWaterSnapshot);
+        equipment = docsToPublicData(equipmentSnapshot);
+    }
+
+    const tasksSnapshot = await serviceStopRef.collection("tasks").get();
+    const companyData = companyDoc.exists ? companyDoc.data() || {} : {};
+
+    return {
+        agreementId: agreement.id || "",
+        agreementTitle: agreement.title || "Service Agreement",
+        companyId,
+        companyName: agreement.companyName || companyData.name || companyData.companyName || "Your Pool Company",
+        customerName: agreement.customerName || serviceStopData.customerName || "",
+        serviceStopId,
+        serviceStop: serializePublicValue(serviceStopData),
+        serviceLocation,
+        bodiesOfWater,
+        equipment,
+        stopDataRecords,
+        tasks: docsToPublicData(tasksSnapshot),
+    };
+};
+
+exports.getPublicServiceAgreement = functions.https.onCall(async (data) => {
+    const payload = getCallableData(data);
+    const agreementId = String(payload.agreementId || "").trim();
+    const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
+    const agreement = await loadPublicServiceAgreementForToken({
+        agreementId,
+        accessToken,
+        email: payload.email,
+    });
+
+    return {
+        status: 200,
+        agreement: publicServiceAgreementSnapshot(agreement, {
+            accessToken,
+            baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+        }),
+    };
+});
+
+exports.getPublicServiceAgreementInspectionReport = functions.https.onCall(async (data) => {
+    const payload = getCallableData(data);
+    const agreementId = String(payload.agreementId || "").trim();
+    const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
+    const agreement = await loadPublicServiceAgreementForToken({
+        agreementId,
+        accessToken,
+        email: payload.email,
+    });
+
+    return {
+        status: 200,
+        report: await buildPublicInspectionReportSnapshot(agreement),
+    };
+});
 
 //----------Send Grid Functions//----------Send Grid Functions
 exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context) => {
@@ -1004,11 +1295,19 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
 
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
+    const reviewAccessToken = uuidv4();
     const agreementUrl = buildUrl(agreementBaseUrl, `/customer/service-agreements/${agreementId}`, {
         email: agreement.email,
+        accessToken: reviewAccessToken,
     });
     const inspectionReportUrl = includeInspectionReport
-        ? inspectionReportUrlForAgreement(agreement, agreementBaseUrl)
+        ? publicInspectionReportUrlForAgreement({
+            agreement,
+            baseUrl: agreementBaseUrl,
+            agreementId,
+            email: agreement.email,
+            accessToken: reviewAccessToken,
+        })
         : "";
     const customerAccess = await buildCustomerAccessTemplateData({
         companyId,
@@ -1075,9 +1374,12 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
             replyTo: replyToEmail,
             messageId,
             agreementUrl,
+            reviewAccessToken,
+            reviewAccessTokenCreatedAt: sentAt,
             includeInspectionReport,
             hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
             inspectionReportUrl,
+            inspectionReportTitle: "Inspection Report",
             customerActionUrl: customerAccess.customerActionUrl,
             customerPortalUrl: customerAccess.customerPortalUrl,
             claimAccountUrl: customerAccess.claimAccountUrl,
@@ -1227,19 +1529,11 @@ const buildSalesInvoiceFallbackHtml = (templateData) => {
     `;
 };
 
-exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => {
-    console.log("Send Sales Invoice Email");
-
-    const callableAuth = await getCallableAuth(
-        data,
-        context,
-        "You must be signed in to send an invoice."
-    );
-
-    const payload = getCallableData(data);
-    const companyId = payload.companyId;
-    const invoiceId = payload.invoiceId;
-    const invoiceBaseUrl = payload.invoiceBaseUrl || process.env.SALES_INVOICE_BASE_URL || process.env.APP_BASE_URL || "";
+const sendSalesInvoiceEmailCore = async ({
+    companyId,
+    invoiceId,
+    invoiceBaseUrl = process.env.SALES_INVOICE_BASE_URL || process.env.APP_BASE_URL || "",
+}) => {
     const templateId = process.env.SEND_GRID_SALES_INVOICE_TEMPLATE_ID || process.env.SENDGRID_SALES_INVOICE_TEMPLATE_ID || "";
 
     if (!companyId) {
@@ -1248,10 +1542,6 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
 
     if (!invoiceId) {
         throw new HttpsError("invalid-argument", "Missing invoiceId.");
-    }
-
-    if (!(await userHasCompanyAccess(callableAuth.uid, companyId))) {
-        throw new HttpsError("permission-denied", "You do not have access to send email for this company.");
     }
 
     if (!invoiceBaseUrl) {
@@ -1379,6 +1669,37 @@ exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => 
         testMode: emailDelivery.testMode,
         templateMode
     };
+};
+
+exports.sendSalesInvoiceEmailForAutomation = sendSalesInvoiceEmailCore;
+
+exports.sendSalesInvoiceEmail = functions.https.onCall(async (data, context) => {
+    console.log("Send Sales Invoice Email");
+
+    const callableAuth = await getCallableAuth(
+        data,
+        context,
+        "You must be signed in to send an invoice."
+    );
+
+    const payload = getCallableData(data);
+    const companyId = payload.companyId;
+    const invoiceId = payload.invoiceId;
+    const invoiceBaseUrl = payload.invoiceBaseUrl || process.env.SALES_INVOICE_BASE_URL || process.env.APP_BASE_URL || "";
+
+    if (!companyId) {
+        throw new HttpsError("invalid-argument", "Missing companyId.");
+    }
+
+    if (!invoiceId) {
+        throw new HttpsError("invalid-argument", "Missing invoiceId.");
+    }
+
+    if (!(await userHasCompanyAccess(callableAuth.uid, companyId))) {
+        throw new HttpsError("permission-denied", "You do not have access to send email for this company.");
+    }
+
+    return sendSalesInvoiceEmailCore({ companyId, invoiceId, invoiceBaseUrl });
 });
 
 exports.sendServiceReportOnFinish = functions.https.onCall(async (data, context) => {

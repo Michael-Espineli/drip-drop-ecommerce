@@ -494,6 +494,15 @@ const acceptanceSourceLabel = (source) => {
   return labelize(source || 'Not accepted');
 };
 
+const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
+  if (agreement.inspectionServiceStopId) return agreement.inspectionServiceStopId;
+  if (agreement.serviceAgreementEstimateServiceStopId) return agreement.serviceAgreementEstimateServiceStopId;
+  if (agreement.estimateServiceStopId) return agreement.estimateServiceStopId;
+  if (agreement.serviceStopId) return agreement.serviceStopId;
+  if (Array.isArray(agreement.serviceStopIds) && agreement.serviceStopIds.length) return agreement.serviceStopIds[0];
+  return '';
+};
+
 const SalesAgreementDetail = () => {
   const { agreementId } = useParams();
   const navigate = useNavigate();
@@ -706,6 +715,18 @@ const SalesAgreementDetail = () => {
   );
   const totalAmountCents = agreement?.totalAmountCents ?? agreement?.rateAmountCents ?? subtotalAmountCents;
   const emailDelivery = agreement?.emailDelivery || {};
+  const linkedInspectionServiceStopId = linkedInspectionServiceStopIdForAgreement(agreement || {});
+  const inspectionReportUrl = (
+    emailDelivery.inspectionReportUrl ||
+    agreement?.inspectionReportUrl ||
+    agreement?.serviceAgreementInspectionReportUrl ||
+    agreement?.inspectionReport?.url ||
+    ''
+  );
+  const inspectionReportLink = inspectionReportUrl || (
+    linkedInspectionServiceStopId ? `/company/serviceStops/detail/${linkedInspectionServiceStopId}` : ''
+  );
+  const hasLinkedInspectionReport = Boolean(inspectionReportLink);
   const emailTestMode = emailDelivery.testMode === true || emailDelivery.testMode === 'true';
   const currentStatusKey = normalizeStatus(agreement?.status);
   const isAccepted = currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted);
@@ -801,6 +822,36 @@ const SalesAgreementDetail = () => {
     normalizeStatus(agreement.status) !== normalizeStatus(SalesAgreementStatus.accepted) &&
     !['canceled', 'rejected', 'expired', 'superseded'].includes(normalizeStatus(agreement.status))
   );
+  const sendEmailDisabledReasons = [];
+
+  if (!agreement) {
+    sendEmailDisabledReasons.push('Agreement is still loading.');
+  }
+  if (agreement && !user) {
+    sendEmailDisabledReasons.push('You must be signed in to send this agreement.');
+  }
+  if (companyMismatch) {
+    sendEmailDisabledReasons.push('Select the company that owns this agreement.');
+  }
+  if (editing) {
+    sendEmailDisabledReasons.push('Save or cancel edit mode before sending.');
+  }
+  readinessItems
+    .filter((item) => !item.ready)
+    .forEach((item) => sendEmailDisabledReasons.push(`${item.title}: ${item.helper}`));
+  if (sending) {
+    sendEmailDisabledReasons.push('Email send is already in progress.');
+  }
+  if (currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted)) {
+    sendEmailDisabledReasons.push('Accepted agreements cannot be sent again from this button.');
+  }
+  if (['canceled', 'rejected', 'expired', 'superseded'].includes(currentStatusKey)) {
+    sendEmailDisabledReasons.push(`Agreement status is ${labelize(agreement?.status || currentStatusKey)}.`);
+  }
+
+  const sendEmailButtonTitle = canSend
+    ? 'Send service agreement email'
+    : `Send Email is disabled:\n${sendEmailDisabledReasons.join('\n') || 'No send reason is available.'}`;
   const canMarkAccepted = Boolean(
     agreement &&
     user &&
@@ -1796,40 +1847,84 @@ const SalesAgreementDetail = () => {
                     }}
                     className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
                       canScheduleRecurringRoute
-                        ? 'bg-slate-950 text-white hover:bg-slate-800'
-                        : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                        ? 'bg-blue-600 text-white hover:bg-blue-700'
+                        : 'cursor-not-allowed border border-slate-400 bg-slate-200 text-slate-700'
                     }`}
                   >
                     <FaRoute className="text-xs" />
                     Schedule Route
                   </Link>
                 )}
-                <button
-                  type="button"
-                  onClick={sendAgreementEmail}
-                  disabled={!canSend}
-                  className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaEnvelope className="text-xs" />
-                  {sending ? 'Sending...' : 'Send Email'}
-                </button>
+                <span className="inline-flex" title={sendEmailButtonTitle}>
+                  <button
+                    type="button"
+                    onClick={sendAgreementEmail}
+                    disabled={!canSend}
+                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <FaEnvelope className="text-xs" />
+                    {sending ? 'Sending...' : 'Send Email'}
+                  </button>
+                </span>
               </div>
 
-              <label className="inline-flex max-w-md items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={includeInspectionReport}
-                  onChange={(event) => setIncludeInspectionReport(event.target.checked)}
-                  disabled={sending}
-                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                />
-                <span>
-                  Include inspection report
-                  <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                    Adds the linked site inspection report to the service agreement email when one is available.
+              <div className="w-full max-w-md space-y-2">
+                <label className="inline-flex w-full items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={includeInspectionReport}
+                    onChange={(event) => setIncludeInspectionReport(event.target.checked)}
+                    disabled={sending}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                  />
+                  <span>
+                    Include inspection report
+                    <span className="mt-0.5 block text-xs font-normal text-slate-500">
+                      Adds the linked site inspection report to the service agreement email and public review page.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+
+                {includeInspectionReport && (
+                  <div
+                    className={`rounded-md border px-3 py-2 text-xs ${
+                      hasLinkedInspectionReport
+                        ? 'border-blue-200 bg-blue-50 text-blue-800'
+                        : 'border-amber-200 bg-amber-50 text-amber-800'
+                    }`}
+                  >
+                    <p className="font-semibold">
+                      {hasLinkedInspectionReport
+                        ? 'Inspection report will be included.'
+                        : 'No linked inspection report was found yet.'}
+                    </p>
+                    <p className="mt-1">
+                      {hasLinkedInspectionReport
+                        ? 'The email and public agreement page will show an Inspection Report section.'
+                        : 'The email can still send, but the customer will see that no linked report is available yet.'}
+                    </p>
+                    {hasLinkedInspectionReport && (
+                      inspectionReportUrl ? (
+                        <a
+                          href={inspectionReportUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 inline-flex font-semibold text-blue-700 underline"
+                        >
+                          Open inspection report
+                        </a>
+                      ) : (
+                        <Link
+                          to={inspectionReportLink}
+                          className="mt-2 inline-flex font-semibold text-blue-700 underline"
+                        >
+                          Open linked service stop
+                        </Link>
+                      )
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </section>
@@ -1917,8 +2012,8 @@ const SalesAgreementDetail = () => {
                         }}
                         className={`inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition sm:w-auto ${
                           canScheduleRecurringRoute
-                            ? 'bg-slate-950 text-white hover:bg-slate-800'
-                            : 'cursor-not-allowed bg-slate-300 text-slate-500'
+                            ? 'bg-blue-600 text-white hover:bg-blue-700'
+                            : 'cursor-not-allowed border border-slate-400 bg-slate-200 text-slate-700'
                         }`}
                       >
                         <FaRoute className="text-xs" />

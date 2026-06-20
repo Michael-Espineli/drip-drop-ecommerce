@@ -5,7 +5,6 @@ import {
     doc,
     getDoc,
     updateDoc,
-    deleteDoc,
     collection,
     setDoc,
     serverTimestamp,
@@ -29,7 +28,6 @@ const SERVICE_STOP_OPERATION_STATUS = {
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
 const panelClass = 'rounded-lg border border-gray-200 bg-white p-5 shadow-sm';
 const actionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
-const secondaryActionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50';
 
 const isLeadServiceEstimateVisit = (visit = {}) => {
     const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
@@ -195,7 +193,7 @@ const PreEstimateVisitLockedCard = ({ lead }) => {
                     Create the customer first before scheduling a fact-finding service estimate.
                 </p>
 
-                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                <div className="rounded-md border border-amber-200 bg-amber-50 p-4">
                     <p className="text-sm font-medium text-amber-800">
                         A company customer profile is required before this visit can be created. Use the Lead Conversion action on this page to create and link the customer from the homeowner request.
                     </p>
@@ -216,8 +214,6 @@ export default function LeadDetail() {
     const [estimate, setEstimate] = useState(null);
     const [loading, setLoading] = useState(true);
     const [estimateVisit, setEstimateVisit] = useState(null);
-    const [showDeleteModal, setShowDeleteModal] = useState(false);
-    const [deletingLead, setDeletingLead] = useState(false);
 
     const [savingDescription, setSavingDescription] = useState(false);
     const [descriptionDraft, setDescriptionDraft] = useState('');
@@ -428,22 +424,6 @@ export default function LeadDetail() {
         }
     };
 
-    const handleDeleteLead = async () => {
-        if (!requirePermission("616", "delete leads")) return;
-
-        setDeletingLead(true);
-        try {
-            await deleteDoc(doc(db, 'homeownerServiceRequests', leadId));
-            toast.success('Lead deleted.');
-            navigate('/company/leads');
-        } catch (error) {
-            console.error('Error deleting lead:', error);
-            toast.error('Failed to delete lead.');
-            setDeletingLead(false);
-            setShowDeleteModal(false);
-        }
-    };
-
     if (loading) {
         return (
             <div className="flex justify-center items-center h-screen">
@@ -579,7 +559,7 @@ export default function LeadDetail() {
                     {can("22") && (
                         <button
                             onClick={handleCreateJobFromLead}
-                            className={secondaryActionButtonClass}
+                            className={actionButtonClass}
                         >
                             Create Job
                         </button>
@@ -1007,35 +987,6 @@ export default function LeadDetail() {
                     </div>
                 </div>
             </div>
-
-            {showDeleteModal && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-40 p-4">
-                    <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
-                        <h3 className="text-xl font-bold text-gray-900">Delete Lead</h3>
-                        <p className="mt-3 text-sm text-gray-600">
-                            Delete this lead permanently? Any linked customer, estimate, or scheduled visit will stay in place.
-                        </p>
-                        <div className="mt-6 flex justify-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setShowDeleteModal(false)}
-                                disabled={deletingLead}
-                                className="rounded-md bg-gray-200 px-4 py-2 text-sm font-semibold text-gray-800 transition hover:bg-gray-300 disabled:opacity-60"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                type="button"
-                                onClick={handleDeleteLead}
-                                disabled={deletingLead}
-                                className="rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-60"
-                            >
-                                {deletingLead ? 'Deleting...' : 'Delete'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
