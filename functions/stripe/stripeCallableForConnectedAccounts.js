@@ -13,9 +13,11 @@ const { title } = require("process");
 const sgMail = require("@sendgrid/mail");
 
 const db = admin.firestore(); 
+const {
+  createStripeProxy,
+} = require("./stripeClient");
 
-// CORRECTED: Use the Stripe API key from the environment variables loaded in index.js
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+const stripe = createStripeProxy();
 
 const salesCollectionNames = {
   billingProfiles: 'salesBillingProfiles',
@@ -135,6 +137,16 @@ const getOrCreateConnectedStripeCustomer = async ({ subscription, connectedAccou
 };
 
 const normalizeEmail = (value) => String(value || '').trim().toLowerCase();
+
+const normalizeStripeAccountId = (value) => {
+  const id = typeof value === 'string' ? value.trim() : '';
+  return id.startsWith('acct_') ? id : '';
+};
+
+const getCompanyConnectedAccountId = (companyData = {}) => (
+  normalizeStripeAccountId(companyData.stripeConnectedAccountId) ||
+  normalizeStripeAccountId(companyData.stripeConnectAccountId)
+);
 
 const getCallableData = (data) => data?.data || data || {};
 
@@ -1748,51 +1760,122 @@ exports.updateSalesBillingSubscriptionStripeItems = functions.https.onCall(async
 
 
 exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(data, context) => {
+    const callableAuth = await getCallableAuth(
+      data,
+      context,
+      'You must be signed in to check Stripe billing readiness.'
+    );
     const receivedData = data.data || data;
-    const connectedAccount = receivedData.connectedAccount || receivedData.stripeConnectedAccountId;
+    const companyId = String(receivedData.companyId || '').trim();
+
+    if (!companyId) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        'A company id is required.'
+      );
+    }
+
+    const companySnapshot = await db.collection('companies').doc(companyId).get();
+
+    if (!companySnapshot.exists) {
+      throw new functions.https.HttpsError(
+        'not-found',
+        'Company was not found.'
+      );
+    }
+
+    const companyData = companySnapshot.data() || {};
+    const companyAccountId = getCompanyConnectedAccountId(companyData);
+    const connectedAccount = normalizeStripeAccountId(
+      receivedData.accountId ||
+      receivedData.connectedAccount ||
+      receivedData.stripeConnectedAccountId ||
+      companyAccountId
+    );
 
     if (!connectedAccount) {
       throw new functions.https.HttpsError(
-        'invalid-argument',
-        'A Stripe connected account id is required.'
+        'failed-precondition',
+        'This company does not have a Stripe connected account yet.'
+      );
+    }
+
+    if (companyAccountId && connectedAccount !== companyAccountId) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'Connected account does not belong to this company.'
+      );
+    }
+
+    const hasAccess = companyData.ownerId === callableAuth.uid || await userHasCompanyAccess(callableAuth.uid, companyId);
+
+    if (!hasAccess) {
+      throw new functions.https.HttpsError(
+        'permission-denied',
+        'You do not have access to this company Stripe account.'
       );
     }
 
     try {
       const account = await stripe.accounts.retrieve(connectedAccount);
       const requirements = account.requirements || {};
+      const futureRequirements = account.future_requirements || {};
       const capabilities = account.capabilities || {};
       const currentlyDue = requirements.currently_due || [];
       const pastDue = requirements.past_due || [];
+      const pendingVerification = requirements.pending_verification || [];
       const errors = requirements.errors || [];
       const cardPaymentsCapability = capabilities.card_payments || 'unknown';
       const transfersCapability = capabilities.transfers || 'unknown';
       const canCreateCharges = Boolean(account.charges_enabled);
       const canProcessCardPayments = cardPaymentsCapability === 'active';
       const canReceivePayouts = Boolean(account.payouts_enabled);
+      const canTransferFunds = transfersCapability === 'active';
       const hasBlockingRequirements = currentlyDue.length > 0 || pastDue.length > 0 || errors.length > 0;
       const canBillCustomers = canCreateCharges && canProcessCardPayments && !hasBlockingRequirements;
+      const canRunLiveBilling = (
+        Boolean(account.livemode) &&
+        canBillCustomers &&
+        canReceivePayouts &&
+        canTransferFunds &&
+        Boolean(process.env.STRIPE_WEBHOOK_SECRET)
+      );
 
       return {
         accountId: account.id,
         canBillCustomers,
+        canRunLiveBilling,
+        livemode: Boolean(account.livemode),
         chargesEnabled: canCreateCharges,
         cardPaymentsEnabled: canProcessCardPayments,
         payoutsEnabled: canReceivePayouts,
+        transfersEnabled: canTransferFunds,
         detailsSubmitted: Boolean(account.details_submitted),
         disabledReason: requirements.disabled_reason || '',
         currentlyDue,
         pastDue,
         eventuallyDue: requirements.eventually_due || [],
-        pendingVerification: requirements.pending_verification || [],
+        pendingVerification,
         errors,
+        futureRequirements: {
+          currentlyDue: futureRequirements.currently_due || [],
+          eventuallyDue: futureRequirements.eventually_due || [],
+          pastDue: futureRequirements.past_due || [],
+          pendingVerification: futureRequirements.pending_verification || [],
+          errors: futureRequirements.errors || [],
+        },
         capabilities: {
           cardPayments: cardPaymentsCapability,
           transfers: transfersCapability,
         },
+        platform: {
+          webhookSigningSecretConfigured: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+          stripeApiKeyConfigured: Boolean(process.env.STRIPE_API_KEY || process.env.STRIPE_SECRET_KEY || process.env.stripe_secret_key),
+        },
         defaultCurrency: account.default_currency || '',
         country: account.country || '',
         businessType: account.business_type || '',
+        companyId,
       };
     } catch(error) {
       console.error('Unable to verify connected account billing readiness', error);

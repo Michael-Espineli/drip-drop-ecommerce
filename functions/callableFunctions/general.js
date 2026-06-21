@@ -562,7 +562,11 @@ const copyUniversalReadingAndDosageTemplatesToCompany = async (companyId) => {
 // const publishableStripeKey = defineSecret('pk_live_51SR0FQAarMCMczenzad9KHz2dWM4tcMlSN1aquZVdN83md983TatYFy02H3usQAWeWldDMmlnPbVw5PvmhdjsXbn00sJx5TPCF');
 //Test
 
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+const {
+  createStripeProxy,
+} = require("../stripe/stripeClient");
+
+const stripe = createStripeProxy();
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 
@@ -3044,13 +3048,31 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
   let receivedData = data.data || data || {}
   console.log("Received Data")
   console.log(receivedData)
-  let ownerId = receivedData.ownerId
-  let ownerName = receivedData.ownerName
+  const authUserId = context.auth?.uid;
+  if (!authUserId) {
+    throw new functions.https.HttpsError(
+      "unauthenticated",
+      "You must be signed in to create a company."
+    );
+  }
+
+  let ownerId = receivedData.ownerId || authUserId
+  if (ownerId !== authUserId) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "You can only create a company for your own user account."
+    );
+  }
+
+  let ownerName = receivedData.ownerName || context.auth.token?.name || ""
   let companyName = receivedData.companyName
-  let email = receivedData.email
-  let phoneNumber = receivedData.phoneNumber
-  let zipCodes = receivedData.zipCodes
-  let services = receivedData.services
+  let email = receivedData.email || context.auth.token?.email || ""
+  let phoneNumber = receivedData.phoneNumber || ""
+  let zipCodes = Array.isArray(receivedData.zipCodes) ? receivedData.zipCodes : []
+  let services = Array.isArray(receivedData.services) ? receivedData.services : []
+  let address = receivedData.address || null
+  let websiteURL = receivedData.websiteURL || ""
+  let yelpURL = receivedData.yelpURL || ""
 
   if (!(await isCompanyCreationEnabled())) {
     throw new functions.https.HttpsError(
@@ -3075,14 +3097,18 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       phoneNumber: phoneNumber,
       verified: false,
       hideFromBrowse: false,
+      address: address,
       serviceZipCodes: zipCodes,
       services: services,
       accountType: "Free",
       paidUntil: new Date(),
       status: "Free",
+      stripeConnectedAccountId: "",
+      stripeConnectedAccountStatus: "Not Started",
+      stripeConnectAccountId: "",
       stripeConnectAccountStatus: "Not Started",
-      yelpURL: "",
-      websiteURL: ""
+      yelpURL: yelpURL,
+      websiteURL: websiteURL
 
     }
     await getFirestore()
@@ -3405,12 +3431,24 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     const customer = await stripe.customers.create({
       email: email,
       name: ownerName,
+      metadata: {
+        userId: ownerId,
+        companyId,
+      },
     });
 
     const compDocRef2 = db.collection('companies').doc(companyId);
-    await compDocRef2.set({
-      stripeId: customer.id, // CORRECTED FIELD NAME
-    }, { merge: true });
+    const userDocRef = db.collection('users').doc(ownerId);
+    await Promise.all([
+      userDocRef.set({
+        stripeId: customer.id,
+        stripeCustomerId: customer.id,
+      }, { merge: true }),
+      compDocRef2.set({
+        stripeId: customer.id,
+        stripeCustomerId: customer.id,
+      }, { merge: true }),
+    ]);
 
     console.log(`Successfully Created Stripe customer: ${customer.id}`);
     //2. Create Connected Account. Check out createNewStripeAccount for refrence
@@ -3422,8 +3460,14 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         card_payments: { requested: true },
         transfers: { requested: true },
       },
-      // ... other account details as needed
-
+      business_profile: {
+        name: companyName || undefined,
+        url: websiteURL || undefined,
+      },
+      metadata: {
+        companyId,
+        ownerId,
+      },
     });
     console.log('account: ', account)
 
@@ -3431,6 +3475,11 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     // 3. Save the Stripe customer ID to the user's document in Firestore
     await compDocRef2.set({
       stripeConnectedAccountId: account.id,
+      stripeConnectedAccountStatus: "Not Started",
+      stripeConnectAccountId: account.id,
+      stripeConnectAccountStatus: "Not Started",
+      stripeConnectedAccountOwnerId: ownerId,
+      stripeConnectedAccountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
     }, { merge: true });
 
     console.log(`Stripe customer ID ${customer.id} saved for user ${ownerId}`);
@@ -3458,7 +3507,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
             price: 0,
             started: new Date(),
             status: "active",
-            stripeCustomerId: "",
+            stripeCustomerId: customer.id,
             stripePriceId: "",
             stripeProductId: "",
             stripeSubscriptionId: "",
@@ -3476,7 +3525,8 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
     console.log("Sucessfully Created Company")
 
     return {
-      status: 200,
+      status: "success",
+      statusCode: 200,
       companyId: companyId
     };
   } catch (error) {

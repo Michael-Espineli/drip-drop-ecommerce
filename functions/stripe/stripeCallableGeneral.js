@@ -6,9 +6,11 @@ const { defineSecret } = require('firebase-functions/params');
 
 const admin = require("firebase-admin");
 const db = admin.firestore();
+const {
+    createStripeProxy,
+} = require("./stripeClient");
 
-// CORRECTED: Use the Stripe API key from the environment variables loaded in index.js
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+const stripe = createStripeProxy();
 
 const normalizeStripeCustomerId = (value) => {
     const id = typeof value === 'string' ? value.trim() : '';
@@ -20,11 +22,118 @@ const getCompanyStripeCustomerId = (companyData = {}) => (
     normalizeStripeCustomerId(companyData.stripeId)
 );
 
+const getUserStripeCustomerId = (userData = {}) => (
+    normalizeStripeCustomerId(userData.stripeCustomerId) ||
+    normalizeStripeCustomerId(userData.stripeId)
+);
+
+const normalizeStripeAccountId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id.startsWith('acct_') ? id : '';
+};
+
+const getCompanyConnectedAccountId = (companyData = {}) => (
+    normalizeStripeAccountId(companyData.stripeConnectedAccountId) ||
+    normalizeStripeAccountId(companyData.stripeConnectAccountId)
+);
+
+const getCallableData = (data) => data?.data || data || {};
+
+const getStripeErrorMessage = (error, fallbackMessage) => (
+    error?.raw?.message ||
+    error?.message ||
+    fallbackMessage
+);
+
+const buildStripeRedirectUrl = (value, fallbackPath) => {
+    const fallbackUrl = `https://dripdrop-poolapp.com${fallbackPath}`;
+
+    try {
+        const url = new URL(String(value || fallbackUrl));
+        const isAllowedHttpLocalhost = url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname);
+        return url.protocol === 'https:' || isAllowedHttpLocalhost ? url.toString() : fallbackUrl;
+    } catch (error) {
+        return fallbackUrl;
+    }
+};
+
+const accountHasOpenRequirements = (account = {}) => {
+    const requirements = account.requirements || {};
+    const currentlyDue = requirements.currently_due || [];
+    const pastDue = requirements.past_due || [];
+    const pendingVerification = requirements.pending_verification || [];
+    const errors = requirements.errors || [];
+
+    return (
+        currentlyDue.length > 0 ||
+        pastDue.length > 0 ||
+        pendingVerification.length > 0 ||
+        errors.length > 0 ||
+        Boolean(requirements.disabled_reason)
+    );
+};
+
+const requireCallableAuth = async (data, context) => {
+    if (context.auth?.uid) {
+        return {
+            uid: context.auth.uid,
+            token: context.auth.token || {},
+        };
+    }
+
+    const payload = getCallableData(data);
+    const authorizationHeader =
+        context.rawRequest?.headers?.authorization ||
+        context.rawRequest?.headers?.Authorization ||
+        '';
+    const bearerToken = String(authorizationHeader).startsWith('Bearer ')
+        ? String(authorizationHeader).slice('Bearer '.length).trim()
+        : '';
+    const idToken = [
+        payload.idToken,
+        payload.auth?.idToken,
+        payload.data?.idToken,
+        bearerToken,
+    ].find((candidate) => String(candidate || '').trim());
+
+    if (!idToken) {
+        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    }
+
+    try {
+        const decodedToken = await admin.auth().verifyIdToken(idToken);
+        return {
+            uid: decodedToken.uid,
+            token: decodedToken,
+        };
+    } catch (error) {
+        console.error('Unable to verify Stripe callable auth token', error);
+        throw new functions.https.HttpsError('unauthenticated', 'The function must be called while authenticated.');
+    }
+};
+
+const getOwnerCompanyForStripe = async ({ companyId, uid }) => {
+    if (!companyId) {
+        throw new functions.https.HttpsError('invalid-argument', 'companyId is required.');
+    }
+
+    const companyRef = db.collection('companies').doc(companyId);
+    const companySnap = await companyRef.get();
+
+    if (!companySnap.exists) {
+        throw new functions.https.HttpsError('not-found', 'Company not found.');
+    }
+
+    const companyData = companySnap.data() || {};
+    if (companyData.ownerId !== uid) {
+        throw new functions.https.HttpsError('permission-denied', 'Only the company owner can manage the connected Stripe account.');
+    }
+
+    return { companyRef, companyData };
+};
+
 const resolveOrCreateStripeCustomer = async ({ providedCustomerId, companyId, userId, authEmail }) => {
     const providedStripeCustomerId = normalizeStripeCustomerId(providedCustomerId);
-    if (providedStripeCustomerId) {
-        return providedStripeCustomerId;
-    }
 
     const companyRef = db.collection('companies').doc(companyId);
     const userRef = db.collection('users').doc(userId);
@@ -38,12 +147,42 @@ const resolveOrCreateStripeCustomer = async ({ providedCustomerId, companyId, us
     }
 
     const companyData = companySnap.data() || {};
-    const existingStripeCustomerId = getCompanyStripeCustomerId(companyData);
-    if (existingStripeCustomerId) {
-        return existingStripeCustomerId;
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    const existingUserStripeCustomerId = getUserStripeCustomerId(userData);
+
+    if (providedStripeCustomerId) {
+        const existingCompanyStripeCustomerId = getCompanyStripeCustomerId(companyData);
+        const matchesSavedCustomer = [
+            existingUserStripeCustomerId,
+            existingCompanyStripeCustomerId,
+        ].filter(Boolean).includes(providedStripeCustomerId);
+
+        if ((existingUserStripeCustomerId || existingCompanyStripeCustomerId) && !matchesSavedCustomer) {
+            throw new HttpsError('permission-denied', 'Provided Stripe customer does not match this user or company.');
+        }
+
+        await userRef.set({
+            stripeId: providedStripeCustomerId,
+            stripeCustomerId: providedStripeCustomerId,
+        }, { merge: true });
+
+        return providedStripeCustomerId;
     }
 
-    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    if (existingUserStripeCustomerId) {
+        return existingUserStripeCustomerId;
+    }
+
+    const existingCompanyStripeCustomerId = getCompanyStripeCustomerId(companyData);
+    if (existingCompanyStripeCustomerId) {
+        await userRef.set({
+            stripeId: existingCompanyStripeCustomerId,
+            stripeCustomerId: existingCompanyStripeCustomerId,
+        }, { merge: true });
+
+        return existingCompanyStripeCustomerId;
+    }
+
     const firstName = userData.firstName || '';
     const lastName = userData.lastName || '';
     const customerName = companyData.ownerName || `${firstName} ${lastName}`.trim() || companyData.name || undefined;
@@ -58,10 +197,16 @@ const resolveOrCreateStripeCustomer = async ({ providedCustomerId, companyId, us
         },
     });
 
-    await companyRef.set({
-        stripeId: customer.id,
-        stripeCustomerId: customer.id,
-    }, { merge: true });
+    await Promise.all([
+        userRef.set({
+            stripeId: customer.id,
+            stripeCustomerId: customer.id,
+        }, { merge: true }),
+        companyRef.set({
+            stripeId: customer.id,
+            stripeCustomerId: customer.id,
+        }, { merge: true }),
+    ]);
 
     return customer.id;
 };
@@ -77,6 +222,21 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
 
     if (!stripePriceId || !billingUserId || !companyId || !successUrl || !cancelUrl) {
         throw new HttpsError('invalid-argument', 'The function must be called with all required arguments: "stripePriceId", "userId", "companyId", "successUrl", and "cancelUrl".');
+    }
+
+    if (billingUserId !== request.auth.uid) {
+        throw new HttpsError('permission-denied', 'You can only start checkout for your own user account.');
+    }
+
+    const userAccessSnap = await db
+        .collection('users')
+        .doc(request.auth.uid)
+        .collection('userAccess')
+        .doc(companyId)
+        .get();
+
+    if (!userAccessSnap.exists) {
+        throw new HttpsError('permission-denied', 'You do not have access to this company.');
     }
 
     try {
@@ -120,84 +280,188 @@ exports.createSubscriptionCheckoutSession = onCall(async (request) => {
 
 // --- Other functions --- 
 
-exports.createStripeCustomer = functions.https.onCall(async(data,context) => {
-    const receivedData = data.data
+exports.createStripeCustomer = functions.https.onCall(async(data, context) => {
+    const auth = await requireCallableAuth(data, context);
+    const receivedData = getCallableData(data);
+    const userId = receivedData.userId || auth.uid;
+
+    if (userId !== auth.uid) {
+        throw new functions.https.HttpsError('permission-denied', 'You can only create a Stripe customer for your own user account.');
+    }
+
+    const userRef = getFirestore().collection('users').doc(userId);
+    const userSnap = await userRef.get();
+    const userData = userSnap.exists ? userSnap.data() || {} : {};
+    const existingStripeCustomerId = getUserStripeCustomerId(userData);
+
+    if (existingStripeCustomerId) {
+        return {
+            status: 200,
+            stripeId: existingStripeCustomerId,
+            customer: { id: existingStripeCustomerId },
+            created: false,
+        };
+    }
+
     try {
       const customer = await stripe.customers.create({
-        name: receivedData.name,
-        email: receivedData.email,
+        name: receivedData.name || `${userData.firstName || ''} ${userData.lastName || ''}`.trim() || undefined,
+        email: receivedData.email || userData.email || auth.token?.email || undefined,
+        metadata: {
+            userId,
+        },
       });
-      let newData = { stripeCustomerId: customer.id}
-      
-      await getFirestore()
-      .collection('users').doc(user.id)
-      .update(newData);  
+
+      await userRef.set({
+        stripeId: customer.id,
+        stripeCustomerId: customer.id,
+      }, { merge: true });
 
       console.log("Successfully created new stripe customer");
       return {
-        customer:customer
-      }
+        status: 200,
+        stripeId: customer.id,
+        customer,
+        created: true,
+      };
     } catch(error) {
-      console.error(error)
+      console.error(error);
+      throw new functions.https.HttpsError('internal', 'Unable to create Stripe customer.', error.message);
     }
   });
  
 exports.createStripeAccountLink = functions.https.onCall(async(data,context) => {
+    const auth = await requireCallableAuth(data, context);
+    const receivedData = getCallableData(data);
+    const companyId = receivedData.companyId;
+    const { companyData } = await getOwnerCompanyForStripe({ companyId, uid: auth.uid });
+    const companyAccountId = getCompanyConnectedAccountId(companyData);
+    const accountId = normalizeStripeAccountId(receivedData.accountId || receivedData.account || companyAccountId);
+
+    if (!accountId) {
+        throw new functions.https.HttpsError('failed-precondition', 'This company does not have a Stripe connected account yet.');
+    }
+
+    if (companyAccountId && accountId !== companyAccountId) {
+        throw new functions.https.HttpsError('permission-denied', 'Connected account does not belong to this company.');
+    }
+
     try {
-      const accountId = data.data.accountId;
+      const account = await stripe.accounts.retrieve(accountId);
+      const shouldUseOnboardingLink = !account.details_submitted || accountHasOpenRequirements(account);
+
+      if (!shouldUseOnboardingLink) {
+        const loginLink = await stripe.accounts.createLoginLink(accountId);
+
+        return {
+          status: 200,
+          accountId,
+          accountLink: loginLink.url,
+          url: loginLink.url,
+          linkType: 'login',
+        };
+      }
+
+      const returnUrl = buildStripeRedirectUrl(
+        receivedData.returnUrl,
+        `/return/${accountId}`
+      );
+      const refreshUrl = buildStripeRedirectUrl(
+        receivedData.refreshUrl || receivedData.returnUrl,
+        `/refresh/${accountId}`
+      );
       const accountLink = await stripe.accountLinks.create({
         account: accountId,
-        return_url: `https://dripdrop-poolapp.com/return/${accountId}`,
-        refresh_url: `https://dripdrop-poolapp.com/refresh/${accountId}`,
+        return_url: returnUrl,
+        refresh_url: refreshUrl,
         type: "account_onboarding",
       });
+
       return {
         status: 200,
-        accountLink: accountLink.url
+        accountId,
+        accountLink: accountLink.url,
+        url: accountLink.url,
+        linkType: 'onboarding',
       };
     } catch (error) {
+      const message = getStripeErrorMessage(error, 'Unable to create Stripe account link.');
       console.error(
         "An error occurred when calling the Stripe API to create an account link:",
-        error
+        {
+          accountId,
+          message,
+          stripeCode: error?.code,
+          stripeType: error?.type,
+          requestId: error?.requestId,
+        }
       );
-      return {
-        status: 500,
-        error: error.message
-      };
+      throw new functions.https.HttpsError(
+        error?.type === 'StripeInvalidRequestError' ? 'failed-precondition' : 'internal',
+        message,
+        {
+          stripeCode: error?.code || '',
+          stripeType: error?.type || '',
+          requestId: error?.requestId || '',
+        }
+      );
     }
   });
   
   exports.createNewStripeAccount = functions.https.onCall(async(data,context) => {
-    let receivedData = data.data
+    const auth = await requireCallableAuth(data, context);
+    let receivedData = getCallableData(data);
+    const companyId = receivedData.companyId;
+    const { companyRef, companyData } = await getOwnerCompanyForStripe({ companyId, uid: auth.uid });
+    const existingAccountId = getCompanyConnectedAccountId(companyData);
+
+    if (existingAccountId) {
+      return {
+        status: 200,
+        account: existingAccountId,
+        created: false,
+      };
+    }
+
     try {
       const account = await stripe.accounts.create({
         type: 'express', 
         country: 'US',  
-        email: receivedData.email, 
+        email: receivedData.email || companyData.email || auth.token?.email || undefined,
         capabilities: {
           card_payments: { requested: true },
           transfers: { requested: true },
         },
+        business_profile: {
+          name: companyData.name || companyData.companyName || undefined,
+          url: companyData.websiteURL || undefined,
+        },
+        metadata: {
+          companyId,
+          ownerId: auth.uid,
+        },
       });
   
-      let newData = { stripeConnectedAccountId: account.id}
-      await getFirestore()
-      .collection('users').doc(user.id)
-      .update(newData);  
+      await companyRef.set({
+        stripeConnectedAccountId: account.id,
+        stripeConnectedAccountStatus: "Not Started",
+        stripeConnectAccountId: account.id,
+        stripeConnectAccountStatus: "Not Started",
+        stripeConnectedAccountOwnerId: auth.uid,
+        stripeConnectedAccountCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
 
       return {
         status: 200,
-        account: account.id
+        account: account.id,
+        created: true,
       };
     } catch (error) {
       console.error(
         "An error occurred when calling the Stripe API to create an account",
         error
       );
-      return {
-        status: 500,
-        error: error.message
-      };
+      throw new functions.https.HttpsError('internal', 'Unable to create Stripe connected account.', error.message);
     }
   });
   
@@ -321,6 +585,11 @@ exports.getStripePaymentHistory = onCall(async (request) => {
 
     const { stripeCustomerId, companyId } = request.data || {};
     let resolvedStripeCustomerId = normalizeStripeCustomerId(stripeCustomerId);
+
+    if (!resolvedStripeCustomerId) {
+        const userSnap = await db.collection('users').doc(request.auth.uid).get();
+        resolvedStripeCustomerId = getUserStripeCustomerId(userSnap.data());
+    }
 
     if (!resolvedStripeCustomerId && companyId) {
         const companySnap = await db.collection('companies').doc(companyId).get();

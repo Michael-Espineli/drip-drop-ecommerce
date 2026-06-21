@@ -1,14 +1,20 @@
 import React, { useState, useContext, useEffect, useCallback, useMemo } from "react";
 import { sendPasswordResetEmail, updateProfile } from "firebase/auth";
-import { getFunctions, httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { Link } from "react-router-dom";
 import { Context } from "../../context/AuthContext";
 import { collection, doc, getDoc, getDocs, limit, orderBy, query, updateDoc, where } from "firebase/firestore";
-import { auth, db, storage } from '../../utils/config';
+import { auth, db, functions, storage } from '../../utils/config';
+import { FaExternalLinkAlt } from "react-icons/fa";
 import toast from 'react-hot-toast';
 
-const functions = getFunctions();
+const buttonBaseClass = "inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-60";
+const primaryButtonClass = `${buttonBaseClass} bg-blue-600 text-white shadow-sm hover:bg-blue-700 focus:ring-blue-100`;
+const secondaryButtonClass = `${buttonBaseClass} border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus:ring-blue-100`;
+const subtleButtonClass = `${buttonBaseClass} border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 focus:ring-blue-100`;
+const dangerButtonClass = `${buttonBaseClass} bg-red-600 text-white shadow-sm hover:bg-red-700 focus:ring-red-100`;
+const dangerSubtleButtonClass = `${buttonBaseClass} border border-red-200 bg-red-50 text-red-700 hover:bg-red-100 focus:ring-red-100`;
 
 const dateFromValue = (value) => {
     if (!value) return null;
@@ -132,7 +138,7 @@ const SummaryTile = ({ label, value, helper }) => (
 const ActionLink = ({ to, children }) => (
     <Link
         to={to}
-        className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+        className={primaryButtonClass}
     >
         {children}
     </Link>
@@ -144,8 +150,8 @@ const DeleteModal = ({ onConfirm, onCancel }) => (
             <h3 className="text-2xl font-bold text-gray-800 mb-4">Are you sure?</h3>
             <p className="text-gray-600 mb-8">This action is irreversible and will permanently delete your account.</p>
             <div className="flex justify-end space-x-4">
-                <button onClick={onCancel} className='py-2 px-5 bg-gray-200 text-gray-800 font-semibold rounded-lg shadow-md hover:bg-gray-300 transition'>Cancel</button>
-                <button onClick={onConfirm} className='py-2 px-5 bg-red-600 text-white font-semibold rounded-lg shadow-md hover:bg-red-700 transition'>Delete Account</button>
+                <button type="button" onClick={onCancel} className={secondaryButtonClass}>Cancel</button>
+                <button type="button" onClick={onConfirm} className={dangerButtonClass}>Delete Account</button>
             </div>
         </div>
     </div>
@@ -157,6 +163,7 @@ export default function ProfilePage() {
         dataBaseUser,
         setDataBaseUser,
         stripeConnectedAccountId,
+        setStripeConnectedAccountId,
         recentlySelectedCompany,
         recentlySelectedCompanyName,
         companyUserAccess,
@@ -466,37 +473,87 @@ export default function ProfilePage() {
     };
 
     const handleStripeAction = useCallback(async (action) => {
-        const callableName = action === 'create' ? 'createNewStripeAccount' : 'createStripeAccountLink';
+        if (!recentlySelectedCompany) {
+            toast.error('Select a company before managing Stripe.');
+            return;
+        }
+
+        const activeUser = auth.currentUser;
+        if (!activeUser) {
+            toast.error('Your session expired. Sign in again before managing Stripe.');
+            return;
+        }
+
+        if (user?.uid && activeUser.uid !== user.uid) {
+            toast.error('Your session changed. Refresh the page before managing Stripe.');
+            return;
+        }
+
         const loadingKey = action === 'create' ? 'create' : 'link';
 
         setStripeLoading(prev => ({ ...prev, [loadingKey]: true }));
         const toastId = toast.loading(`Processing Stripe request...`);
 
         try {
-            const callable = httpsCallable(functions, callableName);
-            const response = await callable({ account: stripeConnectedAccountId });
-            
-            const { error, account, accountLink } = response.data;
+            const idToken = await activeUser.getIdToken(true);
+            let accountId = stripeConnectedAccountId;
+
+            if (action === 'create') {
+                const createAccount = httpsCallable(functions, 'createNewStripeAccount');
+                const createResponse = await createAccount({
+                    companyId: recentlySelectedCompany,
+                    email: companyProfile.company?.email || dataBaseUser?.email || user?.email || '',
+                    idToken,
+                });
+
+                accountId = createResponse.data?.account;
+                if (accountId) {
+                    setStripeConnectedAccountId(accountId);
+                }
+            }
+
+            if (!accountId) {
+                throw new Error('Stripe connected account was not found.');
+            }
+
+            const createAccountLink = httpsCallable(functions, 'createStripeAccountLink');
+            const response = await createAccountLink({
+                companyId: recentlySelectedCompany,
+                accountId,
+                returnUrl: window.location.href,
+                refreshUrl: window.location.href,
+                idToken,
+            });
+
+            const { error, accountLink, url } = response.data || {};
 
             if (error) throw new Error(error.message || 'An unknown error occurred');
 
-            if (action === 'create' && account) {
-                await updateDoc(doc(db, 'users', user.uid), { stripeConnectedAccountId: account });
-                toast.success('Stripe account created! Redirecting...', { id: toastId });
-                // Fall through to create and redirect via account link
+            if (accountLink || url) {
+                toast.success('Redirecting to Stripe...', { id: toastId });
+                window.location.href = accountLink || url;
+                return;
             }
 
-            if (accountLink && accountLink.url) {
-                window.location.href = accountLink.url;
-            }
-
+            throw new Error('Stripe did not return an onboarding link.');
         } catch (err) {
             console.error(`Stripe ${action} error:`, err);
-            toast.error(err.message || `Failed to ${action} Stripe account.`, { id: toastId });
+            const errorMessage = err.code === 'functions/unauthenticated'
+                ? 'Your session expired. Sign in again before managing Stripe.'
+                : err.details?.message || err.message || `Failed to ${action} Stripe account.`;
+            toast.error(errorMessage, { id: toastId });
         } finally {
             setStripeLoading(prev => ({ ...prev, [loadingKey]: false }));
         }
-    }, [stripeConnectedAccountId, user.uid]);
+    }, [
+        companyProfile.company?.email,
+        dataBaseUser?.email,
+        recentlySelectedCompany,
+        setStripeConnectedAccountId,
+        stripeConnectedAccountId,
+        user?.email,
+        user?.uid,
+    ]);
 
     const renderAccountInfo = () => {
         if (editMode) {
@@ -515,7 +572,7 @@ export default function ProfilePage() {
                                 <div className="space-y-2">
                                     <label
                                         htmlFor="profile-photo-upload"
-                                        className="inline-flex cursor-pointer items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-100"
+                                        className={`${secondaryButtonClass} cursor-pointer`}
                                     >
                                         Choose Photo
                                     </label>
@@ -561,7 +618,7 @@ export default function ProfilePage() {
                     <p className="text-sm text-gray-500">Select a company to see your company profile, work history, and paysheet.</p>
                     <Link
                         to="/company/selection"
-                        className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-100"
+                        className={secondaryButtonClass}
                     >
                         Select Company
                     </Link>
@@ -672,6 +729,12 @@ export default function ProfilePage() {
         );
     };
 
+    const canManageStripeAccount = Boolean(
+        recentlySelectedCompany &&
+        user?.uid &&
+        companyProfile.company?.ownerId === user.uid
+    );
+
     if (!dataBaseUser) {
         return (
             <div className='min-h-screen bg-gray-50 p-8'>
@@ -698,26 +761,28 @@ export default function ProfilePage() {
                         <ProfileCard 
                             title="Account Info"
                             actions={
-                                <div className="flex space-x-2">
+                                <div className="flex gap-2">
                                     {editMode ? (
                                         <>
                                             <button
+                                                type="button"
                                                 onClick={handleCancelEdit}
                                                 disabled={profileSaving}
-                                                className='py-2 px-4 bg-gray-200 text-gray-800 font-semibold rounded-lg text-sm hover:bg-gray-300 transition disabled:cursor-not-allowed disabled:opacity-60'
+                                                className={secondaryButtonClass}
                                             >
                                                 Cancel
                                             </button>
                                             <button
+                                                type="button"
                                                 onClick={handleUpdateUser}
                                                 disabled={profileSaving}
-                                                className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg text-sm hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:bg-blue-300'
+                                                className={primaryButtonClass}
                                             >
                                                 {profileSaving ? "Saving..." : "Save"}
                                             </button>
                                         </>
                                     ) : (
-                                        <button onClick={() => setEditMode(true)} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg text-sm hover:bg-blue-700 transition'>Edit Profile</button>
+                                        <button type="button" onClick={() => setEditMode(true)} className={primaryButtonClass}>Edit Profile</button>
                                     )}
                                 </div>
                             }
@@ -735,13 +800,21 @@ export default function ProfilePage() {
                                         <p className="font-semibold text-gray-800">Stripe</p>
                                         <p className="text-sm text-gray-500">Connect your Stripe account to process payments.</p>
                                     </div>
-                                    {!stripeConnectedAccountId ? (
-                                        <button onClick={() => handleStripeAction('create')} disabled={stripeLoading.create} className='py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg text-sm hover:bg-blue-700 transition disabled:bg-blue-300'>
+                                    {!recentlySelectedCompany ? (
+                                        <p className="text-sm font-semibold text-gray-600">Select a company first.</p>
+                                    ) : companyProfile.loading ? (
+                                        <p className="text-sm font-semibold text-gray-600">Loading company...</p>
+                                    ) : !canManageStripeAccount ? (
+                                        <p className="text-sm font-semibold text-gray-600">Only the company owner can manage Stripe.</p>
+                                    ) : !stripeConnectedAccountId ? (
+                                        <button type="button" onClick={() => handleStripeAction('create')} disabled={stripeLoading.create} className={primaryButtonClass}>
                                             {stripeLoading.create ? 'Creating...' : 'Connect Stripe'}
+                                            <FaExternalLinkAlt className="h-3 w-3" />
                                         </button>
                                     ) : (
-                                        <button onClick={() => handleStripeAction('link')} disabled={stripeLoading.link} className='py-2 px-4 bg-green-600 text-white font-semibold rounded-lg text-sm hover:bg-green-700 transition disabled:bg-green-300'>
+                                        <button type="button" onClick={() => handleStripeAction('link')} disabled={stripeLoading.link} className={subtleButtonClass}>
                                             {stripeLoading.link ? 'Redirecting...' : 'Manage Account'}
+                                            <FaExternalLinkAlt className="h-3 w-3" />
                                         </button>
                                     )}
                                 </div>
@@ -756,13 +829,14 @@ export default function ProfilePage() {
                                 type="button"
                                 onClick={handlePasswordReset}
                                 disabled={passwordResetLoading}
-                                className="w-full text-left py-3 px-4 bg-blue-50 text-blue-700 font-semibold rounded-lg hover:bg-blue-100 transition disabled:cursor-not-allowed disabled:opacity-60"
+                                className={`${subtleButtonClass} w-full justify-start`}
                             >
                                 {passwordResetLoading ? "Sending reset email..." : "Update Password"}
                             </button>
-                             <button 
+                            <button
+                                type="button"
                                 onClick={() => setShowDeleteModal(true)} 
-                                className="w-full text-left py-3 px-4 bg-red-50 text-red-700 font-semibold rounded-lg hover:bg-red-100 transition"
+                                className={`${dangerSubtleButtonClass} w-full justify-start`}
                             >
                                 Delete My Account
                             </button>

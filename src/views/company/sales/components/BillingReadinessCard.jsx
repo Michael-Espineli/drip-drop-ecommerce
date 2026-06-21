@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import { FaCheckCircle, FaExternalLinkAlt } from 'react-icons/fa';
-import { functions } from '../../../../utils/config';
+import { auth, functions } from '../../../../utils/config';
 
 const labelize = (value) => {
   if (!value) return 'Unknown';
@@ -77,15 +77,25 @@ const BillingReadinessCard = ({
     setAccountLinkLoading(true);
 
     try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        throw new Error('Your session expired. Sign in again before managing Stripe.');
+      }
+
+      const idToken = await currentUser.getIdToken(true);
       const createAccountLink = httpsCallable(functions, 'createStripeAccountLink');
       const result = await createAccountLink({
+        companyId,
         account: connectedAccountId,
         accountId: connectedAccountId,
         connectedAccount: connectedAccountId,
+        idToken,
         data: {
           account: connectedAccountId,
           accountId: connectedAccountId,
           connectedAccount: connectedAccountId,
+          companyId,
+          idToken,
         },
       });
       const response = result.data || {};
@@ -102,7 +112,7 @@ const BillingReadinessCard = ({
       window.location.href = accountLinkUrl;
     } catch (error) {
       console.error('Unable to open Stripe setup', error);
-      toast.error(error.message || 'Unable to open Stripe setup.');
+      toast.error(error.details?.message || error.message || 'Unable to open Stripe setup.');
     } finally {
       setAccountLinkLoading(false);
     }

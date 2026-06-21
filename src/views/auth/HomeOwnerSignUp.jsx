@@ -89,7 +89,8 @@ export default function HomeOwnerSignUp() {
                 id: user.uid,
                 recentlySelectedCompany: '',
                 photoUrl: '',
-                stripeConnectedAccountId: '',
+                stripeId: '',
+                stripeCustomerId: '',
                 exp: 0,
             };
             await setDoc(doc(db, 'users', user.uid), homeowner);

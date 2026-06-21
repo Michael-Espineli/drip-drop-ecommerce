@@ -14,7 +14,6 @@ if (admin.apps.length === 0) {
 
 const db = getFirestore();
 const mySecret = defineSecret('stripe_secret_key');
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
 const salesCollectionNames = {
   billingSubscriptions: "salesBillingSubscriptions",
   invoices: "salesInvoices",

@@ -14,9 +14,6 @@ const sgMail = require("@sendgrid/mail");
 admin.initializeApp();
 const db = admin.firestore();
 
-// Securely access the Stripe API key from the environment variables.
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
-
 // =========================================================================
 //   CORRECTED AUTOMATED FUNCTION: Create Stripe customer on new user signup
 // =========================================================================

@@ -3,9 +3,11 @@ require('dotenv').config({ path: `.env.${process.env.GCLOUD_PROJECT}` });
 const { onRequest } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 const { v4: uuidv4 } = require('uuid');
+const {
+    createStripeProxy,
+} = require("./stripeClient");
 
-// Securely access the Stripe API key from the environment variables.
-const stripe = require("stripe")(process.env.STRIPE_API_KEY || 'sk_test_dummyApiKey');
+const stripe = createStripeProxy();
 
 // Securely access the webhook secret from the environment variables.
 const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;

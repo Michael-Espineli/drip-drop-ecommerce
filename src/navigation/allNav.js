@@ -71,17 +71,18 @@ export const allNav = [
     { id: 38, title: 'Todo List', icon: <FaClipboardList />, role: 'Company', path: '/company/todo-list', category: 'NA', featureFlagId: 'feature_flag_010' },
     { id: 80, title: 'Messages', icon: <MdEmail />, role: 'Company', path: '/company/messages', category: 'NA', featureFlagId: 'feature_flag_001' },
     { id: 81, title: 'Setup Guide', icon: <FaClipboardQuestion />, role: 'Company', path: '/company/setup-guide', category: 'NA', permissionId: '800' },
+    //Marketting 
+    { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing', permissionId: '610', featureFlagId: 'feature_flag_007' },
+    { id: 90, title: 'Public Page', icon: <FaStore />, role: 'Company', path: '/company/public-profile', category: 'Marketing', featureFlagId: 'feature_flag_007' },
 
     // Finance
     { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+    { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 70, title: 'Invoices', icon: <MdReceiptLong />, role: 'Company', path: '/company/sales/invoices', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 71, title: 'Payment History', icon: <MdOutlinePayments />, role: 'Company', path: '/company/sales/payments', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
-    { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 117, title: 'Payroll', icon: <MdPayment />, role: 'Company', path: '/company/payroll', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_006' },
-    { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing', permissionId: '610', featureFlagId: 'feature_flag_007' },
-    { id: 90, title: 'Public Page', icon: <FaStore />, role: 'Company', path: '/company/public-profile', category: 'Marketing', featureFlagId: 'feature_flag_007' },
 
     // Operations
     { id: 21, title: 'Operations Dashboard', icon: <MdOutlineDashboard />, role: 'Company', path: '/company/operations-dashboard', category: 'Operations', permissionId: '0' },

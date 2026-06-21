@@ -12,6 +12,10 @@ const getStripeCustomerId = (companyData = {}) => (
     companyData.stripeCustomerId || companyData.stripeId || null
 );
 
+const getStripeConnectedAccountId = (companyData = {}) => (
+    companyData.stripeConnectedAccountId || companyData.stripeConnectAccountId || null
+);
+
 const getCompanyDisplayName = (companyData = {}) => (
     String(companyData.name || companyData.companyName || companyData.displayName || companyData.businessName || "").trim() || null
 );
@@ -102,6 +106,7 @@ export function AuthContext({ children }) {
                         setRole(dbUser.accountType);
                         setName(`${dbUser.firstName} ${dbUser.lastName}`);
                         setPhotoUrl(dbUser.photoUrl);
+                        setStripeId(getStripeCustomerId(dbUser));
 
                         if (dbUser.accountType === 'Company') {
                             setRecentlySelectedCompany(dbUser.recentlySelectedCompany);
@@ -112,8 +117,8 @@ export function AuthContext({ children }) {
                                 if (companyDoc.exists()) {
                                     const companyData = companyDoc.data();
                                     setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
-                                    setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
-                                    setStripeId(getStripeCustomerId(companyData));
+                                    setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
+                                    setStripeId(getStripeCustomerId(dbUser) || getStripeCustomerId(companyData));
                                 }
                             }
                         } else {
@@ -193,7 +198,6 @@ export function AuthContext({ children }) {
         const resetCompanyContext = () => {
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
-            setStripeId(null);
             setCompanyUserAccess(null);
             setCompanyRole(null);
             setCompanyRoleLoading(false);
@@ -204,7 +208,6 @@ export function AuthContext({ children }) {
             setRecentlySelectedCompany(null);
             setRecentlySelectedCompanyName(null);
             setStripeConnectedAccountId(null);
-            setStripeId(null);
             setCompanyUserAccess(null);
             setCompanyRole(null);
         };
@@ -232,12 +235,11 @@ export function AuthContext({ children }) {
                 if (companyDoc.exists()) {
                     const companyData = companyDoc.data();
                     setRecentlySelectedCompanyName(getCompanyDisplayName(companyData));
-                    setStripeConnectedAccountId(companyData.stripeConnectedAccountId || null);
-                    setStripeId(getStripeCustomerId(companyData));
+                    setStripeConnectedAccountId(getStripeConnectedAccountId(companyData));
+                    setStripeId(getStripeCustomerId(dataBaseUser) || getStripeCustomerId(companyData));
                 } else {
                     setRecentlySelectedCompanyName(null);
                     setStripeConnectedAccountId(null);
-                    setStripeId(null);
                 }
 
                 if (!userAccessDoc.exists()) {
@@ -281,7 +283,7 @@ export function AuthContext({ children }) {
         return () => {
             cancelled = true;
         };
-    }, [user, accountType, recentlySelectedCompany]);
+    }, [user, accountType, recentlySelectedCompany, dataBaseUser]);
 
     const hasCompanyPermission = useCallback((permissionId) => {
         return roleHasCompanyPermission(companyRole, permissionId);
