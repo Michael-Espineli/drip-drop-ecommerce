@@ -364,12 +364,20 @@ const AdminDashboard = () => {
           </p>
         </div>
 
-        <Link
-          to="/admin/subscriptions"
-          className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
-        >
-          Manage Subscriptions
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to="/admin/billing-fee-calculator"
+            className="px-4 py-2 rounded-md font-semibold bg-[#efb12f] text-slate-950 hover:bg-[#efb12f]/90 transition"
+          >
+            Billing Calculator
+          </Link>
+          <Link
+            to="/admin/subscriptions"
+            className="px-4 py-2 rounded-md font-semibold bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition"
+          >
+            Manage Subscriptions
+          </Link>
+        </div>
       </div>
 
       <div className="mt-6 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">

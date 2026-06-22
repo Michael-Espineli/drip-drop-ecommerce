@@ -9,8 +9,14 @@ const {
 
 const stripe = createStripeProxy();
 
-// Securely access the webhook secret from the environment variables.
-const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+// Securely access webhook secrets from environment variables. Stripe issues a
+// different signing secret for each endpoint, so allow comma-separated values.
+const endpointSecrets = [
+    ...(process.env.STRIPE_WEBHOOK_SECRET || '').split(','),
+    ...(process.env.STRIPE_WEBHOOK_SECRETS || '').split(','),
+]
+    .map((secret) => secret.trim())
+    .filter(Boolean);
 
 const salesCollectionNames = {
     agreements: 'salesAgreements',
@@ -18,6 +24,7 @@ const salesCollectionNames = {
     invoices: 'salesInvoices',
     payments: 'salesPayments',
     paymentEvents: 'salesPaymentEvents',
+    payouts: 'stripePayouts',
 };
 
 const timestampFromStripeSeconds = (seconds) => (
@@ -46,6 +53,189 @@ const mapStripeInvoiceStatus = (status) => {
     if (status === 'void') return 'void';
     if (status === 'uncollectible') return 'uncollectible';
     return 'open';
+};
+
+const constructStripeWebhookEvent = (rawBody, signature) => {
+    if (endpointSecrets.length === 0) {
+        throw new Error('Stripe webhook signing secret is not configured.');
+    }
+
+    let lastError;
+    for (const secret of endpointSecrets) {
+        try {
+            return stripe.webhooks.constructEvent(rawBody, signature, secret);
+        } catch (error) {
+            lastError = error;
+        }
+    }
+
+    throw lastError;
+};
+
+const normalizeStripeAccountId = (value) => {
+    const id = typeof value === 'string' ? value.trim() : '';
+    return id.startsWith('acct_') ? id : '';
+};
+
+const findCompanyByConnectedAccountId = async (connectedAccount) => {
+    const accountId = normalizeStripeAccountId(connectedAccount);
+    if (!accountId) return null;
+
+    const snapshot = await admin.firestore()
+        .collection('companies')
+        .where('stripeConnectedAccountId', '==', accountId)
+        .limit(1)
+        .get();
+
+    if (!snapshot.empty) {
+        const doc = snapshot.docs[0];
+        return {
+            ref: doc.ref,
+            data: { id: doc.id, ...doc.data() },
+        };
+    }
+
+    const legacySnapshot = await admin.firestore()
+        .collection('companies')
+        .where('stripeConnectAccountId', '==', accountId)
+        .limit(1)
+        .get();
+
+    if (legacySnapshot.empty) return null;
+
+    const doc = legacySnapshot.docs[0];
+    return {
+        ref: doc.ref,
+        data: { id: doc.id, ...doc.data() },
+    };
+};
+
+const mapConnectedAccountStatus = (account = {}) => {
+    const requirements = account.requirements || {};
+    const hasBlockingRequirements = Boolean(
+        requirements.disabled_reason ||
+        requirements.currently_due?.length ||
+        requirements.past_due?.length ||
+        requirements.errors?.length
+    );
+
+    if (!account.details_submitted) return 'Not Started';
+    if (account.charges_enabled && account.payouts_enabled && !hasBlockingRequirements) return 'Ready';
+    return 'Needs Attention';
+};
+
+const syncConnectedAccountSnapshot = async ({ account, connectedAccount, event }) => {
+    const accountId = normalizeStripeAccountId(connectedAccount || account?.id);
+    if (!accountId) return false;
+
+    const company = await findCompanyByConnectedAccountId(accountId);
+    if (!company) return false;
+
+    const requirements = account.requirements || {};
+    const capabilities = account.capabilities || {};
+
+    await company.ref.set({
+        stripeConnectedAccountId: accountId,
+        stripeConnectedAccountStatus: mapConnectedAccountStatus(account),
+        stripeConnectAccountId: accountId,
+        stripeConnectAccountStatus: mapConnectedAccountStatus(account),
+        stripeConnectedAccountChargesEnabled: Boolean(account.charges_enabled),
+        stripeConnectedAccountPayoutsEnabled: Boolean(account.payouts_enabled),
+        stripeConnectedAccountDetailsSubmitted: Boolean(account.details_submitted),
+        stripeConnectedAccountLivemode: Boolean(account.livemode),
+        stripeConnectedAccountDefaultCurrency: account.default_currency || '',
+        stripeConnectedAccountCountry: account.country || '',
+        stripeConnectedAccountBusinessType: account.business_type || '',
+        stripeConnectedAccountDisabledReason: requirements.disabled_reason || '',
+        stripeConnectedAccountCurrentlyDue: requirements.currently_due || [],
+        stripeConnectedAccountPastDue: requirements.past_due || [],
+        stripeConnectedAccountEventuallyDue: requirements.eventually_due || [],
+        stripeConnectedAccountPendingVerification: requirements.pending_verification || [],
+        stripeConnectedAccountRequirementErrors: requirements.errors || [],
+        stripeConnectedAccountCapabilities: {
+            cardPayments: capabilities.card_payments || 'unknown',
+            transfers: capabilities.transfers || 'unknown',
+        },
+        stripeConnectedAccountLastEventId: event?.id || '',
+        stripeConnectedAccountLastEventType: event?.type || '',
+        stripeConnectedAccountUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return true;
+};
+
+const syncExternalAccountSnapshot = async ({ externalAccount, connectedAccount, event }) => {
+    const accountId = normalizeStripeAccountId(connectedAccount);
+    if (!accountId) return false;
+
+    const company = await findCompanyByConnectedAccountId(accountId);
+    if (!company) return false;
+
+    await company.ref.set({
+        stripeConnectedAccountId: accountId,
+        stripePayoutExternalAccountId: externalAccount.id || '',
+        stripePayoutExternalAccountObject: externalAccount.object || '',
+        stripePayoutExternalAccountBankName: externalAccount.bank_name || '',
+        stripePayoutExternalAccountLast4: externalAccount.last4 || '',
+        stripePayoutExternalAccountStatus: externalAccount.status || '',
+        stripePayoutExternalAccountCurrency: externalAccount.currency || '',
+        stripePayoutExternalAccountCountry: externalAccount.country || '',
+        stripePayoutExternalAccountUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        stripeConnectedAccountLastEventId: event?.id || '',
+        stripeConnectedAccountLastEventType: event?.type || '',
+    }, { merge: true });
+
+    return true;
+};
+
+const upsertStripePayout = async ({ payout, connectedAccount, event }) => {
+    const accountId = normalizeStripeAccountId(connectedAccount);
+    if (!accountId || !payout?.id) return false;
+
+    const company = await findCompanyByConnectedAccountId(accountId);
+    if (!company) return false;
+
+    const payoutData = {
+        id: payout.id,
+        companyId: company.data.id,
+        stripePayoutId: payout.id,
+        stripeConnectedAccountId: accountId,
+        amountCents: Number(payout.amount || 0),
+        currency: String(payout.currency || 'usd').toLowerCase(),
+        status: payout.status || '',
+        method: payout.method || '',
+        type: payout.type || '',
+        description: payout.description || '',
+        statementDescriptor: payout.statement_descriptor || '',
+        automatic: Boolean(payout.automatic),
+        arrivalDate: timestampFromStripeSeconds(payout.arrival_date),
+        stripeCreatedAt: timestampFromStripeSeconds(payout.created),
+        destinationId: typeof payout.destination === 'string' ? payout.destination : payout.destination?.id || '',
+        failureCode: payout.failure_code || '',
+        failureMessage: payout.failure_message || '',
+        livemode: Boolean(payout.livemode),
+        lastStripeEventId: event?.id || '',
+        lastStripeEventType: event?.type || '',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+    const batch = admin.firestore().batch();
+    const companyPayoutRef = company.ref.collection(salesCollectionNames.payouts).doc(payout.id);
+    const payoutRef = admin.firestore().collection(salesCollectionNames.payouts).doc(payout.id);
+
+    batch.set(companyPayoutRef, payoutData, { merge: true });
+    batch.set(payoutRef, payoutData, { merge: true });
+    batch.set(company.ref, {
+        stripeLastPayoutId: payout.id,
+        stripeLastPayoutStatus: payout.status || '',
+        stripeLastPayoutAmountCents: Number(payout.amount || 0),
+        stripeLastPayoutCurrency: String(payout.currency || 'usd').toLowerCase(),
+        stripeLastPayoutArrivalDate: timestampFromStripeSeconds(payout.arrival_date),
+        stripeLastPayoutUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    await batch.commit();
+    return true;
 };
 
 const findSalesBillingSubscriptionByStripeId = async (stripeSubscriptionId) => {
@@ -416,11 +606,65 @@ exports.stripeWebHook = onRequest(async (request, response) => {
 
     try {          
         // The rawBody is available in v2 functions and is required for signature verification.
-        event = stripe.webhooks.constructEvent(request.rawBody, sig, endpointSecret);
+        event = constructStripeWebhookEvent(request.rawBody, sig);
     } catch (err) {
         console.error('Webhook signature verification failed!', err.message);
         response.status(400).send(`Webhook Error: ${err.message}`);
         return;
+    }
+
+    if (event.type === 'account.updated') {
+        try {
+            const account = event.data.object;
+            const handledAccountUpdate = await syncConnectedAccountSnapshot({
+                account,
+                connectedAccount: event.account || account.id,
+                event,
+            });
+
+            response.status(200).send(handledAccountUpdate ? 'Connected account synchronized.' : 'Connected account not linked in Firestore.');
+            return;
+        } catch (accountError) {
+            console.error('Database update failed for connected account webhook:', accountError);
+            response.status(500).send(`Internal Server Error: ${accountError.message}`);
+            return;
+        }
+    }
+
+    if (event.type === 'account.external_account.updated') {
+        try {
+            const externalAccount = event.data.object;
+            const handledExternalAccountUpdate = await syncExternalAccountSnapshot({
+                externalAccount,
+                connectedAccount: event.account,
+                event,
+            });
+
+            response.status(200).send(handledExternalAccountUpdate ? 'Connected account external payout account synchronized.' : 'Connected account not linked in Firestore.');
+            return;
+        } catch (externalAccountError) {
+            console.error('Database update failed for connected external account webhook:', externalAccountError);
+            response.status(500).send(`Internal Server Error: ${externalAccountError.message}`);
+            return;
+        }
+    }
+
+    if (['payout.created', 'payout.updated', 'payout.paid', 'payout.failed', 'payout.canceled'].includes(event.type)) {
+        try {
+            const payout = event.data.object;
+            const handledPayout = await upsertStripePayout({
+                payout,
+                connectedAccount: event.account,
+                event,
+            });
+
+            response.status(200).send(handledPayout ? 'Payout synchronized.' : 'Payout connected account not linked in Firestore.');
+            return;
+        } catch (payoutError) {
+            console.error('Database update failed for payout webhook:', payoutError);
+            response.status(500).send(`Internal Server Error: ${payoutError.message}`);
+            return;
+        }
     }
 
     // Handle the 'checkout.session.completed' event

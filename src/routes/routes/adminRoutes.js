@@ -7,6 +7,7 @@ const AdminDashboard = lazy(() => import("../../views/admin/AdminDashboard"))
 const SubscriptionList = lazy(() => import("../../views/admin/subscriptions/SubscriptionList"))
 const AddNewSubscription = lazy(() => import("../../views/admin/subscriptions/AddNewSubscription"))
 const SubscriptionDetailView = lazy(() => import("../../views/admin/subscriptions/SubscriptionDetailView"))
+const BillingFeeCalculator = lazy(() => import("../../views/admin/billing/BillingFeeCalculator"))
 
 const CompanyList = lazy(() => import("../../views/admin/company/CompanyList"))
 const CompanyDetailView = lazy(() => import("../../views/admin/company/CompanyDetailView"))
@@ -86,6 +87,12 @@ export const adminRoutes = [
     {
         path: '/admin/subscriptions/detail/:subscriptionId',
         element: <SubscriptionDetailView />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/billing-fee-calculator',
+        element: <BillingFeeCalculator />,
         role: 'Admin'
     }
     ,

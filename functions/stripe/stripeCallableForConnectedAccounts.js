@@ -148,6 +148,46 @@ const getCompanyConnectedAccountId = (companyData = {}) => (
   normalizeStripeAccountId(companyData.stripeConnectAccountId)
 );
 
+const normalizeApplicationFeePercent = (value) => {
+  if (value === undefined || value === null || value === '') return null;
+
+  const percent = Number(value);
+  if (!Number.isFinite(percent) || percent <= 0) return null;
+
+  return Math.min(Math.round(percent * 100) / 100, 100);
+};
+
+const resolveApplicationFee = (subscription = {}, companyData = {}) => {
+  const candidates = [
+    { source: 'subscriptionApplicationFeePercent', value: subscription.applicationFeePercent },
+    { source: 'subscriptionPlatformFeePercent', value: subscription.platformFeePercent },
+    { source: 'companyStripeApplicationFeePercent', value: companyData.stripeApplicationFeePercent },
+    { source: 'companyApplicationFeePercent', value: companyData.applicationFeePercent },
+    { source: 'environmentStripeApplicationFeePercent', value: process.env.STRIPE_APPLICATION_FEE_PERCENT },
+  ];
+
+  for (const candidate of candidates) {
+    const percent = normalizeApplicationFeePercent(candidate.value);
+    if (percent !== null) {
+      return {
+        percent,
+        source: candidate.source,
+      };
+    }
+  }
+
+  return {
+    percent: null,
+    source: 'none',
+  };
+};
+
+const stripeWebhookSecretConfigured = () => (
+  String(`${process.env.STRIPE_WEBHOOK_SECRET || ''},${process.env.STRIPE_WEBHOOK_SECRETS || ''}`)
+    .split(',')
+    .some((secret) => secret.trim())
+);
+
 const getCallableData = (data) => data?.data || data || {};
 
 const getCallableAuth = async (data, context, message) => {
@@ -1369,6 +1409,17 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
     throw new functions.https.HttpsError('failed-precondition', 'The company needs a Stripe connected account before Checkout can start.');
   }
 
+  const companySnapshot = await db.collection('companies').doc(companyId).get();
+  const companyData = companySnapshot.exists ? companySnapshot.data() : {};
+  const companyConnectedAccount = getCompanyConnectedAccountId(companyData);
+
+  if (companyConnectedAccount && connectedAccount !== companyConnectedAccount) {
+    throw new functions.https.HttpsError('permission-denied', 'Billing subscription is not connected to this company Stripe account.');
+  }
+
+  const applicationFee = resolveApplicationFee(subscription, companyData);
+  const applicationFeePercent = applicationFee.percent;
+
   const lineItems = buildCheckoutLineItems(subscription);
   if (lineItems.length === 0) {
     throw new functions.https.HttpsError('failed-precondition', 'At least one billable line item is required before Checkout can start.');
@@ -1389,7 +1440,16 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       salesCustomerId: subscription.customerId || '',
       createdByUserId: callableAuth.uid,
       stripeConnectedAccountId: connectedAccount,
+      applicationFeePercent: applicationFeePercent === null ? '' : String(applicationFeePercent),
+      applicationFeeSource: applicationFee.source,
     };
+    const subscriptionData = {
+      metadata,
+    };
+
+    if (applicationFeePercent !== null) {
+      subscriptionData.application_fee_percent = applicationFeePercent;
+    }
 
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
@@ -1398,9 +1458,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       line_items: lineItems,
       client_reference_id: billingSubscriptionId,
       metadata,
-      subscription_data: {
-        metadata,
-      },
+      subscription_data: subscriptionData,
       success_url: successUrl,
       cancel_url: cancelUrl,
     }, {
@@ -1422,6 +1480,8 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       manualBillingReason: 'autopayCheckoutStarted',
       nextAction: 'completeCheckout',
       customerCanPayImmediately: true,
+      applicationFeePercent,
+      platformFeeSource: applicationFee.source,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       stripeCheckoutCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
       stripeCheckoutCreatedByUserId: callableAuth.uid,
@@ -1447,6 +1507,8 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
         autopayStatus: 'checkoutStarted',
         manualBillingEnabled: subscription.manualBillingEnabled !== false,
         manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
+        applicationFeePercent,
+        platformFeeSource: applicationFee.source,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
     }
@@ -1833,12 +1895,13 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
       const canTransferFunds = transfersCapability === 'active';
       const hasBlockingRequirements = currentlyDue.length > 0 || pastDue.length > 0 || errors.length > 0;
       const canBillCustomers = canCreateCharges && canProcessCardPayments && !hasBlockingRequirements;
+      const applicationFee = resolveApplicationFee({}, companyData);
       const canRunLiveBilling = (
         Boolean(account.livemode) &&
         canBillCustomers &&
         canReceivePayouts &&
         canTransferFunds &&
-        Boolean(process.env.STRIPE_WEBHOOK_SECRET)
+        stripeWebhookSecretConfigured()
       );
 
       return {
@@ -1869,8 +1932,10 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
           transfers: transfersCapability,
         },
         platform: {
-          webhookSigningSecretConfigured: Boolean(process.env.STRIPE_WEBHOOK_SECRET),
+          webhookSigningSecretConfigured: stripeWebhookSecretConfigured(),
           stripeApiKeyConfigured: Boolean(process.env.STRIPE_API_KEY || process.env.STRIPE_SECRET_KEY || process.env.stripe_secret_key),
+          applicationFeePercent: applicationFee.percent,
+          applicationFeeSource: applicationFee.source,
         },
         defaultCurrency: account.default_currency || '',
         country: account.country || '',

@@ -123,6 +123,7 @@ const PerformanceHistoryImport = lazy(() => import("../../views/company/migratio
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
 const CompanySettings = lazy(() => import("../../views/company/settings/CompanySettings"))
+const StripeBillingSnapshot = lazy(() => import("../../views/company/settings/StripeBillingSnapshot"))
 const OnboardingChecklistSettings = lazy(() => import("../../views/company/settings/OnboardingChecklistSettings"))
 const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySetupGuide"))
 
@@ -181,6 +182,12 @@ export const sellerRoutes = [
         element: <CompanySettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/settings/stripe-billing',
+        element: <StripeBillingSnapshot />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
     }, {
         path: '/company/settings/payroll-setup',
         element: <Payroll mode="setup" />,
