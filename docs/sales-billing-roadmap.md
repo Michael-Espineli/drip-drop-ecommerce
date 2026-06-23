@@ -13,9 +13,36 @@ Sales is the finance workspace for customer billing. It should support two billi
 
 The one-off flow should stay owned by jobs. When purchased materials are assigned to a job, the job should handle customer billing for those materials instead of the purchased item being billed separately.
 
-## Pricing And Stripe Product Decision
+## Current Implementation Snapshot
+
+The Sales workflow now has enough structure to support a real billing rollout in phases:
+
+- `feature_flag_004` exposes the Sales workspace under Finance.
+- `src/views/company/sales/Sales.jsx` reads company-scoped sales records and summarizes agreements, billing profiles, billing subscriptions, invoices, accounts receivable, and payments.
+- `src/views/company/sales/SalesFinanceBoard.jsx` gives operators working views for invoices, payments, and subscriptions, including manual payment recording.
+- `src/views/company/sales/SalesCatalogItems.jsx` manages company-owned catalog building blocks for estimates, service agreements, invoices, and future Stripe handoff.
+- `src/views/company/sales/CreateSalesAgreement.jsx` and `src/views/company/sales/SalesAgreementDetail.jsx` support service agreement drafting, terms snapshots, pricing lines, internal manual acceptance, service agreement email send, and Stripe checkout handoff after acceptance.
+- `src/views/company/sales/CreateSalesInvoice.jsx` and `src/views/company/sales/SalesInvoiceDetail.jsx` support manual one-time invoices, editable invoice lines, customer email delivery, voiding, write-offs, and manual payment recording.
+- `src/views/company/sales/components/BillingReadinessCard.jsx` checks whether the selected company's connected Stripe account can bill customers and gives the company a setup link when action is needed.
+- `functions/stripe/stripeCallableForConnectedAccounts.js` can create sales billing subscription checkout sessions on the connected account, update Sales records, and apply configured platform fee percentages.
+- `functions/stripe/stripeWebHooks.js` syncs Stripe subscription, invoice, payment, connected account, external account, and payout events back into DripDrop Sales and company records.
+- `src/views/company/settings/StripeBillingSnapshot.jsx` is a separate owner-only Stripe readiness page linked from company Settings.
+- `src/views/admin/billing/BillingFeeCalculator.jsx` gives admins payment-fee comparison tables, custom transaction testing, Firebase cost estimates, and platform-fee coverage estimates.
+
+## Pricing, Stripe Connect, And Platform Fee Decision
 
 DripDrop owns the estimate and billing building blocks. Stripe is the payment rail and subscription/invoice processor, not the source of truth for what a pool company quoted.
+
+Companies subscribe to DripDrop for the base web app. Customer payment processing happens through the pool company's Stripe connected account so the company can collect customer payments and receive payouts. DripDrop can collect a platform fee from connected-account Stripe billing to help cover Firebase, hosting, support, and billing workflow costs.
+
+Current working pricing assumptions:
+
+- Card platform fee target: `0.08%`.
+- ACH platform fee target: `0.19%`.
+- ACH is the strongest competitive path because Stripe ACH plus the DripDrop fee can stay around QuickBooks' public ACH rate while still creating platform margin.
+- Card fees are more sensitive because Stripe's fixed card fee affects smaller invoices. The admin Billing Calculator should be used before changing public pricing.
+
+Important implementation note: Stripe subscription `application_fee_percent` is a single subscription-level percentage. If DripDrop truly needs different platform percentages for card vs ACH on the same subscription, that needs an explicit follow-up design instead of relying on one static `application_fee_percent`.
 
 ### Job Detail Estimates
 
@@ -30,12 +57,33 @@ DripDrop owns the estimate and billing building blocks. Stripe is the payment ra
 - Use reusable Stripe Products and Prices for recurring service offerings such as monthly residential service, twice-weekly service, and commercial service.
 - Store the app-side agreement and billing subscription in Sales so the company can still track the customer, terms, service location, and billing status inside DripDrop.
 - Stripe subscription ids, product ids, price ids, invoice ids, and payment ids should be references attached to the DripDrop records, not replacements for them.
+- Recurring subscriptions can start as manual DripDrop invoices until the customer completes Stripe autopay setup.
+- Once autopay is active, Stripe subscription webhooks should continue syncing invoice, payment, and failure state back to Sales.
+- Application/platform fee percent can be sourced from the billing subscription, company configuration, or environment default.
 
 ### Company-Owned Catalog
 
 - Company pricing building blocks should be company scoped because each pool company has its own pricing and terms.
 - Use `companies/{companyId}/salesCatalogItems` for reusable sales building blocks.
 - Keep Terms Templates at `companies/{companyId}/termsTemplates`. Do not move Terms Templates to a top-level collection without confirming the data model first.
+
+### Connected Account Ownership
+
+- Each app user can have a customer `stripeId` for subscribing to DripDrop.
+- Each company should have one `stripeConnectedAccountId` for customer billing and payouts.
+- The connected account setup/manage action should be owner-only in the company UI.
+- Multi-company users should always act against the selected company's `stripeConnectedAccountId`, not a user-level connected account id.
+- The company record remains the source of truth for which connected account belongs to that company.
+
+### Webhook And Snapshot Payload Setup
+
+- Use Stripe webhook snapshot payloads for the current implementation.
+- The webhook handler expects classic Stripe events with `event.data.object`.
+- Configure a Connected accounts webhook endpoint for connected account events.
+- Configure a Your account webhook endpoint if DripDrop platform subscription billing also needs to sync through the same function.
+- Store one signing secret in `STRIPE_WEBHOOK_SECRET` or multiple secrets in comma-separated `STRIPE_WEBHOOK_SECRETS`.
+- The current deployed webhook URL is `https://stripewebhook-52bwqpekza-uc.a.run.app`.
+- Required events include connected account updates, external account updates, payouts, checkout sessions, customer subscription changes, invoice finalized/paid/payment failed, and subscription deleted.
 
 ## Service Agreement Email Readiness
 
@@ -61,6 +109,8 @@ After send:
 - Stripe subscriptions, invoices, receipts, manual payments, and Accounts Receivable records should reference the accepted DripDrop agreement instead of replacing it.
 
 ## Core Records
+
+Current model names live in `src/utils/models/Sales.js`.
 
 ### Billing Account
 
@@ -117,12 +167,32 @@ Reusable line item shape:
 - Total in cents.
 - Taxable.
 
+### Payment And Payment Event
+
+Payment history should support both app-collected and manually recorded payments:
+
+- Stripe card and ACH payments.
+- Cash, check, bank transfer, external card, and other manual payments.
+- Payment status, amount, source invoice, source subscription, and source agreement.
+- Stripe payment intent, charge, invoice, receipt, and failure references when available.
+- Payment event history so webhook updates do not overwrite the audit trail.
+
+### Payout
+
+Connected account payouts should be visible to owners and admins:
+
+- Store recent connected account payouts under `companies/{companyId}/stripePayouts`.
+- Also keep root `stripePayouts` records for admin/reconciliation needs.
+- Track payout status, amount, arrival date, destination, failure reason, and last Stripe event id.
+
 ## Web First Slice
 
 - Add Sales under Finance nav.
 - Use `src/views/company/sales/Sales.jsx` as the Sales workspace.
 - Keep one-off billing linked to job detail billing.
 - Add recurring billing pages after the service agreement model is decided.
+- Keep the separate owner-only Stripe Billing Snapshot linked from company Settings.
+- Keep admin billing calculators under `/admin/billing-fee-calculator` for pricing, Firebase cost, and payment volume tests.
 
 ## iOS First Slice
 
@@ -131,9 +201,48 @@ Reusable line item shape:
 - Keep job billing actions in Job Detail.
 - Use feature flag 4 to make the Sales area easy to enable when ready.
 
+## Deployment And Operations Notes
+
+- Upgrade Firebase Functions off Node.js 20 before the next production deployment window. Firebase deploy output warned that Node.js 20 decommissions on `2026-10-30`.
+- Keep Stripe API keys and webhook signing secrets out of tracked source.
+- Use the Admin Billing Calculator to estimate whether base subscription fees plus platform fees cover Firebase usage.
+- Use snapshot webhook payloads until the webhook handler is intentionally rewritten to support Stripe thin events.
+- Before enabling real billing for companies, test Stripe account setup, checkout, subscription sync, invoice sync, payment failure sync, and payout sync with Stripe test events.
+
+## What To Work On Next
+
+Recommended next implementation order:
+
+1. Finalize platform-fee policy.
+   Decide whether the first production rollout uses one flat subscription-level `application_fee_percent` or needs method-specific card/ACH fee logic.
+
+2. Finish production webhook setup.
+   Create the Stripe snapshot webhook endpoints, set the signing secret environment variables, send test events, and verify the Stripe Billing Snapshot page changes from missing/stale to synced.
+
+3. Harden the customer acceptance path.
+   Finish signed customer review URLs, homeowner acceptance/decline, manual company acceptance rules, and acceptance audit fields before broad use.
+
+4. Complete payment method and autopay UX.
+   Make it obvious when a customer still needs to add ACH/card autopay and when a subscription is still running as manual invoices.
+
+5. Build the recurring billing run.
+   Add a monthly run or queue that creates recurring invoice drafts, identifies exceptions, prevents duplicate period billing, and supports review before sending.
+
+6. Connect job detail one-off billing.
+   Generate Sales invoices from accepted job estimates and assigned purchased materials while keeping the job as the owner of that one-off billing flow.
+
+7. Improve reconciliation.
+   Link payouts back to payments/invoices where possible, expose payout status in admin/company finance views, and add export/reporting for deposits.
+
+8. Add guardrails and tests.
+   Add callable and webhook tests for connected account ownership, multi-company users, subscription checkout, invoice/payment webhook sync, and manual payment balance updates.
+
 ## Open Decisions
 
 - Whether service agreements live in a new `serviceAgreements` collection or migrate from `recurringContracts`.
 - Whether billing runs create invoice drafts immediately or stage draft line items first.
 - How recurring service stop completion should affect monthly billing exceptions.
 - Whether skipped service stops create credits automatically or only flag the invoice for review.
+- Whether platform fee percent should be company-level, subscription-level, environment default, or method-specific by payment rail.
+- Whether the first production billing rollout should be ACH-first, card-and-ACH, or manual invoice first with autopay opt-in.
+- Whether payout reconciliation should be company-facing only, admin-facing only, or both.

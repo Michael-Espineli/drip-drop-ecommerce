@@ -7,10 +7,13 @@ import {
   FaExclamationTriangle,
   FaGlobe,
   FaMapMarkerAlt,
+  FaPlus,
   FaSave,
+  FaSearch,
   FaSyncAlt,
   FaTimes,
   FaTools,
+  FaTrash,
 } from 'react-icons/fa';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
@@ -24,6 +27,101 @@ const SERVICE_OPTIONS = [
   { value: 'chemical_balancing', label: 'Chemical Balancing' },
   { value: 'leak_detection', label: 'Leak Detection' },
   { value: 'pool_inspection', label: 'Pool Inspection' },
+  { value: 'filter_cleaning', label: 'Filter Cleaning' },
+  { value: 'cartridge_filter_replacement', label: 'Cartridge Filter Replacement' },
+  { value: 'de_filter_service', label: 'DE Filter Service' },
+  { value: 'sand_filter_service', label: 'Sand Filter Service' },
+  { value: 'pump_repair', label: 'Pump Repair' },
+  { value: 'pump_replacement', label: 'Pump Replacement' },
+  { value: 'variable_speed_pump_installation', label: 'Variable Speed Pump Installation' },
+  { value: 'motor_replacement', label: 'Motor Replacement' },
+  { value: 'heater_repair', label: 'Heater Repair' },
+  { value: 'heater_installation', label: 'Heater Installation' },
+  { value: 'heat_pump_service', label: 'Heat Pump Service' },
+  { value: 'automation_setup', label: 'Automation Setup' },
+  { value: 'automation_repair', label: 'Automation Repair' },
+  { value: 'salt_system_installation', label: 'Salt System Installation' },
+  { value: 'salt_cell_cleaning', label: 'Salt Cell Cleaning' },
+  { value: 'salt_cell_replacement', label: 'Salt Cell Replacement' },
+  { value: 'chlorine_generator_service', label: 'Chlorine Generator Service' },
+  { value: 'pool_opening', label: 'Pool Opening' },
+  { value: 'pool_closing', label: 'Pool Closing' },
+  { value: 'green_pool_cleanup', label: 'Green Pool Cleanup' },
+  { value: 'algae_treatment', label: 'Algae Treatment' },
+  { value: 'black_algae_treatment', label: 'Black Algae Treatment' },
+  { value: 'phosphate_treatment', label: 'Phosphate Treatment' },
+  { value: 'water_testing', label: 'Water Testing' },
+  { value: 'water_chemistry_startup', label: 'Water Chemistry Startup' },
+  { value: 'acid_wash', label: 'Acid Wash' },
+  { value: 'chlorine_wash', label: 'Chlorine Wash' },
+  { value: 'tile_cleaning', label: 'Tile Cleaning' },
+  { value: 'tile_repair', label: 'Tile Repair' },
+  { value: 'coping_repair', label: 'Coping Repair' },
+  { value: 'plaster_repair', label: 'Plaster Repair' },
+  { value: 'resurfacing_consultation', label: 'Resurfacing Consultation' },
+  { value: 'pool_remodeling_consultation', label: 'Pool Remodeling Consultation' },
+  { value: 'pool_light_repair', label: 'Pool Light Repair' },
+  { value: 'led_light_upgrade', label: 'LED Light Upgrade' },
+  { value: 'gfci_troubleshooting', label: 'GFCI Troubleshooting' },
+  { value: 'electrical_diagnostics', label: 'Electrical Diagnostics' },
+  { value: 'plumbing_leak_repair', label: 'Plumbing Leak Repair' },
+  { value: 'valve_repair', label: 'Valve Repair' },
+  { value: 'valve_replacement', label: 'Valve Replacement' },
+  { value: 'skimmer_repair', label: 'Skimmer Repair' },
+  { value: 'skimmer_replacement', label: 'Skimmer Replacement' },
+  { value: 'main_drain_service', label: 'Main Drain Service' },
+  { value: 'return_line_repair', label: 'Return Line Repair' },
+  { value: 'vacuum_line_repair', label: 'Vacuum Line Repair' },
+  { value: 'cleaner_repair', label: 'Cleaner Repair' },
+  { value: 'robotic_cleaner_setup', label: 'Robotic Cleaner Setup' },
+  { value: 'pressure_cleaner_service', label: 'Pressure Cleaner Service' },
+  { value: 'suction_cleaner_service', label: 'Suction Cleaner Service' },
+  { value: 'pool_cover_installation', label: 'Pool Cover Installation' },
+  { value: 'pool_cover_repair', label: 'Pool Cover Repair' },
+  { value: 'safety_cover_service', label: 'Safety Cover Service' },
+  { value: 'solar_cover_service', label: 'Solar Cover Service' },
+  { value: 'solar_heating_repair', label: 'Solar Heating Repair' },
+  { value: 'solar_heating_installation', label: 'Solar Heating Installation' },
+  { value: 'spa_cleaning', label: 'Spa Cleaning' },
+  { value: 'spa_chemical_service', label: 'Spa Chemical Service' },
+  { value: 'spa_heater_repair', label: 'Spa Heater Repair' },
+  { value: 'spa_jet_repair', label: 'Spa Jet Repair' },
+  { value: 'spa_drain_and_fill', label: 'Spa Drain and Fill' },
+  { value: 'water_feature_repair', label: 'Water Feature Repair' },
+  { value: 'fountain_service', label: 'Fountain Service' },
+  { value: 'waterfall_service', label: 'Waterfall Service' },
+  { value: 'deck_jet_repair', label: 'Deck Jet Repair' },
+  { value: 'autofill_repair', label: 'Autofill Repair' },
+  { value: 'autofill_installation', label: 'Autofill Installation' },
+  { value: 'pool_drain_and_refill', label: 'Pool Drain and Refill' },
+  { value: 'calcium_removal', label: 'Calcium Removal' },
+  { value: 'scale_treatment', label: 'Scale Treatment' },
+  { value: 'stain_treatment', label: 'Stain Treatment' },
+  { value: 'metal_sequestration', label: 'Metal Sequestration' },
+  { value: 'enzyme_treatment', label: 'Enzyme Treatment' },
+  { value: 'filter_pressure_diagnostics', label: 'Filter Pressure Diagnostics' },
+  { value: 'flow_issue_diagnostics', label: 'Flow Issue Diagnostics' },
+  { value: 'air_leak_diagnostics', label: 'Air Leak Diagnostics' },
+  { value: 'priming_issue_repair', label: 'Priming Issue Repair' },
+  { value: 'equipment_pad_inspection', label: 'Equipment Pad Inspection' },
+  { value: 'equipment_pad_plumbing', label: 'Equipment Pad Plumbing' },
+  { value: 'equipment_upgrade_consultation', label: 'Equipment Upgrade Consultation' },
+  { value: 'new_pool_startup', label: 'New Pool Startup' },
+  { value: 'pool_school_orientation', label: 'Pool School Orientation' },
+  { value: 'weekly_maintenance', label: 'Weekly Maintenance' },
+  { value: 'biweekly_maintenance', label: 'Biweekly Maintenance' },
+  { value: 'one_time_cleaning', label: 'One Time Cleaning' },
+  { value: 'vacation_pool_care', label: 'Vacation Pool Care' },
+  { value: 'storm_cleanup', label: 'Storm Cleanup' },
+  { value: 'debris_removal', label: 'Debris Removal' },
+  { value: 'fire_ash_cleanup', label: 'Fire Ash Cleanup' },
+  { value: 'hoa_pool_maintenance', label: 'HOA Pool Maintenance' },
+  { value: 'commercial_pool_maintenance', label: 'Commercial Pool Maintenance' },
+  { value: 'apartment_pool_service', label: 'Apartment Pool Service' },
+  { value: 'hotel_pool_service', label: 'Hotel Pool Service' },
+  { value: 'municipal_pool_service', label: 'Municipal Pool Service' },
+  { value: 'warranty_inspection', label: 'Warranty Inspection' },
+  { value: 'pre_purchase_pool_inspection', label: 'Pre-Purchase Pool Inspection' },
 ];
 
 const toList = (value) => {
@@ -56,14 +154,33 @@ const formatOfferingLabel = (value) => {
   return option?.label || labelize(text);
 };
 
-const normalizeOfferingValue = (value) => {
+const getOfferingOption = (value) => {
   const text = String(value || '').trim();
-  const option = SERVICE_OPTIONS.find((service) => (
+  if (!text) return null;
+
+  return SERVICE_OPTIONS.find((service) => (
     service.value.toLowerCase() === text.toLowerCase()
     || service.label.toLowerCase() === text.toLowerCase()
-  ));
+  )) || null;
+};
+
+const normalizeOfferingValue = (value) => {
+  const text = String(value || '').trim();
+  const option = getOfferingOption(text);
 
   return option?.value || text;
+};
+
+const normalizeOfferingList = (value) => {
+  const uniqueValues = new Map();
+  toList(value).forEach((item) => {
+    const normalized = normalizeOfferingValue(item);
+    if (normalized) {
+      uniqueValues.set(normalized.toLowerCase(), normalized);
+    }
+  });
+
+  return [...uniqueValues.values()];
 };
 
 const safeHref = (value = '') => {
@@ -240,6 +357,176 @@ const ListField = ({
   </label>
 );
 
+const OfferingsField = ({
+  label,
+  value,
+  editMode,
+  onChange,
+  helper = '',
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [customOffering, setCustomOffering] = useState('');
+
+  const selectedServices = useMemo(() => normalizeOfferingList(value), [value]);
+  const selectedKeys = useMemo(
+    () => new Set(selectedServices.map((service) => service.toLowerCase())),
+    [selectedServices]
+  );
+  const selectedCustomServices = selectedServices.filter((service) => !getOfferingOption(service));
+  const filteredOptions = useMemo(() => {
+    const query = searchTerm.trim().toLowerCase();
+    if (!query) return SERVICE_OPTIONS;
+
+    return SERVICE_OPTIONS.filter((service) => (
+      service.label.toLowerCase().includes(query)
+      || service.value.toLowerCase().includes(query)
+    ));
+  }, [searchTerm]);
+
+  const updateSelection = (nextServices) => {
+    onChange(normalizeOfferingList(nextServices));
+  };
+
+  const toggleService = (serviceValue) => {
+    if (selectedKeys.has(serviceValue.toLowerCase())) {
+      updateSelection(selectedServices.filter((service) => service.toLowerCase() !== serviceValue.toLowerCase()));
+      return;
+    }
+
+    updateSelection([...selectedServices, serviceValue]);
+  };
+
+  const removeService = (serviceValue) => {
+    updateSelection(selectedServices.filter((service) => service.toLowerCase() !== serviceValue.toLowerCase()));
+  };
+
+  const handleAddCustom = () => {
+    const normalized = normalizeOfferingValue(customOffering);
+    if (!normalized) return;
+
+    if (selectedKeys.has(normalized.toLowerCase())) {
+      setCustomOffering('');
+      return;
+    }
+
+    updateSelection([...selectedServices, normalized]);
+    setCustomOffering('');
+  };
+
+  return (
+    <div className="block">
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+        <span className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</span>
+        <span className="text-xs font-semibold text-slate-500">
+          {selectedServices.length} selected
+        </span>
+      </div>
+
+      {!editMode ? (
+        <BadgeList items={value} formatter={formatOfferingLabel} />
+      ) : (
+        <div className="mt-2 space-y-3">
+          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+            <div className="relative">
+              <FaSearch className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-xs text-slate-400" />
+              <input
+                type="search"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder={`Search ${SERVICE_OPTIONS.length} service options`}
+                className="w-full rounded-md border border-slate-300 bg-white py-2 pl-8 pr-3 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              />
+            </div>
+
+            <div className="mt-3 max-h-72 overflow-y-auto rounded-md border border-slate-200 bg-white">
+              {filteredOptions.length > 0 ? (
+                <div className="grid gap-0 sm:grid-cols-2">
+                  {filteredOptions.map((service) => {
+                    const checked = selectedKeys.has(service.value.toLowerCase());
+
+                    return (
+                      <label
+                        key={service.value}
+                        className="flex min-h-11 cursor-pointer items-center gap-3 border-b border-slate-100 px-3 py-2 text-sm font-semibold text-slate-800 last:border-b-0 hover:bg-blue-50"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleService(service.value)}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                        />
+                        <span>{service.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="px-3 py-4 text-sm font-semibold text-slate-500">No matching services.</p>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <input
+              type="text"
+              value={customOffering}
+              onChange={(event) => setCustomOffering(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  handleAddCustom();
+                }
+              }}
+              placeholder="Add custom service"
+              className="min-w-0 flex-1 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+            />
+            <button
+              type="button"
+              onClick={handleAddCustom}
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800"
+            >
+              <FaPlus />
+              Add
+            </button>
+          </div>
+
+          {selectedServices.length > 0 && (
+            <div className="rounded-md border border-blue-100 bg-blue-50 p-3">
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Selected Services</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {selectedServices.map((service) => (
+                  <span
+                    key={service}
+                    className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-2.5 py-1 text-xs font-semibold text-blue-800"
+                  >
+                    {formatOfferingLabel(service)}
+                    <button
+                      type="button"
+                      onClick={() => removeService(service)}
+                      aria-label={`Remove ${formatOfferingLabel(service)}`}
+                      className="rounded-full p-0.5 text-blue-500 hover:bg-blue-100 hover:text-blue-800"
+                    >
+                      <FaTrash className="text-[10px]" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {selectedCustomServices.length > 0 && (
+            <p className="text-xs text-slate-500">
+              Custom: {selectedCustomServices.map(formatOfferingLabel).join(', ')}
+            </p>
+          )}
+
+          {helper && <p className="text-xs text-slate-500">{helper}</p>}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const BadgeList = ({ items, formatter = (item) => item, tone = 'slate' }) => {
   const list = toList(items);
   const toneClass = tone === 'blue'
@@ -344,10 +631,10 @@ const CompanyInfo = () => {
     setFormData((prev) => ({ ...prev, [name]: toList(value) }));
   };
 
-  const handleOfferingsChange = (e) => {
+  const handleOfferingsSelectionChange = (services) => {
     setFormData((prev) => ({
       ...prev,
-      services: toList(e.target.value).map(normalizeOfferingValue),
+      services: normalizeOfferingList(services),
     }));
   };
 
@@ -360,7 +647,7 @@ const CompanyInfo = () => {
     photoUrl: formData.photoUrl || '',
     serviceZipCodes: toList(formData.serviceZipCodes),
     serviceAreas: toList(formData.serviceAreas),
-    services: toList(formData.services),
+    services: normalizeOfferingList(formData.services),
     updatedAt: serverTimestamp(),
   });
 
@@ -370,7 +657,7 @@ const CompanyInfo = () => {
       ...formData,
       serviceZipCodes: toList(formData.serviceZipCodes),
       serviceAreas: toList(formData.serviceAreas),
-      services: toList(formData.services),
+      services: normalizeOfferingList(formData.services),
     });
 
     const updatePromise = async () => {
@@ -599,15 +886,12 @@ const CompanyInfo = () => {
                     helper="Separate city/state service areas with commas."
                     placeholder="La Mesa, El Cajon, Spring Valley"
                   />
-                  <ListField
+                  <OfferingsField
                     label="Services Offered"
-                    name="services"
                     value={formData.services}
-                    displayFormatter={formatOfferingLabel}
                     editMode={editMode}
-                    onChange={handleOfferingsChange}
-                    helper="Use commas. Known setup offerings will save to the same values used by iOS."
-                    placeholder="Pool Cleaning, Equipment Repair"
+                    onChange={handleOfferingsSelectionChange}
+                    helper="Choose from the list or add a custom service."
                   />
                 </div>
                 <div className="min-h-[22rem] overflow-hidden rounded-md border border-slate-200 bg-slate-100">

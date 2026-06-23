@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   addDoc,
@@ -250,6 +250,41 @@ const ReviewRow = ({ label, value, status, tone = "slate" }) => (
   </div>
 );
 
+const readinessTone = (value) => (value ? "emerald" : "amber");
+
+const readinessText = (value, enabled = "Enabled", disabled = "Needs attention") => (
+  value ? enabled : disabled
+);
+
+const StripeInfoRow = ({ label, value, status, tone = "slate" }) => (
+  <div className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2 text-sm">
+    <dt className="min-w-0 text-slate-500">{label}</dt>
+    <dd className="flex min-w-0 items-center gap-2 text-right">
+      <span className="truncate font-bold text-slate-950">{value || "Not set"}</span>
+      {status ? <StatusPill tone={tone}>{status}</StatusPill> : null}
+    </dd>
+  </div>
+);
+
+const StripeRequirementList = ({ title, items = [], tone = "amber" }) => {
+  const visibleItems = Array.isArray(items) ? items.filter(Boolean) : [];
+
+  if (visibleItems.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {visibleItems.map((item, index) => (
+          <StatusPill key={`${title}-${item}-${index}`} tone={tone}>
+            {labelize(item.reason || item.code || item.requirement || item)}
+          </StatusPill>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const CompanyAccountingWorkspace = () => {
   const {
     recentlySelectedCompany,
@@ -494,8 +529,11 @@ const CompanyAccountingWorkspace = () => {
     },
   ]), [accounting]);
 
-  const verifyStripeReadiness = async () => {
-    if (!stripeConnectedAccountId || stripeReadinessLoading) return;
+  const verifyStripeReadiness = useCallback(async ({ showToast = true } = {}) => {
+    if (!stripeConnectedAccountId || !recentlySelectedCompany) {
+      setStripeReadiness(null);
+      return;
+    }
 
     setStripeReadinessLoading(true);
     try {
@@ -506,13 +544,23 @@ const CompanyAccountingWorkspace = () => {
         companyId: recentlySelectedCompany,
       });
       setStripeReadiness(result.data);
+      if (showToast) toast.success("Stripe account checked.");
     } catch (error) {
       console.error("Unable to verify Stripe account", error);
-      toast.error(error.message || "Unable to verify Stripe account.");
+      if (showToast) toast.error(error.message || "Unable to verify Stripe account.");
     } finally {
       setStripeReadinessLoading(false);
     }
-  };
+  }, [recentlySelectedCompany, stripeConnectedAccountId]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany || !stripeConnectedAccountId) {
+      setStripeReadiness(null);
+      return;
+    }
+
+    verifyStripeReadiness({ showToast: false });
+  }, [recentlySelectedCompany, stripeConnectedAccountId, verifyStripeReadiness]);
 
   const markPaymentReconciled = async (payment) => {
     setReconcilingPaymentId(payment.id);
@@ -615,7 +663,7 @@ const CompanyAccountingWorkspace = () => {
           <NavButton href="#reconciliation" icon={FaClipboardCheck} label="Reconciliation" />
           <NavButton href="#receivables" icon={FaFileInvoiceDollar} label="AR Aging" />
           <NavButton href="#expenses" icon={FaReceipt} label="AP & Expenses" />
-          <NavButton href="#payouts" icon={FaMoneyBillTransfer} label="Payouts" />
+          <NavButton href="#payouts" icon={FaMoneyBillTransfer} label="Stripe" />
           <NavButton href="#tax" icon={FaScaleBalanced} label="Tax" />
           <NavButton href="#documents" icon={FaBuildingColumns} label="Documents" />
           <NavButton href="#close" icon={FaCheck} label="Close" />
@@ -659,7 +707,7 @@ const CompanyAccountingWorkspace = () => {
             <NavButton href="#reconciliation" icon={FaClipboardCheck} label="Reconcile" />
             <NavButton href="#receivables" icon={FaFileInvoiceDollar} label="AR" />
             <NavButton href="#expenses" icon={FaReceipt} label="Expenses" />
-            <NavButton href="#payouts" icon={FaMoneyBillTransfer} label="Payouts" />
+            <NavButton href="#payouts" icon={FaMoneyBillTransfer} label="Stripe" />
             <NavButton href="#tax" icon={FaScaleBalanced} label="Tax" />
             <NavButton href="#documents" icon={FaBuildingColumns} label="Docs" />
             <NavButton href="#close" icon={FaCheck} label="Close" />
@@ -901,33 +949,116 @@ const CompanyAccountingWorkspace = () => {
           <section id="payouts" className="grid gap-4 xl:grid-cols-[0.9fr_1.4fr]">
             <Panel className="p-5">
               <SectionHeader
-                eyebrow="Payouts"
-                title="Stripe Readiness"
+                eyebrow="Stripe"
+                title="Connected Account Snapshot"
                 action={
-                  <button
-                    type="button"
-                    onClick={verifyStripeReadiness}
-                    disabled={!stripeConnectedAccountId || stripeReadinessLoading}
-                    className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {stripeReadinessLoading ? "Checking" : "Check Stripe"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <Link
+                      to="/company/settings/stripe-billing"
+                      className="rounded-md border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-emerald-700 hover:bg-emerald-50"
+                    >
+                      Billing Snapshot
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => verifyStripeReadiness()}
+                      disabled={!stripeConnectedAccountId || stripeReadinessLoading}
+                      className="rounded-md bg-emerald-700 px-3 py-2 text-sm font-bold text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {stripeReadinessLoading ? "Checking" : "Refresh Stripe"}
+                    </button>
+                  </div>
                 }
               />
               <dl className="mt-5 space-y-3 text-sm">
-                <div className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
-                  <dt className="text-slate-500">Connected Account</dt>
-                  <dd className="truncate font-bold text-slate-950">{stripeConnectedAccountId || "Not connected"}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
-                  <dt className="text-slate-500">Charges</dt>
-                  <dd className="font-bold text-slate-950">{stripeReadiness ? (stripeReadiness.chargesEnabled ? "Enabled" : "Disabled") : "Unchecked"}</dd>
-                </div>
-                <div className="flex items-center justify-between gap-3 rounded-md bg-slate-50 px-3 py-2">
-                  <dt className="text-slate-500">Payouts</dt>
-                  <dd className="font-bold text-slate-950">{stripeReadiness ? (stripeReadiness.payoutsEnabled ? "Enabled" : "Pending") : "Unchecked"}</dd>
-                </div>
+                <StripeInfoRow label="Connected Account" value={stripeReadiness?.accountId || stripeConnectedAccountId || "Not connected"} />
+                <StripeInfoRow
+                  label="Mode"
+                  value={stripeReadiness ? (stripeReadiness.livemode ? "Live" : "Test") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.livemode ? "Live mode" : "Test mode") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.livemode) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Live Billing"
+                  value={stripeReadiness ? readinessText(stripeReadiness.canRunLiveBilling, "Ready", "Not ready") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.canRunLiveBilling ? "Ready" : "Review") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.canRunLiveBilling) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Charges"
+                  value={stripeReadiness ? readinessText(stripeReadiness.chargesEnabled, "Enabled", "Disabled") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.chargesEnabled ? "OK" : "Needs setup") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.chargesEnabled) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Card Payments"
+                  value={stripeReadiness ? readinessText(stripeReadiness.cardPaymentsEnabled, "Enabled", "Pending") : "Unchecked"}
+                  status={stripeReadiness?.capabilities?.cardPayments ? labelize(stripeReadiness.capabilities.cardPayments) : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.cardPaymentsEnabled) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Payouts"
+                  value={stripeReadiness ? readinessText(stripeReadiness.payoutsEnabled, "Enabled", "Pending") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.payoutsEnabled ? "OK" : "Needs setup") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.payoutsEnabled) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Transfers"
+                  value={stripeReadiness ? readinessText(stripeReadiness.transfersEnabled, "Enabled", "Pending") : "Unchecked"}
+                  status={stripeReadiness?.capabilities?.transfers ? labelize(stripeReadiness.capabilities.transfers) : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.transfersEnabled) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Onboarding"
+                  value={stripeReadiness ? readinessText(stripeReadiness.detailsSubmitted, "Submitted", "Incomplete") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.detailsSubmitted ? "Submitted" : "Needs owner") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.detailsSubmitted) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Webhook Secret"
+                  value={stripeReadiness ? readinessText(stripeReadiness.platform?.webhookSigningSecretConfigured, "Configured", "Missing") : "Unchecked"}
+                  status={stripeReadiness ? (stripeReadiness.platform?.webhookSigningSecretConfigured ? "Sync ready" : "Required") : ""}
+                  tone={stripeReadiness ? readinessTone(stripeReadiness.platform?.webhookSigningSecretConfigured) : "slate"}
+                />
+                <StripeInfoRow
+                  label="Platform Fee"
+                  value={stripeReadiness?.platform?.applicationFeePercent ? `${stripeReadiness.platform.applicationFeePercent}%` : "Rail based"}
+                  status={stripeReadiness?.platform?.applicationFeeSource ? labelize(stripeReadiness.platform.applicationFeeSource) : "Card/ACH"}
+                />
+                <StripeInfoRow label="Default Currency" value={String(stripeReadiness?.defaultCurrency || "usd").toUpperCase()} />
+                <StripeInfoRow label="Country" value={stripeReadiness?.country || "US"} />
+                <StripeInfoRow label="Business Type" value={labelize(stripeReadiness?.businessType || "")} />
+                <StripeInfoRow label="Business Name" value={stripeReadiness?.businessProfile?.name || stripeReadiness?.dashboard?.displayName || ""} />
+                <StripeInfoRow label="Stripe Email" value={stripeReadiness?.email || ""} />
+                <StripeInfoRow
+                  label="Payout Schedule"
+                  value={stripeReadiness?.payoutsSchedule?.interval
+                    ? labelize(stripeReadiness.payoutsSchedule.interval)
+                    : "Not returned"}
+                  status={stripeReadiness?.payoutsSchedule?.delayDays !== "" ? `${stripeReadiness.payoutsSchedule.delayDays} day delay` : ""}
+                />
               </dl>
+
+              {stripeReadiness?.disabledReason && (
+                <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  <p className="font-bold">Stripe disabled reason</p>
+                  <p className="mt-1">{labelize(stripeReadiness.disabledReason)}</p>
+                </div>
+              )}
+
+              <div className="mt-4 space-y-3">
+                <StripeRequirementList title="Currently Due" items={stripeReadiness?.currentlyDue || []} />
+                <StripeRequirementList title="Past Due" items={stripeReadiness?.pastDue || []} tone="rose" />
+                <StripeRequirementList title="Pending Verification" items={stripeReadiness?.pendingVerification || []} tone="slate" />
+                <StripeRequirementList title="Future Requirements" items={stripeReadiness?.futureRequirements?.currentlyDue || []} tone="slate" />
+                <StripeRequirementList title="Errors" items={stripeReadiness?.errors || []} tone="rose" />
+              </div>
+
+              {!stripeConnectedAccountId && (
+                <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  This company does not have a Stripe connected account saved yet.
+                </div>
+              )}
             </Panel>
 
             <Panel className="p-5">

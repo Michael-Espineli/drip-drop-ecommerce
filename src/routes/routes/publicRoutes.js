@@ -27,6 +27,7 @@ const PublicServiceRequest = lazy(() => import("../../views/public/PublicService
 const PublicServiceRequestVerification = lazy(() => import("../../views/public/PublicServiceRequestVerification"))
 const PublicServiceAgreementLanding = lazy(() => import("../../views/public/PublicServiceAgreementLanding"))
 const PublicServiceAgreementInspectionReport = lazy(() => import("../../views/public/PublicServiceAgreementInspectionReport"))
+const ClientInvoiceDetail = lazy(() => import("../../views/client/billing/ClientInvoiceDetail"))
 
 const TermsOfService = lazy(() => import("../../views/public/TermsOfService"))
 
@@ -134,6 +135,11 @@ const publicRoutes = [
   {
     path: "/customer/service-agreements/:agreementId",
     element: <PublicServiceAgreementLanding />,
+  }
+  ,
+  {
+    path: "/customer/invoices/:invoiceId",
+    element: <ClientInvoiceDetail />,
   }
   ,
   {

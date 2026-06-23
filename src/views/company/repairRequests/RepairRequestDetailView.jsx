@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where } from 'firebase/firestore';
+import { XMarkIcon } from '@heroicons/react/24/outline';
 import { db, storage } from '../../../utils/config';
 import {
   REPAIR_REQUEST_STATUS,
@@ -47,6 +48,7 @@ const RepairRequestDetailView = () => {
   const [connectingJob, setConnectingJob] = useState(false);
   const [photoFiles, setPhotoFiles] = useState([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
   const repairRequestJobIdsKey = (repairRequest?.jobIds || []).join("|");
 
   const getRequestRef = (path = sourcePath) => (
@@ -196,6 +198,22 @@ const RepairRequestDetailView = () => {
     fetchConnectedEquipmentStatus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repairRequest?.equipmentId, sourcePath, recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!selectedPhoto) return undefined;
+
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") {
+        setSelectedPhoto(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [selectedPhoto]);
 
   const handleCreateJob = () => {
     if (!requirePermission("22", "create jobs")) return;
@@ -531,13 +549,21 @@ const RepairRequestDetailView = () => {
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       {photoUrls.map((photo, index) => {
                         const photoSrc = getRepairRequestPhotoUrl(photo);
+                        const photoAlt = photo?.description || photo?.name || `Repair photo ${index + 1}`;
                         return photoSrc ? (
-                          <img
-                            key={index}
-                            src={photoSrc}
-                            alt={`Repair photo ${index + 1}`}
-                            className="rounded-md w-full h-auto object-cover"
-                          />
+                          <button
+                            key={`${photoSrc}-${index}`}
+                            type="button"
+                            onClick={() => setSelectedPhoto({ src: photoSrc, alt: photoAlt })}
+                            className="group overflow-hidden rounded-md border border-slate-200 bg-slate-100 text-left shadow-sm transition hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            aria-label={`Expand ${photoAlt}`}
+                          >
+                            <img
+                              src={photoSrc}
+                              alt={photoAlt}
+                              className="aspect-square w-full object-cover transition duration-200 group-hover:scale-105"
+                            />
+                          </button>
                         ) : null;
                       })}
                     </div>
@@ -730,6 +756,31 @@ const RepairRequestDetailView = () => {
           </div>
         </div>
       </div>
+
+      {selectedPhoto && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4"
+          onClick={() => setSelectedPhoto(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Expanded repair photo"
+        >
+          <button
+            type="button"
+            onClick={() => setSelectedPhoto(null)}
+            className="absolute right-4 top-4 inline-flex h-11 w-11 items-center justify-center rounded-full bg-white/90 text-slate-900 shadow-lg transition hover:bg-white focus:outline-none focus:ring-2 focus:ring-white"
+            aria-label="Close expanded photo"
+          >
+            <XMarkIcon className="h-6 w-6" aria-hidden="true" />
+          </button>
+          <img
+            src={selectedPhoto.src}
+            alt={selectedPhoto.alt}
+            className="max-h-[88vh] max-w-[92vw] rounded-lg object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   );
 };

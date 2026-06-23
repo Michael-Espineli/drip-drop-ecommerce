@@ -263,11 +263,5 @@ export const clientRoutes = [
         element: <ClientInvoiceDetail />,
         ability: ['Admin', 'Client'],
         role: 'Client'
-    },
-    {
-        path: '/customer/invoices/:invoiceId',
-        element: <ClientInvoiceDetail />,
-        ability: ['Admin', 'Client'],
-        role: 'Client'
     }
 ]

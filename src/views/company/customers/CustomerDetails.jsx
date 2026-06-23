@@ -4,7 +4,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
-import { ClipboardDocumentIcon, EnvelopeIcon, PencilSquareIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { ClipboardDocumentIcon, DocumentDuplicateIcon, EnvelopeIcon, PencilSquareIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
@@ -3017,6 +3017,15 @@ export default function CustomerDetails() {
                         </div>
 
                         <div className="flex flex-wrap gap-2">
+                            {can("12") && (
+                                <Link
+                                    to={`/company/customers/duplicate/${customer.id}`}
+                                    className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                >
+                                    <DocumentDuplicateIcon className="h-4 w-4" />
+                                    Duplicate
+                                </Link>
+                            )}
                             {can("14") && !customer.userId && (
                                 <button
                                     onClick={handleCreateCustomerInviteLink}

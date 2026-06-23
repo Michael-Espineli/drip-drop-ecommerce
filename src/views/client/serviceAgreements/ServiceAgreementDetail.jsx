@@ -10,6 +10,7 @@ import {
   DocumentTextIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
+import PaymentMethodSelector from '../../../components/sales/PaymentMethodSelector';
 import { Context } from '../../../context/AuthContext';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
@@ -22,6 +23,7 @@ import {
   formatServiceFrequency,
 } from '../../../utils/sales/agreementCadence';
 import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
+import { SalesPaymentMethodType } from '../../../utils/sales/paymentMethodFees';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -126,6 +128,10 @@ const ServiceAgreementDetail = () => {
   const [startingCheckout, setStartingCheckout] = useState(false);
   const [acceptanceNote, setAcceptanceNote] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [acceptedPricing, setAcceptedPricing] = useState(false);
+  const [acceptedAutopayNotice, setAcceptedAutopayNotice] = useState(false);
+  const [signatureName, setSignatureName] = useState('');
+  const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState(SalesPaymentMethodType.ach);
   const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
   const emailParam = queryParams.get('email') || '';
   const accessTokenParam = queryParams.get('accessToken') || queryParams.get('reviewToken') || '';
@@ -241,6 +247,12 @@ const ServiceAgreementDetail = () => {
     }
   }, [queryParams]);
 
+  useEffect(() => {
+    if (!agreement || signatureName) return;
+
+    setSignatureName(agreement.customerName || user?.displayName || user?.email || emailParam || '');
+  }, [agreement, emailParam, signatureName, user?.displayName, user?.email]);
+
   const lineItems = useMemo(
     () => (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []),
     [agreement]
@@ -292,8 +304,13 @@ const ServiceAgreementDetail = () => {
 
     if (!canAccept) return;
 
-    if (!acceptedTerms) {
-      toast.error('Confirm that you have reviewed the service agreement.');
+    if (!acceptedTerms || !acceptedPricing || !acceptedAutopayNotice) {
+      toast.error('Confirm the agreement terms, pricing, and recurring payment authorization.');
+      return;
+    }
+
+    if (signatureName.trim().length < 2) {
+      toast.error('Enter your name as the acceptance signature.');
       return;
     }
 
@@ -311,6 +328,10 @@ const ServiceAgreementDetail = () => {
         email: emailParam || agreement.email || '',
         accessToken: accessTokenParam,
         acceptanceNote,
+        acceptedTerms,
+        acceptedPricing,
+        acceptedAutopayNotice,
+        signatureName: signatureName.trim(),
       });
 
       toast.success('Service agreement accepted.');
@@ -355,6 +376,7 @@ const ServiceAgreementDetail = () => {
         billingSubscriptionId: effectiveSubscriptionId,
         agreementId: agreement.id,
         companyId: agreement.companyId,
+        paymentMethodType: selectedPaymentMethodType,
         successUrl: `${window.location.origin}/client/service-agreements/${encodeURIComponent(agreement.id)}?stripeCheckout=success`,
         cancelUrl: `${window.location.origin}/client/service-agreements/${encodeURIComponent(agreement.id)}?stripeCheckout=canceled`,
       });
@@ -655,6 +677,42 @@ const ServiceAgreementDetail = () => {
                   </span>
                 </label>
 
+                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={acceptedPricing}
+                    onChange={(event) => setAcceptedPricing(event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-slate-700">
+                    I reviewed the price, billing frequency, and invoice terms.
+                  </span>
+                </label>
+
+                <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={acceptedAutopayNotice}
+                    onChange={(event) => setAcceptedAutopayNotice(event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span className="text-slate-700">
+                    I understand this agreement can be used to set up recurring online billing.
+                  </span>
+                </label>
+
+                <label className="block text-sm font-semibold text-slate-700" htmlFor="signatureName">
+                  Signature Name
+                  <input
+                    id="signatureName"
+                    type="text"
+                    value={signatureName}
+                    onChange={(event) => setSignatureName(event.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    placeholder="Full name"
+                  />
+                </label>
+
                 <button
                   type="button"
                   onClick={acceptAgreement}
@@ -705,15 +763,23 @@ const ServiceAgreementDetail = () => {
                 Billing is active.
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={startCheckout}
-                disabled={!canStartCheckout}
-                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <CreditCardIcon className="h-5 w-5" />
-                {startingCheckout ? 'Opening Stripe...' : 'Set Up Payment'}
-              </button>
+              <div className="mt-5 space-y-4">
+                <PaymentMethodSelector
+                  amountCents={billingSubscription?.amountCents || agreement.totalAmountCents || agreement.rateAmountCents}
+                  value={selectedPaymentMethodType}
+                  onChange={setSelectedPaymentMethodType}
+                  disabled={!canStartCheckout}
+                />
+                <button
+                  type="button"
+                  onClick={startCheckout}
+                  disabled={!canStartCheckout}
+                  className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <CreditCardIcon className="h-5 w-5" />
+                  {startingCheckout ? 'Opening Stripe...' : 'Set Up Payment'}
+                </button>
+              </div>
             )}
 
             {!canStartCheckout && !hasActiveStripeSubscription && (

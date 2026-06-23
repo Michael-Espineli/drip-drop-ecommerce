@@ -33,6 +33,7 @@ const WorkInProgress = lazy(() => import("../../views/company/WorkInProgress"))
 const Customers = lazy(() => import("../../views/company/customers/Customers"))
 const CustomerDetails = lazy(() => import("../../views/company/customers/CustomerDetails"))
 const CreateNewCustomer = lazy(() => import("../../views/company/customers/CreateNewCustomer"))
+const DuplicateCustomer = lazy(() => import("../../views/company/customers/DuplicateCustomer"))
 const BulkCustomerUpload = lazy(() => import("../../views/company/customers/BulkCustomerUpload"))
 const CustomerHistory = lazy(() => import("../../views/company/customers/CustomerHistory"))
 const ReadingsAndDosagesHistory = lazy(() => import("../../views/company/customers/ReadingsAndDosagesHistory"))
@@ -789,6 +790,11 @@ export const sellerRoutes = [
     }, {
         path: '/company/customers/details/:customerId/:tab',
         element: <CustomerDetails />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
+        path: '/company/customers/duplicate/:customerId',
+        element: <DuplicateCustomer />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, {

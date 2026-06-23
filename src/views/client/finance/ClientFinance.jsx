@@ -12,6 +12,7 @@ import {
   ExclamationTriangleIcon,
   MagnifyingGlassIcon,
 } from '@heroicons/react/24/outline';
+import PaymentMethodSelector from '../../../components/sales/PaymentMethodSelector';
 import { Context } from '../../../context/AuthContext';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { db, functions } from '../../../utils/config';
@@ -21,6 +22,7 @@ import {
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
+import { SalesPaymentMethodType } from '../../../utils/sales/paymentMethodFees';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -166,6 +168,7 @@ const ClientFinance = () => {
   const [error, setError] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [startingCheckoutId, setStartingCheckoutId] = useState('');
+  const [selectedPaymentMethods, setSelectedPaymentMethods] = useState({});
 
   useEffect(() => {
     const queryParams = new URLSearchParams(location.search);
@@ -302,6 +305,19 @@ const ClientFinance = () => {
     return sortByFreshest([...openInvoiceItems, ...agreementItems, ...approvalItems]).slice(0, 8);
   }, [agreements, approvals, invoices]);
 
+  const paymentMethodForSubscription = (subscription = {}) => (
+    selectedPaymentMethods[subscription.id] ||
+    subscription.paymentMethodType ||
+    SalesPaymentMethodType.ach
+  );
+
+  const updatePaymentMethodForSubscription = (subscriptionId, paymentMethodType) => {
+    setSelectedPaymentMethods((current) => ({
+      ...current,
+      [subscriptionId]: paymentMethodType,
+    }));
+  };
+
   const startCheckout = async (subscription) => {
     if (!subscription?.id || startingCheckoutId) return;
 
@@ -315,6 +331,7 @@ const ClientFinance = () => {
         billingSubscriptionId: subscription.id,
         agreementId: subscription.agreementId || '',
         companyId: subscription.companyId,
+        paymentMethodType: paymentMethodForSubscription(subscription),
         successUrl: `${window.location.origin}/client/finance?stripeCheckout=success&billingSubscriptionId=${encodeURIComponent(subscription.id)}`,
         cancelUrl: `${window.location.origin}/client/finance?stripeCheckout=canceled&billingSubscriptionId=${encodeURIComponent(subscription.id)}`,
       });
@@ -547,6 +564,16 @@ const ClientFinance = () => {
                         <Link to={`/client/service-agreements/${subscription.agreementId}`} className="mt-3 inline-flex text-xs font-semibold text-blue-700 hover:text-blue-900">
                           View agreement
                         </Link>
+                      )}
+                      {!isActive && (
+                        <PaymentMethodSelector
+                          amountCents={subscription.amountCents}
+                          value={paymentMethodForSubscription(subscription)}
+                          onChange={(paymentMethodType) => updatePaymentMethodForSubscription(subscription.id, paymentMethodType)}
+                          disabled={!canCheckout || startingCheckoutId === subscription.id}
+                          compact
+                          className="mt-3"
+                        />
                       )}
                       <button
                         type="button"

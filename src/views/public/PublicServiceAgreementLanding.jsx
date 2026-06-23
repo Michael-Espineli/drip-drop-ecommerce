@@ -97,6 +97,9 @@ const PublicServiceAgreementLanding = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [acceptedTerms, setAcceptedTerms] = useState(false);
+  const [acceptedPricing, setAcceptedPricing] = useState(false);
+  const [acceptedAutopayNotice, setAcceptedAutopayNotice] = useState(false);
+  const [signatureName, setSignatureName] = useState('');
   const [acceptanceNote, setAcceptanceNote] = useState('');
   const [accepting, setAccepting] = useState(false);
 
@@ -168,11 +171,22 @@ const PublicServiceAgreementLanding = () => {
     inspectionReportUrl.includes('/customer/service-agreements/')
   );
 
+  useEffect(() => {
+    if (!agreement || signatureName) return;
+
+    setSignatureName(agreement.customerName || agreement.email || emailParam || '');
+  }, [agreement, emailParam, signatureName]);
+
   const acceptAgreement = async () => {
     if (!agreement || accepting || isAccepted || isClosed) return;
 
-    if (!acceptedTerms) {
-      toast.error('Confirm that you have reviewed the service agreement.');
+    if (!acceptedTerms || !acceptedPricing || !acceptedAutopayNotice) {
+      toast.error('Confirm the agreement terms, pricing, and recurring payment authorization.');
+      return;
+    }
+
+    if (signatureName.trim().length < 2) {
+      toast.error('Enter your name as the acceptance signature.');
       return;
     }
 
@@ -185,6 +199,10 @@ const PublicServiceAgreementLanding = () => {
         email: emailParam || agreement.email || '',
         accessToken,
         acceptanceNote,
+        acceptedTerms,
+        acceptedPricing,
+        acceptedAutopayNotice,
+        signatureName: signatureName.trim(),
       });
 
       toast.success('Service agreement accepted.');
@@ -471,6 +489,42 @@ const PublicServiceAgreementLanding = () => {
                     <span className="text-slate-700">
                       I reviewed the agreement, pricing, and terms.
                     </span>
+                  </label>
+
+                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={acceptedPricing}
+                      onChange={(event) => setAcceptedPricing(event.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-slate-700">
+                      I reviewed the price, billing frequency, and invoice terms.
+                    </span>
+                  </label>
+
+                  <label className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
+                    <input
+                      type="checkbox"
+                      checked={acceptedAutopayNotice}
+                      onChange={(event) => setAcceptedAutopayNotice(event.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-slate-700">
+                      I understand this agreement can be used to set up recurring online billing.
+                    </span>
+                  </label>
+
+                  <label className="block text-sm font-semibold text-slate-700" htmlFor="signatureName">
+                    Signature Name
+                    <input
+                      id="signatureName"
+                      type="text"
+                      value={signatureName}
+                      onChange={(event) => setSignatureName(event.target.value)}
+                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      placeholder="Full name"
+                    />
                   </label>
 
                   <button

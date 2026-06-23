@@ -55,6 +55,44 @@ const mapStripeInvoiceStatus = (status) => {
     return 'open';
 };
 
+const normalizeSalesPaymentMethodType = (value) => {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (['ach', 'bank', 'bank_account', 'us_bank_account'].includes(normalized)) return 'ach';
+    if (['card', 'credit_card', 'debit_card'].includes(normalized)) return 'card';
+    return '';
+};
+
+const salesPaymentMethodPolicy = (value) => {
+    const paymentMethodType = normalizeSalesPaymentMethodType(value) || 'card';
+
+    if (paymentMethodType === 'ach') {
+        return {
+            paymentMethodType: 'ach',
+            stripePaymentMethodType: 'us_bank_account',
+            stripePaymentMethodTypes: ['us_bank_account'],
+            paymentMethodLabel: 'Bank account (ACH)',
+            salesPaymentMethod: 'stripeAch',
+        };
+    }
+
+    return {
+        paymentMethodType: 'card',
+        stripePaymentMethodType: 'card',
+        stripePaymentMethodTypes: ['card'],
+        paymentMethodLabel: 'Card',
+        salesPaymentMethod: 'stripeCard',
+    };
+};
+
+const normalizeApplicationFeePercent = (value) => {
+    if (value === undefined || value === null || value === '') return null;
+
+    const percent = Number(value);
+    if (!Number.isFinite(percent) || percent <= 0) return null;
+
+    return Math.min(Math.round(percent * 100) / 100, 100);
+};
+
 const constructStripeWebhookEvent = (rawBody, signature) => {
     if (endpointSecrets.length === 0) {
         throw new Error('Stripe webhook signing secret is not configured.');
@@ -268,6 +306,16 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
     const item = subscription.items?.data?.[0] || {};
     const stripeStatus = subscription.status || '';
     const status = mapStripeSubscriptionStatus(stripeStatus);
+    const paymentMethodPolicy = salesPaymentMethodPolicy(
+        metadata.paymentMethodType ||
+        metadata.stripePaymentMethodType ||
+        checkoutSession?.payment_method_types?.[0] ||
+        ''
+    );
+    const applicationFeePercent = normalizeApplicationFeePercent(
+        metadata.applicationFeePercent ||
+        subscription.application_fee_percent
+    );
     const autopayIsActive = ['active', 'trialing'].includes(stripeStatus);
     const stripeManagedBilling = ['active', 'trialing', 'past_due', 'unpaid', 'paused'].includes(stripeStatus);
     const autopayStatus = autopayIsActive
@@ -290,6 +338,12 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
         stripeDefaultPaymentMethodId: typeof subscription.default_payment_method === 'string'
             ? subscription.default_payment_method
             : subscription.default_payment_method?.id || '',
+        paymentMethodType: paymentMethodPolicy.paymentMethodType,
+        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+        stripePaymentMethodTypes: paymentMethodPolicy.stripePaymentMethodTypes,
+        paymentMethodLabel: paymentMethodPolicy.paymentMethodLabel,
+        applicationFeePercent,
+        platformFeeSource: metadata.applicationFeeSource || '',
         stripeStatus,
         status,
         checkoutStatus: checkoutSession ? 'completed' : 'synced',
@@ -338,6 +392,11 @@ const updateSalesBillingSubscriptionFromStripe = async ({ subscription, connecte
             autopayStatus: updateData.autopayStatus,
             manualBillingEnabled: updateData.manualBillingEnabled,
             manualBillingAutoSendEnabled: updateData.manualBillingAutoSendEnabled,
+            paymentMethodType: updateData.paymentMethodType,
+            stripePaymentMethodType: updateData.stripePaymentMethodType,
+            paymentMethodLabel: updateData.paymentMethodLabel,
+            applicationFeePercent: updateData.applicationFeePercent,
+            platformFeeSource: updateData.platformFeeSource,
             customerCanPayImmediately: false,
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         }, { merge: true });
@@ -381,6 +440,12 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
     const currency = String(invoice.currency || subscription.currency || 'usd').toLowerCase();
     const receiptUrl = invoice.hosted_invoice_url || invoice.invoice_pdf || '';
     const receiptDeliveryMethod = 'stripeHostedInvoice';
+    const paymentMethodPolicy = salesPaymentMethodPolicy(
+        subscription.paymentMethodType ||
+        subscription.stripePaymentMethodType ||
+        invoice.payment_settings?.payment_method_types?.[0] ||
+        ''
+    );
     const basePaymentFields = {
         companyId: subscription.companyId || '',
         customerId: subscription.customerId || '',
@@ -393,7 +458,12 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         billingSubscriptionId: subscription.id,
         agreementId: subscription.agreementId || '',
         currency,
-        method: 'stripeCard',
+        method: paymentMethodPolicy.salesPaymentMethod,
+        paymentMethodType: paymentMethodPolicy.paymentMethodType,
+        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+        paymentMethodLabel: paymentMethodPolicy.paymentMethodLabel,
+        applicationFeePercent: subscription.applicationFeePercent ?? null,
+        platformFeeSource: subscription.platformFeeSource || '',
         stripeConnectedAccountId: connectedAccount || subscription.stripeConnectedAccountId || '',
         stripeCustomerId: typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id || '',
         stripeSubscriptionId,
@@ -427,6 +497,11 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         receiptDeliveryMethod,
         receiptsEnabled: true,
         currency,
+        paymentMethodType: paymentMethodPolicy.paymentMethodType,
+        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+        paymentMethodLabel: paymentMethodPolicy.paymentMethodLabel,
+        applicationFeePercent: subscription.applicationFeePercent ?? null,
+        platformFeeSource: subscription.platformFeeSource || '',
         amountDueCents: amountRemaining,
         amountPaidCents: amountPaid,
         balanceCents: amountRemaining,
@@ -499,6 +574,12 @@ const upsertSalesInvoiceAndPaymentFromStripeInvoice = async ({
         status: isPaymentFailed ? 'failed' : isPaid ? 'posted' : mapStripeInvoiceStatus(invoice.status),
         amountCents: isPaid ? amountPaid : amountRemaining || amountDue,
         currency,
+        method: paymentMethodPolicy.salesPaymentMethod,
+        paymentMethodType: paymentMethodPolicy.paymentMethodType,
+        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+        paymentMethodLabel: paymentMethodPolicy.paymentMethodLabel,
+        applicationFeePercent: subscription.applicationFeePercent ?? null,
+        platformFeeSource: subscription.platformFeeSource || '',
         stripeConnectedAccountId: connectedAccount || subscription.stripeConnectedAccountId || '',
         stripeCustomerId: typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id || '',
         stripeSubscriptionId,

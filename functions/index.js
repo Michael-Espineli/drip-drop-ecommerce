@@ -73,6 +73,7 @@ const sendGridGeneral = require('./sendGrid/general');
 exports.sendServiceAgreementEmail = sendGridGeneral.sendServiceAgreementEmail;
 exports.getPublicServiceAgreement = sendGridGeneral.getPublicServiceAgreement;
 exports.getPublicServiceAgreementInspectionReport = sendGridGeneral.getPublicServiceAgreementInspectionReport;
+exports.getPublicSalesInvoice = sendGridGeneral.getPublicSalesInvoice;
 exports.sendServiceReportOnFinish = sendGridGeneral.sendServiceReportOnFinish;
 exports.sendJobEstimateEmail = sendGridGeneral.sendJobEstimateEmail;
 exports.sendInvoiceEmail = sendGridGeneral.sendInvoiceEmail;

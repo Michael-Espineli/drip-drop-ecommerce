@@ -1038,6 +1038,148 @@ const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
     };
 };
 
+const invoiceBalanceCents = (invoice = {}) => {
+    if (invoice.amountDueCents !== undefined && invoice.amountDueCents !== null) {
+        return Number(invoice.amountDueCents) || 0;
+    }
+
+    const total = Number(invoice.totalAmountCents || invoice.totalCents || 0);
+    const paid = Number(invoice.amountPaidCents || 0);
+    const writtenOff = Number(invoice.writeOffAmountCents || 0);
+
+    return Math.max(total - paid - writtenOff, 0);
+};
+
+const publicSalesInvoiceSnapshot = (invoice = {}, options = {}) => {
+    const invoiceEmail = invoice.email || invoice.customerEmail || invoice.billingEmail || "";
+    const accessToken = options.accessToken || invoice.emailDelivery?.reviewAccessToken || "";
+
+    return {
+        id: invoice.id || "",
+        companyId: invoice.companyId || "",
+        companyName: invoice.companyName || "",
+        customerId: invoice.customerId || "",
+        customerName: invoice.customerName || "",
+        email: invoiceEmail,
+        title: invoice.title || "Invoice",
+        invoiceNumber: invoice.invoiceNumber || invoice.id || "",
+        status: invoice.status || "",
+        type: invoice.type || "",
+        sourceType: invoice.sourceType || "",
+        lineItems: Array.isArray(invoice.lineItems) ? invoice.lineItems : [],
+        serviceLocationIds: Array.isArray(invoice.serviceLocationIds) ? invoice.serviceLocationIds : [],
+        serviceLocationSnapshots: Array.isArray(invoice.serviceLocationSnapshots) ? invoice.serviceLocationSnapshots : [],
+        subtotalAmountCents: Number(invoice.subtotalAmountCents || 0),
+        discountAmountCents: Number(invoice.discountAmountCents || 0),
+        taxAmountCents: Number(invoice.taxAmountCents || 0),
+        totalAmountCents: Number(invoice.totalAmountCents || invoice.totalCents || 0),
+        amountPaidCents: Number(invoice.amountPaidCents || 0),
+        amountDueCents: invoiceBalanceCents(invoice),
+        balanceCents: invoiceBalanceCents(invoice),
+        currency: invoice.currency || "usd",
+        paymentTerms: invoice.paymentTerms || "",
+        memo: invoice.memo || "",
+        billingSubscriptionId: invoice.billingSubscriptionId || "",
+        agreementId: invoice.agreementId || "",
+        stripeHostedInvoiceUrl: invoice.stripeHostedInvoiceUrl || "",
+        stripeInvoicePdfUrl: invoice.stripeInvoicePdfUrl || "",
+        receiptUrl: invoice.receiptUrl || "",
+        receiptDeliveryMethod: invoice.receiptDeliveryMethod || invoice.deliveryMethod || "",
+        dueDate: serializeDateValue(invoice.dueDate),
+        sentAt: serializeDateValue(invoice.sentAt),
+        createdAt: serializeDateValue(invoice.createdAt),
+        updatedAt: serializeDateValue(invoice.updatedAt),
+        paidAt: serializeDateValue(invoice.paidAt),
+        lastPaymentAt: serializeDateValue(invoice.lastPaymentAt),
+        emailDelivery: {
+            lastSentAt: serializeDateValue(invoice.emailDelivery?.lastSentAt),
+            intendedTo: invoice.emailDelivery?.intendedTo || invoiceEmail,
+        },
+        invoiceUrl: buildUrl(options.baseUrl || "", `/customer/invoices/${invoice.id || ""}`, {
+            email: invoiceEmail,
+            accessToken,
+        }),
+    };
+};
+
+const publicSalesPaymentSnapshot = (payment = {}) => ({
+    id: payment.id || "",
+    invoiceId: payment.invoiceId || "",
+    amountCents: Number(payment.amountCents || 0),
+    currency: payment.currency || "usd",
+    method: payment.method || "",
+    paymentMethodType: payment.paymentMethodType || "",
+    status: payment.status || "",
+    referenceNumber: payment.referenceNumber || "",
+    receiptUrl: payment.receiptUrl || "",
+    receivedAt: serializeDateValue(payment.receivedAt),
+    createdAt: serializeDateValue(payment.createdAt),
+});
+
+const publicBillingSubscriptionSnapshot = (subscription = {}) => ({
+    id: subscription.id || "",
+    companyId: subscription.companyId || "",
+    customerId: subscription.customerId || "",
+    customerName: subscription.customerName || "",
+    email: subscription.email || "",
+    agreementId: subscription.agreementId || "",
+    amountCents: Number(subscription.amountCents || 0),
+    currency: subscription.currency || "usd",
+    interval: subscription.interval || "month",
+    intervalCount: Number(subscription.intervalCount || 1),
+    status: subscription.status || "",
+    stripeStatus: subscription.stripeStatus || "",
+    autopayStatus: subscription.autopayStatus || "",
+    checkoutStatus: subscription.checkoutStatus || "",
+    nextAction: subscription.nextAction || "",
+    paymentMethodType: subscription.paymentMethodType || "",
+    paymentMethodLabel: subscription.paymentMethodLabel || "",
+    stripeConnectedAccountReady: Boolean(subscription.stripeConnectedAccountId),
+    stripeSubscriptionActive: ["active", "trialing"].includes(normalizeStatusKey(subscription.stripeStatus || subscription.status)),
+});
+
+const loadPublicSalesInvoiceForToken = async ({
+    invoiceId = "",
+    accessToken = "",
+    email = "",
+} = {}) => {
+    if (!invoiceId) {
+        throw new HttpsError("invalid-argument", "Missing invoiceId.");
+    }
+
+    if (!accessToken) {
+        throw new HttpsError("invalid-argument", "Open the invoice from the latest invoice email.");
+    }
+
+    const invoiceDoc = await db.collection("salesInvoices").doc(invoiceId).get();
+
+    if (!invoiceDoc.exists) {
+        throw new HttpsError("not-found", "Invoice not found.");
+    }
+
+    const invoice = {
+        id: invoiceDoc.id,
+        ...invoiceDoc.data()
+    };
+    const requestedEmail = normalizeEmail(email);
+    const invoiceEmail = normalizeEmail(invoice.email || invoice.customerEmail || invoice.billingEmail);
+    const savedAccessToken = String(invoice.emailDelivery?.reviewAccessToken || "").trim();
+
+    if (!savedAccessToken || savedAccessToken !== accessToken) {
+        throw new HttpsError("permission-denied", "This invoice review link is invalid or has been replaced by a newer email.");
+    }
+
+    if (requestedEmail && invoiceEmail && invoiceEmail !== requestedEmail) {
+        throw new HttpsError("permission-denied", "This email address does not match the invoice recipient.");
+    }
+
+    if (normalizeStatusKey(invoice.status) === "draft") {
+        throw new HttpsError("failed-precondition", "This invoice has not been sent yet.");
+    }
+
+    return invoice;
+};
+
 const loadPublicServiceAgreementForToken = async ({
     agreementId = "",
     accessToken = "",
@@ -1205,6 +1347,44 @@ exports.getPublicServiceAgreementInspectionReport = functions.https.onCall(async
     return {
         status: 200,
         report: await buildPublicInspectionReportSnapshot(agreement),
+    };
+});
+
+exports.getPublicSalesInvoice = functions.https.onCall(async (data) => {
+    const payload = getCallableData(data);
+    const invoiceId = String(payload.invoiceId || "").trim();
+    const accessToken = String(payload.accessToken || payload.reviewToken || "").trim();
+    const invoice = await loadPublicSalesInvoiceForToken({
+        invoiceId,
+        accessToken,
+        email: payload.email,
+    });
+    const [paymentsSnapshot, billingSubscriptionDoc] = await Promise.all([
+        db.collection("salesPayments").where("invoiceId", "==", invoiceId).get(),
+        invoice.billingSubscriptionId
+            ? db.collection("salesBillingSubscriptions").doc(invoice.billingSubscriptionId).get()
+            : Promise.resolve(null),
+    ]);
+    const billingSubscription = billingSubscriptionDoc?.exists
+        ? {
+            id: billingSubscriptionDoc.id,
+            ...billingSubscriptionDoc.data()
+        }
+        : null;
+
+    return {
+        status: 200,
+        invoice: publicSalesInvoiceSnapshot(invoice, {
+            accessToken,
+            baseUrl: payload.baseUrl || payload.appBaseUrl || "",
+        }),
+        payments: paymentsSnapshot.docs.map((paymentDoc) => publicSalesPaymentSnapshot({
+            id: paymentDoc.id,
+            ...paymentDoc.data()
+        })),
+        billingSubscription: billingSubscription
+            ? publicBillingSubscriptionSnapshot(billingSubscription)
+            : null,
     };
 });
 
@@ -1594,7 +1774,11 @@ const sendSalesInvoiceEmailCore = async ({
 
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "mespineli@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
-    const invoiceUrl = `${invoiceBaseUrl.replace(/\/$/, "")}/client/billing/invoices/${invoiceId}`;
+    const reviewAccessToken = uuidv4();
+    const invoiceUrl = buildUrl(invoiceBaseUrl, `/customer/invoices/${invoiceId}`, {
+        email: invoice.email,
+        accessToken: reviewAccessToken,
+    });
     const customerAccess = await buildCustomerAccessTemplateData({
         companyId,
         customerId: invoice.customerId || "",
@@ -1648,6 +1832,8 @@ const sendSalesInvoiceEmailCore = async ({
             replyTo: replyToEmail,
             messageId,
             invoiceUrl,
+            reviewAccessToken,
+            reviewAccessTokenCreatedAt: admin.firestore.FieldValue.serverTimestamp(),
             customerActionUrl: customerAccess.customerActionUrl,
             customerPortalUrl: customerAccess.customerPortalUrl,
             claimAccountUrl: customerAccess.claimAccountUrl,

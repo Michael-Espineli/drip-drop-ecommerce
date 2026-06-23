@@ -157,7 +157,50 @@ const normalizeApplicationFeePercent = (value) => {
   return Math.min(Math.round(percent * 100) / 100, 100);
 };
 
-const resolveApplicationFee = (subscription = {}, companyData = {}) => {
+const salesPaymentMethodFeePolicy = {
+  ach: {
+    paymentMethodType: 'ach',
+    stripePaymentMethodType: 'us_bank_account',
+    stripePaymentMethodTypes: ['us_bank_account'],
+    applicationFeePercent: 0.19,
+    source: 'dripDropAchPlatformFee',
+    label: 'Bank account (ACH)',
+  },
+  card: {
+    paymentMethodType: 'card',
+    stripePaymentMethodType: 'card',
+    stripePaymentMethodTypes: ['card'],
+    applicationFeePercent: 0.08,
+    source: 'dripDropCardPlatformFee',
+    label: 'Card',
+  },
+};
+
+const normalizeSalesPaymentMethodType = (value) => {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (['ach', 'bank', 'bank_account', 'us_bank_account'].includes(normalized)) return 'ach';
+  if (['card', 'credit_card', 'debit_card'].includes(normalized)) return 'card';
+  return 'card';
+};
+
+const resolveSalesPaymentMethodFeePolicy = (value) => {
+  const paymentMethodType = normalizeSalesPaymentMethodType(value);
+  return salesPaymentMethodFeePolicy[paymentMethodType] || salesPaymentMethodFeePolicy.card;
+};
+
+const resolveApplicationFee = (subscription = {}, companyData = {}, paymentMethodType = '') => {
+  if (paymentMethodType) {
+    const policy = resolveSalesPaymentMethodFeePolicy(paymentMethodType);
+    return {
+      percent: policy.applicationFeePercent,
+      source: policy.source,
+      paymentMethodType: policy.paymentMethodType,
+      stripePaymentMethodType: policy.stripePaymentMethodType,
+      stripePaymentMethodTypes: policy.stripePaymentMethodTypes,
+      label: policy.label,
+    };
+  }
+
   const candidates = [
     { source: 'subscriptionApplicationFeePercent', value: subscription.applicationFeePercent },
     { source: 'subscriptionPlatformFeePercent', value: subscription.platformFeePercent },
@@ -169,16 +212,32 @@ const resolveApplicationFee = (subscription = {}, companyData = {}) => {
   for (const candidate of candidates) {
     const percent = normalizeApplicationFeePercent(candidate.value);
     if (percent !== null) {
+      const policy = resolveSalesPaymentMethodFeePolicy(
+        subscription.paymentMethodType ||
+        subscription.preferredPaymentMethodType ||
+        companyData.defaultSalesPaymentMethodType ||
+        ''
+      );
+
       return {
         percent,
         source: candidate.source,
+        paymentMethodType: policy.paymentMethodType,
+        stripePaymentMethodType: policy.stripePaymentMethodType,
+        stripePaymentMethodTypes: policy.stripePaymentMethodTypes,
+        label: policy.label,
       };
     }
   }
 
+  const fallbackPolicy = resolveSalesPaymentMethodFeePolicy(subscription.paymentMethodType || subscription.preferredPaymentMethodType || companyData.defaultSalesPaymentMethodType || 'card');
   return {
     percent: null,
     source: 'none',
+    paymentMethodType: fallbackPolicy.paymentMethodType,
+    stripePaymentMethodType: fallbackPolicy.stripePaymentMethodType,
+    stripePaymentMethodTypes: fallbackPolicy.stripePaymentMethodTypes,
+    label: fallbackPolicy.label,
   };
 };
 
@@ -279,6 +338,64 @@ const publicAgreementLinkCanAccess = ({ agreement, accessToken, email }) => {
 };
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+
+const valueToMillis = (value) => {
+  if (!value) return 0;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (typeof value.toDate === 'function') return value.toDate().getTime();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? 0 : parsed;
+};
+
+const agreementIsExpired = (agreement = {}) => {
+  const expiresAtMillis = valueToMillis(
+    agreement.expiresAt ||
+    agreement.acceptBy ||
+    agreement.lastDateToAccept
+  );
+
+  return Boolean(expiresAtMillis && expiresAtMillis < Date.now());
+};
+
+const getAgreementAcceptanceAudit = (context = {}) => {
+  const headers = context.rawRequest?.headers || {};
+  const forwardedFor = String(headers['x-forwarded-for'] || '').split(',')[0].trim();
+
+  return {
+    acceptedUserAgent: String(headers['user-agent'] || '').slice(0, 500),
+    acceptedIpAddress: String(forwardedFor || context.rawRequest?.ip || '').slice(0, 120),
+  };
+};
+
+const validateAgreementAcceptance = (receivedData = {}) => {
+  const signatureName = String(receivedData.signatureName || receivedData.acceptedBySignatureName || '').trim();
+
+  if (receivedData.acceptedTerms !== true) {
+    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the service agreement terms were reviewed.');
+  }
+
+  if (receivedData.acceptedPricing !== true) {
+    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the agreement pricing was reviewed.');
+  }
+
+  if (receivedData.acceptedAutopayNotice !== true) {
+    throw new functions.https.HttpsError('invalid-argument', 'Confirm that the recurring payment authorization was reviewed.');
+  }
+
+  if (signatureName.length < 2) {
+    throw new functions.https.HttpsError('invalid-argument', 'Enter the customer name as the acceptance signature.');
+  }
+
+  return {
+    signatureName,
+    acceptedTermsConfirmed: true,
+    acceptedPricingConfirmed: true,
+    acceptedAutopayNoticeConfirmed: true,
+  };
+};
 
 const renewalPreviousAgreementId = (agreement = {}) => (
   agreement.supersedesAgreementId ||
@@ -581,7 +698,11 @@ const buildSalesBillingSubscriptionFromAgreement = ({ agreement, stripeConnected
     currentPeriodEnd: null,
     cancelAtPeriodEnd: false,
     canceledAt: null,
+    paymentMethodType: '',
+    stripePaymentMethodType: '',
+    paymentMethodLabel: '',
     applicationFeePercent: null,
+    platformFeeSource: '',
   };
 };
 
@@ -797,6 +918,8 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
+  const acceptanceConfirmation = validateAgreementAcceptance(receivedData);
+  const acceptanceAudit = getAgreementAcceptanceAudit(context);
 
   if (!agreementId) {
     throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
@@ -817,7 +940,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   }
 
   const statusKey = normalizeStatus(agreement.status);
-  if (['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey)) {
+  if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
     throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
@@ -841,6 +964,12 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     }
 
     const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
+    const freshStatusKey = normalizeStatus(freshAgreement.status);
+
+    if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
+      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
+    }
+
     const existingSubscription = subscriptionSnap.exists
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
@@ -980,6 +1109,12 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
       acceptedByEmail,
       acceptedSource: 'customerPortal',
       acceptedNote: acceptanceNote,
+      acceptedSignatureName: acceptanceConfirmation.signatureName,
+      acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
+      acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
+      acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
+      acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
+      acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
       acceptedSnapshot: {
         agreementId: freshAgreement.id,
         title: freshAgreement.title || 'Service Agreement',
@@ -991,6 +1126,12 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         acceptedByUserId: callableAuth.uid,
         acceptedByUserName: acceptedByName,
         acceptedByEmail,
+        acceptedSignatureName: acceptanceConfirmation.signatureName,
+        acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
+        acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
+        acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
+        acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
+        acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
         previousAgreementId: previousAgreementId || '',
         supersedesAgreementId: previousAgreementId || '',
         agreementHistoryGroupId: historyGroupId,
@@ -1070,12 +1211,14 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   };
 });
 
-exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) => {
+exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, context) => {
   const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
   const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
   const email = receivedData.email || '';
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
+  const acceptanceConfirmation = validateAgreementAcceptance(receivedData);
+  const acceptanceAudit = getAgreementAcceptanceAudit(context);
 
   if (!agreementId) {
     throw new functions.https.HttpsError('invalid-argument', 'agreementId is required.');
@@ -1098,7 +1241,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) 
   }
 
   const statusKey = normalizeStatus(agreement.status);
-  if (['canceled', 'rejected', 'expired', 'superseded'].includes(statusKey)) {
+  if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(statusKey) || agreementIsExpired(agreement)) {
     throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
@@ -1125,6 +1268,11 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) 
     const freshAgreement = { id: freshAgreementSnap.id, ...freshAgreementSnap.data() };
     if (!publicAgreementLinkCanAccess({ agreement: freshAgreement, accessToken, email })) {
       throw new functions.https.HttpsError('permission-denied', 'This service agreement link is invalid or has been replaced by a newer email.');
+    }
+
+    const freshStatusKey = normalizeStatus(freshAgreement.status);
+    if (['accepted', 'canceled', 'rejected', 'expired', 'superseded'].includes(freshStatusKey) || agreementIsExpired(freshAgreement)) {
+      throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
     }
 
     const existingSubscription = subscriptionSnap.exists
@@ -1266,6 +1414,12 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) 
       acceptedByEmail,
       acceptedSource: 'emailLink',
       acceptedNote: acceptanceNote,
+      acceptedSignatureName: acceptanceConfirmation.signatureName,
+      acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
+      acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
+      acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
+      acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
+      acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
       acceptedSnapshot: {
         agreementId: freshAgreement.id,
         title: freshAgreement.title || 'Service Agreement',
@@ -1277,6 +1431,12 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data) 
         acceptedByUserId,
         acceptedByUserName: acceptedByName,
         acceptedByEmail,
+        acceptedSignatureName: acceptanceConfirmation.signatureName,
+        acceptedTermsConfirmed: acceptanceConfirmation.acceptedTermsConfirmed,
+        acceptedPricingConfirmed: acceptanceConfirmation.acceptedPricingConfirmed,
+        acceptedAutopayNoticeConfirmed: acceptanceConfirmation.acceptedAutopayNoticeConfirmed,
+        acceptedUserAgent: acceptanceAudit.acceptedUserAgent,
+        acceptedIpAddress: acceptanceAudit.acceptedIpAddress,
         previousAgreementId: previousAgreementId || '',
         supersedesAgreementId: previousAgreementId || '',
         agreementHistoryGroupId: historyGroupId,
@@ -1365,6 +1525,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
     companyId,
     successUrl,
     cancelUrl,
+    paymentMethodType: requestedPaymentMethodType,
   } = receivedData;
 
   if (!billingSubscriptionId || !companyId || !successUrl || !cancelUrl) {
@@ -1417,7 +1578,19 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
     throw new functions.https.HttpsError('permission-denied', 'Billing subscription is not connected to this company Stripe account.');
   }
 
-  const applicationFee = resolveApplicationFee(subscription, companyData);
+  const paymentMethodPolicy = resolveSalesPaymentMethodFeePolicy(
+    requestedPaymentMethodType ||
+    subscription.paymentMethodType ||
+    subscription.preferredPaymentMethodType ||
+    companyData.defaultSalesPaymentMethodType ||
+    'card'
+  );
+
+  if (paymentMethodPolicy.paymentMethodType === 'ach' && String(subscription.currency || 'usd').toLowerCase() !== 'usd') {
+    throw new functions.https.HttpsError('failed-precondition', 'ACH billing requires USD currency.');
+  }
+
+  const applicationFee = resolveApplicationFee(subscription, companyData, paymentMethodPolicy.paymentMethodType);
   const applicationFeePercent = applicationFee.percent;
 
   const lineItems = buildCheckoutLineItems(subscription);
@@ -1440,6 +1613,8 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       salesCustomerId: subscription.customerId || '',
       createdByUserId: callableAuth.uid,
       stripeConnectedAccountId: connectedAccount,
+      paymentMethodType: paymentMethodPolicy.paymentMethodType,
+      stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
       applicationFeePercent: applicationFeePercent === null ? '' : String(applicationFeePercent),
       applicationFeeSource: applicationFee.source,
     };
@@ -1454,7 +1629,7 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
     const session = await stripe.checkout.sessions.create({
       mode: 'subscription',
       customer: stripeCustomer.id,
-      payment_method_types: ['card'],
+      payment_method_types: paymentMethodPolicy.stripePaymentMethodTypes,
       line_items: lineItems,
       client_reference_id: billingSubscriptionId,
       metadata,
@@ -1480,6 +1655,10 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       manualBillingReason: 'autopayCheckoutStarted',
       nextAction: 'completeCheckout',
       customerCanPayImmediately: true,
+      paymentMethodType: paymentMethodPolicy.paymentMethodType,
+      stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+      stripePaymentMethodTypes: paymentMethodPolicy.stripePaymentMethodTypes,
+      paymentMethodLabel: paymentMethodPolicy.label,
       applicationFeePercent,
       platformFeeSource: applicationFee.source,
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1507,6 +1686,9 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
         autopayStatus: 'checkoutStarted',
         manualBillingEnabled: subscription.manualBillingEnabled !== false,
         manualBillingAutoSendEnabled: subscription.manualBillingAutoSendEnabled === true,
+        paymentMethodType: paymentMethodPolicy.paymentMethodType,
+        stripePaymentMethodType: paymentMethodPolicy.stripePaymentMethodType,
+        paymentMethodLabel: paymentMethodPolicy.label,
         applicationFeePercent,
         platformFeeSource: applicationFee.source,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -1520,6 +1702,8 @@ exports.createSalesBillingSubscriptionCheckoutSession = functions.https.onCall(a
       url: session.url,
       sessionId: session.id,
       stripeCustomerId: stripeCustomer.id,
+      paymentMethodType: paymentMethodPolicy.paymentMethodType,
+      applicationFeePercent,
     };
   } catch (error) {
     if (error instanceof functions.https.HttpsError) throw error;
@@ -1906,6 +2090,7 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
 
       return {
         accountId: account.id,
+        email: account.email || '',
         canBillCustomers,
         canRunLiveBilling,
         livemode: Boolean(account.livemode),
@@ -1937,6 +2122,26 @@ exports.verifyConnectedAccountBillingReadiness = functions.https.onCall(async(da
           applicationFeePercent: applicationFee.percent,
           applicationFeeSource: applicationFee.source,
         },
+        businessProfile: {
+          name: account.business_profile?.name || '',
+          productDescription: account.business_profile?.product_description || '',
+          mcc: account.business_profile?.mcc || '',
+          url: account.business_profile?.url || '',
+          supportEmail: account.business_profile?.support_email || '',
+          supportPhone: account.business_profile?.support_phone || '',
+        },
+        payoutsSchedule: {
+          interval: account.settings?.payouts?.schedule?.interval || '',
+          delayDays: account.settings?.payouts?.schedule?.delay_days ?? '',
+          weeklyAnchor: account.settings?.payouts?.schedule?.weekly_anchor || '',
+          monthlyAnchor: account.settings?.payouts?.schedule?.monthly_anchor || '',
+        },
+        dashboard: {
+          displayName: account.settings?.dashboard?.display_name || '',
+          timezone: account.settings?.dashboard?.timezone || '',
+        },
+        chargesStatementDescriptor: account.settings?.card_payments?.statement_descriptor_prefix || '',
+        externalAccountsCount: Number(account.external_accounts?.total_count || 0),
         defaultCurrency: account.default_currency || '',
         country: account.country || '',
         businessType: account.business_type || '',

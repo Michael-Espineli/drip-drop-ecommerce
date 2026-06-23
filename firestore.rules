@@ -96,7 +96,7 @@ service cloud.firestore {
         && (
           (data.companyId is string && hasCompanyAccess(data.companyId))
           || (data.customerUserId is string && data.customerUserId == request.auth.uid)
-          || (!hasLinkedSalesCustomerUser(data) && emailMatchesSignedInUser(data))
+          || emailMatchesSignedInUser(data)
         );
     }
 

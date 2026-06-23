@@ -189,7 +189,9 @@ const StripeBillingSnapshotPanel = ({
         {
             complete: readiness ? readiness.livemode : false,
             label: "Live mode account",
-            detail: readiness?.livemode ? "The connected account is running in live mode." : "Use live mode before charging real customers.",
+            detail: readiness?.livemode
+                ? "This company connected account is running in live mode."
+                : "This selected company's connected account is in test mode; use a live connected account before charging real customers.",
         },
         {
             complete: null,

@@ -95,6 +95,11 @@ export const SalesPaymentMethod = {
   other: 'other',
 };
 
+export const SalesPaymentMethodType = {
+  ach: 'ach',
+  card: 'card',
+};
+
 export const SalesBillingMode = {
   connectedAccountDirectCharge: 'connectedAccountDirectCharge',
   connectedAccountDestinationCharge: 'connectedAccountDestinationCharge',
@@ -563,7 +568,11 @@ export class SalesBillingSubscription {
     supersededAt = null,
     supersededByAgreementId = '',
     supersededByBillingSubscriptionId = '',
+    paymentMethodType = '',
+    stripePaymentMethodType = '',
+    paymentMethodLabel = '',
     applicationFeePercent = null,
+    platformFeeSource = '',
     createdAt = null,
     updatedAt = null,
   }) {
@@ -643,7 +652,11 @@ export class SalesBillingSubscription {
     this.supersededAt = supersededAt;
     this.supersededByAgreementId = supersededByAgreementId;
     this.supersededByBillingSubscriptionId = supersededByBillingSubscriptionId;
+    this.paymentMethodType = paymentMethodType;
+    this.stripePaymentMethodType = stripePaymentMethodType;
+    this.paymentMethodLabel = paymentMethodLabel;
     this.applicationFeePercent = applicationFeePercent;
+    this.platformFeeSource = platformFeeSource;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }

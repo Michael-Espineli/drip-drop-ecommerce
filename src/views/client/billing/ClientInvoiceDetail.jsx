@@ -1,19 +1,24 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { collection, doc, onSnapshot, query, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
+import toast from 'react-hot-toast';
 import {
   ArrowLeftIcon,
   BanknotesIcon,
   DocumentTextIcon,
   ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
+import PaymentMethodSelector from '../../../components/sales/PaymentMethodSelector';
 import { Context } from '../../../context/AuthContext';
-import { db } from '../../../utils/config';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
+import { db, functions } from '../../../utils/config';
 import {
   SalesInvoiceStatus,
   SalesPaymentStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
+import { SalesPaymentMethodType } from '../../../utils/sales/paymentMethodFees';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -95,11 +100,26 @@ const Field = ({ label, value }) => (
 
 const ClientInvoiceDetail = () => {
   const { invoiceId } = useParams();
+  const location = useLocation();
   const { user } = useContext(Context);
   const [invoice, setInvoice] = useState(null);
   const [payments, setPayments] = useState([]);
+  const [billingSubscription, setBillingSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [startingCheckout, setStartingCheckout] = useState(false);
+  const [selectedPaymentMethodType, setSelectedPaymentMethodType] = useState(SalesPaymentMethodType.ach);
+  const isPublicInvoiceRoute = location.pathname.startsWith('/customer/invoices/');
+  const queryParams = useMemo(() => new URLSearchParams(location.search), [location.search]);
+  const emailParam = queryParams.get('email') || '';
+  const accessToken = queryParams.get('accessToken') || queryParams.get('reviewToken') || '';
+
+  useEffect(() => {
+    const checkoutResult = queryParams.get('stripeCheckout');
+    if (checkoutResult === 'success') {
+      toast.success('Payment setup returned from Stripe.');
+    }
+  }, [queryParams]);
 
   useEffect(() => {
     if (!invoiceId) {
@@ -111,6 +131,53 @@ const ClientInvoiceDetail = () => {
 
     setLoading(true);
     setError('');
+
+    if (isPublicInvoiceRoute) {
+      if (!accessToken) {
+        setInvoice(null);
+        setPayments([]);
+        setBillingSubscription(null);
+        setError('Open the invoice from the latest invoice email link.');
+        setLoading(false);
+        return undefined;
+      }
+
+      let isActive = true;
+
+      const loadPublicInvoice = async () => {
+        try {
+          const getPublicInvoice = httpsCallable(functions, 'getPublicSalesInvoice');
+          const result = await getPublicInvoice({
+            invoiceId,
+            email: emailParam,
+            accessToken,
+          });
+
+          if (!isActive) return;
+
+          setInvoice(result.data?.invoice || null);
+          setPayments(Array.isArray(result.data?.payments) ? result.data.payments : []);
+          setBillingSubscription(result.data?.billingSubscription || null);
+          if (!result.data?.invoice) setError('Invoice not found.');
+        } catch (loadError) {
+          console.error('Unable to load public invoice', loadError);
+          if (isActive) {
+            setInvoice(null);
+            setPayments([]);
+            setBillingSubscription(null);
+            setError(loadError.message || 'Unable to verify this invoice link.');
+          }
+        } finally {
+          if (isActive) setLoading(false);
+        }
+      };
+
+      loadPublicInvoice();
+
+      return () => {
+        isActive = false;
+      };
+    }
 
     return onSnapshot(
       doc(db, salesCollectionNames.invoices, invoiceId),
@@ -131,9 +198,11 @@ const ClientInvoiceDetail = () => {
         setLoading(false);
       }
     );
-  }, [invoiceId]);
+  }, [accessToken, emailParam, invoiceId, isPublicInvoiceRoute]);
 
   useEffect(() => {
+    if (isPublicInvoiceRoute) return undefined;
+
     if (!invoiceId || !user?.uid) {
       setPayments([]);
       return undefined;
@@ -169,13 +238,99 @@ const ClientInvoiceDetail = () => {
     ];
 
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
-  }, [invoiceId, user]);
+  }, [invoiceId, isPublicInvoiceRoute, user]);
+
+  useEffect(() => {
+    if (isPublicInvoiceRoute) return undefined;
+
+    const billingSubscriptionId = invoice?.billingSubscriptionId;
+    if (!billingSubscriptionId || !user?.uid) {
+      setBillingSubscription(null);
+      return undefined;
+    }
+
+    return onSnapshot(
+      doc(db, salesCollectionNames.billingSubscriptions, billingSubscriptionId),
+      (snapshot) => {
+        setBillingSubscription(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+      },
+      (snapshotError) => {
+        console.error('Unable to load billing subscription', snapshotError);
+      }
+    );
+  }, [invoice?.billingSubscriptionId, isPublicInvoiceRoute, user?.uid]);
 
   const lineItems = useMemo(
     () => (Array.isArray(invoice?.lineItems) ? invoice.lineItems : []),
     [invoice]
   );
   const balanceCents = invoice ? invoiceBalanceCents(invoice) : 0;
+  const invoiceReviewPath = `${location.pathname || `/customer/invoices/${invoiceId}`}${location.search || ''}`;
+  const redirectParam = encodeURIComponent(invoiceReviewPath);
+  const signInPath = `/homeownerSignIn?redirect=${redirectParam}`;
+  const signUpEmail = invoice?.email || emailParam;
+  const signUpPath = `/homeownerSignUp?redirect=${redirectParam}${signUpEmail ? `&email=${encodeURIComponent(signUpEmail)}` : ''}`;
+  const backPath = isPublicInvoiceRoute ? '/' : '/client/finance';
+  const backLabel = isPublicInvoiceRoute ? 'Drip Drop' : 'Finance';
+  const subscriptionStatusKey = normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status);
+  const hasActiveStripeSubscription = ['active', 'trialing'].includes(subscriptionStatusKey);
+  const billingSubscriptionId = billingSubscription?.id || invoice?.billingSubscriptionId || '';
+  const billingSetupReady = Boolean(
+    billingSubscriptionId &&
+    (billingSubscription?.stripeConnectedAccountReady || billingSubscription?.stripeConnectedAccountId)
+  );
+  const canStartCheckout = Boolean(
+    user?.uid &&
+    invoice &&
+    billingSetupReady &&
+    !hasActiveStripeSubscription &&
+    Number(billingSubscription?.amountCents || invoice.totalAmountCents || 0) > 0 &&
+    !startingCheckout
+  );
+
+  const checkoutReturnUrl = (checkoutStatus) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('stripeCheckout', checkoutStatus);
+    if (billingSubscriptionId) url.searchParams.set('billingSubscriptionId', billingSubscriptionId);
+    return url.toString();
+  };
+
+  const startCheckout = async () => {
+    if (!canStartCheckout) return;
+
+    setStartingCheckout(true);
+
+    try {
+      const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
+      const authPayload = await getCallableAuthPayload();
+      const result = await startCheckoutCallable({
+        ...authPayload,
+        billingSubscriptionId,
+        agreementId: invoice.agreementId || billingSubscription?.agreementId || '',
+        companyId: invoice.companyId || billingSubscription?.companyId || '',
+        paymentMethodType: selectedPaymentMethodType,
+        successUrl: checkoutReturnUrl('success'),
+        cancelUrl: checkoutReturnUrl('canceled'),
+      });
+
+      if (result.data?.url) {
+        window.location.href = result.data.url;
+        return;
+      }
+
+      if (result.data?.status === 'already_active') {
+        toast.success('Billing is already active.');
+        return;
+      }
+
+      throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
+    } catch (checkoutError) {
+      console.error('Unable to start Stripe Checkout', checkoutError);
+      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
+    } finally {
+      setStartingCheckout(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -190,13 +345,29 @@ const ClientInvoiceDetail = () => {
   if (error || !invoice) {
     return (
       <div className="min-h-screen bg-slate-50 p-6">
-        <Link to="/client/finance" className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+        <Link to={backPath} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
           <ArrowLeftIcon className="h-4 w-4" />
-          Finance
+          {backLabel}
         </Link>
         <div className="rounded-lg border border-rose-200 bg-rose-50 p-8 text-center shadow-sm">
           <ExclamationTriangleIcon className="mx-auto h-10 w-10 text-rose-500" />
           <p className="mt-3 font-semibold text-rose-800">{error || 'Invoice not found.'}</p>
+          {isPublicInvoiceRoute && (
+            <div className="mt-5 flex flex-col justify-center gap-2 sm:flex-row">
+              <Link
+                to={signInPath}
+                className="inline-flex justify-center rounded-md bg-rose-600 px-4 py-2 text-sm font-bold text-white hover:bg-rose-700"
+              >
+                Sign In
+              </Link>
+              <Link
+                to="/"
+                className="inline-flex justify-center rounded-md border border-rose-300 bg-white px-4 py-2 text-sm font-bold text-rose-800 hover:bg-rose-100"
+              >
+                Drip Drop
+              </Link>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -206,13 +377,13 @@ const ClientInvoiceDetail = () => {
     <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
       <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <Link to="/client/finance" className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
+          <Link to={backPath} className="mb-3 inline-flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900">
             <ArrowLeftIcon className="h-4 w-4" />
-            Finance
+            {backLabel}
           </Link>
           <h1 className="text-3xl font-bold text-slate-950">{invoice.invoiceNumber || 'Invoice'}</h1>
           <p className="mt-1 text-sm text-slate-500">
-            {invoice.companyName || 'Pool company'} sent this invoice to {invoice.email || user?.email || 'your account'}.
+            {invoice.companyName || 'Pool company'} sent this invoice to {invoice.email || emailParam || user?.email || 'your account'}.
           </p>
         </div>
 
@@ -303,7 +474,7 @@ const ClientInvoiceDetail = () => {
                 rel="noreferrer"
                 className="mt-5 inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-bold text-white hover:bg-blue-700"
               >
-                Open Stripe Invoice
+                Pay Stripe Invoice
               </a>
             )}
 
@@ -318,7 +489,62 @@ const ClientInvoiceDetail = () => {
               </a>
             )}
 
-            {!invoice.stripeHostedInvoiceUrl && balanceCents > 0 && (
+            {billingSubscriptionId && (
+              <div className="mt-5 rounded-md border border-slate-200 bg-slate-50 p-3">
+                <p className="text-sm font-bold text-slate-900">Recurring Billing Setup</p>
+                <p className="mt-1 text-xs leading-5 text-slate-600">
+                  Set up automatic billing for future recurring service charges from your homeowner account.
+                </p>
+
+                {user?.uid ? (
+                  <div className="mt-4 space-y-3">
+                    <PaymentMethodSelector
+                      amountCents={billingSubscription?.amountCents || invoice.totalAmountCents || balanceCents}
+                      value={selectedPaymentMethodType}
+                      onChange={setSelectedPaymentMethodType}
+                      disabled={!canStartCheckout}
+                      compact
+                    />
+                    {hasActiveStripeSubscription ? (
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3 text-sm font-semibold text-emerald-700">
+                        Billing is active.
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={startCheckout}
+                        disabled={!canStartCheckout}
+                        className="inline-flex w-full items-center justify-center rounded-md bg-slate-950 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {startingCheckout ? 'Opening Stripe...' : 'Set Up Recurring Billing'}
+                      </button>
+                    )}
+                    {!canStartCheckout && !hasActiveStripeSubscription && (
+                      <p className="text-xs text-slate-500">
+                        Billing setup appears when this invoice is tied to an online billing subscription.
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="mt-4 flex flex-col gap-2">
+                    <Link
+                      to={signInPath}
+                      className="inline-flex w-full justify-center rounded-md bg-slate-950 px-4 py-3 text-sm font-bold text-white hover:bg-slate-800"
+                    >
+                      Sign In To Set Up Billing
+                    </Link>
+                    <Link
+                      to={signUpPath}
+                      className="inline-flex w-full justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-bold text-blue-700 hover:bg-blue-100"
+                    >
+                      Create Homeowner Account
+                    </Link>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!invoice.stripeHostedInvoiceUrl && balanceCents > 0 && !billingSubscriptionId && (
               <p className="mt-4 text-xs text-slate-500">
                 This invoice does not have an online payment link yet. Contact the company or use their normal payment instructions.
               </p>
@@ -352,7 +578,7 @@ const ClientInvoiceDetail = () => {
               <Field label="Sent" value={formatDate(invoice.sentAt)} />
               <Field label="Created" value={formatDate(invoice.createdAt)} />
             </dl>
-            {invoice.agreementId && (
+            {invoice.agreementId && !isPublicInvoiceRoute && (
               <Link to={`/client/service-agreements/${invoice.agreementId}`} className="mt-5 inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-4 py-3 text-sm font-bold text-slate-700 hover:bg-slate-50">
                 View Service Agreement
               </Link>
