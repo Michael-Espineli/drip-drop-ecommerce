@@ -11,7 +11,6 @@ import {
   serverTimestamp,
   updateDoc,
   where,
-  writeBatch,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
@@ -130,10 +129,39 @@ const labelize = (value) => {
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
-const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
-  !subscription?.stripeSubscriptionId ||
-  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+const SALES_PERMISSION_ID = '400';
+
+const isPermissionDeniedError = (error) => (
+  error?.code === 'permission-denied' ||
+  /missing or insufficient permissions/i.test(String(error?.message || ''))
 );
+
+const salesRecordCompanyId = (record = {}) => (
+  typeof record?.companyId === 'string' ? record.companyId.trim() : ''
+);
+
+const getSalesDeleteOwnershipIssue = ({
+  label,
+  record,
+  selectedCompanyId,
+  agreementCompanyId = '',
+}) => {
+  const companyId = salesRecordCompanyId(record);
+
+  if (!companyId) {
+    return `${label} is missing companyId, so Firebase rules cannot verify company access.`;
+  }
+
+  if (selectedCompanyId && companyId !== selectedCompanyId) {
+    return `${label} belongs to a different company than the one currently selected.`;
+  }
+
+  if (agreementCompanyId && companyId !== agreementCompanyId) {
+    return `${label} is linked to this agreement but belongs to a different company.`;
+  }
+
+  return '';
+};
 
 const renewalPreviousAgreementId = (agreement = {}) => (
   agreement.supersedesAgreementId ||
@@ -1595,49 +1623,59 @@ const SalesAgreementDetail = () => {
 
   const deleteAgreement = async () => {
     if (!agreement || deleteConfirmation.trim().toUpperCase() !== 'DELETE') return;
+    if (!requirePermission(SALES_PERMISSION_ID, 'delete service agreements')) return;
+
+    const selectedCompanyId = String(recentlySelectedCompany || '').trim();
+    const agreementCompanyId = salesRecordCompanyId(agreement);
+    const agreementOwnershipIssue = !selectedCompanyId
+      ? 'Select the company that owns this service agreement before deleting it.'
+      : getSalesDeleteOwnershipIssue({
+        label: 'This service agreement',
+        record: agreement,
+        selectedCompanyId,
+      });
+
+    if (agreementOwnershipIssue) {
+      console.warn('Blocked service agreement delete before Firestore batch', {
+        issue: agreementOwnershipIssue,
+        agreementId: agreement.id,
+        agreementCompanyId,
+        selectedCompanyId,
+        userId: user?.uid || '',
+      });
+      toast.error(agreementOwnershipIssue);
+      return;
+    }
 
     setDeleting(true);
 
     try {
-      const subscriptionsToDelete = new Map();
-      if (billingSubscription?.id) subscriptionsToDelete.set(billingSubscription.id, billingSubscription);
-
-      if (agreement.billingSubscriptionId && !subscriptionsToDelete.has(agreement.billingSubscriptionId)) {
-        const subscriptionSnap = await getDoc(doc(db, salesCollectionNames.billingSubscriptions, agreement.billingSubscriptionId));
-        if (subscriptionSnap.exists()) {
-          subscriptionsToDelete.set(subscriptionSnap.id, { id: subscriptionSnap.id, ...subscriptionSnap.data() });
-        }
-      }
-
-      const linkedSubscriptionsSnapshot = await getDocs(query(
-        collection(db, salesCollectionNames.billingSubscriptions),
-        where('agreementId', '==', agreement.id)
-      ));
-      linkedSubscriptionsSnapshot.docs.forEach((subscriptionDoc) => {
-        subscriptionsToDelete.set(subscriptionDoc.id, { id: subscriptionDoc.id, ...subscriptionDoc.data() });
+      const deleteSalesAgreementCallable = httpsCallable(functions, 'deleteSalesAgreement');
+      const authPayload = await getCallableAuthPayload();
+      const result = await deleteSalesAgreementCallable({
+        ...authPayload,
+        agreementId: agreement.id,
+        companyId: selectedCompanyId,
       });
+      const deletedSubscriptionIds = Array.isArray(result.data?.deletedBillingSubscriptionIds)
+        ? result.data.deletedBillingSubscriptionIds
+        : [];
 
-      const liveStripeSubscription = [...subscriptionsToDelete.values()].find(
-        (subscriptionRecord) => !canDeleteBillingSubscriptionRecord(subscriptionRecord)
-      );
-      if (liveStripeSubscription) {
-        toast.error('Cancel the active Stripe billing subscription before deleting this agreement.');
-        return;
-      }
-
-      const deleteBatch = writeBatch(db);
-      [...subscriptionsToDelete.keys()].forEach((subscriptionId) => {
-        deleteBatch.delete(doc(db, salesCollectionNames.billingSubscriptions, subscriptionId));
-      });
-      deleteBatch.delete(doc(db, salesCollectionNames.agreements, agreement.id));
-      await deleteBatch.commit();
-      toast.success(subscriptionsToDelete.size
+      toast.success(deletedSubscriptionIds.length
         ? 'Service agreement and billing subscription deleted.'
         : 'Service agreement deleted.');
       navigate('/company/sales/agreements');
     } catch (deleteError) {
-      console.error('Unable to delete service agreement', deleteError);
-      toast.error(deleteError.message || 'Failed to delete service agreement.');
+      console.error('Unable to delete service agreement', {
+        error: deleteError,
+        agreementId: agreement.id,
+        agreementCompanyId: salesRecordCompanyId(agreement),
+        selectedCompanyId,
+        userId: user?.uid || '',
+      });
+      toast.error(isPermissionDeniedError(deleteError)
+        ? 'Firebase denied the delete. Check that this agreement and every linked billing subscription have the selected companyId and that your userAccess record exists for that company.'
+        : deleteError.message || 'Failed to delete service agreement.');
     } finally {
       setDeleting(false);
     }

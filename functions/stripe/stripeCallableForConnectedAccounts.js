@@ -413,6 +413,11 @@ const agreementHistoryGroupId = (agreement = {}) => (
 
 const activeStripeStatusKeys = new Set(['active', 'trialing', 'pastdue', 'unpaid', 'paused']);
 
+const canDeleteBillingSubscriptionRecord = (subscription = {}) => (
+  !subscription?.stripeSubscriptionId ||
+  normalizeStatus(subscription.stripeStatus || subscription.status) === 'canceled'
+);
+
 const supersededSubscriptionUpdates = (subscription = {}, timestamp) => {
   const hasStripeSubscription = Boolean(subscription.stripeSubscriptionId);
   const statusKey = normalizeStatus(subscription.stripeStatus || subscription.status);
@@ -1513,6 +1518,96 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     billingSubscriptionId: subscriptionDraft.id,
     customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
     nextAction: subscriptionDraft.nextAction,
+  };
+});
+
+exports.deleteSalesAgreement = functions.https.onCall(async (data, context) => {
+  const callableAuth = await getCallableAuth(data, context, 'You must be signed in to delete a service agreement.');
+  const receivedData = getCallableData(data);
+  const agreementId = String(receivedData.agreementId || '').trim();
+  const companyId = String(receivedData.companyId || '').trim();
+
+  if (!agreementId || !companyId) {
+    throw new functions.https.HttpsError('invalid-argument', 'agreementId and companyId are required.');
+  }
+
+  const agreementRef = db.collection(salesCollectionNames.agreements).doc(agreementId);
+  const agreementSnap = await agreementRef.get();
+
+  if (!agreementSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Service agreement was not found.');
+  }
+
+  const agreement = { id: agreementSnap.id, ...agreementSnap.data() };
+
+  if (agreement.companyId !== companyId) {
+    throw new functions.https.HttpsError('permission-denied', 'This service agreement belongs to another company.');
+  }
+
+  const hasAccess = await userHasCompanyAccess(callableAuth.uid, companyId);
+  if (!hasAccess) {
+    throw new functions.https.HttpsError('permission-denied', 'You do not have access to delete service agreements for this company.');
+  }
+
+  const subscriptionsToDelete = new Map();
+
+  if (agreement.billingSubscriptionId) {
+    const linkedSubscriptionSnap = await db
+      .collection(salesCollectionNames.billingSubscriptions)
+      .doc(String(agreement.billingSubscriptionId))
+      .get();
+
+    if (linkedSubscriptionSnap.exists) {
+      subscriptionsToDelete.set(linkedSubscriptionSnap.id, {
+        id: linkedSubscriptionSnap.id,
+        ...linkedSubscriptionSnap.data(),
+      });
+    }
+  }
+
+  const linkedSubscriptionsSnap = await db
+    .collection(salesCollectionNames.billingSubscriptions)
+    .where('agreementId', '==', agreementId)
+    .get();
+
+  linkedSubscriptionsSnap.docs.forEach((subscriptionSnap) => {
+    subscriptionsToDelete.set(subscriptionSnap.id, {
+      id: subscriptionSnap.id,
+      ...subscriptionSnap.data(),
+    });
+  });
+
+  const mismatchedSubscription = [...subscriptionsToDelete.values()].find(
+    (subscription) => subscription.companyId !== companyId
+  );
+  if (mismatchedSubscription) {
+    throw new functions.https.HttpsError(
+      'permission-denied',
+      `Linked billing subscription ${mismatchedSubscription.id || ''} belongs to another company.`
+    );
+  }
+
+  const liveStripeSubscription = [...subscriptionsToDelete.values()].find(
+    (subscription) => !canDeleteBillingSubscriptionRecord(subscription)
+  );
+  if (liveStripeSubscription) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Cancel the active Stripe billing subscription before deleting this agreement.'
+    );
+  }
+
+  const batch = db.batch();
+  [...subscriptionsToDelete.keys()].forEach((subscriptionId) => {
+    batch.delete(db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionId));
+  });
+  batch.delete(agreementRef);
+  await batch.commit();
+
+  return {
+    status: 'success',
+    agreementId,
+    deletedBillingSubscriptionIds: [...subscriptionsToDelete.keys()],
   };
 });
 

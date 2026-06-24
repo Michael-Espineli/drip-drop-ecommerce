@@ -14,6 +14,12 @@ import {
     normalizeTodo,
     todoIsOpen,
 } from '../utils/models/TodoItem';
+import {
+    JOB_BILLING_STATUS,
+    JOB_OPERATION_STATUS,
+    isActionableOperationsJob,
+    isFinishedOutstandingJob,
+} from '../utils/jobStatusFilters';
 
 const normalizeBookmarkPaths = (savedBookmarks) => (
     Array.isArray(savedBookmarks)
@@ -62,7 +68,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -132,11 +138,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0 });
+            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0 });
             return;
         }
 
-        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {} }));
+        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0 }));
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -164,6 +170,23 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         const externalRepairRequestsQuery = query(
             collection(db, "homeownerRepairRequests"),
             where("companyId", "==", recentlySelectedCompany)
+        );
+
+        const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+
+        const finishedJobsQuery = query(
+            workOrdersRef,
+            where("operationStatus", "==", JOB_OPERATION_STATUS.finished)
+        );
+
+        const draftOperationJobsQuery = query(
+            workOrdersRef,
+            where("operationStatus", "==", JOB_OPERATION_STATUS.draft)
+        );
+
+        const acceptedJobsQuery = query(
+            workOrdersRef,
+            where("billingStatus", "==", JOB_BILLING_STATUS.accepted)
         );
 
         const unsubscribeLeads = onSnapshot(leadsQuery, snapshot => {
@@ -260,6 +283,65 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             updateRepairRequestCount("external", snapshot);
         });
 
+        const actionableJobSources = {
+            draftOperation: new Set(),
+            acceptedNotScheduled: new Set(),
+        };
+
+        const updateActionableJobCount = (source, snapshot) => {
+            actionableJobSources[source] = new Set(
+                snapshot.docs
+                    .map((jobDoc) => ({ id: jobDoc.id, ...jobDoc.data() }))
+                    .filter(isActionableOperationsJob)
+                    .map((job) => job.id)
+            );
+
+            const actionableJobIds = new Set([
+                ...actionableJobSources.draftOperation,
+                ...actionableJobSources.acceptedNotScheduled,
+            ]);
+
+            setCounts(prev => ({ ...prev, actionableJobs: actionableJobIds.size }));
+        };
+
+        const handleActionableJobError = (source, error) => {
+            console.error("Error loading actionable job count:", error);
+            actionableJobSources[source] = new Set();
+            const actionableJobIds = new Set([
+                ...actionableJobSources.draftOperation,
+                ...actionableJobSources.acceptedNotScheduled,
+            ]);
+            setCounts(prev => ({ ...prev, actionableJobs: actionableJobIds.size }));
+        };
+
+        const unsubscribeFinishedJobs = onSnapshot(
+            finishedJobsQuery,
+            snapshot => {
+                const finishedJobs = snapshot.docs
+                    .map((jobDoc) => ({ id: jobDoc.id, ...jobDoc.data() }))
+                    .filter(isFinishedOutstandingJob)
+                    .length;
+
+                setCounts(prev => ({ ...prev, finishedJobs }));
+            },
+            error => {
+                console.error("Error loading finished job count:", error);
+                setCounts(prev => ({ ...prev, finishedJobs: 0 }));
+            }
+        );
+
+        const unsubscribeDraftOperationJobs = onSnapshot(
+            draftOperationJobsQuery,
+            snapshot => updateActionableJobCount("draftOperation", snapshot),
+            error => handleActionableJobError("draftOperation", error)
+        );
+
+        const unsubscribeAcceptedJobs = onSnapshot(
+            acceptedJobsQuery,
+            snapshot => updateActionableJobCount("acceptedNotScheduled", snapshot),
+            error => handleActionableJobError("acceptedNotScheduled", error)
+        );
+
         return () => {
             unsubscribeLeads();
             unsubscribeMessages();
@@ -268,6 +350,9 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             unsubscribeLegacyShopping();
             unsubscribeInternalRepairRequests();
             unsubscribeExternalRepairRequests();
+            unsubscribeFinishedJobs();
+            unsubscribeDraftOperationJobs();
+            unsubscribeAcceptedJobs();
         };
     }, [recentlySelectedCompany, user, dataBaseUser, companyRoleLoaded, companyUserAccess, featureFlagsLoaded, isFeatureEnabled]);
 
@@ -354,7 +439,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                             ? (counts.shopping || 0) + (counts.legacyShopping || 0)
                                                             : item.title === 'Repair Requests'
                                                                 ? counts.repairRequests
-                                                                : 0;
+                                                                : item.title === 'Finished Jobs'
+                                                                    ? counts.finishedJobs
+                                                                    : item.title === 'Jobs'
+                                                                        ? counts.actionableJobs
+                                                                        : 0;
 
                                         return (
                                             <li key={`${section.key}-${item.path}-${item.title}`}>

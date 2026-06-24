@@ -78,6 +78,7 @@ export const allNav = [
 
     // Finance
     { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+    { id: 63, title: 'Finished Jobs', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/jobs/billing', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 72, title: 'Billing Subscriptions', icon: <FaCreditCard />, role: 'Company', path: '/company/sales/subscriptions', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
@@ -88,7 +89,7 @@ export const allNav = [
     // Operations
     { id: 21, title: 'Operations Dashboard', icon: <MdOutlineDashboard />, role: 'Company', path: '/company/operations-dashboard', category: 'Operations', permissionId: '0' },
     { id: 25, title: 'Customers', icon: <FaHouseUser />, role: 'Company', path: '/company/customers', category: 'Operations', permissionId: '10' },
-    { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs', category: 'Operations', permissionId: '20' },
+    { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs/operations', category: 'Operations', permissionId: '20' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
     { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
     { id: 37, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Company', path: '/company/part-approvals', category: 'Operations' },

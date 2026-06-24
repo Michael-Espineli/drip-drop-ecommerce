@@ -154,6 +154,7 @@ const connectedAcctFunc = require('./stripe/stripeCallableForConnectedAccounts')
 exports.verifyConnectedAccountBillingReadiness = connectedAcctFunc.verifyConnectedAccountBillingReadiness;
 exports.acceptSalesServiceAgreement = connectedAcctFunc.acceptSalesServiceAgreement;
 exports.acceptPublicSalesServiceAgreement = connectedAcctFunc.acceptPublicSalesServiceAgreement;
+exports.deleteSalesAgreement = connectedAcctFunc.deleteSalesAgreement;
 exports.createSalesBillingSubscriptionCheckoutSession = connectedAcctFunc.createSalesBillingSubscriptionCheckoutSession;
 exports.syncSalesBillingSubscriptionFromStripe = connectedAcctFunc.syncSalesBillingSubscriptionFromStripe;
 exports.cancelSalesBillingSubscription = connectedAcctFunc.cancelSalesBillingSubscription;

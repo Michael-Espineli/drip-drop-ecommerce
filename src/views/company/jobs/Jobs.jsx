@@ -17,36 +17,39 @@ import { useNavigate, useParams } from "react-router-dom";
 import { FaSort, FaSortAmountDown, FaSortAmountUp } from "react-icons/fa";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+    JOB_BILLING_STATUS,
+    JOB_OPERATION_STATUS,
+    isAcceptedNotScheduledJob,
+    isActionableOperationsJob,
+    isDraftOperationJob,
+    isFinishedOutstandingJob,
+} from "../../../utils/jobStatusFilters";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
-    "Estimate Pending",
-    "Unscheduled",
-    "Scheduled",
-    "Waiting for Parts",
-    "In Progress"
+    JOB_OPERATION_STATUS.draft
 ];
 
 const OPERATIONS_QUICK_BILLING_STATUSES = [
-    "Draft",
-    "Estimate",
-    "Accepted",
-    "In Progress"
+    JOB_BILLING_STATUS.accepted
 ];
 
-const BILLING_QUICK_OPERATION_STATUSES = ["Finished"];
+const BILLING_QUICK_OPERATION_STATUSES = [JOB_OPERATION_STATUS.finished];
 
 const BILLING_QUICK_BILLING_STATUSES = [
-    "Draft",
-    "Estimate",
-    "Accepted",
-    "In Progress",
-    "Expired"
+    JOB_BILLING_STATUS.draft,
+    JOB_BILLING_STATUS.estimate,
+    JOB_BILLING_STATUS.accepted,
+    JOB_BILLING_STATUS.inProgress,
+    JOB_BILLING_STATUS.expired,
+    JOB_BILLING_STATUS.rejected
 ];
 
 const JOB_LIST_VIEWS = ["operations", "billing"];
 const DEFAULT_JOB_LIST_VIEW = "operations";
 
 const OPERATION_STATUS_OPTIONS = [
+    "Draft",
     "Estimate Pending",
     "Unscheduled",
     "Scheduled",
@@ -100,10 +103,6 @@ const operationStatusOrder = OPERATION_STATUS_OPTIONS.reduce((acc, status, index
     acc[status.toLowerCase()] = index;
     return acc;
 }, {});
-
-const statusMatches = (value, status) => {
-    return String(value || "").trim().toLowerCase() === status.toLowerCase();
-};
 
 const toMillis = (value) => {
     if (!value) return 0;
@@ -247,6 +246,7 @@ const Jobs = () => {
     const [bulkOperationStatus, setBulkOperationStatus] = useState("");
     const [bulkBillingStatus, setBulkBillingStatus] = useState("");
     const [bulkUpdating, setBulkUpdating] = useState(false);
+    const [customFiltersActive, setCustomFiltersActive] = useState(false);
 
     // Filter and Sort States
     const [operationStatusFilter, setOperationStatusFilter] = useState([
@@ -263,7 +263,14 @@ const Jobs = () => {
         return JOB_LIST_VIEWS.includes(viewValue) ? viewValue : DEFAULT_JOB_LIST_VIEW;
     }, []);
 
+    const currentJobListView = useMemo(
+        () => getInitialJobListView(view),
+        [view, getInitialJobListView]
+    );
+
     const applyJobListViewFilters = useCallback((nextView) => {
+        setCustomFiltersActive(false);
+
         if (nextView === "billing") {
             setOperationStatusFilter([...BILLING_QUICK_OPERATION_STATUSES]);
             setBillingStatusFilter([...BILLING_QUICK_BILLING_STATUSES]);
@@ -292,7 +299,41 @@ const Jobs = () => {
         }
 
         try {
-            let q = collection(db, "companies", recentlySelectedCompany, "workOrders");
+            const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+
+            if (!customFiltersActive && currentJobListView === "operations") {
+                const [draftOperationSnapshot, acceptedSnapshot] = await Promise.all([
+                    getDocs(query(workOrdersRef, where("operationStatus", "==", JOB_OPERATION_STATUS.draft))),
+                    getDocs(query(workOrdersRef, where("billingStatus", "==", JOB_BILLING_STATUS.accepted))),
+                ]);
+
+                const jobsById = new Map();
+
+                [...draftOperationSnapshot.docs, ...acceptedSnapshot.docs].forEach((jobDoc) => {
+                    const job = Job.fromFirestore(jobDoc);
+                    if (isActionableOperationsJob(job)) {
+                        jobsById.set(job.id, job);
+                    }
+                });
+
+                setJobs([...jobsById.values()]);
+                return;
+            }
+
+            if (!customFiltersActive && currentJobListView === "billing") {
+                const finishedSnapshot = await getDocs(
+                    query(workOrdersRef, where("operationStatus", "==", JOB_OPERATION_STATUS.finished))
+                );
+
+                setJobs(
+                    finishedSnapshot.docs
+                        .map(doc => Job.fromFirestore(doc))
+                        .filter(isFinishedOutstandingJob)
+                );
+                return;
+            }
+
+            let q = workOrdersRef;
             let queries = [];
 
             if (operationStatusFilter.length > 0) {
@@ -314,7 +355,9 @@ const Jobs = () => {
     }, [
         recentlySelectedCompany,
         operationStatusFilter,
-        billingStatusFilter
+        billingStatusFilter,
+        currentJobListView,
+        customFiltersActive
     ]);
 
     useEffect(() => {
@@ -532,6 +575,7 @@ const Jobs = () => {
     };
 
     const handleApplyFilters = (newOperationFilters, newBillingFilters) => {
+        setCustomFiltersActive(true);
         setOperationStatusFilter(newOperationFilters);
         setBillingStatusFilter(newBillingFilters);
         setShowFilterModal(false);
@@ -543,20 +587,8 @@ const Jobs = () => {
     };
 
     const activeQuickFilter = useMemo(() => {
-        const sameSet = (left, right) => (
-            left.length === right.length && left.every((item) => right.includes(item))
-        );
-
-        if (sameSet(operationStatusFilter, OPERATIONS_QUICK_OPERATION_STATUSES) && sameSet(billingStatusFilter, OPERATIONS_QUICK_BILLING_STATUSES)) {
-            return "operations";
-        }
-
-        if (sameSet(operationStatusFilter, BILLING_QUICK_OPERATION_STATUSES) && sameSet(billingStatusFilter, BILLING_QUICK_BILLING_STATUSES)) {
-            return "billing";
-        }
-
-        return "custom";
-    }, [billingStatusFilter, operationStatusFilter]);
+        return customFiltersActive ? "custom" : currentJobListView;
+    }, [currentJobListView, customFiltersActive]);
 
     const [activeSortKey, activeSortDirection = "asc"] = sortBy.split("-");
     const canCreateJobs = can("22");
@@ -658,34 +690,20 @@ const Jobs = () => {
 
     const jobSummary = useMemo(() => {
         const summaryJobs = allJobs.length > 0 ? allJobs : visibleJobs;
-        const actionableJobIds = new Set();
 
-        const draftBillingCount = summaryJobs.filter((job) => {
-            const isMatch = statusMatches(job.billingStatus, "Draft");
-            if (isMatch) actionableJobIds.add(job.id);
-            return isMatch;
-        }).length;
-
-        const acceptedBillingCount = summaryJobs.filter((job) => {
-            const isMatch = statusMatches(job.billingStatus, "Accepted");
-            if (isMatch) actionableJobIds.add(job.id);
-            return isMatch;
-        }).length;
-
-        const unscheduledOperationCount = summaryJobs.filter((job) => {
-            const isMatch = statusMatches(job.operationStatus, "Unscheduled");
-            if (isMatch) actionableJobIds.add(job.id);
-            return isMatch;
-        }).length;
+        const actionableJobsCount = summaryJobs.filter(isActionableOperationsJob).length;
+        const draftOperationCount = summaryJobs.filter(isDraftOperationJob).length;
+        const acceptedNotScheduledCount = summaryJobs.filter(isAcceptedNotScheduledJob).length;
+        const finishedOutstandingCount = summaryJobs.filter(isFinishedOutstandingJob).length;
 
         return {
             totalRateCents: summaryJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             visibleRateCents: visibleJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             totalJobsCount: summaryJobs.length,
-            actionableJobsCount: actionableJobIds.size,
-            draftBillingCount,
-            acceptedBillingCount,
-            unscheduledOperationCount,
+            actionableJobsCount,
+            draftOperationCount,
+            acceptedNotScheduledCount,
+            finishedOutstandingCount,
         };
     }, [allJobs, visibleJobs]);
 
@@ -1038,7 +1056,7 @@ const Jobs = () => {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5 mb-6">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6 mb-6">
                     <JobMetricCard
                         label="Total Rate"
                         value={moneyFromCents(jobSummary.totalRateCents)}
@@ -1055,21 +1073,28 @@ const Jobs = () => {
                     <JobMetricCard
                         label="Actionable Jobs"
                         value={jobSummary.actionableJobsCount}
-                        detail="Draft, accepted, or unscheduled"
+                        detail="Draft operations or accepted jobs not scheduled"
                         tone="amber"
                     />
 
                     <JobMetricCard
-                        label="Draft Billing"
-                        value={jobSummary.draftBillingCount}
-                        detail="Needs estimate or billing work"
+                        label="Finished Not Invoiced"
+                        value={jobSummary.finishedOutstandingCount}
+                        detail="Finished jobs needing billing action"
+                        tone="blue"
+                    />
+
+                    <JobMetricCard
+                        label="Draft Operations"
+                        value={jobSummary.draftOperationCount}
+                        detail="Operation status Draft"
                         tone="red"
                     />
 
                     <JobMetricCard
-                        label="Accepted / Unscheduled"
-                        value={`${jobSummary.acceptedBillingCount} / ${jobSummary.unscheduledOperationCount}`}
-                        detail="Needs billing or operations follow-up"
+                        label="Accepted Not Scheduled"
+                        value={jobSummary.acceptedNotScheduledCount}
+                        detail="Billing accepted without Scheduled operation"
                         tone="green"
                     />
                 </div>
@@ -1086,7 +1111,7 @@ const Jobs = () => {
                                     : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
                             ].join(" ")}
                         >
-                            Operations
+                            Actionable Jobs
                         </button>
                         <button
                             type="button"
@@ -1098,7 +1123,7 @@ const Jobs = () => {
                                     : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
                             ].join(" ")}
                         >
-                            Billing: Finished Not Invoiced
+                            Finished Not Invoiced
                         </button>
                     </div>
                     <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
