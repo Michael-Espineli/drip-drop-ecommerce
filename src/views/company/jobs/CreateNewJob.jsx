@@ -270,7 +270,7 @@ const CreateNewJob = () => {
 
             category: "Job",
             subCategory: item.subCategory || "Custom",
-            status: item.status || "Need to Purchase",
+            status: "Needs Customer Approval",
             purchaserId: item.purchaserId || createdByUserId || "",
             purchaserName: item.purchaserName || createdByUserName || "",
 

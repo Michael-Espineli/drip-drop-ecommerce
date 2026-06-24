@@ -4,7 +4,6 @@ import Select from 'react-select';
 import { collection, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import {
-  FaArrowLeft,
   FaFileSignature,
   FaPlus,
   FaSave,
@@ -32,6 +31,7 @@ import {
   formatServiceFrequency,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
+import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -40,26 +40,80 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
 
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
 
-const pnlChemicalCostModeOptions = [
-  { value: SalesAgreementPnlChemicalCostMode.includeAll, label: 'Include Chemical Costs' },
-  { value: SalesAgreementPnlChemicalCostMode.excludeAll, label: 'Exclude Chemical Costs' },
-  { value: SalesAgreementPnlChemicalCostMode.excludeSelected, label: 'Exclude Selected Chemicals' },
-];
-
 const chemicalBillingModeOptions = [
   { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
   { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
   { value: SalesAgreementChemicalBillingMode.mixed, label: 'Mixed Chemical Billing' },
 ];
 
+const ChemicalBillingMixedSelectionMode = Object.freeze({
+  separatelyBilled: 'separatelyBilled',
+  included: 'included',
+});
+
+const mixedChemicalBillingSelectionOptions = [
+  {
+    value: ChemicalBillingMixedSelectionMode.separatelyBilled,
+    label: 'Select dosages excluded and billed separately',
+  },
+  {
+    value: ChemicalBillingMixedSelectionMode.included,
+    label: 'Select dosages included in service',
+  },
+];
+
 const normalizeCommaList = (value) => (
   Array.from(new Set(
-    String(value || '')
-      .split(/[\n,]/)
-      .map((item) => item.trim())
+    (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+      .map((item) => String(item || '').trim())
       .filter(Boolean)
   ))
 );
+
+const dosageTemplateKeys = (template = {}) => (
+  [
+    template.id,
+    template.templateId,
+    template.dosageTemplateId,
+    template.universalTemplateId,
+  ].map((value) => String(value || '').trim()).filter(Boolean)
+);
+
+const deriveChemicalBillingFields = (form = {}) => {
+  const selectedChemicalBillingMode = form.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
+  const selectedMixedChemicalBillingMode = form.chemicalBillingMixedSelectionMode
+    || ChemicalBillingMixedSelectionMode.separatelyBilled;
+  const shouldPersistIncludedChemicalSelections = selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+    && selectedMixedChemicalBillingMode === ChemicalBillingMixedSelectionMode.included;
+  const shouldPersistSeparatelyBilledChemicalSelections = selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+    && selectedMixedChemicalBillingMode === ChemicalBillingMixedSelectionMode.separatelyBilled;
+
+  return {
+    chemicalBillingMode: selectedChemicalBillingMode,
+    chemicalBillingMixedSelectionMode: selectedChemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+      ? selectedMixedChemicalBillingMode
+      : '',
+    includedChemicalKeywords: [],
+    includedChemicalIds: shouldPersistIncludedChemicalSelections
+      ? normalizeCommaList(form.includedChemicalIds)
+      : [],
+    separatelyBilledChemicalKeywords: [],
+    separatelyBilledChemicalIds: shouldPersistSeparatelyBilledChemicalSelections
+      ? normalizeCommaList(form.separatelyBilledChemicalIds)
+      : [],
+    customerPurchasedChemicalKeywords: [],
+    customerPurchasedChemicalIds: [],
+    chemicalBillingNotes: String(form.chemicalBillingNotes || '').trim(),
+  };
+};
+
+const deriveInternalPnlFields = () => ({
+  pnlIncludeInReports: true,
+  pnlChemicalCostMode: SalesAgreementPnlChemicalCostMode.includeAll,
+  pnlExcludedChemicalKeywords: [],
+  pnlExcludedChemicalIds: [],
+  pnlExcludeCustomerPurchasedChemicals: true,
+});
 
 const customerDisplayName = (customer = {}) => {
   if (customer.displayAsCompany) {
@@ -189,6 +243,118 @@ const selectStyles = {
   }),
 };
 
+const ChemicalDosagePicker = ({
+  id,
+  label,
+  selectedIds = [],
+  dosageTemplates = [],
+  loading = false,
+  onChange,
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const normalizedSelectedIds = normalizeCommaList(selectedIds);
+  const selectedSet = new Set(normalizedSelectedIds);
+  const templateById = new Map();
+
+  dosageTemplates.forEach((template) => {
+    dosageTemplateKeys(template).forEach((key) => templateById.set(key, template));
+  });
+
+  const filteredTemplates = dosageTemplates.filter((template) => (
+    dosageLabel(template).toLowerCase().includes(searchTerm.trim().toLowerCase())
+  ));
+
+  const toggleSelection = (dosageId) => {
+    const nextIds = selectedSet.has(dosageId)
+      ? normalizedSelectedIds.filter((currentId) => currentId !== dosageId)
+      : [...normalizedSelectedIds, dosageId];
+
+    onChange(nextIds);
+  };
+
+  return (
+    <div className="rounded-md border border-slate-200 bg-white p-3">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <label className="text-sm font-semibold text-slate-700" htmlFor={id}>
+          {label}
+        </label>
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+          {normalizedSelectedIds.length} selected
+        </span>
+      </div>
+
+      {normalizedSelectedIds.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {normalizedSelectedIds.map((dosageId) => {
+            const template = templateById.get(dosageId);
+            const labelText = template ? dosageLabel(template) : dosageId;
+            return (
+              <span
+                key={dosageId}
+                className="inline-flex max-w-full items-center gap-2 rounded-md bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800"
+              >
+                <span className="truncate">{labelText}</span>
+                <button
+                  type="button"
+                  onClick={() => toggleSelection(dosageId)}
+                  className="text-blue-500 transition hover:text-rose-600"
+                  aria-label={`Remove ${labelText}`}
+                >
+                  <FaTimes className="text-[10px]" />
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+
+      <input
+        id={id}
+        type="search"
+        value={searchTerm}
+        onChange={(event) => setSearchTerm(event.target.value)}
+        className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+        placeholder="Search dosage templates"
+      />
+
+      <div className="mt-3 max-h-56 overflow-y-auto rounded-md border border-slate-200 bg-slate-50">
+        {loading ? (
+          <div className="p-3 text-sm text-slate-500">Loading dosage templates...</div>
+        ) : filteredTemplates.length ? (
+          filteredTemplates.map((template) => {
+            const dosageId = dosageTemplateKeys(template)[0];
+            if (!dosageId) return null;
+
+            return (
+              <label
+                key={dosageId}
+                className="flex cursor-pointer items-start gap-3 border-b border-slate-200 px-3 py-2 text-sm last:border-b-0 hover:bg-blue-50"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedSet.has(dosageId)}
+                  onChange={() => toggleSelection(dosageId)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span className="min-w-0">
+                  <span className="block truncate font-semibold text-slate-900">{dosageLabel(template)}</span>
+                  {template.chemType && (
+                    <span className="block truncate text-xs text-slate-500">{template.chemType}</span>
+                  )}
+                </span>
+              </label>
+            );
+          })
+        ) : (
+          <div className="p-3 text-sm text-slate-500">
+            No dosage templates found.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const CreateSalesAgreement = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -211,10 +377,12 @@ const CreateSalesAgreement = () => {
   const [customers, setCustomers] = useState([]);
   const [serviceLocations, setServiceLocations] = useState([]);
   const [catalogItems, setCatalogItems] = useState([]);
+  const [dosageTemplates, setDosageTemplates] = useState([]);
   const [termsTemplates, setTermsTemplates] = useState([]);
   const [selectedTerms, setSelectedTerms] = useState([]);
   const [loading, setLoading] = useState(true);
   const [termsLoading, setTermsLoading] = useState(false);
+  const [loadingDosageTemplates, setLoadingDosageTemplates] = useState(false);
   const [saving, setSaving] = useState(false);
   const [selectedCatalogItemId, setSelectedCatalogItemId] = useState('');
   const [selectedCatalogQuantity, setSelectedCatalogQuantity] = useState('1');
@@ -238,18 +406,10 @@ const CreateSalesAgreement = () => {
     rateType: 'perMonth',
     paymentTerms: 'dueOnReceipt',
     invoiceDeliveryMethod: SalesInvoiceDeliveryMethod.email,
-    pnlIncludeInReports: true,
-    pnlChemicalCostMode: SalesAgreementPnlChemicalCostMode.includeAll,
-    pnlExcludedChemicalKeywords: '',
-    pnlExcludedChemicalIds: '',
-    pnlExcludeCustomerPurchasedChemicals: true,
     chemicalBillingMode: SalesAgreementChemicalBillingMode.includedAll,
-    includedChemicalKeywords: '',
-    includedChemicalIds: '',
-    separatelyBilledChemicalKeywords: '',
-    separatelyBilledChemicalIds: '',
-    customerPurchasedChemicalKeywords: '',
-    customerPurchasedChemicalIds: '',
+    chemicalBillingMixedSelectionMode: ChemicalBillingMixedSelectionMode.separatelyBilled,
+    includedChemicalIds: [],
+    separatelyBilledChemicalIds: [],
     chemicalBillingNotes: '',
     startDate: toInputDate(new Date()),
     expiresAt: '',
@@ -324,6 +484,34 @@ const CreateSalesAgreement = () => {
     ];
 
     return () => unsubscribes.forEach((unsubscribe) => unsubscribe());
+  }, [recentlySelectedCompany]);
+
+  useEffect(() => {
+    if (!recentlySelectedCompany) {
+      setDosageTemplates([]);
+      setLoadingDosageTemplates(false);
+      return undefined;
+    }
+
+    setLoadingDosageTemplates(true);
+
+    return onSnapshot(
+      collection(db, 'companies', recentlySelectedCompany, 'settings', 'dosages', 'dosages'),
+      (snapshot) => {
+        const templates = snapshot.docs.map((templateDoc) => ({
+          id: templateDoc.id,
+          ...templateDoc.data(),
+        }));
+        setDosageTemplates(sortDosageTemplates(templates));
+        setLoadingDosageTemplates(false);
+      },
+      (error) => {
+        console.error('Unable to load dosage templates for sales agreement', error);
+        toast.error('Failed to load dosage templates.');
+        setDosageTemplates([]);
+        setLoadingDosageTemplates(false);
+      }
+    );
   }, [recentlySelectedCompany]);
 
   useEffect(() => {
@@ -519,6 +707,38 @@ const CreateSalesAgreement = () => {
     }));
   };
 
+  const updateChemicalBillingMode = (value) => {
+    setForm((current) => {
+      const mixedSelectionMode = current.chemicalBillingMixedSelectionMode
+        || ChemicalBillingMixedSelectionMode.separatelyBilled;
+      const isMixed = value === SalesAgreementChemicalBillingMode.mixed;
+      const keepIncludedSelections = isMixed
+        && mixedSelectionMode === ChemicalBillingMixedSelectionMode.included;
+      const keepSeparatelyBilledSelections = isMixed
+        && mixedSelectionMode === ChemicalBillingMixedSelectionMode.separatelyBilled;
+
+      return {
+        ...current,
+        chemicalBillingMode: value,
+        includedChemicalIds: keepIncludedSelections ? current.includedChemicalIds : [],
+        separatelyBilledChemicalIds: keepSeparatelyBilledSelections ? current.separatelyBilledChemicalIds : [],
+      };
+    });
+  };
+
+  const updateChemicalBillingMixedSelectionMode = (value) => {
+    setForm((current) => ({
+      ...current,
+      chemicalBillingMixedSelectionMode: value,
+      includedChemicalIds: value === ChemicalBillingMixedSelectionMode.included
+        ? current.includedChemicalIds
+        : [],
+      separatelyBilledChemicalIds: value === ChemicalBillingMixedSelectionMode.separatelyBilled
+        ? current.separatelyBilledChemicalIds
+        : [],
+    }));
+  };
+
   const handleCustomerChange = (customerId) => {
     const customer = customers.find((item) => item.id === customerId);
 
@@ -657,6 +877,8 @@ const CreateSalesAgreement = () => {
           ? SalesAgreementSourceType.lead
           : SalesAgreementSourceType.manual;
       const agreementSourceId = sourceServiceStopId || sourceLeadId || '';
+      const chemicalBillingFields = deriveChemicalBillingFields(form);
+      const pnlReportingFields = deriveInternalPnlFields(chemicalBillingFields);
       const agreement = new SalesAgreement({
         companyId: recentlySelectedCompany,
         companyName: selectedCompanyName,
@@ -695,19 +917,8 @@ const CreateSalesAgreement = () => {
         billingFrequencyCount: Number(form.billingFrequencyCount || 1),
         paymentTerms: form.paymentTerms,
         invoiceDeliveryMethod: form.invoiceDeliveryMethod,
-        pnlIncludeInReports: form.pnlIncludeInReports !== false,
-        pnlChemicalCostMode: form.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
-        pnlExcludedChemicalKeywords: normalizeCommaList(form.pnlExcludedChemicalKeywords),
-        pnlExcludedChemicalIds: normalizeCommaList(form.pnlExcludedChemicalIds),
-        pnlExcludeCustomerPurchasedChemicals: form.pnlExcludeCustomerPurchasedChemicals !== false,
-        chemicalBillingMode: form.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
-        includedChemicalKeywords: normalizeCommaList(form.includedChemicalKeywords),
-        includedChemicalIds: normalizeCommaList(form.includedChemicalIds),
-        separatelyBilledChemicalKeywords: normalizeCommaList(form.separatelyBilledChemicalKeywords),
-        separatelyBilledChemicalIds: normalizeCommaList(form.separatelyBilledChemicalIds),
-        customerPurchasedChemicalKeywords: normalizeCommaList(form.customerPurchasedChemicalKeywords),
-        customerPurchasedChemicalIds: normalizeCommaList(form.customerPurchasedChemicalIds),
-        chemicalBillingNotes: form.chemicalBillingNotes.trim(),
+        ...pnlReportingFields,
+        ...chemicalBillingFields,
         startDate: dateFromInput(form.startDate),
         expiresAt: dateFromInput(form.expiresAt),
         atWill: Boolean(form.atWill),
@@ -754,15 +965,18 @@ const CreateSalesAgreement = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 py-6 text-slate-900 sm:px-6 lg:px-8">
-      <div className="mx-auto max-w-7xl space-y-6">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  Feature Flag 004
-                </span>
+                <Link
+                  to="/company/sales/agreements"
+                  className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                >
+                  &larr; Back to Service Agreements
+                </Link>
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
                   {selectedCompanyName}
                 </span>
@@ -784,19 +998,11 @@ const CreateSalesAgreement = () => {
                 Build the customer-facing agreement snapshot before sending or starting billing.
               </p>
             </div>
-
-            <Link
-              to="/company/sales"
-              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-            >
-              <FaArrowLeft className="text-xs" />
-              Sales
-            </Link>
           </div>
         </section>
 
-        <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_380px]">
-          <div className="space-y-6">
+        <form onSubmit={handleSubmit} className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+          <main className="space-y-6 lg:order-2">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Customer</h2>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -999,7 +1205,15 @@ const CreateSalesAgreement = () => {
                 </div>
 
                 <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Chemical Billing</h3>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Chemical Billing</h3>
+                    <Link
+                      to="/company/readingsAndDosages"
+                      className="text-sm font-semibold text-blue-700 hover:text-blue-800"
+                    >
+                      Manage Dosages
+                    </Link>
+                  </div>
                   <div className="mt-3 grid gap-4 sm:grid-cols-2">
                     <div>
                       <label htmlFor="chemicalBillingMode" className="block text-sm font-semibold text-slate-700">
@@ -1008,7 +1222,7 @@ const CreateSalesAgreement = () => {
                       <select
                         id="chemicalBillingMode"
                         value={form.chemicalBillingMode}
-                        onChange={(event) => handleFieldChange('chemicalBillingMode', event.target.value)}
+                        onChange={(event) => updateChemicalBillingMode(event.target.value)}
                         className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                       >
                         {chemicalBillingModeOptions.map((option) => (
@@ -1030,168 +1244,59 @@ const CreateSalesAgreement = () => {
                         placeholder="tabs supplied by customer, phosphate billed separately"
                       />
                     </div>
-
-                    {(form.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed) && (
-                      <>
-                        <div>
-                          <label htmlFor="separatelyBilledChemicalKeywords" className="block text-sm font-semibold text-slate-700">
-                            Separately Billed Keywords
-                          </label>
-                          <input
-                            id="separatelyBilledChemicalKeywords"
-                            type="text"
-                            value={form.separatelyBilledChemicalKeywords}
-                            onChange={(event) => handleFieldChange('separatelyBilledChemicalKeywords', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="phosphate, salt, stabilizer"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="separatelyBilledChemicalIds" className="block text-sm font-semibold text-slate-700">
-                            Separately Billed IDs
-                          </label>
-                          <input
-                            id="separatelyBilledChemicalIds"
-                            type="text"
-                            value={form.separatelyBilledChemicalIds}
-                            onChange={(event) => handleFieldChange('separatelyBilledChemicalIds', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="database item or dosage template ids"
-                          />
-                        </div>
-                      </>
-                    )}
-
-                    {(form.chemicalBillingMode !== SalesAgreementChemicalBillingMode.includedAll) && (
-                      <>
-                        <div>
-                          <label htmlFor="includedChemicalKeywords" className="block text-sm font-semibold text-slate-700">
-                            Included Chemical Keywords
-                          </label>
-                          <input
-                            id="includedChemicalKeywords"
-                            type="text"
-                            value={form.includedChemicalKeywords}
-                            onChange={(event) => handleFieldChange('includedChemicalKeywords', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="chlorine, acid"
-                          />
-                        </div>
-                        <div>
-                          <label htmlFor="includedChemicalIds" className="block text-sm font-semibold text-slate-700">
-                            Included Chemical IDs
-                          </label>
-                          <input
-                            id="includedChemicalIds"
-                            type="text"
-                            value={form.includedChemicalIds}
-                            onChange={(event) => handleFieldChange('includedChemicalIds', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="database item or dosage template ids"
-                          />
-                        </div>
-                      </>
-                    )}
-
-                    <div>
-                      <label htmlFor="customerPurchasedChemicalKeywords" className="block text-sm font-semibold text-slate-700">
-                        Customer-Purchased Keywords
-                      </label>
-                      <input
-                        id="customerPurchasedChemicalKeywords"
-                        type="text"
-                        value={form.customerPurchasedChemicalKeywords}
-                        onChange={(event) => handleFieldChange('customerPurchasedChemicalKeywords', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        placeholder="tabs, trichlor"
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="customerPurchasedChemicalIds" className="block text-sm font-semibold text-slate-700">
-                        Customer-Purchased IDs
-                      </label>
-                      <input
-                        id="customerPurchasedChemicalIds"
-                        type="text"
-                        value={form.customerPurchasedChemicalIds}
-                        onChange={(event) => handleFieldChange('customerPurchasedChemicalIds', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                        placeholder="database item or dosage template ids"
-                      />
-                    </div>
                   </div>
-                </div>
 
-                <div>
-                  <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">PNL Treatment</h3>
-                  <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label htmlFor="pnlChemicalCostMode" className="block text-sm font-semibold text-slate-700">
-                        Chemical Costs
-                      </label>
-                      <select
-                        id="pnlChemicalCostMode"
-                        value={form.pnlChemicalCostMode}
-                        onChange={(event) => handleFieldChange('pnlChemicalCostMode', event.target.value)}
-                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {pnlChemicalCostModeOptions.map((option) => (
-                          <option key={option.value} value={option.value}>{option.label}</option>
-                        ))}
-                      </select>
-                    </div>
+                  <div className="mt-3">
+                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.includedAll && (
+                      <div className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                        All dosage templates are included in service. No dosage selections are needed.
+                      </div>
+                    )}
 
-                    <div className="grid gap-3 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm">
-                      <label className="flex items-start gap-3 font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={form.pnlIncludeInReports !== false}
-                          onChange={(event) => handleFieldChange('pnlIncludeInReports', event.target.checked)}
-                          className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        Agreement revenue in PNL
-                      </label>
-                      <label className="flex items-start gap-3 font-semibold text-slate-700">
-                        <input
-                          type="checkbox"
-                          checked={form.pnlExcludeCustomerPurchasedChemicals !== false}
-                          onChange={(event) => handleFieldChange('pnlExcludeCustomerPurchasedChemicals', event.target.checked)}
-                          className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        Ignore customer-purchased chemicals
-                      </label>
-                    </div>
+                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.billAllSeparately && (
+                      <div className="rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">
+                        All dosage templates are billed separately. No dosage selections are needed.
+                      </div>
+                    )}
 
-                    {form.pnlChemicalCostMode === SalesAgreementPnlChemicalCostMode.excludeSelected && (
-                      <>
-                        <div>
-                          <label htmlFor="pnlExcludedChemicalKeywords" className="block text-sm font-semibold text-slate-700">
-                            Excluded Chemical Keywords
+                    {form.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                      <div className="grid gap-3 lg:grid-cols-2">
+                        <div className="rounded-md border border-slate-200 bg-white p-3">
+                          <label htmlFor="chemicalBillingMixedSelectionMode" className="block text-sm font-semibold text-slate-700">
+                            Mixed Billing Selection
                           </label>
-                          <input
-                            id="pnlExcludedChemicalKeywords"
-                            type="text"
-                            value={form.pnlExcludedChemicalKeywords}
-                            onChange={(event) => handleFieldChange('pnlExcludedChemicalKeywords', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="tabs, trichlor, acid"
-                          />
+                          <select
+                            id="chemicalBillingMixedSelectionMode"
+                            value={form.chemicalBillingMixedSelectionMode}
+                            onChange={(event) => updateChemicalBillingMixedSelectionMode(event.target.value)}
+                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          >
+                            {mixedChemicalBillingSelectionOptions.map((option) => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
                         </div>
-                        <div>
-                          <label htmlFor="pnlExcludedChemicalIds" className="block text-sm font-semibold text-slate-700">
-                            Excluded Chemical IDs
-                          </label>
-                          <input
-                            id="pnlExcludedChemicalIds"
-                            type="text"
-                            value={form.pnlExcludedChemicalIds}
-                            onChange={(event) => handleFieldChange('pnlExcludedChemicalIds', event.target.value)}
-                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                            placeholder="database item or dosage template ids"
+
+                        {form.chemicalBillingMixedSelectionMode === ChemicalBillingMixedSelectionMode.included ? (
+                          <ChemicalDosagePicker
+                            id="includedChemicalIds"
+                            label="Included Dosages"
+                            selectedIds={form.includedChemicalIds}
+                            dosageTemplates={dosageTemplates}
+                            loading={loadingDosageTemplates}
+                            onChange={(nextIds) => handleFieldChange('includedChemicalIds', nextIds)}
                           />
-                        </div>
-                      </>
+                        ) : (
+                          <ChemicalDosagePicker
+                            id="separatelyBilledChemicalIds"
+                            label="Excluded / Separately Billed Dosages"
+                            selectedIds={form.separatelyBilledChemicalIds}
+                            dosageTemplates={dosageTemplates}
+                            loading={loadingDosageTemplates}
+                            onChange={(nextIds) => handleFieldChange('separatelyBilledChemicalIds', nextIds)}
+                          />
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -1336,9 +1441,7 @@ const CreateSalesAgreement = () => {
                 )}
               </div>
             </section>
-          </div>
 
-          <aside className="space-y-6">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <h2 className="text-lg font-bold text-slate-950">Terms Snapshot</h2>
@@ -1380,7 +1483,9 @@ const CreateSalesAgreement = () => {
                 Manage terms templates
               </Link>
             </section>
+          </main>
 
+          <aside className="space-y-6 lg:order-1">
             <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
               <h2 className="text-lg font-bold text-slate-950">Draft Summary</h2>
               <dl className="mt-4 space-y-3 text-sm">

@@ -438,7 +438,7 @@ function PerformanceHistoryImport() {
                 This {MURDOCK_POOL_SERVICE_ONLY_LABEL} importer is only available for {TARGET_PERFORMANCE_IMPORT_COMPANY_ID}.
               </p>
               <Link className="mt-3 inline-flex text-sm font-semibold text-amber-900 underline" to="/company/migration">
-                Back to migration dashboard
+                Back to customer tracker
               </Link>
             </div>
           </div>
@@ -465,7 +465,7 @@ function PerformanceHistoryImport() {
             to="/company/migration"
             className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
           >
-            Back to migration
+            Back to customer tracker
           </Link>
         </div>
 

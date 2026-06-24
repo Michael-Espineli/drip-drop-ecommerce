@@ -6,8 +6,7 @@ import {
     AiOutlineTeam,
     AiOutlineApi,
     AiOutlineException,
-    AiOutlineSolution,
-    AiOutlineFundProjectionScreen
+    AiOutlineSolution
 
 } from "react-icons/ai";
 
@@ -111,7 +110,7 @@ export const allNav = [
     // { id: 115, title: 'One Time Labor Contracts', icon: <FaRegFileAlt />, role: 'Company', path: '/company/laborContracts', category: 'Users' },
 
     // Migration
-    { id: 118, title: 'Migration Dashboard', icon: <AiOutlineFundProjectionScreen />, role: 'Company', path: '/company/migration', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
+    { id: 118, title: 'Customer Migration Tracker', icon: <FaClipboardList />, role: 'Company', path: '/company/migration', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
     { id: 119, title: 'Customer Export Upload', icon: <AiOutlineFileText />, role: 'Company', path: '/company/migration/customer-export-import', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
     { id: 120, title: 'Equipment Upload', icon: <FaWrench />, role: 'Company', path: '/company/migration/equipment-import', category: 'Migration', permissionId: '800', featureFlagId: 'feature_flag_008' },
     { id: 121, title: 'Service History Upload', icon: <FaRegFileAlt />, role: 'Company', path: '/company/migration/skimmer-previous-dosages-upload', category: 'Migration', permissionId: '800', featureFlagIds: ['feature_flag_008', 'feature_flag_009'] },

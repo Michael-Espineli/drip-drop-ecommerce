@@ -113,6 +113,12 @@ export const agreementChemicalBillingMode = (agreement = {}) => {
   return SalesAgreementChemicalBillingMode.includedAll;
 };
 
+const agreementMixedSelectionMode = (agreement = {}) => normalizeKey(
+  agreement.chemicalBillingMixedSelectionMode ||
+  agreement.mixedChemicalBillingSelectionMode ||
+  ''
+);
+
 export const chemicalMatchesAgreementList = (agreement = {}, listPrefix = '', ...records) => (
   matchesTerms({
     ids: agreement[`${listPrefix}Ids`] || agreement[`${listPrefix}ChemicalIds`],
@@ -142,6 +148,9 @@ export const classifyAgreementChemicalBilling = ({ agreement = {}, record = {}, 
   const isIncludedOverride = chemicalMatchesAgreementList(agreement, 'includedChemical', ...records);
   const isSeparatelyBilled = chemicalMatchesAgreementList(agreement, 'separatelyBilledChemical', ...records);
   const mode = agreementChemicalBillingMode(agreement);
+  const mixedSelectionMode = agreementMixedSelectionMode(agreement);
+  const mixedDefaultsToSeparatelyBilled = mode === SalesAgreementChemicalBillingMode.mixed
+    && ['included', 'selectincluded', 'includedinservice'].includes(mixedSelectionMode);
 
   if (isIncludedOverride) {
     return {
@@ -153,13 +162,17 @@ export const classifyAgreementChemicalBilling = ({ agreement = {}, record = {}, 
     };
   }
 
-  if (isSeparatelyBilled || mode === SalesAgreementChemicalBillingMode.billAllSeparately) {
+  if (isSeparatelyBilled || mode === SalesAgreementChemicalBillingMode.billAllSeparately || mixedDefaultsToSeparatelyBilled) {
     return {
       treatment: ChemicalBillingTreatment.separatelyBilled,
       billSeparately: true,
       includedInService: false,
       pnlCostIncluded: true,
-      reason: isSeparatelyBilled ? 'matchedSeparatelyBilledTerms' : 'billAllSeparately',
+      reason: isSeparatelyBilled
+        ? 'matchedSeparatelyBilledTerms'
+        : mode === SalesAgreementChemicalBillingMode.billAllSeparately
+          ? 'billAllSeparately'
+          : 'mixedDefaultSeparatelyBilled',
     };
   }
 

@@ -115,7 +115,7 @@ const Vendors = lazy(() => import("../../views/company/venders/Venders"))
 const CreateNewVendor = lazy(() => import("../../views/company/venders/CreateNewVenders"))
 
 const Reports = lazy(() => import("../../views/company/reports/Reports"))
-const MigrationDashboard = lazy(() => import("../../views/company/migration/MigrationDashboard"))
+const CustomerMigrationTracker = lazy(() => import("../../views/company/migration/CustomerMigrationTracker"))
 const CustomerExportImport = lazy(() => import("../../views/company/migration/CustomerExportImport"))
 const EquipmentImport = lazy(() => import("../../views/company/migration/EquipmentImport"))
 const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
@@ -957,7 +957,7 @@ export const sellerRoutes = [
     ,
     {
         path: '/company/migration',
-        element: <MigrationDashboard />,
+        element: <CustomerMigrationTracker />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
         permissionId: '800',

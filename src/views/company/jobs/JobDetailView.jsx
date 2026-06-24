@@ -271,6 +271,7 @@ const JobDetailView = () => {
     jobName: "",
     dbItemId: "",
     linkedTaskId: "",
+    customerApprovalRequired: false,
   });
 
   useEffect(() => {
@@ -518,6 +519,27 @@ const JobDetailView = () => {
   const [customerPriceInput, setCustomerPriceInput] = useState("");
   const requiresShoppingDbItem = shoppingFormData.subCategory === "Data Base";
   const requiresShoppingManualDetails = !requiresShoppingDbItem;
+  const isJobAcceptedForMaterials = (status = job.billingStatus) => (
+    ["accepted", "in progress", "invoiced", "paid", "comped"].includes(
+      String(status || "").trim().toLowerCase()
+    )
+  );
+  const initialJobMaterialStatus = ({ customerApprovalRequired = false, requestedStatus = "" } = {}) => {
+    if (customerApprovalRequired) return "Needs Customer Approval";
+
+    if (!isJobAcceptedForMaterials()) return "Needs Customer Approval";
+
+    const normalizedRequestedStatus = String(requestedStatus || "").trim();
+    if (
+      normalizedRequestedStatus &&
+      normalizedRequestedStatus !== "Need to Purchase" &&
+      normalizedRequestedStatus !== "Needs Customer Approval"
+    ) {
+      return normalizedRequestedStatus;
+    }
+
+    return "Ready to Purchase";
+  };
 
   const canSaveShoppingItem = useMemo(() => {
     const hasQuantity =
@@ -4160,12 +4182,13 @@ const JobDetailView = () => {
 
         const materialName = selectedTaskDbItem?.name || "";
         const materialDescription = selectedTaskDbItem?.description || "";
+        const materialStatus = initialJobMaterialStatus();
 
         await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
           id: linkedShoppingListItemId,
           category: "Job",
           subCategory: "Data Base",
-          status: "Need to Purchase",
+          status: materialStatus,
           purchaserId: "",
           purchaserName: "",
           genericItemId: selectedTaskDbItem?.genericItemId || "",
@@ -4208,6 +4231,8 @@ const JobDetailView = () => {
           customerApprovalRequestedAt: null,
           approvalRequestId: "",
           partApprovalRequestId: "",
+          estimateAccepted: isJobAcceptedForMaterials(),
+          jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
           itemId: selectedTaskDbItem?.id || "",
           itemType: "Data Base",
           cost: plannedUnitCostCents,
@@ -4418,7 +4443,7 @@ const JobDetailView = () => {
     setShoppingFormData({
       category: "Job",
       subCategory: "Custom",
-      status: "Need to Purchase",
+      status: initialJobMaterialStatus(),
       purchaserId: "",
       purchaserName: "",
       genericItemId: "",
@@ -4432,6 +4457,7 @@ const JobDetailView = () => {
       jobName: job.internalId || "",
       dbItemId: "",
       linkedTaskId: "",
+      customerApprovalRequired: false,
     });
   };
 
@@ -4495,6 +4521,11 @@ const JobDetailView = () => {
         : shoppingFormData.description || "";
       const linkedTask =
         (taskList || []).find((task) => task.id === shoppingFormData.linkedTaskId) || null;
+      const customerApprovalRequired = Boolean(shoppingFormData.customerApprovalRequired);
+      const materialStatus = initialJobMaterialStatus({
+        customerApprovalRequired,
+        requestedStatus: shoppingFormData.status,
+      });
       const prepKeys = Array.from(
         new Set(
           [
@@ -4510,7 +4541,7 @@ const JobDetailView = () => {
         id,
         category: "Job",
         subCategory: shoppingFormData.subCategory,
-        status: shoppingFormData.status,
+        status: materialStatus,
         purchaserId: shoppingFormData.purchaserId || "",
         purchaserName: shoppingFormData.purchaserName || "",
         genericItemId: shoppingFormData.genericItemId || "",
@@ -4556,11 +4587,13 @@ const JobDetailView = () => {
         dbItemName: requiresShoppingDbItem ? materialName : "",
         purchasedItem: "",
         invoiced: false,
-        customerApprovalRequired: false,
-        customerApprovalStatus: "notRequired",
-        customerApprovalRequestedAt: null,
+        customerApprovalRequired,
+        customerApprovalStatus: customerApprovalRequired ? "pending" : "notRequired",
+        customerApprovalRequestedAt: customerApprovalRequired ? Timestamp.fromDate(new Date()) : null,
         approvalRequestId: "",
         partApprovalRequestId: "",
+        estimateAccepted: isJobAcceptedForMaterials(),
+        jobBillingStatus: isJobAcceptedForMaterials() ? "accepted" : String(job.billingStatus || "draft").toLowerCase(),
 
         // Legacy web fields for backward compatibility
         itemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
@@ -4599,7 +4632,7 @@ const JobDetailView = () => {
         description: materialDescription || "",
         changes: [
           buildHistoryChange("quantity", "Quantity", "—", qty),
-          buildHistoryChange("status", "Status", "—", shoppingFormData.status),
+          buildHistoryChange("status", "Status", "—", materialStatus),
           buildHistoryChange("plannedTotalCostCents", "Planned Cost", "—", moneyFromCents(plannedTotalCostCents)),
           buildHistoryChange("plannedTotalPriceCents", "Planned Billable", "—", moneyFromCents(plannedTotalPriceCents)),
         ],

@@ -41,6 +41,7 @@ const emptyCounts = {
   activeBillingSubscriptions: 0,
   invoices: 0,
   payments: 0,
+  customerMigrationRows: 0,
 };
 
 const STARTUP_GUIDE_TEMPLATE_VERSION = 1;
@@ -296,6 +297,7 @@ const CompanySetupGuide = () => {
           billingSubscriptionCounts,
           invoices,
           payments,
+          customerMigrationRows,
         ] = await Promise.all([
           safeGetDoc(doc(db, "companies", companyId), "company"),
           safeGetDoc(doc(db, "companies", companyId, "settings", "emailConfiguration"), "email configuration"),
@@ -319,6 +321,7 @@ const CompanySetupGuide = () => {
           getBillingSubscriptionCounts(companyId),
           countSnapshot(query(collection(db, salesCollectionNames.invoices), where("companyId", "==", companyId)), "sales invoices"),
           countSnapshot(query(collection(db, salesCollectionNames.payments), where("companyId", "==", companyId)), "sales payments"),
+          countSnapshot(collection(db, "companies", companyId, "customerMigrationTracker"), "customer migration tracker"),
         ]);
 
         setCompany(companySnap?.exists?.() ? { id: companySnap.id, ...companySnap.data() } : null);
@@ -347,6 +350,7 @@ const CompanySetupGuide = () => {
           activeBillingSubscriptions: billingSubscriptionCounts.activeBillingSubscriptions,
           invoices,
           payments,
+          customerMigrationRows,
         });
       } catch (err) {
         console.error("Unable to load company setup guide:", err);
@@ -428,6 +432,18 @@ const CompanySetupGuide = () => {
             metric: `${counts.customers} customers`,
             to: "/company/customers",
             actionLabel: "Customers",
+          },
+          {
+            id: "customer_migration_tracker",
+            sectionId: "customer_setup",
+            sectionTitle: "Customer Setup",
+            sortOrder: 115,
+            title: "Customer migration tracker",
+            description: "Check each customer through site info, routing, billing, and custom transition signoffs so nobody is missed.",
+            completed: counts.customerMigrationRows > 0,
+            metric: `${counts.customerMigrationRows} tracked customers`,
+            to: "/company/migration",
+            actionLabel: "Tracker",
           },
           {
             id: "service_locations",

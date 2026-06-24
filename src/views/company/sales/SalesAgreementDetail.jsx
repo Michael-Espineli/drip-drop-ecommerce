@@ -16,7 +16,6 @@ import {
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
-  FaArrowLeft,
   FaCheckCircle,
   FaCopy,
   FaCreditCard,
@@ -1782,10 +1781,9 @@ const SalesAgreementDetail = () => {
               <div className="flex flex-wrap items-center gap-2">
                 <Link
                   to="/company/sales/agreements"
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                  className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                 >
-                  <FaArrowLeft className="text-xs" />
-                  Back to agreements
+                  &larr; Back to Service Agreements
                 </Link>
                 {agreement?.status && <StatusBadge status={agreement.status} />}
               </div>

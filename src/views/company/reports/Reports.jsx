@@ -44,6 +44,8 @@ const reportCatalog = [
   { value: "job", label: "Jobs", status: "Ready", source: "workOrders, purchases, payroll", category: "operations" },
   { value: "vehicle", label: "Vehicle", status: "Ready", source: "vehicals and activeRoutes", category: "operations" },
   { value: "purchases", label: "Purchases", status: "Ready", source: "purchasedItems and database items", category: "finance" },
+  { value: "payroll", label: "Payroll", status: "Ready", source: "technician payroll line items", category: "finance" },
+  { value: "futurePayroll", label: "Future Payroll", status: "Ready", source: "unpaid payroll and scheduled service stop estimates", category: "finance" },
   { value: "pnl", label: "P.N.L.", status: "Ready", source: "service agreements, jobs, purchases, payroll", category: "finance" },
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
@@ -604,6 +606,39 @@ const purchaseQuantity = (purchase, databaseItemById) => {
 const jobRevenueCents = (job) => cents(job.revenueCents ?? job.invoiceTotalCents ?? job.totalCents ?? job.rate ?? job.amount ?? 0);
 const jobLaborCostCents = (job) => cents(job.laborCostCents ?? job.laborCost ?? 0);
 const payrollLineCents = (line) => cents(line.totalAmountCents ?? line.amountCents ?? line.payCents ?? 0);
+
+const isPayrollLinePaid = (line) => Boolean(line?.paidAt) || reportStatusKey(line?.calculationStatus) === "paid";
+
+const isPayrollLineApproved = (line) =>
+  Boolean(line?.approvedAt) || reportStatusKey(line?.calculationStatus) === "approved" || isPayrollLinePaid(line);
+
+const isPayrollLineVoided = (line) => Boolean(line?.voidedAt) || reportStatusKey(line?.calculationStatus) === "voided";
+
+const payrollStatusCategory = (line) => {
+  if (isPayrollLinePaid(line)) return "paid";
+  if (isPayrollLineApproved(line)) return "approved";
+  return "unapproved";
+};
+
+const payrollCategoryLabels = {
+  paid: "Paid",
+  approved: "Approved Unpaid",
+  unapproved: "Unapproved",
+  predicted: "Predicted",
+};
+
+const payrollCategoryOrder = ["paid", "approved", "unapproved", "predicted"];
+
+const payrollCategoryLabel = (category) => payrollCategoryLabels[category] || "Unapproved";
+
+const payrollLineWorkerId = (line = {}) =>
+  line.technicianId || line.userId || line.techId || line.workerId || "unassigned";
+
+const payrollLineWorkerName = (line = {}) =>
+  line.technicianName || line.userName || line.techName || line.workerName || "Unassigned";
+
+const payrollLineDisplayTitle = (line = {}) =>
+  line.displayTitle || line.taskName || line.workTypeName || line.serviceStopTypeName || line.title || "Payroll Line";
 
 const firstPresent = (...values) =>
   values.find((value) => value !== null && value !== undefined && value !== "");
@@ -2668,6 +2703,506 @@ const buildWasteReport = ({ stopData, purchases, dosageTemplates, databaseItemBy
   };
 };
 
+const buildPayrollReport = ({ payrollLines, mode, groupBy }) => {
+  const activeLines = payrollLines.filter((line) => !isPayrollLineVoided(line));
+  const categoryTotals = {
+    paid: { amountCents: 0, count: 0 },
+    approved: { amountCents: 0, count: 0 },
+    unapproved: { amountCents: 0, count: 0 },
+  };
+  const groups = new Map();
+
+  activeLines.forEach((line) => {
+    const amountCents = payrollLineCents(line);
+    const category = payrollStatusCategory(line);
+    const group = ensureGroup(groups, groupKey({
+      ...line,
+      userId: payrollLineWorkerId(line),
+      userName: payrollLineWorkerName(line),
+    }, groupBy));
+
+    categoryTotals[category].amountCents += amountCents;
+    categoryTotals[category].count += 1;
+    addMetric(group, `${category}Cents`, amountCents);
+    addMetric(group, `${category}Count`, 1);
+    addMetric(group, "totalCents", amountCents);
+    addMetric(group, "totalCount", 1);
+
+    if (mode === "summary") return;
+
+    const completedDate = itemDate(line, ["completedDate", "createdAt", "paidAt"]);
+    group.rows.push({
+      id: line.id,
+      sortCategory: payrollCategoryOrder.indexOf(category),
+      sortTime: completedDate?.getTime() || 0,
+      date: shortDate(completedDate),
+      paidDate: shortDate(line.paidAt),
+      category: payrollCategoryLabel(category),
+      worker: payrollLineWorkerName(line),
+      customer: line.customerName || line.customerId || "-",
+      title: payrollLineDisplayTitle(line),
+      status: line.calculationStatus || "-",
+      amountCents,
+      paymentReference: line.paymentReference || line.externalReferenceId || "-",
+    });
+  });
+
+  const categorySummaryRows = payrollCategoryOrder
+    .filter((category) => category !== "predicted")
+    .map((category) => ({
+      id: category,
+      category: payrollCategoryLabel(category),
+      lines: categoryTotals[category].count,
+      amountCents: categoryTotals[category].amountCents,
+    }));
+  const totalCents = categorySummaryRows.reduce((total, row) => total + row.amountCents, 0);
+  const totalLines = categorySummaryRows.reduce((total, row) => total + row.lines, 0);
+  const recentlyPaidRows = activeLines
+    .filter(isPayrollLinePaid)
+    .sort((left, right) => (dateFromValue(right.paidAt)?.getTime() || 0) - (dateFromValue(left.paidAt)?.getTime() || 0))
+    .slice(0, 10)
+    .map((line) => ({
+      id: line.id,
+      paidDate: shortDate(line.paidAt),
+      completedDate: shortDate(firstPresent(line.completedDate, line.createdAt)),
+      worker: payrollLineWorkerName(line),
+      customer: line.customerName || line.customerId || "-",
+      title: payrollLineDisplayTitle(line),
+      amountCents: payrollLineCents(line),
+      paymentReference: line.paymentReference || line.externalReferenceId || "-",
+    }));
+
+  const resultGroups = [...groups.values()]
+    .map((group) => {
+      const rows = mode === "summary"
+        ? payrollCategoryOrder
+            .filter((category) => category !== "predicted")
+            .map((category) => ({
+              id: `${group.id}-${category}`,
+              category: payrollCategoryLabel(category),
+              lines: group.metrics[`${category}Count`] || 0,
+              amountCents: group.metrics[`${category}Cents`] || 0,
+            }))
+        : [...group.rows]
+            .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
+            .map(({ sortCategory, sortTime, ...row }) => row);
+
+      return {
+        ...group,
+        metrics: {
+          Total: moneyFromCents(group.metrics.totalCents || 0),
+          Lines: group.metrics.totalCount || 0,
+          Paid: moneyFromCents(group.metrics.paidCents || 0),
+          "Approved Unpaid": moneyFromCents(group.metrics.approvedCents || 0),
+          Unapproved: moneyFromCents(group.metrics.unapprovedCents || 0),
+        },
+        rows,
+        footerRow: mode === "summary"
+          ? {
+              category: "Total",
+              lines: group.metrics.totalCount || 0,
+              amountCents: group.metrics.totalCents || 0,
+            }
+          : {
+              date: "Total",
+              paidDate: "",
+              category: "",
+              worker: "",
+              customer: "",
+              title: "",
+              status: "",
+              amountCents: group.metrics.totalCents || 0,
+              paymentReference: "",
+            },
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    title: "Payroll Report",
+    stats: [
+      moneyMetric("Total Payroll", totalCents),
+      moneyMetric("Paid", categoryTotals.paid.amountCents),
+      moneyMetric("Approved Unpaid", categoryTotals.approved.amountCents),
+      moneyMetric("Unapproved", categoryTotals.unapproved.amountCents),
+      numberMetric("Payroll Lines", totalLines),
+    ],
+    columns: mode === "summary"
+      ? [
+          { key: "category", label: "Category" },
+          { key: "lines", label: "Lines", align: "right" },
+          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        ]
+      : [
+          { key: "date", label: "Completed" },
+          { key: "paidDate", label: "Paid" },
+          { key: "category", label: "Category" },
+          { key: "worker", label: "User" },
+          { key: "customer", label: "Customer" },
+          { key: "title", label: "Work" },
+          { key: "status", label: "Status" },
+          { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+          { key: "paymentReference", label: "Payment Ref" },
+        ],
+    summarySections: [
+      {
+        title: "Payroll Categories",
+        columns: [
+          { key: "category", label: "Category" },
+          { key: "lines", label: "Lines", align: "right" },
+          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        ],
+        rows: categorySummaryRows,
+      },
+      {
+        title: "Recently Paid",
+        columns: [
+          { key: "paidDate", label: "Paid" },
+          { key: "completedDate", label: "Completed" },
+          { key: "worker", label: "User" },
+          { key: "customer", label: "Customer" },
+          { key: "title", label: "Work" },
+          { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+          { key: "paymentReference", label: "Payment Ref" },
+        ],
+        rows: recentlyPaidRows,
+      },
+    ],
+    total: {
+      label: "Total Payroll",
+      value: moneyFromCents(totalCents),
+      subtitle: `${totalLines.toLocaleString()} line(s) in period`,
+    },
+    groups: resultGroups,
+  };
+};
+
+const buildFuturePayrollReport = ({
+  companyId = "",
+  payrollLines = [],
+  serviceStops = [],
+  paySettings = null,
+  companyUsers = [],
+  companyServiceStopTypes = [],
+  companyWorkTypes = [],
+  workTypeMappings = [],
+  technicianRates = [],
+  serviceStopTasksById = new Map(),
+  mode,
+  groupBy,
+}) => {
+  const activeLines = payrollLines.filter((line) => !isPayrollLineVoided(line));
+  const unpaidLines = activeLines.filter((line) => !isPayrollLinePaid(line));
+  const payrollServiceStopIds = new Set(
+    activeLines
+      .map((line) => firstPresent(line.serviceStopId, line.serviceStopID, line.stopId))
+      .filter(Boolean)
+      .map(String)
+  );
+  const serviceStopTypesById = new Map();
+  const serviceStopTypesByName = new Map();
+  const idValue = (value) => String(value || "").trim();
+  const keyValue = (value) => idValue(value).toLowerCase();
+
+  companyServiceStopTypes.forEach((type) => {
+    ["id", "typeId", "serviceStopTypeId"].forEach((field) => {
+      const value = idValue(type?.[field]);
+      if (value) serviceStopTypesById.set(value, type);
+    });
+    [type?.name, type?.serviceStopTypeName, type?.type].forEach((value) => {
+      const key = keyValue(value);
+      if (key && !serviceStopTypesByName.has(key)) serviceStopTypesByName.set(key, type);
+    });
+  });
+
+  const companyUserForServiceStop = (serviceStop = {}) => {
+    const workerId = idValue(firstPresent(
+      serviceStop.techId,
+      serviceStop.userId,
+      serviceStop.technicianId,
+      serviceStop.workerId,
+      serviceStop.companyUserId,
+      serviceStop.assignedUserId,
+      serviceStop.assignedToId
+    ));
+
+    if (!workerId) return null;
+
+    return (
+      companyUsers.find((user) =>
+        [user.userId, user.id, user.docId, user.uid, user.companyUserId].some((value) => idValue(value) === workerId)
+      ) || {
+        id: workerId,
+        userId: workerId,
+        userName: serviceStop.tech || serviceStop.techName || serviceStop.technicianName || serviceStop.userName || "Technician",
+      }
+    );
+  };
+
+  const serviceStopTypeFor = (serviceStop = {}) => {
+    const typeId = idValue(firstPresent(
+      serviceStop.typeId,
+      serviceStop.serviceStopTypeId,
+      serviceStop.companyServiceStopTypeId,
+      typeof serviceStop.serviceStopType === "string" ? serviceStop.serviceStopType : ""
+    ));
+    const typeName = keyValue(firstPresent(
+      serviceStop.type,
+      serviceStop.serviceStopTypeName,
+      typeof serviceStop.serviceStopType === "string" ? serviceStop.serviceStopType : ""
+    ));
+
+    if (typeId && serviceStopTypesById.has(typeId)) return serviceStopTypesById.get(typeId);
+    if (typeName && serviceStopTypesByName.has(typeName)) return serviceStopTypesByName.get(typeName);
+    if (!typeId && !typeName) return null;
+
+    return {
+      id: typeId || typeName,
+      name: serviceStop.type || serviceStop.serviceStopTypeName || "Service Stop",
+      defaultWorkTypeIds: serviceStop.defaultWorkTypeIds || serviceStop.serviceStopDefaultWorkTypeIds || [],
+      category: serviceStop.category || serviceStop.serviceStopCategory || "",
+      serviceStopTypeUseCaseRawValue: serviceStop.serviceStopTypeUseCaseRawValue || "",
+    };
+  };
+
+  const tasksForServiceStop = (serviceStop = {}) => {
+    const stopId = idValue(firstPresent(serviceStop.id, serviceStop.serviceStopId));
+    const tasks = [
+      ...(serviceStopTasksById instanceof Map ? serviceStopTasksById.get(stopId) || [] : serviceStopTasksById?.[stopId] || []),
+      ...(Array.isArray(serviceStop.tasks) ? serviceStop.tasks : []),
+    ];
+    if (tasks.length) return tasks;
+
+    const estimatedMinutes = Number(firstPresent(serviceStop.duration, serviceStop.estimatedDuration, serviceStop.estimatedMinutes));
+    if (!Number.isFinite(estimatedMinutes) || estimatedMinutes <= 0) return [];
+
+    return [{
+      id: `${stopId || "stop"}_duration_estimate`,
+      name: "Duration estimate",
+      type: "__report_duration_estimate__",
+      estimatedTime: estimatedMinutes,
+      contractedRate: 0,
+    }];
+  };
+
+  const serviceStopUseCaseSourceId = (serviceStop = {}) => {
+    if (serviceStop.jobId) return "system_job_service_stop";
+    if (serviceStop.recurringServiceStopId || serviceStop.recurringStopId) return "system_recurring_service_stop";
+    if (serviceStop.serviceAgreementId || serviceStop.agreementId) return "system_service_agreement_estimate_service_stop";
+    return "";
+  };
+
+  const serviceStopWorkerName = (serviceStop = {}) =>
+    serviceStop.tech || serviceStop.techName || serviceStop.technicianName || serviceStop.userName || "Unassigned";
+
+  const groups = new Map();
+  const totals = {
+    approved: { amountCents: 0, count: 0 },
+    unapproved: { amountCents: 0, count: 0 },
+    predicted: { amountCents: 0, count: 0 },
+  };
+
+  const addFutureRow = ({
+    category,
+    amountCents,
+    lineCount = 1,
+    groupRecord,
+    detailRow,
+  }) => {
+    const group = ensureGroup(groups, groupKey(groupRecord, groupBy));
+    totals[category].amountCents += amountCents;
+    totals[category].count += lineCount;
+    addMetric(group, `${category}Cents`, amountCents);
+    addMetric(group, `${category}Count`, lineCount);
+    addMetric(group, "totalCents", amountCents);
+    addMetric(group, "totalCount", lineCount);
+    if (mode === "detail") group.rows.push(detailRow);
+  };
+
+  unpaidLines.forEach((line) => {
+    const category = isPayrollLineApproved(line) ? "approved" : "unapproved";
+    const amountCents = payrollLineCents(line);
+    const completedDate = itemDate(line, ["completedDate", "createdAt"]);
+    addFutureRow({
+      category,
+      amountCents,
+      groupRecord: {
+        ...line,
+        userId: payrollLineWorkerId(line),
+        userName: payrollLineWorkerName(line),
+      },
+      detailRow: {
+        id: line.id,
+        sortCategory: payrollCategoryOrder.indexOf(category),
+        sortTime: completedDate?.getTime() || 0,
+        date: shortDate(completedDate),
+        category: payrollCategoryLabel(category),
+        source: "Payroll Line",
+        worker: payrollLineWorkerName(line),
+        customer: line.customerName || line.customerId || "-",
+        title: payrollLineDisplayTitle(line),
+        status: line.calculationStatus || "-",
+        amountCents,
+        notes: line.payStatementId ? "Attached to statement" : "",
+      },
+    });
+  });
+
+  serviceStops.forEach((serviceStop, serviceStopIndex) => {
+    const serviceStopId = String(serviceStop.id || serviceStop.serviceStopId || "");
+    if (serviceStopId && payrollServiceStopIds.has(serviceStopId)) return;
+
+    const estimatedPay = estimateServiceStopPaySummary({
+      companyId,
+      settings: paySettings,
+      serviceStop,
+      serviceStopType: serviceStopTypeFor(serviceStop),
+      serviceStopUseCaseSourceId: serviceStopUseCaseSourceId(serviceStop),
+      tasks: tasksForServiceStop(serviceStop),
+      worker: companyUserForServiceStop(serviceStop),
+      workTypes: companyWorkTypes,
+      mappings: workTypeMappings,
+      rates: technicianRates,
+      date: dateFromValue(firstPresent(serviceStop.serviceDate, serviceStop.date, serviceStop.createdAt)) || new Date(),
+    });
+    const estimateLines = estimatedPay.lines;
+    if (!estimateLines.length) return;
+
+    const workerId = firstPresent(serviceStop.techId, serviceStop.userId, serviceStop.technicianId, serviceStop.workerId, "unassigned");
+    const workerName = serviceStopWorkerName(serviceStop);
+    const serviceDate = itemDate(serviceStop, ["serviceDate", "date", "createdAt"]);
+    estimateLines.forEach((line, lineIndex) => {
+      const amountCents = payrollLineCents(line);
+      addFutureRow({
+        category: "predicted",
+        amountCents,
+        groupRecord: {
+          ...serviceStop,
+          userId: workerId,
+          userName: workerName,
+          customerId: serviceStop.customerId,
+          customerName: serviceStop.customerName,
+        },
+        detailRow: {
+          id: `${serviceStopId || `service-stop-${serviceStopIndex}`}-${line.id || lineIndex}`,
+          sortCategory: payrollCategoryOrder.indexOf("predicted"),
+          sortTime: serviceDate?.getTime() || 0,
+          date: shortDate(serviceDate),
+          category: payrollCategoryLabel("predicted"),
+          source: "Scheduled Stop Estimate",
+          worker: workerName,
+          customer: serviceStop.customerName || serviceStop.customerId || "-",
+          title: [
+            line.title || line.workTypeName || serviceStop.type || serviceStop.serviceStopTypeName || "Service Stop Pay",
+            line.workTypeName && line.title !== line.workTypeName ? line.workTypeName : "",
+          ].filter(Boolean).join(" | "),
+          status: line.calculationStatus || "calculated",
+          amountCents,
+          notes: line.notes || "",
+        },
+      });
+    });
+  });
+
+  const totalCents = totals.approved.amountCents + totals.unapproved.amountCents + totals.predicted.amountCents;
+  const totalLines = totals.approved.count + totals.unapproved.count + totals.predicted.count;
+  const categorySummaryRows = ["approved", "unapproved", "predicted"].map((category) => ({
+    id: category,
+    category: payrollCategoryLabel(category),
+    lines: totals[category].count,
+    amountCents: totals[category].amountCents,
+  }));
+
+  const resultGroups = [...groups.values()]
+    .map((group) => {
+      const rows = mode === "summary"
+        ? ["approved", "unapproved", "predicted"].map((category) => ({
+            id: `${group.id}-${category}`,
+            category: payrollCategoryLabel(category),
+            lines: group.metrics[`${category}Count`] || 0,
+            amountCents: group.metrics[`${category}Cents`] || 0,
+          }))
+        : [...group.rows]
+            .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
+            .map(({ sortCategory, sortTime, ...row }) => row);
+
+      return {
+        ...group,
+        metrics: {
+          Total: moneyFromCents(group.metrics.totalCents || 0),
+          Lines: group.metrics.totalCount || 0,
+          "Approved Unpaid": moneyFromCents(group.metrics.approvedCents || 0),
+          Unapproved: moneyFromCents(group.metrics.unapprovedCents || 0),
+          Predicted: moneyFromCents(group.metrics.predictedCents || 0),
+        },
+        rows,
+        footerRow: mode === "summary"
+          ? {
+              category: "Total",
+              lines: group.metrics.totalCount || 0,
+              amountCents: group.metrics.totalCents || 0,
+            }
+          : {
+              date: "Total",
+              category: "",
+              source: "",
+              worker: "",
+              customer: "",
+              title: "",
+              status: "",
+              amountCents: group.metrics.totalCents || 0,
+              notes: "",
+            },
+      };
+    })
+    .sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    title: "Future Payroll Report",
+    stats: [
+      moneyMetric("Future Payroll", totalCents),
+      moneyMetric("Approved Unpaid", totals.approved.amountCents),
+      moneyMetric("Unapproved", totals.unapproved.amountCents),
+      moneyMetric("Predicted", totals.predicted.amountCents),
+      numberMetric("Lines", totalLines),
+    ],
+    columns: mode === "summary"
+      ? [
+          { key: "category", label: "Category" },
+          { key: "lines", label: "Lines", align: "right" },
+          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        ]
+      : [
+          { key: "date", label: "Date" },
+          { key: "category", label: "Category" },
+          { key: "source", label: "Source" },
+          { key: "worker", label: "User" },
+          { key: "customer", label: "Customer" },
+          { key: "title", label: "Work" },
+          { key: "status", label: "Status" },
+          { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+          { key: "notes", label: "Notes" },
+        ],
+    summarySections: [
+      {
+        title: "Future Payroll Categories",
+        columns: [
+          { key: "category", label: "Category" },
+          { key: "lines", label: "Lines", align: "right" },
+          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        ],
+        rows: categorySummaryRows,
+      },
+    ],
+    total: {
+      label: "Future Payroll",
+      value: moneyFromCents(totalCents),
+      subtitle: `${totalLines.toLocaleString()} unpaid or predicted line(s)`,
+    },
+    groups: resultGroups,
+  };
+};
+
 const buildUsersReport = ({ users, serviceStops, jobs, purchases, payrollLines }) => {
   const groups = new Map();
   users.forEach((user) => {
@@ -4216,12 +4751,12 @@ const Reports = () => {
 
       const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users"].includes(reportType);
       const needsJobs = ["pnl", "job", "tax", "users"].includes(reportType);
-      const needsPayroll = ["pnl", "job", "users", "pnlPerPool"].includes(reportType);
-      const needsPayrollFallback = reportType === "pnlPerPool";
+      const needsPayroll = ["payroll", "futurePayroll", "pnl", "job", "users", "pnlPerPool"].includes(reportType);
+      const needsPayrollFallback = ["futurePayroll", "pnlPerPool"].includes(reportType);
       const needsUsers = reportType === "users" || needsPayrollFallback;
       const needsFleet = reportType === "vehicle";
       const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
-      const needsServiceStops = ["users", "readingPerformance", "pnlPerPool"].includes(reportType);
+      const needsServiceStops = ["users", "readingPerformance", "futurePayroll", "pnlPerPool"].includes(reportType);
       const needsRecurringServiceStops = reportType === "readingPerformance";
       const needsServiceAgreements = ["pnl", "pnlPerPool"].includes(reportType);
       const needsServiceLocations = reportType === "pnlPerPool";
@@ -4371,6 +4906,8 @@ const Reports = () => {
         chemicals: buildChemicalReport,
         purchases: buildPurchaseReport,
         waste: buildWasteReport,
+        payroll: buildPayrollReport,
+        futurePayroll: buildFuturePayrollReport,
         users: buildUsersReport,
         pnlPerPool: buildPnlPerPoolReport,
         pnl: buildPnlReport,
