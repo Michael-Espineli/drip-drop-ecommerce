@@ -22,6 +22,9 @@ const FINISHED_BILLING_STATUSES = [
   JOB_BILLING_STATUS.comped,
 ];
 
+const getOperationStatus = (job = {}) => job.operationStatus ?? job.status;
+const getBillingStatus = (job = {}) => job.billingStatus;
+
 export const normalizeJobStatus = (value) => String(value || "").trim().toLowerCase();
 
 export const jobStatusMatches = (value, status) => (
@@ -29,12 +32,12 @@ export const jobStatusMatches = (value, status) => (
 );
 
 export const isDraftOperationJob = (job = {}) => (
-  jobStatusMatches(job.operationStatus, JOB_OPERATION_STATUS.draft)
+  jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.draft)
 );
 
 export const isAcceptedNotScheduledJob = (job = {}) => (
-  jobStatusMatches(job.billingStatus, JOB_BILLING_STATUS.accepted) &&
-  !jobStatusMatches(job.operationStatus, JOB_OPERATION_STATUS.scheduled)
+  jobStatusMatches(getBillingStatus(job), JOB_BILLING_STATUS.accepted) &&
+  !jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.scheduled)
 );
 
 export const isActionableOperationsJob = (job = {}) => (
@@ -42,6 +45,6 @@ export const isActionableOperationsJob = (job = {}) => (
 );
 
 export const isFinishedOutstandingJob = (job = {}) => (
-  jobStatusMatches(job.operationStatus, JOB_OPERATION_STATUS.finished) &&
-  !FINISHED_BILLING_STATUSES.some((status) => jobStatusMatches(job.billingStatus, status))
+  jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.finished) &&
+  !FINISHED_BILLING_STATUSES.some((status) => jobStatusMatches(getBillingStatus(job), status))
 );

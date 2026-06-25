@@ -1,6 +1,24 @@
 import { IdInfo } from './IdInfo'; // Assuming IdInfo is also a model
 import { ServiceStopTaskTemplate } from './ServiceStopTaskTemplate'; // Assuming ServiceStopTaskTemplate is also a model
 
+const docData = (snapshot = {}) => (
+  typeof snapshot?.data === 'function' ? snapshot.data() : snapshot
+);
+
+const docId = (snapshot = {}) => (
+  snapshot?.id || docData(snapshot)?.id || ''
+);
+
+const toDate = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === 'function') return value.toDate();
+  if (value instanceof Date) return value;
+  if (typeof value === 'number') return new Date(value);
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : new Date(parsed);
+};
+
 export class Job {
   constructor(
     id,
@@ -77,23 +95,25 @@ export class Job {
   }
 
   static fromFirestore(doc) {
-    const data = doc.data();
+    const data = docData(doc);
 
     // Handle potential null or undefined values and convert dates
-    const dateCreated = data.dateCreated ? data.dateCreated.toDate() : null;
-    const dateEstimateAccepted = data.dateEstimateAccepted ? data.dateEstimateAccepted.toDate() : null;
-    const invoiceDate = data.invoiceDate ? data.invoiceDate.toDate() : null;
+    const dateCreated = toDate(data.dateCreated);
+    const dateEstimateAccepted = toDate(data.dateEstimateAccepted);
+    const invoiceDate = toDate(data.invoiceDate);
 
     // Map nested objects if they exist
     const estimateRef = data.estimateRef ? IdInfo.fromFirestore(data.estimateRef) : null;
     const invoiceRef = data.invoiceRef ? IdInfo.fromFirestore(data.invoiceRef) : null;
 
     // Map array of nested objects if they exist
-    const tasks = data.tasks ? data.tasks.map(taskData => ServiceStopTaskTemplate.fromFirestore(taskData)) : [];
+    const tasks = Array.isArray(data.tasks)
+      ? data.tasks.map(taskData => ServiceStopTaskTemplate.fromFirestore(taskData))
+      : [];
 
 
     return new Job(
-      doc.id,
+      docId(doc),
       data.internalId ?? '',
       data.type ?? '',
       dateCreated,

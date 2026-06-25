@@ -1,4 +1,4 @@
-class IdInfo {
+export class IdInfo {
     constructor({
         id,
         internalId
@@ -7,11 +7,15 @@ class IdInfo {
         this.internalId = internalId;
     }
 
-    static fromFirestore(snapshot) {
-        const data = snapshot.data();
+    static fromFirestore(snapshot = {}) {
+        const data = typeof snapshot?.data === "function" ? snapshot.data() : snapshot;
+        const id = typeof snapshot === "string" ? snapshot : (snapshot?.id || data?.id || "");
+
         return new IdInfo({
-            id: snapshot.id,
-            internalId: data.internalId || '',
+            id,
+            internalId: data?.internalId || '',
         });
     }
 }
+
+export default IdInfo;

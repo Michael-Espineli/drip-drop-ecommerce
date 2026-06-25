@@ -21,17 +21,23 @@ import {
     JOB_BILLING_STATUS,
     JOB_OPERATION_STATUS,
     isAcceptedNotScheduledJob,
-    isActionableOperationsJob,
     isDraftOperationJob,
     isFinishedOutstandingJob,
 } from "../../../utils/jobStatusFilters";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
-    JOB_OPERATION_STATUS.draft
+    "Estimate Pending",
+    "Unscheduled",
+    "Scheduled",
+    "Waiting for Parts",
+    "In Progress"
 ];
 
 const OPERATIONS_QUICK_BILLING_STATUSES = [
-    JOB_BILLING_STATUS.accepted
+    JOB_BILLING_STATUS.draft,
+    JOB_BILLING_STATUS.estimate,
+    JOB_BILLING_STATUS.accepted,
+    JOB_BILLING_STATUS.inProgress
 ];
 
 const BILLING_QUICK_OPERATION_STATUSES = [JOB_OPERATION_STATUS.finished];
@@ -226,10 +232,41 @@ const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onS
     );
 };
 
+const outlinedButtonToneClasses = {
+    blue: "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 focus-visible:ring-blue-500",
+    emerald: "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus-visible:ring-emerald-500",
+    amber: "border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 focus-visible:ring-amber-500",
+    slate: "border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 focus-visible:ring-slate-500",
+};
+
+const activeOutlinedButtonToneClasses = {
+    blue: "border-blue-300 bg-blue-100 text-blue-800 ring-1 ring-blue-200 focus-visible:ring-blue-500",
+    emerald: "border-emerald-300 bg-emerald-100 text-emerald-800 ring-1 ring-emerald-200 focus-visible:ring-emerald-500",
+    amber: "border-amber-300 bg-amber-100 text-amber-900 ring-1 ring-amber-200 focus-visible:ring-amber-500",
+    slate: "border-slate-300 bg-slate-100 text-slate-800 ring-1 ring-slate-200 focus-visible:ring-slate-500",
+};
+
+const getOutlinedButtonClass = ({ tone = "blue", active = false, className = "" } = {}) => {
+    const toneClass = active
+        ? activeOutlinedButtonToneClasses[tone] || activeOutlinedButtonToneClasses.blue
+        : outlinedButtonToneClasses[tone] || outlinedButtonToneClasses.blue;
+
+    return [
+        "rounded-md border px-4 py-2 text-sm font-semibold shadow-sm transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60",
+        toneClass,
+        className,
+    ].filter(Boolean).join(" ");
+};
+
 const Jobs = () => {
     const { view } = useParams();
     const [jobs, setJobs] = useState([]);
     const [allJobs, setAllJobs] = useState([]);
+    const [jobQueueCounts, setJobQueueCounts] = useState({
+        draftOperations: 0,
+        acceptedNotScheduled: 0,
+        finishedOutstanding: 0,
+    });
     const [jobTemplates, setJobTemplates] = useState([]);
     const [commentCounts, setCommentCounts] = useState({});
 
@@ -300,25 +337,6 @@ const Jobs = () => {
 
         try {
             const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
-
-            if (!customFiltersActive && currentJobListView === "operations") {
-                const [draftOperationSnapshot, acceptedSnapshot] = await Promise.all([
-                    getDocs(query(workOrdersRef, where("operationStatus", "==", JOB_OPERATION_STATUS.draft))),
-                    getDocs(query(workOrdersRef, where("billingStatus", "==", JOB_BILLING_STATUS.accepted))),
-                ]);
-
-                const jobsById = new Map();
-
-                [...draftOperationSnapshot.docs, ...acceptedSnapshot.docs].forEach((jobDoc) => {
-                    const job = Job.fromFirestore(jobDoc);
-                    if (isActionableOperationsJob(job)) {
-                        jobsById.set(job.id, job);
-                    }
-                });
-
-                setJobs([...jobsById.values()]);
-                return;
-            }
 
             if (!customFiltersActive && currentJobListView === "billing") {
                 const finishedSnapshot = await getDocs(
@@ -448,6 +466,11 @@ const Jobs = () => {
     const fetchAllJobs = useCallback(async () => {
         if (!recentlySelectedCompany) {
             setAllJobs([]);
+            setJobQueueCounts({
+                draftOperations: 0,
+                acceptedNotScheduled: 0,
+                finishedOutstanding: 0,
+            });
             return;
         }
 
@@ -455,10 +478,30 @@ const Jobs = () => {
             const querySnapshot = await getDocs(
                 collection(db, "companies", recentlySelectedCompany, "workOrders")
             );
-            const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+            const rawJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            setJobQueueCounts({
+                draftOperations: rawJobs.filter(isDraftOperationJob).length,
+                acceptedNotScheduled: rawJobs.filter(isAcceptedNotScheduledJob).length,
+                finishedOutstanding: rawJobs.filter(isFinishedOutstandingJob).length,
+            });
+
+            const jobsList = querySnapshot.docs.map((jobDoc) => {
+                try {
+                    return Job.fromFirestore(jobDoc);
+                } catch (error) {
+                    console.warn("Unable to normalize job summary record:", jobDoc.id, error);
+                    return { id: jobDoc.id, ...jobDoc.data() };
+                }
+            });
+
             setAllJobs(jobsList);
         } catch (error) {
             console.error("Error fetching job summary data: ", error);
+            setJobQueueCounts({
+                draftOperations: 0,
+                acceptedNotScheduled: 0,
+                finishedOutstanding: 0,
+            });
             setAllJobs([]);
         }
     }, [recentlySelectedCompany]);
@@ -691,21 +734,33 @@ const Jobs = () => {
     const jobSummary = useMemo(() => {
         const summaryJobs = allJobs.length > 0 ? allJobs : visibleJobs;
 
-        const actionableJobsCount = summaryJobs.filter(isActionableOperationsJob).length;
-        const draftOperationCount = summaryJobs.filter(isDraftOperationJob).length;
-        const acceptedNotScheduledCount = summaryJobs.filter(isAcceptedNotScheduledJob).length;
-        const finishedOutstandingCount = summaryJobs.filter(isFinishedOutstandingJob).length;
-
         return {
             totalRateCents: summaryJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             visibleRateCents: visibleJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             totalJobsCount: summaryJobs.length,
-            actionableJobsCount,
-            draftOperationCount,
-            acceptedNotScheduledCount,
-            finishedOutstandingCount,
+            draftOperationCount: jobQueueCounts.draftOperations,
+            acceptedNotScheduledCount: jobQueueCounts.acceptedNotScheduled,
+            finishedOutstandingCount: jobQueueCounts.finishedOutstanding,
         };
-    }, [allJobs, visibleJobs]);
+    }, [allJobs, jobQueueCounts, visibleJobs]);
+
+    const primaryQueueMetric = useMemo(() => {
+        if (currentJobListView === "billing") {
+            return {
+                label: "Finished Not Invoiced",
+                value: jobSummary.finishedOutstandingCount,
+                detail: "Finished jobs needing billing action",
+                tone: "blue",
+            };
+        }
+
+        return {
+            label: "Draft Operations",
+            value: jobSummary.draftOperationCount,
+            detail: "Operation status Draft",
+            tone: "red",
+        };
+    }, [currentJobListView, jobSummary]);
 
     const getStatusClass = (status) => {
         switch (status) {
@@ -1049,14 +1104,14 @@ const Jobs = () => {
                         <button
                             type="button"
                             onClick={openCreateOptions}
-                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                            className={getOutlinedButtonClass({ tone: "blue" })}
                         >
                             Create Job
                         </button>
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-6 mb-6">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-6">
                     <JobMetricCard
                         label="Total Rate"
                         value={moneyFromCents(jobSummary.totalRateCents)}
@@ -1071,32 +1126,20 @@ const Jobs = () => {
                     />
 
                     <JobMetricCard
-                        label="Actionable Jobs"
-                        value={jobSummary.actionableJobsCount}
-                        detail="Draft operations or accepted jobs not scheduled"
-                        tone="amber"
+                        label={primaryQueueMetric.label}
+                        value={primaryQueueMetric.value}
+                        detail={primaryQueueMetric.detail}
+                        tone={primaryQueueMetric.tone}
                     />
 
-                    <JobMetricCard
-                        label="Finished Not Invoiced"
-                        value={jobSummary.finishedOutstandingCount}
-                        detail="Finished jobs needing billing action"
-                        tone="blue"
-                    />
-
-                    <JobMetricCard
-                        label="Draft Operations"
-                        value={jobSummary.draftOperationCount}
-                        detail="Operation status Draft"
-                        tone="red"
-                    />
-
-                    <JobMetricCard
-                        label="Accepted Not Scheduled"
-                        value={jobSummary.acceptedNotScheduledCount}
-                        detail="Billing accepted without Scheduled operation"
-                        tone="green"
-                    />
+                    {currentJobListView === "operations" && (
+                        <JobMetricCard
+                            label="Accepted Not Scheduled"
+                            value={jobSummary.acceptedNotScheduledCount}
+                            detail="Billing accepted without Scheduled operation"
+                            tone="green"
+                        />
+                    )}
                 </div>
 
                 <div className="rounded-lg bg-white p-6 shadow-lg">
@@ -1104,24 +1147,20 @@ const Jobs = () => {
                         <button
                             type="button"
                             onClick={() => handleJobListViewChange("operations")}
-                            className={[
-                                "rounded-md px-4 py-2 text-sm font-semibold transition",
-                                activeQuickFilter === "operations"
-                                    ? "bg-blue-600 text-white shadow-sm"
-                                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-                            ].join(" ")}
+                            className={getOutlinedButtonClass({
+                                tone: "emerald",
+                                active: activeQuickFilter === "operations",
+                            })}
                         >
-                            Actionable Jobs
+                            Operations
                         </button>
                         <button
                             type="button"
                             onClick={() => handleJobListViewChange("billing")}
-                            className={[
-                                "rounded-md px-4 py-2 text-sm font-semibold transition",
-                                activeQuickFilter === "billing"
-                                    ? "bg-blue-600 text-white shadow-sm"
-                                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-                            ].join(" ")}
+                            className={getOutlinedButtonClass({
+                                tone: "blue",
+                                active: activeQuickFilter === "billing",
+                            })}
                         >
                             Finished Not Invoiced
                         </button>
@@ -1137,7 +1176,7 @@ const Jobs = () => {
 
                         <button
                             onClick={() => setShowFilterModal(true)}
-                            className="w-full sm:w-auto py-3 px-5 bg-white border border-gray-300 text-gray-700 font-semibold rounded-lg hover:bg-gray-100 transition"
+                            className={getOutlinedButtonClass({ tone: "slate", className: "w-full py-3 px-5 sm:w-auto" })}
                         >
                             Filter & Sort
                         </button>
@@ -1200,7 +1239,7 @@ const Jobs = () => {
                                         type="button"
                                         onClick={handleApplyBatchStatusUpdate}
                                         disabled={bulkUpdating || (!bulkOperationStatus && !bulkBillingStatus)}
-                                        className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={getOutlinedButtonClass({ tone: "blue", className: "py-2.5 font-bold" })}
                                     >
                                         {bulkUpdating ? "Updating..." : "Update Selected"}
                                     </button>
@@ -1209,7 +1248,7 @@ const Jobs = () => {
                                         type="button"
                                         onClick={clearBatchSelection}
                                         disabled={bulkUpdating}
-                                        className="rounded-lg border border-blue-200 bg-white px-4 py-2.5 text-sm font-bold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={getOutlinedButtonClass({ tone: "slate", className: "py-2.5 font-bold" })}
                                     >
                                         Clear
                                     </button>
@@ -1282,7 +1321,7 @@ const Jobs = () => {
                                                 <button
                                                     type="button"
                                                     onClick={openCreateOptions}
-                                                    className="mt-4 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                                                    className={getOutlinedButtonClass({ tone: "blue", className: "mt-4" })}
                                                 >
                                                     Create First Job
                                                 </button>
