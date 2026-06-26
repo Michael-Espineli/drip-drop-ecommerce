@@ -34,24 +34,21 @@ const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
     return (
         <Link
             to={to}
-            className={`group flex items-center gap-4 px-4 py-3 transition-colors sm:px-5 ${
-                isAccounting
+            className={`group flex items-center gap-4 px-4 py-3 transition-colors sm:px-5 ${isAccounting
                     ? "bg-emerald-600 text-white hover:bg-emerald-700"
                     : "bg-white hover:bg-slate-50"
-            }`}
+                }`}
         >
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${
-                isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-slate-100 text-slate-600"
-            }`}>
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-slate-100 text-slate-600"
+                }`}>
                 {icon}
             </div>
             <div className="min-w-0 flex-1">
                 <p className={`font-semibold ${isAccounting ? "text-white" : "text-slate-900"}`}>{title}</p>
                 <p className={`mt-0.5 text-sm ${isAccounting ? "text-emerald-50" : "text-slate-500"}`}>{description}</p>
             </div>
-            <ChevronRightIcon className={`h-5 w-5 shrink-0 transition-transform group-hover:translate-x-0.5 ${
-                isAccounting ? "text-white/80" : "text-slate-400"
-            }`} />
+            <ChevronRightIcon className={`h-5 w-5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isAccounting ? "text-white/80" : "text-slate-400"
+                }`} />
         </Link>
     );
 };
@@ -327,11 +324,10 @@ const NavigationOrderSettings = () => {
                                             return (
                                                 <label
                                                     key={item.path}
-                                                    className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${
-                                                        isSelected
+                                                    className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition ${isSelected
                                                             ? 'border-slate-800 bg-white text-slate-900 shadow-sm'
                                                             : 'border-slate-200 bg-white text-slate-700 hover:border-slate-300'
-                                                    } ${isSavingBookmarks ? 'opacity-70' : ''}`}
+                                                        } ${isSavingBookmarks ? 'opacity-70' : ''}`}
                                                 >
                                                     <input
                                                         type="checkbox"
@@ -589,7 +585,7 @@ const CompanySettings = () => {
     }
 
     return (
-        <div className='p-4 sm:p-6 lg:p-8 bg-gray-50 min-h-screen'>
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
             <div className="w-full">
                 <div className="mb-8">
                     <h1 className="text-3xl font-bold text-gray-900">Settings</h1>

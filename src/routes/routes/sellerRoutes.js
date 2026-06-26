@@ -1,8 +1,6 @@
 import { lazy } from "react";
 import { Navigate } from "react-router-dom";
 
-const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
-
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
 const CompanyDashboardWrapper = lazy(() => import("../../views/company/CompanyDashboardWrapper"))
@@ -417,6 +415,11 @@ export const sellerRoutes = [
         role: 'Company'
     }, {
         path: '/company/repair-requests/create/:customerId',
+        element: <CreateNewRepairRequest />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
+        path: '/company/repair-requests/create/:customerId/:locationId',
         element: <CreateNewRepairRequest />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
@@ -1234,7 +1237,7 @@ export const sellerRoutes = [
     },
     {
         path: '/company/user-dashboard',
-        element: <CompanyUserDashboard />,
+        element: <CompanyUsers />,
         role: 'Company',
     },
     {

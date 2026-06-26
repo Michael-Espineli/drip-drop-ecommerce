@@ -347,29 +347,26 @@ const CompanyPartApprovals = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-      <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="flex flex-col gap-2">
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || 'Selected company'}</p>
-              <h1 className="text-3xl font-bold text-slate-950">Part Approvals</h1>
-              <p className="max-w-3xl text-sm text-slate-600">
-                Customer approvals for small parts before they move into the shopping, install, and invoice workflow.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setShowCreateModal(true)}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
-            >
-              <FaPlus />
-              New Part Approval
-            </button>
+    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+      <div className="w-full">
+        <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6">
+          <div className="flex flex-col gap-2">
+            <h1 className="text-3xl font-bold text-slate-950">Part Approvals</h1>
+            <p className="max-w-3xl text-sm text-slate-600">
+              Customer approvals for small parts before they move into the shopping, install, and invoice workflow.
+            </p>
           </div>
-        </section>
+          <button
+            type="button"
+            onClick={() => setShowCreateModal(true)}
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+          >
+            <FaPlus />
+            New Part Approval
+          </button>
+        </div>
 
-        <section className="grid gap-4 sm:grid-cols-3">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-6">
           <StatTile icon={FaClock} label="Pending" value={summary.pendingCount} helper="Waiting on customer" />
           <StatTile icon={FaCheckCircle} label="Approved" value={summary.approvedCount} helper="Ready to purchase" />
           <StatTile icon={FaFileInvoiceDollar} label="Requested Value" value={formatCurrency(summary.totalValueCents)} helper="Customer-facing value" />

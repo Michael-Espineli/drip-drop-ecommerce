@@ -1093,83 +1093,83 @@ const ServiceLocationsTab = ({ customer }) => {
                             </form>
                         ) : (
                             <>
-                        <div className="grid gap-4 sm:grid-cols-2">
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                    Main Contact
-                                </p>
-                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.name || "—"}</p>
-                            </div>
+                                <div className="grid gap-4 sm:grid-cols-2">
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                            Main Contact
+                                        </p>
+                                        <p className="text-sm text-slate-900">{selectedLocation.mainContact?.name || "—"}</p>
+                                    </div>
 
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                    Email
-                                </p>
-                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
-                            </div>
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                            Email
+                                        </p>
+                                        <p className="text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
+                                    </div>
 
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                    Phone Number
-                                </p>
-                                <p className="text-sm text-slate-900">{selectedLocation.mainContact?.phoneNumber || "—"}</p>
-                            </div>
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                            Phone Number
+                                        </p>
+                                        <p className="text-sm text-slate-900">{selectedLocation.mainContact?.phoneNumber || "—"}</p>
+                                    </div>
 
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                    Gate Code
-                                </p>
-                                <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
-                            </div>
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                            Gate Code
+                                        </p>
+                                        <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
+                                    </div>
 
-                            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
-                                    Status
-                                </p>
-                                <p className="text-sm text-slate-900">
-                                    {(selectedLocation.isActive ?? selectedLocation.active ?? true) ? 'Active' : 'Inactive'}
-                                </p>
-                            </div>
-                        </div>
+                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                            Status
+                                        </p>
+                                        <p className="text-sm text-slate-900">
+                                            {(selectedLocation.isActive ?? selectedLocation.active ?? true) ? 'Active' : 'Inactive'}
+                                        </p>
+                                    </div>
+                                </div>
 
 
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                Contact Notes
-                            </p>
-                            <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                {selectedLocation.mainContact?.notes || "No contact notes added."}
-                            </p>
-                        </div>
+                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                                        Contact Notes
+                                    </p>
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                        {selectedLocation.mainContact?.notes || "No contact notes added."}
+                                    </p>
+                                </div>
 
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                Dogs on Property
-                            </p>
+                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                                        Dogs on Property
+                                    </p>
 
-                            {selectedLocation.dogName?.length > 0 ? (
-                                <ul className="flex flex-wrap gap-2">
-                                    {selectedLocation.dogName.map((dog) => (
-                                        <li
-                                            key={dog}
-                                            className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 border border-blue-100"
-                                        >
-                                            {dog}
-                                        </li>
-                                    ))}
-                                </ul>
-                            ) : (
-                                <p className="text-sm text-slate-500">None found.</p>
-                            )}
-                        </div>
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                Location Notes
-                            </p>
-                            <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                {selectedLocation.notes || "No location notes added."}
-                            </p>
-                        </div>
+                                    {selectedLocation.dogName?.length > 0 ? (
+                                        <ul className="flex flex-wrap gap-2">
+                                            {selectedLocation.dogName.map((dog) => (
+                                                <li
+                                                    key={dog}
+                                                    className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 border border-blue-100"
+                                                >
+                                                    {dog}
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    ) : (
+                                        <p className="text-sm text-slate-500">None found.</p>
+                                    )}
+                                </div>
+                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
+                                        Location Notes
+                                    </p>
+                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                        {selectedLocation.notes || "No location notes added."}
+                                    </p>
+                                </div>
                             </>
                         )}
 
@@ -1437,20 +1437,20 @@ const LocationDetails = ({ location, customerId }) => {
 
     return (<div className="grid gap-6 lg:grid-cols-2">
         <div className="lg:col-span-2">
-        <InfoCard title="Schedule Service Stop">
-            <div className="grid gap-3 md:grid-cols-3">
-                {standaloneServiceStopLinks.map((item) => (
-                    <Link
-                        key={item.category}
-                        to={buildStandaloneServiceStopPath(item.category)}
-                        className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-200 hover:bg-blue-50"
-                    >
-                        <span className="block text-sm font-bold text-slate-900">{item.label}</span>
-                        <span className="mt-1 block text-xs text-slate-600">{item.helper}</span>
-                    </Link>
-                ))}
-            </div>
-        </InfoCard>
+            <InfoCard title="Schedule Service Stop">
+                <div className="grid gap-3 md:grid-cols-3">
+                    {standaloneServiceStopLinks.map((item) => (
+                        <Link
+                            key={item.category}
+                            to={buildStandaloneServiceStopPath(item.category)}
+                            className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-200 hover:bg-blue-50"
+                        >
+                            <span className="block text-sm font-bold text-slate-900">{item.label}</span>
+                            <span className="mt-1 block text-xs text-slate-600">{item.helper}</span>
+                        </Link>
+                    ))}
+                </div>
+            </InfoCard>
         </div>
 
         <InfoCard
@@ -1810,43 +1810,43 @@ const RecurringTab = ({ customer }) => {
                     {recurringStops.map(rs => {
                         const status = getRecurringStopStatus(rs);
                         return (
-                        <li key={rs.id}>
-                            <Link
-                                to={`/company/recurringServiceStop/details/${rs.id}?edit=1`}
-                                className="group block rounded-lg border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                            >
-                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                    <div className="min-w-0">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <p className="text-sm font-bold text-slate-900">{rs.internalId || 'RSS'}</p>
-                                            <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                            <li key={rs.id}>
+                                <Link
+                                    to={`/company/recurringServiceStop/details/${rs.id}?edit=1`}
+                                    className="group block rounded-lg border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                >
+                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                        <div className="min-w-0">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                                <p className="text-sm font-bold text-slate-900">{rs.internalId || 'RSS'}</p>
+                                                <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
+                                            </div>
+                                            <p className="mt-1 truncate text-sm text-slate-700">
+                                                {rs.type || 'Recurring service stop'}
+                                            </p>
+                                            <p className="mt-1 text-xs text-slate-500">
+                                                {getRecurringStopAddress(rs)}
+                                            </p>
                                         </div>
-                                        <p className="mt-1 truncate text-sm text-slate-700">
-                                            {rs.type || 'Recurring service stop'}
-                                        </p>
-                                        <p className="mt-1 text-xs text-slate-500">
-                                            {getRecurringStopAddress(rs)}
-                                        </p>
+
+                                        <div className="shrink-0 text-left sm:text-right">
+                                            <p className="text-sm font-semibold text-slate-900">{rs.frequency || '—'}</p>
+                                            <p className="mt-1 text-xs text-slate-500">{formatRecurringDays(rs)}</p>
+                                        </div>
                                     </div>
 
-                                    <div className="shrink-0 text-left sm:text-right">
-                                        <p className="text-sm font-semibold text-slate-900">{rs.frequency || '—'}</p>
-                                        <p className="mt-1 text-xs text-slate-500">{formatRecurringDays(rs)}</p>
+                                    <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                        <p className="text-xs text-slate-500">
+                                            <span className="font-semibold text-slate-600">Tech:</span> {rs.tech || 'Unassigned'}
+                                            {rs.startDate ? ` • Starts ${formatDateValue(rs.startDate)}` : ''}
+                                        </p>
+                                        <span className="inline-flex items-center gap-1 self-start rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition group-hover:bg-blue-700 sm:self-auto">
+                                            <PencilSquareIcon className="h-4 w-4" />
+                                            Edit RSS
+                                        </span>
                                     </div>
-                                </div>
-
-                                <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                                    <p className="text-xs text-slate-500">
-                                        <span className="font-semibold text-slate-600">Tech:</span> {rs.tech || 'Unassigned'}
-                                        {rs.startDate ? ` • Starts ${formatDateValue(rs.startDate)}` : ''}
-                                    </p>
-                                    <span className="inline-flex items-center gap-1 self-start rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition group-hover:bg-blue-700 sm:self-auto">
-                                        <PencilSquareIcon className="h-4 w-4" />
-                                        Edit RSS
-                                    </span>
-                                </div>
-                            </Link>
-                        </li>
+                                </Link>
+                            </li>
                         );
                     })}
                     {recurringStops.length === 0 && <p className="text-gray-500">None found.</p>}
@@ -2941,9 +2941,9 @@ export default function CustomerDetails() {
                     </p>
                     <Link
                         to="/company/customers"
-                        className="mt-4 inline-flex rounded-md bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800"
+                        className="mt-4 inline-flex text-sm font-semibold text-slate-600 hover:text-slate-900"
                     >
-                        Back to Customers
+                        &larr; Back to Customers
                     </Link>
                 </div>
             </div>
@@ -2994,9 +2994,9 @@ export default function CustomerDetails() {
                             <div className="flex flex-wrap items-center gap-2">
                                 <Link
                                     to="/company/customers"
-                                    className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                                    className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                                 >
-                                    Back to Customers
+                                    &larr; Back to Customers
                                 </Link>
                                 <StatusBadge tone={customer.active ? 'emerald' : 'rose'}>
                                     {customer.active ? 'Active' : 'Inactive'}
@@ -3203,11 +3203,10 @@ export default function CustomerDetails() {
                             </button>
                             <button
                                 onClick={() => handleUpdateCustomerStatus(!customer.active)}
-                                className={`py-2 px-5 text-white font-semibold rounded-lg transition ${
-                                    customer.active
-                                        ? 'bg-amber-600 hover:bg-amber-700'
-                                        : 'bg-emerald-600 hover:bg-emerald-700'
-                                }`}
+                                className={`py-2 px-5 text-white font-semibold rounded-lg transition ${customer.active
+                                    ? 'bg-amber-600 hover:bg-amber-700'
+                                    : 'bg-emerald-600 hover:bg-emerald-700'
+                                    }`}
                                 type="button"
                             >
                                 Confirm

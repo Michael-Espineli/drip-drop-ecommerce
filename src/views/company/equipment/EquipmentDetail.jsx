@@ -38,6 +38,7 @@ import toast from "react-hot-toast";
 
 import DatePicker from "react-datepicker";
 import 'react-datepicker/dist/react-datepicker.css'
+import Chart from "react-apexcharts";
 /**
  * ✅ IMPORTANT:
  * Keep these components OUTSIDE EquipmentDetail
@@ -139,6 +140,86 @@ const computeNextServiceDate = (lastServiceDate, serviceFrequency, serviceFreque
   }
 };
 
+const toDateValue = (value) => {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  if (typeof value.toDate === "function") return value.toDate();
+  if (typeof value === "number") return new Date(value);
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const pluralizeDuration = (value, unit) => `${value} ${unit}${value === 1 ? "" : "s"}`;
+
+const maintenanceIntervalText = (days) => {
+  const safeDays = Math.max(1, Math.abs(days));
+
+  if (safeDays >= 60) {
+    return pluralizeDuration(Math.max(1, Math.floor(safeDays / 30)), "month");
+  }
+
+  if (safeDays >= 14) {
+    return pluralizeDuration(Math.max(1, Math.floor(safeDays / 7)), "week");
+  }
+
+  return pluralizeDuration(safeDays, "day");
+};
+
+const maintenanceTimingText = (equipment = {}) => {
+  const nextServiceDate = toDateValue(equipment.nextServiceDate);
+
+  if (!nextServiceDate) {
+    return "Maintenance is required. No due date is set.";
+  }
+
+  const today = new Date();
+  const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dueStart = new Date(nextServiceDate.getFullYear(), nextServiceDate.getMonth(), nextServiceDate.getDate());
+  const daysOverdue = Math.round((todayStart.getTime() - dueStart.getTime()) / 86400000);
+  const dueLabel = format(nextServiceDate, "PP");
+
+  if (daysOverdue > 0) {
+    return `Maintenance overdue by ${maintenanceIntervalText(daysOverdue)}. Due ${dueLabel}.`;
+  }
+
+  if (daysOverdue === 0) {
+    return "Maintenance due today.";
+  }
+
+  return `Maintenance due in ${maintenanceIntervalText(daysOverdue)}. Due ${dueLabel}.`;
+};
+
+const equipmentAttentionSummary = (equipment = {}) => {
+  const displayStatus = displayEquipmentStatus(equipment.status || "");
+
+  if (displayStatus === EQUIPMENT_STATUS.NEEDS_REPAIR) {
+    return {
+      title: "Needs Repair",
+      detail: "Repair is needed. Create a repair request or schedule a job for this equipment.",
+      tone: "amber",
+    };
+  }
+
+  if (displayStatus === EQUIPMENT_STATUS.NON_OPERATIONAL) {
+    return {
+      title: "Non-Operational",
+      detail: "Equipment is not operational. Repair or replace it before normal service.",
+      tone: "red",
+    };
+  }
+
+  if (displayStatus === EQUIPMENT_STATUS.NEEDS_MAINTENANCE || equipment.needsService) {
+    return {
+      title: "Needs Maintenance",
+      detail: maintenanceTimingText(equipment),
+      tone: "amber",
+    };
+  }
+
+  return null;
+};
+
 const CUSTOM_CATALOG_VALUE = "__custom__";
 const DEFAULT_MAINTENANCE_NAME = "Clean";
 
@@ -184,6 +265,8 @@ const EquipmentDetail = () => {
   const [outstandingRepairRequests, setOutstandingRepairRequests] = useState([]);
   const [outstandingJobs, setOutstandingJobs] = useState([]);
   const [loadingOutstandingWork, setLoadingOutstandingWork] = useState(false);
+  const [pressureTrendPoints, setPressureTrendPoints] = useState([]);
+  const [loadingPressureTrend, setLoadingPressureTrend] = useState(false);
 
   // ✅ prevents re-hydration while editing
   const hasHydratedRef = useRef(false);
@@ -625,6 +708,152 @@ const EquipmentDetail = () => {
     return date ? date.getTime() : 0;
   };
 
+  const attentionSummary = useMemo(() => equipmentAttentionSummary(equipment), [equipment]);
+  const attentionBannerClass =
+    attentionSummary?.tone === "red"
+      ? "border-red-200 bg-red-50 text-red-900"
+      : "border-amber-200 bg-amber-50 text-amber-900";
+  const attentionIconClass = attentionSummary?.tone === "red" ? "text-red-700" : "text-amber-700";
+
+  const pressureTrendChart = useMemo(() => {
+    const categories = pressureTrendPoints.map((point) => (
+      point.date ? format(point.date, "MMM d") : "No date"
+    ));
+
+    return {
+      options: {
+        chart: {
+          type: "line",
+          toolbar: { show: false },
+          zoom: { enabled: false },
+        },
+        colors: ["#2563eb"],
+        dataLabels: { enabled: false },
+        grid: { borderColor: "#e5e7eb" },
+        markers: { size: 4 },
+        stroke: { curve: "smooth", width: 3 },
+        xaxis: {
+          categories,
+          labels: { style: { colors: "#64748b", fontSize: "12px" } },
+        },
+        yaxis: {
+          title: { text: "PSI" },
+          labels: { style: { colors: "#64748b", fontSize: "12px" } },
+        },
+        tooltip: {
+          y: {
+            formatter: (value) => `${value} PSI`,
+          },
+        },
+      },
+      series: [
+        {
+          name: "Pressure",
+          data: pressureTrendPoints.map((point) => point.pressure),
+        },
+      ],
+    };
+  }, [pressureTrendPoints]);
+
+  useEffect(() => {
+    const readPressure = (measurement = {}) => {
+      const value =
+        measurement.poundForcePerSquareInch ??
+        measurement.pressure ??
+        measurement.currentPressure ??
+        measurement.currentFilterPressure;
+      const number = Number(value);
+      return Number.isFinite(number) ? number : null;
+    };
+
+    const pointKey = (point) => `${point.source}:${point.id || point.date?.getTime() || point.pressure}`;
+
+    const fetchPressureTrend = async () => {
+      if (!equipmentId || !recentlySelectedCompany) return;
+
+      try {
+        setLoadingPressureTrend(true);
+
+        const equipmentRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
+        const measurementCollections = ["equipmentMeasurments", "equipmentMeasurements"];
+        const measurementSnapshots = await Promise.allSettled(
+          measurementCollections.map((collectionName) =>
+            getDocs(query(collection(equipmentRef, collectionName), orderBy("date", "desc"), limit(60)))
+          )
+        );
+
+        const subcollectionPoints = measurementSnapshots
+          .filter((result) => result.status === "fulfilled")
+          .flatMap((result, resultIndex) =>
+            result.value.docs.map((measurementDoc) => {
+              const data = measurementDoc.data();
+              const date = getDateValue(data.date);
+              const pressure = readPressure(data);
+              if (!date || pressure === null) return null;
+
+              return {
+                id: measurementDoc.id,
+                date,
+                pressure,
+                source: measurementCollections[resultIndex],
+              };
+            })
+          )
+          .filter(Boolean);
+
+        let stopDataPoints = [];
+        if (equipment?.serviceLocationId) {
+          const stopDataSnap = await getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "stopData"),
+              where("serviceLocationId", "==", equipment.serviceLocationId),
+              orderBy("date", "desc"),
+              limit(100)
+            )
+          );
+
+          stopDataPoints = stopDataSnap.docs.flatMap((stopDataDoc) => {
+            const stopData = stopDataDoc.data();
+            const measurements = Array.isArray(stopData.equipmentMeasurements)
+              ? stopData.equipmentMeasurements
+              : [];
+
+            return measurements
+              .filter((measurement) => measurement.equipmentId === equipmentId)
+              .map((measurement) => {
+                const date = getDateValue(measurement.date || stopData.date);
+                const pressure = readPressure(measurement);
+                if (!date || pressure === null) return null;
+
+                return {
+                  id: `${stopDataDoc.id}_${measurement.id || equipmentId}`,
+                  date,
+                  pressure,
+                  source: "stopData",
+                };
+              })
+              .filter(Boolean);
+          });
+        }
+
+        const uniquePoints = Array.from(
+          new Map([...subcollectionPoints, ...stopDataPoints].map((point) => [pointKey(point), point])).values()
+        )
+          .sort((a, b) => a.date.getTime() - b.date.getTime())
+          .slice(-60);
+
+        setPressureTrendPoints(uniquePoints);
+      } catch (error) {
+        console.error("Error loading pressure trend:", error);
+        setPressureTrendPoints([]);
+      } finally {
+        setLoadingPressureTrend(false);
+      }
+    };
+
+    fetchPressureTrend();
+  }, [equipmentId, recentlySelectedCompany, equipment?.serviceLocationId]);
+
 
   useEffect(() => {
     if (!edit) return;
@@ -995,6 +1224,19 @@ const EquipmentDetail = () => {
     });
   };
 
+  const createEquipmentRepairRequest = () => {
+    const basePath = equipment?.customerId
+      ? `/company/repair-requests/create/${equipment.customerId}${equipment?.serviceLocationId ? `/${equipment.serviceLocationId}` : ""}`
+      : "/company/repair-requests/create";
+
+    navigate(basePath, {
+      state: {
+        equipmentContext: buildEquipmentContext("repairRequest"),
+        defaultDescription: `Repair request for ${getEquipmentDisplayName()}`,
+      },
+    });
+  };
+
   const handleCatalogTypeChange = (value) => {
     setCatalogTypeId(value);
     setCatalogMakeId(CUSTOM_CATALOG_VALUE);
@@ -1153,6 +1395,15 @@ const EquipmentDetail = () => {
               </>
             )}
 
+            {can("32") && (
+              <DetailActionButton
+                label="Add Repair Request"
+                icon={WrenchScrewdriverIcon}
+                tone="amber"
+                onClick={createEquipmentRepairRequest}
+              />
+            )}
+
             {can("22") && (
               <>
                 <DetailActionButton
@@ -1268,10 +1519,22 @@ const EquipmentDetail = () => {
               <div className="flex flex-wrap items-center gap-2">
                 <Badge tone={equipment?.isActive ? "green" : "gray"}>{equipment?.isActive ? "Active" : "Inactive"}</Badge>
                 <Badge tone={equipment?.needsService ? "red" : "green"}>
-                  {equipment?.needsService ? "Needs Service" : "No Service Needed"}
+                  {equipment?.needsService ? "Needs Maintenance" : "No Service Needed"}
                 </Badge>
                 {equipment?.status ? <Badge tone="blue">{displayEquipmentStatus(equipment.status)}</Badge> : null}
               </div>
+
+              {attentionSummary && (
+                <div className={`rounded-xl border p-4 ${attentionBannerClass}`}>
+                  <div className="flex items-start gap-3">
+                    <WrenchScrewdriverIcon className={`mt-0.5 h-5 w-5 flex-shrink-0 ${attentionIconClass}`} />
+                    <div>
+                      <p className="text-sm font-bold">{attentionSummary.title}</p>
+                      <p className="mt-1 text-sm">{attentionSummary.detail}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                 <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
@@ -1589,6 +1852,50 @@ const EquipmentDetail = () => {
                   </Field>
                 </div>
               </div>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Pressure Trend</h3>
+              <p className="mt-1 text-sm text-gray-500">Filter pressure readings captured from route stop observations.</p>
+            </div>
+            <Badge tone={pressureTrendPoints.length ? "blue" : "gray"}>
+              {pressureTrendPoints.length} Reading{pressureTrendPoints.length === 1 ? "" : "s"}
+            </Badge>
+          </div>
+
+          {loadingPressureTrend ? (
+            <p className="mt-5 text-gray-500">Loading pressure history...</p>
+          ) : pressureTrendPoints.length ? (
+            <div className="mt-5 grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-3">
+                <Chart
+                  options={pressureTrendChart.options}
+                  series={pressureTrendChart.series}
+                  type="line"
+                  height={300}
+                />
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <h4 className="font-bold text-gray-800">Recent Readings</h4>
+                <div className="mt-3 space-y-2">
+                  {[...pressureTrendPoints].slice(-5).reverse().map((point) => (
+                    <div key={`${point.source}-${point.id}`} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm">
+                      <span className="font-semibold text-gray-700">
+                        {point.date ? format(point.date, "MMM d, yyyy") : "No date"}
+                      </span>
+                      <span className="font-bold text-blue-700">{point.pressure} PSI</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-5 rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-sm text-gray-500">
+              No pressure readings have been recorded for this equipment yet.
             </div>
           )}
         </div>

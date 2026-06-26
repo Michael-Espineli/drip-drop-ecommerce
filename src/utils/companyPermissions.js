@@ -1,5 +1,5 @@
 const webImplementedPermissionIds = new Set([
-  "0", "10", "12", "14", "16", "20", "22", "24", "26", "30", "32", "34", "36",
+  "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66",
   "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", "400",
   "600", "610", "612", "614", "620", "622", "800", "810", "820", "822", "824", "826", "830",
@@ -14,8 +14,10 @@ const permissionCatalog = [
   { id: "16", name: "Delete Customer", description: "", category: "Operations", ios: false, web: false },
   { id: "20", name: "Jobs", description: "", category: "Operations", ios: true, web: false },
   { id: "22", name: "Create Jobs", description: "", category: "Operations", ios: false, web: false },
+  { id: "23", name: "Create Jobs From Templates", description: "Can create jobs from technician-enabled job templates.", category: "Operations", ios: true, web: false },
   { id: "24", name: "Update Jobs", description: "", category: "Operations", ios: false, web: false },
   { id: "26", name: "Delete Jobs", description: "", category: "Operations", ios: false, web: false },
+  { id: "27", name: "Create Blank Jobs", description: "Can create blank jobs without starting from a template.", category: "Operations", ios: true, web: false },
   { id: "30", name: "Repair Requests", description: "", category: "Operations", ios: true, web: false },
   { id: "32", name: "Create Repair Requests", description: "", category: "Operations", ios: false, web: false },
   { id: "34", name: "Update Repair Requests", description: "", category: "Operations", ios: false, web: false },

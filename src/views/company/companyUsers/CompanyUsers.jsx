@@ -7,6 +7,14 @@ import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
 import { Link } from 'react-router-dom';
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+    MdAdd,
+    MdHistory,
+    MdMailOutline,
+    MdManageAccounts,
+    MdPayment,
+    MdSettings,
+} from "react-icons/md";
 
 const normalizeStatus = (status) => (status || '').toString().trim().toLowerCase();
 
@@ -52,6 +60,38 @@ const getUserPhotoUrl = (user = {}) => (
 const formatDate = (value) => {
     const date = value?.toDate ? value.toDate() : value instanceof Date ? value : value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'N/A';
+};
+
+const isActiveCompanyUser = (user = {}) => {
+    if (typeof user.active === 'boolean') return user.active;
+    if (typeof user.isActive === 'boolean') return user.isActive;
+    if (typeof user.disabled === 'boolean') return !user.disabled;
+    if (user.status) return normalizeStatus(user.status) === 'active';
+    return true;
+};
+
+const StatCard = ({ title, value, sub }) => (
+    <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="text-sm font-semibold text-slate-700">{title}</div>
+        <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+        {sub ? <div className="mt-1 text-sm text-slate-500">{sub}</div> : null}
+    </div>
+);
+
+const ActionLink = ({ to, children, icon: Icon, variant = 'secondary' }) => {
+    const classes = variant === 'primary'
+        ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
+        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50';
+
+    return (
+        <Link
+            to={to}
+            className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium shadow-sm transition ${classes}`}
+        >
+            {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
+            <span>{children}</span>
+        </Link>
+    );
 };
 
 const UserAvatar = ({ user, displayName }) => {
@@ -111,6 +151,7 @@ const UserRow = ({ user, onClick }) => {
 
 const CompanyUsers = () => {
     const [allUsers, setAllUsers] = useState([]);
+    const [recentWorkLogCount, setRecentWorkLogCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
     const { can } = useCompanyPermissions();
@@ -123,6 +164,7 @@ const CompanyUsers = () => {
     useEffect(() => {
         if (!recentlySelectedCompany) {
             setAllUsers([]);
+            setRecentWorkLogCount(0);
             setIsLoading(false);
             return;
         }
@@ -130,9 +172,24 @@ const CompanyUsers = () => {
         const fetchUsers = async () => {
             setIsLoading(true);
             try {
-                const querySnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
+                const [usersResult, workLogsResult, activeRouteLogsResult] = await Promise.allSettled([
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyUsers')),
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'workLogs')),
+                    getDocs(collection(db, 'companies', recentlySelectedCompany, 'activeRouteLogs')),
+                ]);
+                if (usersResult.status === 'rejected') throw usersResult.reason;
+
+                const querySnapshot = usersResult.value;
                 const userList = querySnapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+                const workLogsSize = workLogsResult.status === 'fulfilled' ? workLogsResult.value.size : 0;
+                const activeRouteLogsSize = activeRouteLogsResult.status === 'fulfilled' ? activeRouteLogsResult.value.size : 0;
+
+                if (workLogsResult.status === 'rejected' || activeRouteLogsResult.status === 'rejected') {
+                    console.warn("Could not load all work log stats for company users.");
+                }
+
                 setAllUsers(userList);
+                setRecentWorkLogCount(Math.min(workLogsSize + activeRouteLogsSize, 50));
             } catch (error) {
                 console.error("Error fetching company users: ", error);
             } finally {
@@ -161,28 +218,56 @@ const CompanyUsers = () => {
         }).sort((left, right) => getUserDisplayName(left).localeCompare(getUserDisplayName(right)));
     }, [allUsers, statusFilter, roleFilter]);
 
+    const stats = useMemo(() => ({
+        totalUsers: allUsers.length,
+        activeUsers: allUsers.filter(isActiveCompanyUser).length,
+        recentWorkLogs: recentWorkLogCount,
+        filteredUsers: filteredUsers.length,
+    }), [allUsers, filteredUsers.length, recentWorkLogCount]);
+
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="mx-auto">
-                <header className="flex flex-col sm:flex-row justify-between sm:items-center mb-8">
+                <header className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                     <div>
-                        <h1 className="text-3xl font-bold text-gray-800">Company Users</h1>
-                        <p className="text-gray-600 mt-1">Manage all users associated with your company.</p>
+                        <h1 className="text-3xl font-bold text-gray-800">User Dashboard</h1>
+                        <p className="text-gray-600 mt-1">Manage company users, roles, payroll, and recent activity.</p>
                     </div>
 
-                    <div className="flex space-x-4">
-                        <Link to="/company/invites/pending" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
-                            See Pending Invites
-                        </Link>
+                    <div className="flex flex-wrap gap-2 lg:justify-end">
+                        <ActionLink to="/company/invites/pending" icon={MdMailOutline}>
+                            Pending Invites
+                        </ActionLink>
+                        <ActionLink to="/company/workLogs" icon={MdHistory}>
+                            Work Logs
+                        </ActionLink>
+                        <ActionLink to="/Company/Roles" icon={MdManageAccounts}>
+                            Roles
+                        </ActionLink>
+                        <ActionLink to="/company/settings" icon={MdSettings}>
+                            Settings
+                        </ActionLink>
+                        <ActionLink to="/company/payroll" icon={MdPayment}>
+                            Payroll
+                        </ActionLink>
                         {can("262") && (
-                            <Link to="/company/companyUsers/createNew"
-                                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                            <ActionLink
+                                to="/company/companyUsers/createNew"
+                                icon={MdAdd}
+                                variant="primary"
                             >
-                                + Create New User
-                            </Link>
+                                Create New User
+                            </ActionLink>
                         )}
                     </div>
                 </header>
+
+                <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <StatCard title="Total Users" value={stats.totalUsers} />
+                    <StatCard title="Active Users" value={stats.activeUsers} sub="Based on status and active flags" />
+                    <StatCard title="Recent Work Logs" value={stats.recentWorkLogs} sub="Last 50 loaded" />
+                    <StatCard title="Filtered Users" value={stats.filteredUsers} sub="Matches status and role filters" />
+                </div>
 
                 <div className="bg-white p-4 rounded-xl shadow-lg mb-8">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

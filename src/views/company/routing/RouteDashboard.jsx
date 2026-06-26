@@ -57,6 +57,60 @@ const SERVICE_STOP_KIND_META = Object.freeze({
         rowClassName: 'border-l-violet-500',
     },
 });
+const ROUTE_MAP_COLORS = Object.freeze([
+    '#2563eb',
+    '#dc2626',
+    '#16a34a',
+    '#9333ea',
+    '#ea580c',
+    '#0891b2',
+    '#be123c',
+    '#4f46e5',
+    '#0f766e',
+    '#ca8a04',
+]);
+const MAX_DIRECTIONS_POINTS = 25;
+
+const hashString = (value = '') => (
+    String(value)
+        .split('')
+        .reduce((hash, character) => ((hash * 31) + character.charCodeAt(0)) >>> 0, 0)
+);
+
+const getRouteColor = (routeKey, fallbackIndex = 0) => {
+    const index = routeKey ? hashString(routeKey) : fallbackIndex;
+    return ROUTE_MAP_COLORS[index % ROUTE_MAP_COLORS.length];
+};
+
+const getRouteColorByIndex = (index = 0) => (
+    ROUTE_MAP_COLORS[index % ROUTE_MAP_COLORS.length]
+);
+
+const getTechnicianId = (technician = {}) => (
+    technician.userId || technician.id || technician.docId || ''
+);
+
+const getTechnicianName = (technician = {}) => (
+    technician.userName ||
+    [technician.firstName, technician.lastName].filter(Boolean).join(' ') ||
+    technician.name ||
+    'Technician'
+);
+
+const buildRouteMetaById = (routes = []) => (
+    new Map(
+        [...routes]
+            .filter(route => route?.id)
+            .sort((left, right) => (
+                String(left.techName || left.name || left.id).localeCompare(String(right.techName || right.name || right.id))
+            ))
+            .map((route, index) => [route.id, {
+                route,
+                index,
+                color: getRouteColorByIndex(index),
+            }])
+    )
+);
 
 const getDateValue = (value) => {
     if (!value) return null;
@@ -565,6 +619,112 @@ const buildVehicleOptionsForRoute = (route, technicians, fleetVehicles) => {
     return options;
 };
 
+const findTechnician = (technicians, id, name) => {
+    const normalizedName = String(name || '').trim().toLowerCase();
+
+    return technicians.find(technician => {
+        const technicianId = getTechnicianId(technician);
+        const technicianName = getTechnicianName(technician).trim().toLowerCase();
+
+        return (id && technicianId === id) || (normalizedName && technicianName === normalizedName);
+    }) || null;
+};
+
+const buildRouteTechnicianRows = (route, stops, technicians, fleetVehicles, routeColor) => {
+    const rowsByKey = new Map();
+
+    const addTechnician = ({ id, name, role, isPrimary = false }) => {
+        const technician = findTechnician(technicians, id, name);
+        const technicianId = id || getTechnicianId(technician) || name || role;
+        const technicianName = name || getTechnicianName(technician);
+
+        if (!technicianId && !technicianName) return null;
+
+        const key = technicianId || technicianName;
+        const existing = rowsByKey.get(key);
+
+        if (existing) {
+            existing.roles = Array.from(new Set([...existing.roles, role]));
+            existing.isPrimary = existing.isPrimary || isPrimary;
+            return existing;
+        }
+
+        const row = {
+            key,
+            id: technicianId,
+            name: technicianName,
+            roles: [role],
+            isPrimary,
+            technician,
+            route,
+            routeColor,
+            finishedStops: 0,
+            inProgressStops: 0,
+            openStops: 0,
+            stopCount: 0,
+        };
+
+        rowsByKey.set(key, row);
+        return row;
+    };
+
+    if (route?.techId || route?.techName) {
+        addTechnician({
+            id: route.techId,
+            name: route.techName,
+            role: 'Primary',
+            isPrimary: true,
+        });
+    }
+
+    if (route?.traineeId || route?.traineeName) {
+        addTechnician({
+            id: route.traineeId,
+            name: route.traineeName,
+            role: 'Trainee',
+        });
+    }
+
+    stops.forEach(stop => {
+        const row = addTechnician({
+            id: stop.techId || stop.routeTechId,
+            name: stop.tech || stop.routeTechName,
+            role: 'Assigned Stops',
+        });
+
+        if (!row) return;
+
+        const { start, end } = getStopTiming(stop);
+
+        row.stopCount += 1;
+        if (start && end) {
+            row.finishedStops += 1;
+        } else if (start && !end) {
+            row.inProgressStops += 1;
+        } else {
+            row.openStops += 1;
+        }
+    });
+
+    if (!rowsByKey.size && route?.techName) {
+        addTechnician({
+            name: route.techName,
+            role: 'Primary',
+            isPrimary: true,
+        });
+    }
+
+    return Array.from(rowsByKey.values())
+        .sort((left, right) => {
+            if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
+            return left.name.localeCompare(right.name);
+        })
+        .map(row => ({
+            ...row,
+            vehicleSummary: row.isPrimary ? routeVehicleSummary(route, fleetVehicles, technicians) : '',
+        }));
+};
+
 const distanceMeters = (from, to) => {
     const earthRadiusMeters = 6371000;
     const toRadians = value => value * Math.PI / 180;
@@ -677,6 +837,25 @@ const checkpointIndexes = (total, limit) => {
     const indexes = Array.from({ length: limit }, (_, index) => Math.round(index * step));
 
     return Array.from(new Set(indexes)).sort((a, b) => a - b);
+};
+
+const chunkRoutePositions = (positions, maxPoints = MAX_DIRECTIONS_POINTS) => {
+    if (positions.length <= maxPoints) return [positions];
+
+    const chunks = [];
+    let startIndex = 0;
+
+    while (startIndex < positions.length - 1) {
+        const chunk = positions.slice(startIndex, startIndex + maxPoints);
+
+        if (chunk.length > 1) {
+            chunks.push(chunk);
+        }
+
+        startIndex += maxPoints - 1;
+    }
+
+    return chunks;
 };
 
 const escapeHtml = (value = '') => String(value)
@@ -2029,11 +2208,13 @@ const RouteDashboard = () => {
                             type="button"
                             onClick={() => setShowMoveStopsPanel((current) => !current)}
                             className={`rounded-lg border px-3 py-2 text-sm font-semibold shadow-sm transition ${showMoveStopsPanel
-                                    ? 'border-blue-600 bg-blue-600 text-white hover:bg-blue-700'
+                                    ? 'border-red-600 bg-red-600 text-white hover:bg-red-700'
                                     : 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
                                 }`}
                         >
-                            Move Stops{selectedStopsForMove.length ? ` (${selectedStopsForMove.length})` : ''}
+                            {showMoveStopsPanel
+                                ? 'Cancel Move'
+                                : `Move Stops${selectedStopsForMove.length ? ` (${selectedStopsForMove.length})` : ''}`}
                         </button>
                         {process.env.NODE_ENV !== 'production' && (
                             <button
@@ -2109,8 +2290,6 @@ const RouteDashboard = () => {
                                 vehicleUpdatingRouteId={vehicleUpdatingRouteId}
                                 onSelectRoute={setSelectedRouteId}
                                 onSelectRouteStops={toggleRouteUnfinishedStops}
-                                onToggleStop={toggleSelectedStop}
-                                onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
                                 onVehicleChange={updateRouteVehicle}
                             />
 
@@ -2224,6 +2403,7 @@ const RouteDashboard = () => {
                                             {(isAllRoutesSelected || selectedRoute) && (selectedRouteStops.length > 0 || selectedRouteLocations.length > 0) ? (
                                                 <RouteActivityMap
                                                     route={selectedRoute}
+                                                    routes={displayActiveRoutes}
                                                     stops={selectedRouteStops}
                                                     routeLocations={selectedRouteLocations}
                                                     areaEstimates={selectedRouteAreaEstimates}
@@ -2514,8 +2694,6 @@ const RouteWorkloadBoard = ({
     vehicleUpdatingRouteId,
     onSelectRoute,
     onSelectRouteStops,
-    onToggleStop,
-    onOpenStop,
     onVehicleChange,
 }) => {
     const routeGroups = useMemo(() => {
@@ -2545,10 +2723,19 @@ const RouteWorkloadBoard = ({
             });
         }
 
-        return groups;
+        return groups.map((group, index) => ({
+            ...group,
+            routeColor: getRouteColorByIndex(index),
+        }));
     }, [routes, stops]);
     const finishedCount = stops.filter(stop => getStopTiming(stop).end).length;
     const unfinishedCount = stops.filter(isStopMovable).length;
+    const activeRouteGroups = routeGroups.filter(group => group.route);
+    const selectedRouteGroup = routeGroups.find(group => group.route?.id === selectedRouteId) || null;
+    const technicianSourceGroups = selectedRouteGroup?.route ? [selectedRouteGroup] : activeRouteGroups;
+    const technicianRows = technicianSourceGroups.flatMap(group => (
+        buildRouteTechnicianRows(group.route, group.stops, technicians, fleetVehicles, group.routeColor)
+    ));
 
     return (
         <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -2565,37 +2752,85 @@ const RouteWorkloadBoard = ({
                 </div>
             </div>
 
-            <div className="grid gap-3 xl:grid-cols-2">
-                {routeGroups.length ? routeGroups.map(group => {
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+                <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                        <div>
+                            <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Active Routes</h3>
+                            <p className="text-xs text-gray-500">Select a route to review its assigned technicians.</p>
+                        </div>
+                        <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">
+                            {activeRouteGroups.length}
+                        </span>
+                    </div>
+
+                    {routeGroups.length ? routeGroups.map(group => {
                     const finishedCount = group.stops.filter(stop => getStopTiming(stop).end).length;
+                    const inProgressCount = group.stops.filter(stop => {
+                        const { start, end } = getStopTiming(stop);
+                        return start && !end;
+                    }).length;
+                    const openCount = group.stops.length - finishedCount - inProgressCount;
                     const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
                     const isFocused = group.route && selectedRouteId === group.route.id;
+                    const activeStop = group.stops.find(stop => {
+                        const { start, end } = getStopTiming(stop);
+                        return start && !end;
+                    });
+                    const routeDurationMinutes = getRouteDurationMinutes(group.route);
+                    const durationText = routeDurationMinutes
+                        ? `${Math.floor(routeDurationMinutes / 60)}h ${routeDurationMinutes % 60}m`
+                        : 'N/A';
+                    const mileageText = group.route?.distanceMiles
+                        ? `${Number(group.route.distanceMiles).toFixed(1)} mi`
+                        : 'N/A';
 
                     return (
-                        <div
+                        <article
                             key={group.id}
-                            className={`overflow-hidden rounded-lg border ${isFocused ? 'border-blue-300 ring-2 ring-blue-100' : 'border-gray-200'}`}
+                            className={`overflow-hidden rounded-lg border-l-4 bg-white shadow-sm transition ${isFocused ? 'border-y-blue-300 border-r-blue-300 ring-2 ring-blue-100' : 'border-y-gray-200 border-r-gray-200 hover:border-y-gray-300 hover:border-r-gray-300'}`}
+                            style={{ borderLeftColor: group.routeColor }}
                         >
-                            <div className="border-b border-gray-200 bg-gray-50 px-3 py-2">
+                            <div className="px-4 py-3">
                                 <div className="flex items-start justify-between gap-3">
-                                    <div className="min-w-0">
-                                        <p className="truncate font-semibold text-gray-900">{group.techName}</p>
-                                        <p className="text-xs text-gray-500">{finishedCount}/{group.stops.length} finished</p>
+                                    <div className="flex min-w-0 items-start gap-3">
+                                        <span
+                                            className="mt-1 h-3 w-3 shrink-0 rounded-full"
+                                            style={{ backgroundColor: group.routeColor }}
+                                            aria-hidden="true"
+                                        />
+                                        <div className="min-w-0">
+                                            <p className="truncate font-semibold text-gray-900">
+                                                {group.route?.name || group.techName}
+                                            </p>
+                                            <p className="truncate text-xs text-gray-500">
+                                                {group.techName} · {finishedCount}/{group.stops.length} finished
+                                            </p>
+                                        </div>
                                     </div>
-                                    {group.route && (
-                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(group.route.status)}`}>
-                                            {group.route.status || 'Did Not Start'}
-                                        </span>
-                                    )}
+                                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(group.route?.status)}`}>
+                                        {group.route?.status || 'Unassigned'}
+                                    </span>
                                 </div>
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
+
+                                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                                    <RouteSummaryDatum label="Stops" value={group.stops.length} helper={`${openCount} open`} />
+                                    <RouteSummaryDatum label="Active" value={activeStop?.customerName || 'None'} helper={activeStop?.address?.streetAddress || ''} />
+                                    <RouteSummaryDatum label="Mileage" value={mileageText} />
+                                    <RouteSummaryDatum label="Duration" value={durationText} />
+                                </div>
+
+                                <div className="mt-3 flex flex-wrap items-center gap-2">
                                     {group.route && (
                                         <button
                                             type="button"
                                             onClick={() => onSelectRoute(group.route.id)}
-                                            className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-100"
+                                            className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${isFocused
+                                                    ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
+                                                    : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
+                                                }`}
                                         >
-                                            Focus
+                                            {isFocused ? 'Selected' : 'View Technicians'}
                                         </button>
                                     )}
                                     {group.route && (
@@ -2608,77 +2843,110 @@ const RouteWorkloadBoard = ({
                                         </button>
                                     )}
                                 </div>
-                                <RouteTechnicianSummary
-                                    route={group.route}
-                                    stops={group.stops}
-                                    now={now}
-                                    technicians={technicians}
-                                    fleetVehicles={fleetVehicles}
-                                    onVehicleChange={onVehicleChange}
-                                    isVehicleUpdating={vehicleUpdatingRouteId === group.route?.id}
-                                />
                             </div>
-
-                            <div className="max-h-96 divide-y divide-gray-100 overflow-y-auto">
-                                {group.stops.map((stop, index) => {
-                                    const status = getStopDisplayStatus(stop);
-                                    const routeIndex = stop.routeStopIndex || index + 1;
-                                    const isSelected = selectedStopIds.includes(stop.id);
-                                    const movable = isStopMovable(stop);
-                                    const stopKindMeta = getServiceStopKindMeta(stop);
-
-                                    return (
-                                        <div
-                                            key={stop.id}
-                                            className={`grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-4 px-3 py-2 ${stopKindMeta.rowClassName} ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
-                                        >
-                                            <button
-                                                type="button"
-                                                onClick={() => onToggleStop(stop)}
-                                                disabled={!movable}
-                                                className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
-                                                        ? 'border-blue-600 bg-blue-600 text-white'
-                                                        : movable
-                                                            ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
-                                                            : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
-                                                    }`}
-                                                title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
-                                            >
-                                                {isSelected ? '✓' : routeIndex}
-                                            </button>
-                                            <span className="min-w-0 flex-1">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => onOpenStop(stop)}
-                                                    className="block min-w-0 text-left"
-                                                >
-                                                    <span className="block truncate text-sm font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
-                                                    <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
-                                                </button>
-                                            </span>
-                                            <ServiceStopKindBadge stop={stop} compact />
-                                            <span
-                                                className={`h-2.5 w-2.5 rounded-full ${status.label === 'Finished'
-                                                        ? 'bg-green-500'
-                                                        : status.label === 'In Progress'
-                                                            ? 'bg-blue-500'
-                                                            : 'bg-yellow-500'
-                                                    }`}
-                                                title={status.label}
-                                            >
-                                                <span className="sr-only">{status.label}</span>
-                                            </span>
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        </div>
+                        </article>
                     );
                 }) : (
-                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500 xl:col-span-2">
+                    <div className="rounded-lg border border-gray-200 px-4 py-6 text-sm text-gray-500">
                         No service stops loaded for this date.
                     </div>
                 )}
+                </div>
+
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                    <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Technicians</h3>
+                            <p className="text-sm font-semibold text-gray-900">
+                                {selectedRouteGroup?.route
+                                    ? selectedRouteGroup.techName
+                                    : 'All active route technicians'}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                                {selectedRouteGroup?.route
+                                    ? 'Assigned to the selected route.'
+                                    : 'Select a route card to focus this list.'}
+                            </p>
+                        </div>
+                        {selectedRouteGroup?.route && (
+                            <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(selectedRouteGroup.route.status)}`}>
+                                {selectedRouteGroup.route.status || 'Did Not Start'}
+                            </span>
+                        )}
+                    </div>
+
+                    <div className="space-y-3">
+                        {technicianRows.length ? technicianRows.map(row => {
+                            const initials = row.name
+                                .split(/\s+/)
+                                .filter(Boolean)
+                                .slice(0, 2)
+                                .map(part => part[0]?.toUpperCase())
+                                .join('') || 'T';
+                            const statusLabel = row.inProgressStops > 0
+                                ? 'In Progress'
+                                : row.openStops > 0
+                                    ? 'Open'
+                                    : row.stopCount > 0
+                                        ? 'Finished'
+                                        : 'Assigned';
+                            const statusClassName = statusLabel === 'Finished'
+                                ? 'bg-green-100 text-green-800'
+                                : statusLabel === 'In Progress'
+                                    ? 'bg-blue-100 text-blue-800'
+                                    : 'bg-yellow-100 text-yellow-800';
+
+                            return (
+                                <div key={`${row.route?.id || 'route'}-${row.key}`} className="rounded-lg border border-gray-200 bg-white p-3">
+                                    <div className="flex items-start justify-between gap-3">
+                                        <div className="flex min-w-0 items-start gap-3">
+                                            <span
+                                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white"
+                                                style={{ backgroundColor: row.routeColor }}
+                                            >
+                                                {initials}
+                                            </span>
+                                            <div className="min-w-0">
+                                                <p className="truncate font-semibold text-gray-900">{row.name}</p>
+                                                <p className="truncate text-xs text-gray-500">
+                                                    {row.roles.join(' · ')}
+                                                    {!selectedRouteGroup?.route && row.route?.techName ? ` · ${row.route.techName}` : ''}
+                                                </p>
+                                            </div>
+                                        </div>
+                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${statusClassName}`}>
+                                            {statusLabel}
+                                        </span>
+                                    </div>
+
+                                    <div className="mt-3 grid grid-cols-3 gap-2">
+                                        <RouteSummaryDatum label="Stops" value={row.stopCount} helper={`${row.finishedStops} done`} />
+                                        <RouteSummaryDatum label="Open" value={row.openStops} helper={`${row.inProgressStops} active`} />
+                                        <RouteSummaryDatum label="Vehicle" value={row.vehicleSummary || 'N/A'} />
+                                    </div>
+
+                                    {row.isPrimary && row.route && (
+                                        <div className="mt-3">
+                                            <RouteTechnicianSummary
+                                                route={row.route}
+                                                stops={selectedRouteGroup?.route ? selectedRouteGroup.stops : getOrderedRouteStops(row.route, stops)}
+                                                now={now}
+                                                technicians={technicians}
+                                                fleetVehicles={fleetVehicles}
+                                                onVehicleChange={onVehicleChange}
+                                                isVehicleUpdating={vehicleUpdatingRouteId === row.route.id}
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                            );
+                        }) : (
+                            <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-6 text-sm text-gray-500">
+                                No technicians found for active routes on this date.
+                            </div>
+                        )}
+                    </div>
+                </div>
             </div>
         </section>
     );
@@ -3536,8 +3804,37 @@ const technicianStopLabel = (stop, fallbackIndex) => {
     return `${initials}-${stopNumber}`;
 };
 
-const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlays, showTechnicianLabels = false }) => {
+const RouteActivityMap = ({ route, routes = [], stops, routeLocations, areaEstimates, overlays, showTechnicianLabels = false }) => {
     const mapRef = useRef(null);
+    const routeLegendItems = useMemo(() => {
+        const routeById = buildRouteMetaById(routes);
+        const itemsByKey = new Map();
+
+        const addLegendItem = (key, label, fallbackIndex, color) => {
+            if (!key || itemsByKey.has(key)) return;
+
+            itemsByKey.set(key, {
+                key,
+                label,
+                color: color || getRouteColor(key, fallbackIndex),
+            });
+        };
+
+        if (showTechnicianLabels) {
+            stops.forEach((stop, index) => {
+                const routeMeta = routeById.get(stop.routeId);
+                const key = routeMeta?.route?.id || stop.routeId || stop.routeTechId || stop.techId || stop.routeTechName || stop.tech || 'unassigned-route';
+                const label = routeMeta?.route?.techName || stop.routeTechName || stop.tech || 'Unassigned';
+
+                addLegendItem(key, label, routeMeta?.index ?? index, routeMeta?.color);
+            });
+        } else if (route) {
+            const routeMeta = routeById.get(route.id);
+            addLegendItem(route.id || route.techId || route.techName, route.techName || route.name || 'Selected Route', routeMeta?.index ?? 0, routeMeta?.color);
+        }
+
+        return Array.from(itemsByKey.values());
+    }, [route, routes, showTechnicianLabels, stops]);
 
     useEffect(() => {
         if (!window.google?.maps || !mapRef.current) {
@@ -3554,6 +3851,9 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
         const bounds = new googleMaps.LatLngBounds();
         const infoWindow = new googleMaps.InfoWindow();
         const overlaysToClear = [];
+        const directionsService = googleMaps.DirectionsService ? new googleMaps.DirectionsService() : null;
+        const routeById = buildRouteMetaById(routes);
+        let isDisposed = false;
 
         class MapTextLabel extends googleMaps.OverlayView {
             constructor(position, text, color) {
@@ -3600,7 +3900,7 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
             }
         }
 
-        const addCircleMarker = ({ position, label, title, fillColor, scale = 13, labelText, infoContent }) => {
+        const addCircleMarker = ({ position, label, title, fillColor, strokeColor = '#ffffff', scale = 13, labelText, infoContent }) => {
             const marker = new googleMaps.Marker({
                 position,
                 map,
@@ -3617,8 +3917,8 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
                     path: googleMaps.SymbolPath.CIRCLE,
                     fillColor,
                     fillOpacity: 1,
-                    strokeColor: '#ffffff',
-                    strokeWeight: 2,
+                    strokeColor,
+                    strokeWeight: 3,
                     scale,
                 },
             });
@@ -3642,11 +3942,97 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
             return marker;
         };
 
+        const getStopRouteMeta = (stop, index) => {
+            const routeMeta = routeById.get(stop.routeId) || routeById.get(stop.activeRouteId);
+            const routeKey = routeMeta?.route?.id ||
+                stop.routeId ||
+                stop.activeRouteId ||
+                stop.routeTechId ||
+                stop.techId ||
+                stop.routeTechName ||
+                stop.tech ||
+                route?.id ||
+                'unassigned-route';
+            const routeName = routeMeta?.route?.techName ||
+                stop.routeTechName ||
+                stop.tech ||
+                route?.techName ||
+                route?.name ||
+                'Unassigned';
+            const routeIndex = routeMeta?.index ?? index;
+
+            return {
+                routeKey,
+                routeName,
+                routeColor: routeMeta?.color || getRouteColor(routeKey, routeIndex),
+            };
+        };
+
+        const drawFallbackPath = (positions, color, strokeOpacity = 0.62) => {
+            const fallbackPath = new googleMaps.Polyline({
+                path: positions,
+                geodesic: true,
+                strokeColor: color,
+                strokeOpacity,
+                strokeWeight: 4,
+                map,
+            });
+
+            overlaysToClear.push(fallbackPath);
+        };
+
+        const drawStreetPath = (points, color) => {
+            const positions = points.map(point => point.position);
+
+            if (positions.length < 2) return;
+
+            if (!directionsService || !googleMaps.DirectionsRenderer || !googleMaps.TravelMode?.DRIVING) {
+                drawFallbackPath(positions, color);
+                return;
+            }
+
+            chunkRoutePositions(positions).forEach(chunk => {
+                const request = {
+                    origin: chunk[0],
+                    destination: chunk[chunk.length - 1],
+                    waypoints: chunk.slice(1, -1).map(position => ({
+                        location: position,
+                        stopover: true,
+                    })),
+                    optimizeWaypoints: false,
+                    travelMode: googleMaps.TravelMode.DRIVING,
+                };
+
+                directionsService.route(request, (result, status) => {
+                    if (isDisposed) return;
+
+                    if (status === 'OK' && result) {
+                        const renderer = new googleMaps.DirectionsRenderer({
+                            directions: result,
+                            map,
+                            preserveViewport: true,
+                            suppressMarkers: true,
+                            polylineOptions: {
+                                strokeColor: color,
+                                strokeOpacity: 0.84,
+                                strokeWeight: 5,
+                            },
+                        });
+
+                        overlaysToClear.push(renderer);
+                    } else {
+                        drawFallbackPath(chunk, color, 0.52);
+                    }
+                });
+            });
+        };
+
         const stopPoints = stops
             .map((stop, index) => ({
                 stop,
                 index,
                 position: getStopCoordinate(stop),
+                ...getStopRouteMeta(stop, index),
             }))
             .filter(item => item.position);
 
@@ -3658,25 +4044,32 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
             .filter(item => item.position);
 
         if (overlays.stops && stopPoints.length > 0) {
-            if (stopPoints.length > 1) {
-                const stopPath = new googleMaps.Polyline({
-                    path: stopPoints.map(point => point.position),
-                    geodesic: true,
-                    strokeColor: '#2563eb',
-                    strokeOpacity: 0.72,
-                    strokeWeight: 4,
-                    map,
-                });
-                overlaysToClear.push(stopPath);
-            }
+            const stopGroupsByRoute = stopPoints.reduce((groups, point) => {
+                const currentGroup = groups.get(point.routeKey) || {
+                    key: point.routeKey,
+                    routeName: point.routeName,
+                    routeColor: point.routeColor,
+                    points: [],
+                };
+
+                currentGroup.points.push(point);
+                groups.set(point.routeKey, currentGroup);
+                return groups;
+            }, new Map());
+
+            Array.from(stopGroupsByRoute.values()).forEach(group => {
+                drawStreetPath(group.points, group.routeColor);
+            });
 
             stopPoints.forEach(({ stop, index, position }) => {
                 const status = getStopDisplayStatus(stop).label;
-                const fillColor = status === 'Finished'
+                const statusColor = status === 'Finished'
                     ? '#16a34a'
                     : status === 'In Progress'
                         ? '#2563eb'
                         : '#ca8a04';
+                const { routeName, routeColor } = getStopRouteMeta(stop, index);
+                const fillColor = showTechnicianLabels ? routeColor : statusColor;
                 const markerLabel = showTechnicianLabels ? technicianStopLabel(stop, index) : index + 1;
 
                 addCircleMarker({
@@ -3684,11 +4077,12 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
                     label: markerLabel,
                     title: stop.customerName || `Stop ${index + 1}`,
                     fillColor,
+                    strokeColor: showTechnicianLabels ? '#ffffff' : routeColor,
                     scale: showTechnicianLabels ? 16 : 14,
                     infoContent: `
                         <div style="font-family: Arial, sans-serif; padding: 6px;">
                             <p style="font-weight: 700; margin: 0 0 4px 0;">${escapeHtml(showTechnicianLabels ? markerLabel : `Stop ${index + 1}`)}: ${escapeHtml(stop.customerName || 'Service Stop')}</p>
-                            ${showTechnicianLabels ? `<p style="margin: 0 0 4px 0;">Technician: ${escapeHtml(stop.routeTechName || stop.tech || 'Unassigned')}</p>` : ''}
+                            <p style="margin: 0 0 4px 0;">Route: ${escapeHtml(routeName)}</p>
                             <p style="margin: 0 0 4px 0;">${escapeHtml(stop.address?.streetAddress || 'No address')}</p>
                             <p style="margin: 0;">Status: ${escapeHtml(status)}</p>
                         </div>
@@ -3782,12 +4176,33 @@ const RouteActivityMap = ({ route, stops, routeLocations, areaEstimates, overlay
         }
 
         return () => {
+            isDisposed = true;
             overlaysToClear.forEach(overlay => overlay.setMap(null));
             infoWindow.close();
         };
-    }, [route, stops, routeLocations, areaEstimates, overlays, showTechnicianLabels]);
+    }, [route, routes, stops, routeLocations, areaEstimates, overlays, showTechnicianLabels]);
 
-    return <div ref={mapRef} className="h-full min-h-[400px] w-full" />;
+    return (
+        <div className="relative h-full min-h-[400px] w-full">
+            <div ref={mapRef} className="h-full w-full" />
+            {routeLegendItems.length > 1 && (
+                <div className="pointer-events-none absolute left-3 top-3 max-w-[calc(100%-1.5rem)] rounded-lg border border-white/80 bg-white/95 px-3 py-2 shadow-sm">
+                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                        {routeLegendItems.map(item => (
+                            <span key={item.key} className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-700">
+                                <span
+                                    className="h-2.5 w-2.5 rounded-full"
+                                    style={{ backgroundColor: item.color }}
+                                    aria-hidden="true"
+                                />
+                                {item.label}
+                            </span>
+                        ))}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
 };
 
 const ServiceStopTable = ({ stops, navigate, now, selectedStopIds = [], onToggleStop }) => (

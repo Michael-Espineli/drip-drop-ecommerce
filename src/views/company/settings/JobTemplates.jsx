@@ -1,6 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { collection, deleteDoc, doc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
+import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, updateDoc } from "firebase/firestore";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
@@ -23,6 +23,7 @@ const emptyTemplateForm = () => ({
   defaultLaborCost: "0.00",
   isActive: true,
   locked: false,
+  technicianCanAdd: false,
 });
 
 const emptyTaskForm = () => ({
@@ -91,10 +92,15 @@ const JobTemplates = () => {
   const [itemModal, setItemModal] = useState(null);
   const [itemForm, setItemForm] = useState({});
   const [savingItem, setSavingItem] = useState(false);
+  const [companyUsers, setCompanyUsers] = useState([]);
+  const [defaultAdminId, setDefaultAdminId] = useState("");
+  const [savingDefaultAdmin, setSavingDefaultAdmin] = useState(false);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setTemplates([]);
+      setCompanyUsers([]);
+      setDefaultAdminId("");
       setLoading(false);
       return;
     }
@@ -104,11 +110,33 @@ const JobTemplates = () => {
       setError("");
 
       try {
-        const templatesSnap = await getDocs(
-          query(
-            collection(db, "companies", recentlySelectedCompany, "jobTemplates"),
-            orderBy("name", "asc")
-          )
+        const [templatesSnap, companySnap, companyUsersSnap] = await Promise.all([
+          getDocs(
+            query(
+              collection(db, "companies", recentlySelectedCompany, "jobTemplates"),
+              orderBy("name", "asc")
+            )
+          ),
+          getDoc(doc(db, "companies", recentlySelectedCompany)),
+          getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
+        ]);
+
+        const companyData = companySnap.exists() ? companySnap.data() : {};
+        setDefaultAdminId(companyData.defaultAdminId || "");
+        setCompanyUsers(
+          companyUsersSnap.docs
+            .map((userDoc) => {
+              const data = userDoc.data();
+              return {
+                ...data,
+                id: data.id || userDoc.id,
+                userId: data.userId || userDoc.id,
+                userName: data.userName || data.name || "Unnamed User",
+                roleName: data.roleName || "",
+              };
+            })
+            .filter((companyUser) => String(companyUser.status || "Active").toLowerCase() !== "inactive")
+            .sort((a, b) => String(a.userName || "").localeCompare(String(b.userName || "")))
         );
 
         const templatesWithCounts = await Promise.all(
@@ -163,6 +191,33 @@ const JobTemplates = () => {
     );
   }, [templates, search]);
 
+  const selectedDefaultAdmin = useMemo(
+    () => companyUsers.find((companyUser) => companyUser.userId === defaultAdminId || companyUser.id === defaultAdminId) || null,
+    [companyUsers, defaultAdminId]
+  );
+
+  const saveDefaultAdmin = async () => {
+    if (!recentlySelectedCompany) return;
+
+    setSavingDefaultAdmin(true);
+    setActionError("");
+    setActionMessage("");
+
+    try {
+      await updateDoc(doc(db, "companies", recentlySelectedCompany), {
+        defaultAdminId: selectedDefaultAdmin?.userId || "",
+        defaultAdminName: selectedDefaultAdmin?.userName || "",
+        updatedAt: new Date(),
+      });
+      setActionMessage("Default admin saved.");
+    } catch (err) {
+      console.error("Error saving default admin:", err);
+      setActionError("Could not save default admin.");
+    } finally {
+      setSavingDefaultAdmin(false);
+    }
+  };
+
   const openCreateModal = () => {
     setTemplateForm(emptyTemplateForm());
     setTemplateModal({ mode: "create", template: null });
@@ -179,6 +234,7 @@ const JobTemplates = () => {
       defaultLaborCost: dollarsFromCents(template.defaultLaborCostCents || 0),
       isActive: template.isActive !== false,
       locked: Boolean(template.locked),
+      technicianCanAdd: Boolean(template.technicianCanAdd),
     });
     setTemplateModal({ mode: "edit", template });
     setActionError("");
@@ -429,6 +485,7 @@ const JobTemplates = () => {
         defaultLaborCostCents: centsFromMoney(templateForm.defaultLaborCost),
         isActive: templateForm.isActive,
         locked: templateForm.locked,
+        technicianCanAdd: Boolean(templateForm.technicianCanAdd),
         updatedAt: now,
       };
 
@@ -460,8 +517,8 @@ const JobTemplates = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 sm:p-6 lg:p-8">
-      <div className="mx-auto max-w-7xl">
+    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+      <div className="w-full">
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <Link to="/company/settings" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
@@ -488,6 +545,39 @@ const JobTemplates = () => {
             </Link>
           </div>
         </header>
+
+        <section className="mb-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <h2 className="text-sm font-semibold uppercase text-slate-500">Default Admin</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                New iOS technician jobs will use this admin unless a manager changes it.
+              </p>
+            </div>
+            <div className="flex w-full flex-col gap-2 sm:flex-row lg:w-auto">
+              <select
+                value={defaultAdminId}
+                onChange={(event) => setDefaultAdminId(event.target.value)}
+                className="min-w-72 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+              >
+                <option value="">No default admin</option>
+                {companyUsers.map((companyUser) => (
+                  <option key={companyUser.id} value={companyUser.userId || companyUser.id}>
+                    {companyUser.userName || "Unnamed User"}{companyUser.roleName ? ` (${companyUser.roleName})` : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={saveDefaultAdmin}
+                disabled={savingDefaultAdmin}
+                className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {savingDefaultAdmin ? "Saving" : "Save Default"}
+              </button>
+            </div>
+          </div>
+        </section>
 
         <div className="mb-5 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
           <input
@@ -538,6 +628,11 @@ const JobTemplates = () => {
                     <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">Active</span>
                   )}
                 </div>
+                {template.technicianCanAdd ? (
+                  <span className="mt-3 inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    Technicians Can Add
+                  </span>
+                ) : null}
                 <p className="mt-2 text-xs text-slate-500">{template.templateReference || template.internalId || template.companyTemplateId || "Reusable job template"}</p>
 
                 <div className="mt-4 grid grid-cols-3 gap-2 text-center text-sm">
@@ -891,6 +986,14 @@ const JobTemplates = () => {
                     onChange={(event) => setTemplateForm((form) => ({ ...form, locked: event.target.checked }))}
                   />
                   Locked
+                </label>
+                <label className="flex items-center gap-2 rounded-lg border border-slate-200 p-3 text-sm font-semibold text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={templateForm.technicianCanAdd}
+                    onChange={(event) => setTemplateForm((form) => ({ ...form, technicianCanAdd: event.target.checked }))}
+                  />
+                  Technicians Can Add
                 </label>
               </div>
             </div>

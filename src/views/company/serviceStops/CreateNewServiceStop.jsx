@@ -20,6 +20,7 @@ import {
     resolveServiceStopTypeFields,
     SERVICE_STOP_TYPE_USE_CASES,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
+import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
 
 const SERVICE_STOP_CATEGORY_OPTIONS = [
     {
@@ -401,20 +402,7 @@ const CreateNewServiceStop = () => {
                 setCompanyWorkTypes(workTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setWorkTypeMappings(mappingsSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
                 setTechnicianRates(ratesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
-                setTaskTypeList(
-                    taskTypesSnap.docs.map((docSnap) => {
-                        const data = docSnap.data();
-                        const name = data.name || "Task";
-
-                        return {
-                            ...data,
-                            id: data.id || docSnap.id,
-                            name,
-                            value: name,
-                            label: name,
-                        };
-                    })
-                );
+                setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypesSnap.docs));
                 setTaskGroupList([
                     ...legacyTaskGroupsSnap.docs.map((docSnap) => {
                         const data = docSnap.data();

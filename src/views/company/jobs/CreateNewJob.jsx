@@ -19,6 +19,7 @@ import { v4 as uuidv4 } from "uuid";
 import Select from "react-select";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
+import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -423,18 +424,7 @@ const CreateNewJob = () => {
 
                 setCustomerList(customers);
 
-                setTaskTypeList(
-                    taskTypesSnap.docs.map((docSnap) => {
-                        const data = docSnap.data();
-                        return {
-                            ...data,
-                            id: data.id || docSnap.id,
-                            name: data.name,
-                            label: data.name,
-                            value: data.name,
-                        };
-                    })
-                );
+                setTaskTypeList(jobTaskTypeOptionsFromDocs(taskTypesSnap.docs));
 
                 setTaskGroupList(
                     taskGroupsSnap.docs.map((docSnap) => {
@@ -1680,11 +1670,10 @@ const CreateNewJob = () => {
                         <div>
                             <Link
                                 to="/company/jobs"
-                                className="inline-flex items-center text-sm font-semibold text-slate-600 hover:text-slate-900"
+                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
                             >
                                 &larr; Back to Jobs
                             </Link>
-
                             <h2 className="mt-2 text-3xl font-bold text-slate-950">Create New Job</h2>
 
                             <p className="mt-1 text-sm text-slate-600">

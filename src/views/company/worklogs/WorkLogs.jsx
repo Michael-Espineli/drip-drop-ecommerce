@@ -210,8 +210,8 @@ const WorkLogs = () => {
     ), [routes]);
 
     return (
-        <div className='min-h-screen bg-gray-50 p-4 sm:p-6'>
-            <div className="max-w-7xl mx-auto">
+        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+            <div className="w-full">
                 <header className="mb-6 rounded-lg bg-white p-4 shadow">
                     <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                         <div>

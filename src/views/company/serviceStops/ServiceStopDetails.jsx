@@ -489,6 +489,8 @@ const ServiceStopDetails = () => {
     const [readingDrafts, setReadingDrafts] = useState({});
     const [dosageDrafts, setDosageDrafts] = useState({});
     const [observationDraft, setObservationDraft] = useState("");
+    const [equipmentMeasurementDrafts, setEquipmentMeasurementDrafts] = useState({});
+    const [savingEquipmentObservationId, setSavingEquipmentObservationId] = useState("");
     const [savingStopData, setSavingStopData] = useState(false);
     const [loading, setLoading] = useState(true);
     const [editEnabled, setEditEnabled] = useState(false);
@@ -722,6 +724,7 @@ const ServiceStopDetails = () => {
             setReadingDrafts({});
             setDosageDrafts({});
             setObservationDraft("");
+            setEquipmentMeasurementDrafts({});
             return;
         }
 
@@ -750,9 +753,23 @@ const ServiceStopDetails = () => {
             )
         );
         setObservationDraft((currentStopData?.observation || []).join("\n"));
+        setEquipmentMeasurementDrafts(
+            Object.fromEntries(
+                (currentStopData?.equipmentMeasurements || []).map((measurement) => [
+                    measurement.equipmentId,
+                    {
+                        pressure: measurement.poundForcePerSquareInch ?? measurement.pressure ?? measurement.currentPressure ?? "",
+                        rpm: measurement.revolutionsPerMinute ?? "",
+                    },
+                ])
+            )
+        );
     }, [dosageTemplates, readingTemplates, selectedBodyOfWaterId, stopDataRecords]);
 
     const selectedStopDataRecord = stopDataRecords.find((record) => record.bodyOfWaterId === selectedBodyOfWaterId) || null;
+    const selectedBodyEquipment = useMemo(() => (
+        equipmentList.filter((equipment) => !selectedBodyOfWaterId || equipment.bodyOfWaterId === selectedBodyOfWaterId)
+    ), [equipmentList, selectedBodyOfWaterId]);
     const bodyOfWaterById = useMemo(() => (
         new Map(bodiesOfWater.map((body) => [body.id, body]))
     ), [bodiesOfWater]);
@@ -775,6 +792,44 @@ const ServiceStopDetails = () => {
         ""
     ), [serviceLocation, serviceStop]);
     const equipmentSurveyFindings = useMemo(() => getEquipmentSurveyFindings(equipmentList), [equipmentList]);
+
+    const buildEquipmentMeasurementsForStopData = (overrideMeasurement = null) => {
+        const existingByEquipmentId = new Map(
+            (selectedStopDataRecord?.equipmentMeasurements || []).map((measurement) => [measurement.equipmentId, measurement])
+        );
+
+        if (overrideMeasurement?.equipmentId) {
+            existingByEquipmentId.set(overrideMeasurement.equipmentId, overrideMeasurement);
+        }
+
+        selectedBodyEquipment.forEach((equipment) => {
+            const draft = equipmentMeasurementDrafts[equipment.id] || {};
+            const pressureNumber = Number(draft.pressure);
+            const rpmNumber = Number(draft.rpm);
+            const hasPressure = draft.pressure !== "" && Number.isFinite(pressureNumber);
+            const hasRpm = draft.rpm !== "" && Number.isFinite(rpmNumber);
+
+            if (!hasPressure && !hasRpm) return;
+
+            existingByEquipmentId.set(equipment.id, {
+                ...(existingByEquipmentId.get(equipment.id) || {}),
+                id: existingByEquipmentId.get(equipment.id)?.id || `eqm_${equipment.id}_${Date.now()}`,
+                equipmentId: equipment.id,
+                date: new Date(),
+                status: equipment.status || equipment.operationStatus || "Active",
+                ...(hasPressure
+                    ? {
+                        poundForcePerSquareInch: pressureNumber,
+                        pressure: pressureNumber,
+                        currentPressure: pressureNumber,
+                    }
+                    : {}),
+                ...(hasRpm ? { revolutionsPerMinute: rpmNumber } : {}),
+            });
+        });
+
+        return Array.from(existingByEquipmentId.values());
+    };
 
     const saveStopData = async () => {
         if (!requirePermission("244", "update service stops")) return;
@@ -802,6 +857,7 @@ const ServiceStopDetails = () => {
                 observation,
                 userId: serviceStop.techId || "",
                 date: new Date(),
+                equipmentMeasurements: buildEquipmentMeasurementsForStopData(),
             });
 
             const savedStopData = await saveStopDataRecord({
@@ -820,6 +876,107 @@ const ServiceStopDetails = () => {
             toast.error("Failed to save stop data");
         } finally {
             setSavingStopData(false);
+        }
+    };
+
+    const saveEquipmentObservation = async (equipment) => {
+        if (!requirePermission("244", "update service stops")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !selectedBodyOfWaterId || !equipment?.id) return;
+
+        const draft = equipmentMeasurementDrafts[equipment.id] || {};
+        const pressure = Number(draft.pressure);
+        const rpm = Number(draft.rpm);
+        const hasPressure = draft.pressure !== "" && Number.isFinite(pressure);
+        const hasRpm = draft.rpm !== "" && Number.isFinite(rpm);
+
+        if (!hasPressure && !hasRpm) {
+            toast.error("Enter pressure or RPM before saving");
+            return;
+        }
+
+        try {
+            setSavingEquipmentObservationId(equipment.id);
+
+            const measurement = {
+                id: `eqm_${equipment.id}_${Date.now()}`,
+                equipmentId: equipment.id,
+                date: new Date(),
+                status: equipment.status || equipment.operationStatus || "Active",
+                ...(hasPressure
+                    ? {
+                        poundForcePerSquareInch: pressure,
+                        pressure,
+                        currentPressure: pressure,
+                    }
+                    : {}),
+                ...(hasRpm ? { revolutionsPerMinute: rpm } : {}),
+            };
+
+            const cleanPressure = Number(equipment.cleanFilterPressure ?? equipment.cleanPressure);
+            const pressureNeedsMaintenance =
+                hasPressure &&
+                Number.isFinite(cleanPressure) &&
+                pressure - cleanPressure >= 15;
+            const equipmentUpdates = {
+                ...(hasPressure ? { currentPressure: pressure } : {}),
+                ...(pressureNeedsMaintenance ? { status: "Needs Maintenance", needsService: true } : {}),
+            };
+
+            const equipmentRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipment.id);
+            const batch = writeBatch(db);
+            batch.set(doc(equipmentRef, "equipmentMeasurments", measurement.id), measurement, { merge: true });
+            batch.set(doc(equipmentRef, "equipmentMeasurements", measurement.id), measurement, { merge: true });
+            if (Object.keys(equipmentUpdates).length) {
+                batch.update(equipmentRef, equipmentUpdates);
+            }
+            await batch.commit();
+
+            const readings = readingTemplates.map((template) =>
+                normalizeReadingForStopData(template, readingDrafts[template.id] || "", selectedBodyOfWaterId)
+            );
+            const dosages = dosageTemplates.map((template) =>
+                normalizeDosageForStopData(template, dosageDrafts[template.id] || "", selectedBodyOfWaterId)
+            );
+            const observation = observationDraft
+                .split("\n")
+                .map((line) => line.trim())
+                .filter(Boolean);
+            const stopData = buildStopDataRecord({
+                existingStopData: selectedStopDataRecord,
+                serviceStop,
+                serviceStopId,
+                bodyOfWaterId: selectedBodyOfWaterId,
+                readings,
+                dosages,
+                observation,
+                userId: serviceStop.techId || "",
+                date: new Date(),
+                equipmentMeasurements: buildEquipmentMeasurementsForStopData(measurement),
+            });
+
+            const savedStopData = await saveStopDataRecord({
+                db,
+                companyId: recentlySelectedCompany,
+                stopData,
+            });
+
+            setStopDataRecords((current) => {
+                const others = current.filter((record) => record.id !== savedStopData.id);
+                return [savedStopData, ...others];
+            });
+            setEquipmentList((current) =>
+                current.map((item) => (
+                    item.id === equipment.id
+                        ? { ...item, ...equipmentUpdates, ...(hasPressure ? { currentPressure: pressure } : {}) }
+                        : item
+                ))
+            );
+            toast.success("Equipment observation saved");
+        } catch (error) {
+            console.error("Failed to save equipment observation:", error);
+            toast.error("Failed to save equipment observation");
+        } finally {
+            setSavingEquipmentObservationId("");
         }
     };
 
@@ -2161,6 +2318,90 @@ const ServiceStopDetails = () => {
                                                 placeholder="One observation per line"
                                             />
                                         </label>
+
+                                        <div>
+                                            <div className="mb-3 flex items-center justify-between gap-3">
+                                                <h4 className="font-semibold text-slate-800">Equipment Observations</h4>
+                                                <span className="text-xs font-semibold text-slate-500">
+                                                    {selectedBodyEquipment.length}
+                                                </span>
+                                            </div>
+                                            {selectedBodyEquipment.length ? (
+                                                <div className="grid grid-cols-1 gap-3">
+                                                    {selectedBodyEquipment.map((equipment) => {
+                                                        const draft = equipmentMeasurementDrafts[equipment.id] || {};
+                                                        const savingThisEquipment = savingEquipmentObservationId === equipment.id;
+                                                        return (
+                                                            <div key={equipment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                                                    <div>
+                                                                        <p className="font-semibold text-slate-800">{getEquipmentTitle(equipment)}</p>
+                                                                        <p className="mt-1 text-xs text-slate-500">
+                                                                            Current: {displayText(equipment.currentPressure ?? equipment.currentFilterPressure, "—")} PSI
+                                                                        </p>
+                                                                    </div>
+                                                                    {(equipment.needsService || String(equipment.status || "").toLowerCase().includes("repair") || String(equipment.status || "").toLowerCase().includes("maintenance")) && (
+                                                                        <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
+                                                                            Needs attention
+                                                                        </span>
+                                                                    )}
+                                                                </div>
+                                                                <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                                                    <label className="block">
+                                                                        <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Pressure</span>
+                                                                        <input
+                                                                            type="number"
+                                                                            value={draft.pressure || ""}
+                                                                            onChange={(event) =>
+                                                                                setEquipmentMeasurementDrafts((current) => ({
+                                                                                    ...current,
+                                                                                    [equipment.id]: {
+                                                                                        ...(current[equipment.id] || {}),
+                                                                                        pressure: event.target.value,
+                                                                                    },
+                                                                                }))
+                                                                            }
+                                                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                                                                            placeholder="PSI"
+                                                                        />
+                                                                    </label>
+                                                                    <label className="block">
+                                                                        <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">RPM</span>
+                                                                        <input
+                                                                            type="number"
+                                                                            value={draft.rpm || ""}
+                                                                            onChange={(event) =>
+                                                                                setEquipmentMeasurementDrafts((current) => ({
+                                                                                    ...current,
+                                                                                    [equipment.id]: {
+                                                                                        ...(current[equipment.id] || {}),
+                                                                                        rpm: event.target.value,
+                                                                                    },
+                                                                                }))
+                                                                            }
+                                                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+                                                                            placeholder="Optional"
+                                                                        />
+                                                                    </label>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => saveEquipmentObservation(equipment)}
+                                                                        disabled={savingThisEquipment}
+                                                                        className="self-end rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        {savingThisEquipment ? "Saving..." : "Add Observation"}
+                                                                    </button>
+                                                                </div>
+                                                            </div>
+                                                        );
+                                                    })}
+                                                </div>
+                                            ) : (
+                                                <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                                    No equipment is linked to this body of water.
+                                                </div>
+                                            )}
+                                        </div>
 
                                         <div className="flex justify-end">
                                             <button

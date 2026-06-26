@@ -227,7 +227,7 @@ const QuickActionMenuItem = ({ label, icon: Icon, tone = "black", onClick }) => 
 const EquipmentDetailLink = ({ equipment, children }) => (
   <Link
     to={`/company/equipment/detail/${equipment.id}`}
-    className="font-semibold text-blue-700 hover:text-blue-900 hover:underline"
+    className="font-semibold text-black-700 hover:text-blue-900 hover:underline"
   >
     {children || "—"}
   </Link>

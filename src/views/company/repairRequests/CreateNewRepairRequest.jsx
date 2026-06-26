@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from "react";
-import { useNavigate, Link, useParams } from "react-router-dom";
+import { useNavigate, Link, useParams, useLocation } from "react-router-dom";
 import { db, storage } from "../../../utils/config";
 import { collection, getDocs, query, where, orderBy, setDoc, doc, getDoc, updateDoc } from "firebase/firestore";
 import { REPAIR_REQUEST_STATUS, RepairRequest } from "../../../utils/models/RepairRequest";
@@ -14,8 +14,11 @@ const CreateNewRepairRequest = () => {
   const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
   const { requirePermission } = useCompanyPermissions();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { customerId: customerIdParam, locationId: locationIdParam } = useParams();
+  const equipmentContext = location.state?.equipmentContext || null;
+  const defaultDescription = location.state?.defaultDescription || "";
 
   const [customers, setCustomers] = useState([]);
   const [serviceLocations, setServiceLocations] = useState([]);
@@ -31,6 +34,11 @@ const CreateNewRepairRequest = () => {
   const [description, setDescription] = useState("");
   const [photos, setPhotos] = useState([]);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!defaultDescription || description.trim()) return;
+    setDescription(defaultDescription);
+  }, [defaultDescription, description]);
 
   // -----------------------------
   // Load customers if no param
@@ -237,16 +245,27 @@ const CreateNewRepairRequest = () => {
 
         setBodiesOfWater(bowList);
         setEquipmentOptions(equipmentList);
-        setSelectedBodyOfWater(null);
-        setSelectedEquipment(null);
-        setEquipmentStatusUpdate("");
+        if (equipmentContext?.bodyOfWaterId) {
+          setSelectedBodyOfWater(bowList.find((body) => body.value === equipmentContext.bodyOfWaterId) || null);
+        } else {
+          setSelectedBodyOfWater(null);
+        }
+
+        if (equipmentContext?.equipmentId) {
+          const scopedEquipment = equipmentList.find((item) => item.value === equipmentContext.equipmentId) || null;
+          setSelectedEquipment(scopedEquipment);
+          setEquipmentStatusUpdate(scopedEquipment ? EQUIPMENT_STATUS.NEEDS_REPAIR : "");
+        } else {
+          setSelectedEquipment(null);
+          setEquipmentStatusUpdate("");
+        }
       } catch (error) {
         console.error("Error fetching bodies of water / equipment:", error);
       }
     };
 
     fetchLocationRelatedOptions();
-  }, [selectedLocation, recentlySelectedCompany]);
+  }, [selectedLocation, recentlySelectedCompany, equipmentContext]);
 
   const handlePhotoChange = (e) => {
     if (e.target.files) {
