@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
 import { ClipboardDocumentIcon, DocumentDuplicateIcon, EnvelopeIcon, PencilSquareIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
@@ -12,7 +12,7 @@ import { format } from 'date-fns';
 
 import { functions } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
-import { RepairRequest, displayRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { RepairRequest, displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { loadCustomerTimeline } from '../../../utils/customerTimeline';
 import { deleteCustomerCascade } from '../../../utils/customerCascadeDelete';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
@@ -32,6 +32,12 @@ import {
     normalizeCustomerForFirestore,
     normalizeServiceLocationForFirestore,
 } from '../../../utils/customerLocationData';
+import {
+    getSuggestedWorkTierLabel,
+    getSuggestedWorkTierTone,
+    isOpenSuggestedWorkStatus,
+    normalizeSuggestedWorkTier,
+} from '../../../utils/models/SuggestedWork';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -119,6 +125,11 @@ const formatDateValue = (value) => {
     return millis ? format(new Date(millis), 'MMM d, yyyy') : 'Not set';
 };
 
+const formatDateTimeValue = (value) => {
+    const millis = toMillis(value);
+    return millis ? format(new Date(millis), 'MMM d, h:mm a') : 'Not set';
+};
+
 const labelize = (value) => {
     if (!value) return 'Unknown';
     return String(value)
@@ -164,6 +175,243 @@ const StatusBadge = ({ children, tone = 'slate' }) => {
     );
 };
 
+const getNoteText = (note = {}) => note.note || note.comment || note.text || '';
+
+const CustomerNotesSection = ({ customer }) => {
+    const [notes, setNotes] = useState([]);
+    const [notesLoading, setNotesLoading] = useState(true);
+    const [bodyOfWaterOptions, setBodyOfWaterOptions] = useState([]);
+    const [selectedBodyOfWaterId, setSelectedBodyOfWaterId] = useState('');
+    const [newNote, setNewNote] = useState('');
+    const [addingNote, setAddingNote] = useState(false);
+    const authCtx = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser } = authCtx;
+    const db = getFirestore();
+
+    const getAuthorName = useCallback(() => (
+        `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
+        dataBaseUser?.userName ||
+        user?.displayName ||
+        user?.email ||
+        'Unknown'
+    ), [dataBaseUser, user]);
+
+    useEffect(() => {
+        const fetchBodyOfWaterOptions = async () => {
+            if (!recentlySelectedCompany || !customer?.id) {
+                setBodyOfWaterOptions([]);
+                return;
+            }
+
+            try {
+                const bodySnap = await getDocs(query(
+                    collection(db, 'companies', recentlySelectedCompany, 'bodiesOfWater'),
+                    where('customerId', '==', customer.id)
+                ));
+
+                setBodyOfWaterOptions(
+                    bodySnap.docs
+                        .map((item) => ({ id: item.id, ...item.data() }))
+                        .sort((left, right) => getBodyOfWaterLabel(left).localeCompare(getBodyOfWaterLabel(right)))
+                );
+            } catch (error) {
+                console.error('Failed to load customer note pools:', error);
+            }
+        };
+
+        fetchBodyOfWaterOptions();
+    }, [customer?.id, recentlySelectedCompany, db]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany || !customer?.id) {
+            setNotes([]);
+            setNotesLoading(false);
+            return undefined;
+        }
+
+        setNotesLoading(true);
+        const notesQ = query(
+            collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'notes'),
+            orderBy('date', 'desc')
+        );
+
+        const unsubscribe = onSnapshot(
+            notesQ,
+            (snapshot) => {
+                setNotes(snapshot.docs.map((noteDoc) => ({ id: noteDoc.id, ...noteDoc.data() })));
+                setNotesLoading(false);
+            },
+            (error) => {
+                console.error('Failed to load customer notes:', error);
+                setNotesLoading(false);
+                toast.error('Failed to load customer notes.');
+            }
+        );
+
+        return () => unsubscribe();
+    }, [customer?.id, recentlySelectedCompany, db]);
+
+    const addCustomerNote = async () => {
+        const trimmedNote = newNote.trim();
+        if (!trimmedNote) {
+            toast.error('Write a note first.');
+            return;
+        }
+
+        if (!recentlySelectedCompany || !customer?.id) {
+            toast.error('Select a customer before adding a note.');
+            return;
+        }
+
+        const userId = user?.uid || dataBaseUser?.id || '';
+        if (!userId) {
+            toast.error('Missing signed-in user.');
+            return;
+        }
+
+        const selectedBody = bodyOfWaterOptions.find((body) => body.id === selectedBodyOfWaterId) || null;
+        const nowMillis = Date.now();
+        const noteId = `comp_cus_note_${uuidv4()}`;
+        const authorName = getAuthorName();
+
+        try {
+            setAddingNote(true);
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'notes', noteId), {
+                id: noteId,
+                companyId: recentlySelectedCompany,
+                customerId: customer.id,
+                customerName: getCustomerName(customer) || '',
+                bodyOfWaterId: selectedBody?.id || '',
+                bodyOfWaterName: selectedBody ? getBodyOfWaterLabel(selectedBody) : '',
+                serviceLocationId: selectedBody?.serviceLocationId || '',
+                userId,
+                userName: authorName,
+                authorId: userId,
+                authorName,
+                note: trimmedNote,
+                comment: trimmedNote,
+                resolved: false,
+                date: serverTimestamp(),
+                dateMillis: nowMillis,
+                createdAt: serverTimestamp(),
+                createdAtMillis: nowMillis,
+                updatedAt: serverTimestamp(),
+                updatedAtMillis: nowMillis,
+            });
+
+            setNewNote('');
+            toast.success('Customer note added.');
+        } catch (error) {
+            console.error('Failed to add customer note:', error);
+            toast.error('Failed to add customer note.');
+        } finally {
+            setAddingNote(false);
+        }
+    };
+
+    const setCustomerNoteResolved = async (noteId, resolved) => {
+        if (!recentlySelectedCompany || !customer?.id || !noteId) return;
+
+        try {
+            const nowMillis = Date.now();
+            await updateDoc(doc(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'notes', noteId), {
+                resolved,
+                resolvedAt: resolved ? serverTimestamp() : null,
+                resolvedAtMillis: resolved ? nowMillis : null,
+                resolvedByUserId: resolved ? (user?.uid || dataBaseUser?.id || '') : '',
+                resolvedByUserName: resolved ? getAuthorName() : '',
+                updatedAt: serverTimestamp(),
+                updatedAtMillis: nowMillis,
+            });
+        } catch (error) {
+            console.error('Failed to update customer note:', error);
+            toast.error('Failed to update customer note.');
+        }
+    };
+
+    const openNotesCount = notes.filter((note) => !note.resolved).length;
+
+    return (
+        <InfoCard
+            title="Customer Notes"
+            actions={
+                <div className="flex flex-wrap gap-2">
+                    <StatusBadge tone={openNotesCount ? 'amber' : 'emerald'}>
+                        {openNotesCount} Open
+                    </StatusBadge>
+                    <StatusBadge>{notes.length} Total</StatusBadge>
+                </div>
+            }
+        >
+            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                <textarea
+                    value={newNote}
+                    onChange={(event) => setNewNote(event.target.value)}
+                    rows="3"
+                    placeholder="Write a customer or pool note..."
+                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                />
+                <div className="space-y-2">
+                    <select
+                        value={selectedBodyOfWaterId}
+                        onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    >
+                        <option value="">All customer pools</option>
+                        {bodyOfWaterOptions.map((body) => (
+                            <option key={body.id} value={body.id}>
+                                {getBodyOfWaterLabel(body)}
+                            </option>
+                        ))}
+                    </select>
+                    <button
+                        type="button"
+                        onClick={addCustomerNote}
+                        disabled={addingNote || !newNote.trim()}
+                        className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                    >
+                        {addingNote ? 'Adding...' : 'Add Note'}
+                    </button>
+                </div>
+            </div>
+
+            <div className="max-h-96 space-y-3 overflow-y-auto pr-1">
+                {notesLoading ? (
+                    <div className="text-sm text-slate-500">Loading customer notes...</div>
+                ) : notes.length === 0 ? (
+                    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                        No customer notes yet.
+                    </div>
+                ) : (
+                    notes.map((note) => (
+                        <div key={note.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-slate-900">{note.userName || note.authorName || 'Unknown'}</p>
+                                    <p className="mt-0.5 text-xs text-slate-500">
+                                        {formatDateTimeValue(note.date || note.createdAt || note.dateMillis || note.createdAtMillis)}
+                                        {note.bodyOfWaterName ? ` - ${note.bodyOfWaterName}` : ''}
+                                    </p>
+                                </div>
+                                <label className="inline-flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-600">
+                                    <input
+                                        type="checkbox"
+                                        checked={!!note.resolved}
+                                        onChange={(event) => setCustomerNoteResolved(note.id, event.target.checked)}
+                                        className="h-3.5 w-3.5 rounded border-slate-300"
+                                    />
+                                    Resolved
+                                </label>
+                            </div>
+                            <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{getNoteText(note)}</p>
+                        </div>
+                    ))
+                )}
+            </div>
+        </InfoCard>
+    );
+};
+
 const statusToneFor = (status) => {
     const normalized = String(status || '').toLowerCase();
     if (['accepted', 'active', 'paid', 'posted'].includes(normalized)) return 'emerald';
@@ -173,6 +421,38 @@ const statusToneFor = (status) => {
     if (['rejected', 'canceled', 'cancelled', 'failed', 'void', 'expired'].includes(normalized)) return 'rose';
     return 'slate';
 };
+
+const suggestedWorkTierToneFor = (tier) => {
+    const tone = getSuggestedWorkTierTone(tier);
+    if (tone === 'red') return 'rose';
+    return ['amber', 'blue', 'emerald'].includes(tone) ? tone : 'slate';
+};
+
+const normalizeStatusText = (value) => String(value || '').trim().toLowerCase();
+
+const isCustomerOutstandingJob = (job = {}) => {
+    const operationStatus = normalizeStatusText(job.operationStatus || job.status);
+    const billingStatus = normalizeStatusText(job.billingStatus);
+
+    if (operationStatus === 'finished') return false;
+    if (['invoiced', 'paid', 'comped'].includes(billingStatus)) return false;
+
+    return true;
+};
+
+const getOutstandingWorkMillis = (item = {}) => (
+    toMillis(
+        item.statusChangedAt ||
+        item.updatedAt ||
+        item.createdAt ||
+        item.dateValue ||
+        item.dateCreated ||
+        item.date ||
+        item.statusChangedAtMillis ||
+        item.updatedAtMillis ||
+        item.createdAtMillis
+    )
+);
 
 const getCustomerName = (customer = {}) => (
     customer.displayAsCompany
@@ -231,6 +511,14 @@ const timelineTypeStyles = {
         dot: 'bg-rose-500',
         chip: 'bg-rose-50 text-rose-700 border-rose-100',
     },
+    outstandingWork: {
+        dot: 'bg-amber-500',
+        chip: 'bg-amber-50 text-amber-700 border-amber-100',
+    },
+    suggestedWork: {
+        dot: 'bg-blue-500',
+        chip: 'bg-blue-50 text-blue-700 border-blue-100',
+    },
     repairRequest: {
         dot: 'bg-red-500',
         chip: 'bg-red-50 text-red-700 border-red-100',
@@ -268,7 +556,7 @@ const timelineTypeStyles = {
 const timelineFilters = [
     { id: 'all', label: 'All', types: [] },
     { id: 'service', label: 'Service', types: ['serviceStop'] },
-    { id: 'jobs', label: 'Jobs', types: ['workOrder', 'expiredJob', 'repairRequest'] },
+    { id: 'jobs', label: 'Jobs', types: ['workOrder', 'expiredJob', 'outstandingWork', 'suggestedWork', 'repairRequest'] },
     { id: 'billing', label: 'Billing', types: ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'] },
     { id: 'notes', label: 'Notes', types: ['note', 'toDo'] },
     { id: 'chemistry', label: 'Chemistry', types: ['chemistry'] },
@@ -409,6 +697,7 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
                     <InfoCard title="Notes">
                         <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
                     </InfoCard>
+                    <CustomerNotesSection customer={customer} />
                     <InfoCard title="Tags">
                         {isEditing ? (
                             <div className="space-y-3">
@@ -2041,6 +2330,208 @@ const RepairRequestsSection = ({ customer }) => {
     );
 };
 
+const OutstandingWorkSection = ({ customer }) => {
+    const [outstandingRecords, setOutstandingRecords] = useState([]);
+    const [customerJobs, setCustomerJobs] = useState([]);
+    const [repairRequests, setRepairRequests] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const { recentlySelectedCompany } = useContext(Context);
+    const db = getFirestore();
+
+    useEffect(() => {
+        const fetchOutstandingWork = async () => {
+            if (!recentlySelectedCompany || !customer?.id) return;
+
+            setLoading(true);
+            try {
+                const [recordsSnap, jobsSnap, repairSnap] = await Promise.all([
+                    getDocs(query(
+                        collection(db, 'companies', recentlySelectedCompany, 'suggestedWork'),
+                        where('customerId', '==', customer.id)
+                    )),
+                    getDocs(query(
+                        collection(db, 'companies', recentlySelectedCompany, 'workOrders'),
+                        where('customerId', '==', customer.id)
+                    )),
+                    getDocs(query(
+                        collection(db, 'companies', recentlySelectedCompany, 'repairRequests'),
+                        where('customerId', '==', customer.id)
+                    )),
+                ]);
+
+                setOutstandingRecords(recordsSnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+                setCustomerJobs(jobsSnap.docs.map((item) => ({ id: item.id, ...item.data() })));
+                setRepairRequests(
+                    repairSnap.docs.map((requestDoc) => {
+                        const request = RepairRequest.fromFirestore(requestDoc);
+                        return { ...request, id: request.id || requestDoc.id };
+                    })
+                );
+            } catch (error) {
+                console.error('Failed to fetch outstanding customer work:', error);
+                toast.error('Failed to fetch outstanding work.');
+                setOutstandingRecords([]);
+                setCustomerJobs([]);
+                setRepairRequests([]);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchOutstandingWork();
+    }, [customer?.id, recentlySelectedCompany, db]);
+
+    const outstandingItems = useMemo(() => {
+        const jobsById = new Map(customerJobs.map((job) => [job.id, job]));
+        const persistedJobIds = new Set();
+
+        const persistedItems = outstandingRecords
+            .filter((record) => isOpenSuggestedWorkStatus(record.status || record.suggestionStatus))
+            .filter((record) => {
+                const sourceJobId = record.jobId || record.sourceId || record.id;
+                if (record.sourceType === 'job' && sourceJobId) persistedJobIds.add(sourceJobId);
+
+                const sourceJob = jobsById.get(sourceJobId);
+                return !sourceJob || isCustomerOutstandingJob(sourceJob);
+            })
+            .map((record) => ({
+                id: `suggested-${record.id}`,
+                sourceKind: 'suggestedWork',
+                sourceLabel: 'Suggested Work',
+                title: record.title || record.jobType || record.jobInternalId || 'Suggested work',
+                description: record.description || record.note || record.jobDescription || '',
+                status: record.status || record.suggestionStatus || 'Open',
+                secondaryStatus: `${normalizeSuggestedWorkTier(record.priorityLevel || record.solutionTier)} - ${getSuggestedWorkTierLabel(record.priorityLevel || record.solutionTier)}`,
+                secondaryTone: suggestedWorkTierToneFor(record.priorityLevel || record.solutionTier),
+                dateValue: record.statusChangedAt || record.updatedAt || record.createdAt || record.statusChangedAtMillis,
+                target: record.jobId ? `/company/jobs/detail/${record.jobId}` : '/company/suggested-work',
+                bodyOfWaterName: record.bodyOfWaterName || '',
+                serviceLocationName: record.serviceLocationName || record.serviceLocationAddress || '',
+                raw: record,
+            }));
+
+        const liveJobItems = customerJobs
+            .filter(isCustomerOutstandingJob)
+            .filter((job) => !persistedJobIds.has(job.id))
+            .map((job) => ({
+                id: `job-${job.id}`,
+                sourceKind: 'job',
+                sourceLabel: 'Unfinished Job',
+                title: job.internalId || job.type || 'Job',
+                description: job.description || job.type || '',
+                status: job.billingStatus || 'Open',
+                secondaryStatus: job.operationStatus || '',
+                dateValue: job.dateCreated || job.createdAt || job.updatedAt,
+                target: `/company/jobs/detail/${job.id}`,
+                bodyOfWaterName: job.bodyOfWaterName || '',
+                serviceLocationName: job.serviceLocationName || job.serviceLocationAddress || '',
+                raw: job,
+            }));
+
+        const repairRequestItems = repairRequests
+            .filter((request) => isOpenRepairRequestStatus(request.status))
+            .map((request) => ({
+                id: `repair-${request.id}`,
+                sourceKind: 'repairRequest',
+                sourceLabel: 'Repair Request',
+                title: request.title || request.description || 'Repair request',
+                description: request.description || request.notes || '',
+                status: displayRepairRequestStatus(request.status),
+                secondaryStatus: '',
+                dateValue: request.date || request.createdAt || request.updatedAt,
+                target: request.id ? `/company/repair-requests/detail/${request.id}` : '',
+                bodyOfWaterName: request.bodyOfWaterName || '',
+                serviceLocationName: request.serviceLocationName || '',
+                raw: request,
+            }));
+
+        return [...persistedItems, ...liveJobItems, ...repairRequestItems]
+            .sort((left, right) => getOutstandingWorkMillis(right) - getOutstandingWorkMillis(left));
+    }, [customerJobs, outstandingRecords, repairRequests]);
+
+    const sourceCounts = outstandingItems.reduce((counts, item) => {
+        counts[item.sourceKind] = (counts[item.sourceKind] || 0) + 1;
+        return counts;
+    }, {});
+
+    const renderOutstandingItem = (item) => {
+        const content = (
+            <div className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-slate-50">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                            <StatusBadge tone={item.sourceKind === 'repairRequest' ? 'amber' : statusToneFor(item.status)}>
+                                {item.sourceLabel}
+                            </StatusBadge>
+                            <StatusBadge tone={statusToneFor(item.status)}>{item.status || 'Open'}</StatusBadge>
+                            {item.secondaryStatus && (
+                                <StatusBadge tone={item.secondaryTone || statusToneFor(item.secondaryStatus)}>{item.secondaryStatus}</StatusBadge>
+                            )}
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-slate-900">{item.title}</p>
+                        {(item.bodyOfWaterName || item.serviceLocationName) && (
+                            <p className="mt-1 text-xs font-medium text-slate-500">
+                                {[item.bodyOfWaterName, item.serviceLocationName].filter(Boolean).join(' - ')}
+                            </p>
+                        )}
+                        {item.description && (
+                            <p className="mt-2 whitespace-pre-line text-sm text-slate-600 line-clamp-4">{item.description}</p>
+                        )}
+                    </div>
+                    <div className="shrink-0 text-left lg:text-right">
+                        <p className="text-xs font-semibold text-slate-500">{formatDateValue(item.dateValue)}</p>
+                        {item.target && (
+                            <span className="mt-3 inline-flex rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                                View
+                            </span>
+                        )}
+                    </div>
+                </div>
+            </div>
+        );
+
+        return (
+            <li key={item.id}>
+                {item.target ? (
+                    <Link to={item.target} className="block">
+                        {content}
+                    </Link>
+                ) : content}
+            </li>
+        );
+    };
+
+    return (
+        <InfoCard
+            title="Suggested & Outstanding Work"
+            actions={
+                <div className="flex flex-wrap gap-2">
+                    <StatusBadge tone={outstandingItems.length ? 'amber' : 'emerald'}>
+                        {outstandingItems.length} Open
+                    </StatusBadge>
+                    <StatusBadge>{sourceCounts.suggestedWork || 0} Suggested</StatusBadge>
+                    <StatusBadge>{sourceCounts.job || 0} Jobs</StatusBadge>
+                    <StatusBadge>{sourceCounts.repairRequest || 0} Repairs</StatusBadge>
+                </div>
+            }
+        >
+            {loading ? (
+                <div className="flex justify-center py-6">
+                    <ClipLoader size={24} />
+                </div>
+            ) : outstandingItems.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                    No suggested or outstanding work is listed for this customer.
+                </div>
+            ) : (
+                <ul className="space-y-3">
+                    {outstandingItems.map(renderOutstandingItem)}
+                </ul>
+            )}
+        </InfoCard>
+    );
+};
+
 const uniqueById = (items) => {
     const records = new Map();
     items.forEach((item) => {
@@ -2352,6 +2843,7 @@ const SalesActivitySection = ({ customer }) => {
 const OperationsTab = ({ customer, onNewPartApproval }) => {
     return (
         <div className="space-y-8">
+            <OutstandingWorkSection customer={customer} />
             <InfoCard
                 title="Part Approvals"
                 actions={
@@ -2994,7 +3486,7 @@ export default function CustomerDetails() {
                             <div className="flex flex-wrap items-center gap-2">
                                 <Link
                                     to="/company/customers"
-                                    className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                                    className="app-back-link"
                                 >
                                     &larr; Back to Customers
                                 </Link>

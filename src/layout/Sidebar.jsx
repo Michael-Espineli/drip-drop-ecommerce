@@ -2,7 +2,7 @@ import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
 import { COMPANY_PINNED_CATEGORY, getNav } from '../navigation/index';
-import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
@@ -378,18 +378,26 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-black/50 top-0 left-0 z-10' : 'w-0'}`}></div>
 
             {/* Sidebar */}
-            <div className={`app-sidebar-shell fixed top-0 z-50 h-screen w-[260px] transition-all duration-200 ${isCollapsed ? 'lg:w-[76px]' : 'lg:w-[260px]'} ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
-                <div className='flex flex-col h-full'>
+            <div className={`app-sidebar-shell app-mobile-sidebar-shell fixed top-0 z-50 h-screen w-full transition-all duration-200 ${isCollapsed ? 'lg:w-[76px]' : 'lg:w-[260px]'} ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+                <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
-                    <div className={`app-sidebar-header h-[95px] flex items-center gap-2 border-b px-4 shrink-0 ${isCollapsed ? 'lg:justify-center' : 'justify-between'}`}>
-                        <Link to='/' className='app-sidebar-brand min-w-0 text-3xl font-bold'>
-                            <span className={isCollapsed ? 'hidden lg:inline' : 'hidden'}>DD</span>
-                            <span className={isCollapsed ? 'lg:hidden' : ''}>Drip Drop</span>
+                    <div className={`app-sidebar-header h-[95px] flex items-center gap-2 border-b px-4 shrink-0 ${isCollapsed ? 'justify-between lg:justify-center lg:px-0' : 'justify-between'}`}>
+                        <Link to='/' className={`app-sidebar-brand min-w-0 text-3xl font-bold ${isCollapsed ? 'lg:hidden' : ''}`}>
+                            Drip Drop
                         </Link>
                         <button
                             type="button"
+                            onClick={() => setShowSidebar(false)}
+                            className="app-sidebar-collapse-button flex h-9 w-9 shrink-0 items-center justify-center rounded-md border transition lg:hidden"
+                            aria-label="Close navigation"
+                            title="Close navigation"
+                        >
+                            <XMarkIcon className="h-5 w-5" />
+                        </button>
+                        <button
+                            type="button"
                             onClick={() => setIsCollapsed((current) => !current)}
-                            className={`app-sidebar-collapse-button hidden h-9 w-9 shrink-0 items-center justify-center rounded-md border transition lg:flex ${isCollapsed ? 'lg:absolute lg:-right-4 lg:shadow-sm' : ''}`}
+                            className="app-sidebar-collapse-button hidden h-9 w-9 shrink-0 items-center justify-center rounded-md border transition lg:flex"
                             aria-label={isCollapsed ? "Expand navigation" : "Collapse navigation"}
                             title={isCollapsed ? "Expand navigation" : "Collapse navigation"}
                         >
@@ -402,7 +410,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     </div>
 
                     {/* Navigation */}
-                    <nav className={`app-sidebar-nav px-2 pt-5 flex-grow overflow-y-auto ${isCollapsed ? 'lg:px-2' : ''}`}>
+                    <nav className={`app-sidebar-nav min-h-0 flex-grow overflow-y-auto overscroll-contain px-2 pt-5 ${isCollapsed ? 'lg:px-2' : ''}`}>
                         {navigationSections.map((section, categoryIndex) => (
                             <div
                                 key={section.key}
@@ -468,7 +476,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     </nav>
 
                     {/* Logout Button */}
-                    <div className="app-sidebar-footer p-4 border-t shrink-0">
+                    <div className="app-sidebar-footer app-sidebar-mobile-footer-safe p-4 border-t shrink-0">
                         <button
                             onClick={logout}
                             className={`app-sidebar-logout w-full flex items-center px-4 py-3 text-left rounded-lg font-semibold transition ${isCollapsed ? 'lg:justify-center lg:px-2' : ''}`}

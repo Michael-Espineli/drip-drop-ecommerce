@@ -1,13 +1,10 @@
-import React, { useContext, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { HomeIcon, ArrowLeftOnRectangleIcon, ChatBubbleBottomCenterTextIcon, InboxStackIcon, BuildingOffice2Icon, ChevronDownIcon, ChevronRightIcon, UserPlusIcon, MagnifyingGlassIcon, ClipboardDocumentListIcon, BookmarkIcon } from '@heroicons/react/24/outline';
-import { Context } from '../context/AuthContext';
-import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
+import React, { useState } from 'react';
+import { Link } from 'react-router-dom';
+import { HomeIcon, ArrowLeftOnRectangleIcon, ChatBubbleBottomCenterTextIcon, InboxStackIcon, BuildingOffice2Icon, ChevronDownIcon, ChevronRightIcon, MagnifyingGlassIcon, BookmarkIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { getAuth, signOut } from "firebase/auth";
 
 const NoCompanySidebar = ({ showSidebar, setShowSidebar }) => {
     const auth = getAuth();
-    const { handleLogout } = useContext(Context);
-    const navigate = useNavigate();
     const [invitesOpen, setInvitesOpen] = useState(false);
 
     const logout = async () => {
@@ -30,17 +27,26 @@ const NoCompanySidebar = ({ showSidebar, setShowSidebar }) => {
             <div onClick={() => setShowSidebar(false)} className={`fixed duration-200 lg:hidden ${showSidebar ? 'w-screen h-screen bg-[#8a8a8a6c] top-0 left-0 z-10' : 'w-0'}`}></div>
 
             {/* Sidebar */}
-            <div className={`w-[260px] fixed bg-white z-50 top-0 h-screen shadow-[0_0_15px_0_rgb(0,0,0,0.4)] transition-all ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}>
-                <div className='flex flex-col h-full'>
+            <div className={`app-mobile-sidebar-shell w-full lg:w-[260px] fixed bg-white z-50 top-0 h-screen shadow-[0_0_15px_0_rgb(0,0,0,0.4)] transition-all ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}>
+                <div className='flex h-full flex-col overflow-hidden'>
                     {/* Header */}
-                    <div className='h-[95px] flex justify-center items-center border-b border-b-slate-200 shrink-0'>
+                    <div className='h-[95px] flex items-center justify-between border-b border-b-slate-200 px-4 shrink-0 lg:justify-center'>
                         <Link to='/company/dashboard' className='text-gray-800 font-bold text-3xl'>
                             Drip Drop
                         </Link>
+                        <button
+                            type="button"
+                            onClick={() => setShowSidebar(false)}
+                            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-300 text-slate-700 transition hover:bg-slate-100 lg:hidden"
+                            aria-label="Close navigation"
+                            title="Close navigation"
+                        >
+                            <XMarkIcon className="h-5 w-5" />
+                        </button>
                     </div>
                     
                     {/* Navigation */}
-                    <nav className='px-4 pt-5 text-gray-700 flex-grow overflow-y-auto'>
+                    <nav className='min-h-0 flex-grow overflow-y-auto overscroll-contain px-4 pt-5 text-gray-700'>
                         {/* Home */}
                         <Link to="/company/dashboard" className="w-full px-3 py-2 rounded-md flex justify-start items-center gap-3 hover:bg-gray-100 transition-all font-medium">
                             <HomeIcon className="w-6 h-6 text-gray-500" />
@@ -93,7 +99,7 @@ const NoCompanySidebar = ({ showSidebar, setShowSidebar }) => {
                     </nav>
 
                     {/* Logout */}
-                    <div className="p-4 border-t border-t-slate-200 shrink-0">
+                    <div className="app-sidebar-mobile-footer-safe p-4 border-t border-t-slate-200 shrink-0">
                         <button onClick={logout} className="w-full flex items-center px-4 py-3 text-left text-red-500 hover:bg-red-50 rounded-lg font-medium">
                             <ArrowLeftOnRectangleIcon className="w-6 h-6 mr-3" />
                             Logout

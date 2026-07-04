@@ -293,7 +293,7 @@ const DataBaseItemDetailView = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="min-w-0">
-              <Link to="/company/items" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+              <Link to="/company/items" className="app-back-link">
                 &larr; Back to Items
               </Link>
               <p className="mt-4 text-xs font-bold uppercase tracking-wide text-blue-700">Database Item</p>

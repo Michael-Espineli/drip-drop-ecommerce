@@ -12,6 +12,7 @@ import {
     MdHistory,
     MdMailOutline,
     MdManageAccounts,
+    MdNoteAdd,
     MdPayment,
     MdSettings,
 } from "react-icons/md";
@@ -250,6 +251,11 @@ const CompanyUsers = () => {
                         <ActionLink to="/company/payroll" icon={MdPayment}>
                             Payroll
                         </ActionLink>
+                        {can("264") && (
+                            <ActionLink to="/company/user-dashboard" icon={MdNoteAdd} variant="primary">
+                                Add Performance Note
+                            </ActionLink>
+                        )}
                         {can("262") && (
                             <ActionLink
                                 to="/company/companyUsers/createNew"

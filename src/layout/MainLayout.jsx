@@ -79,7 +79,7 @@ const MainLayout = () => {
                             </div>
                         ) : (
                             <div className="min-h-screen flex flex-col">
-                                <main className="flex-grow pt-[95px]">
+                                <main className="app-main-content flex-grow pt-[95px]">
                                     <Outlet />
                                 </main>
                                 <Footer />

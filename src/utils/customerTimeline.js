@@ -8,6 +8,10 @@ import {
   limit,
 } from "firebase/firestore";
 import { salesCollectionNames } from "./models/Sales";
+import {
+  getSuggestedWorkTierLabel,
+  normalizeSuggestedWorkTier,
+} from "./models/SuggestedWork";
 
 const toDate = (value) => {
   if (!value) return new Date();
@@ -187,6 +191,18 @@ const buildWorkOrderCommentEvent = (job, comment) => ({
   target: `/company/jobs/detail/${job.id}`,
 });
 
+const buildCustomerNoteEvent = (note) => ({
+  id: `customer-note-${note.id}`,
+  type: "note",
+  label: note.resolved ? "Resolved Note" : "Customer Note",
+  title: note.bodyOfWaterName ? `Customer note - ${note.bodyOfWaterName}` : "Customer note",
+  subtitle: compact([note.userName || note.authorName, note.resolved ? "Resolved" : "Open"]).join(" • "),
+  detail: note.note || note.comment || "",
+  date: validDate(note.date || note.createdAt || note.dateMillis || note.createdAtMillis),
+  bodyOfWaterId: note.bodyOfWaterId || "",
+  serviceLocationId: note.serviceLocationId || "",
+});
+
 const buildExpiredJobEvent = (expiredJob) => ({
   id: `expired-job-${expiredJob.id || expiredJob.jobId}`,
   type: "expiredJob",
@@ -203,6 +219,44 @@ const buildExpiredJobEvent = (expiredJob) => ({
   serviceLocationId: expiredJob.serviceLocationId || "",
   target: expiredJob.jobId ? `/company/jobs/detail/${expiredJob.jobId}` : "",
 });
+
+const buildOutstandingWorkEvent = (work) => ({
+  id: `outstanding-work-${work.id || work.jobId || work.sourceId}`,
+  type: "outstandingWork",
+  label: work.billingStatus === "Rejected" ? "Rejected Work" : "Outstanding Work",
+  title: work.title || `${work.billingStatus || "Outstanding"} work`,
+  subtitle: compact([
+    work.jobInternalId,
+    compact([work.operationStatus, work.billingStatus]).join(" / "),
+    moneyFromCents(work.jobRateCents || work.rate),
+  ]).join(" • "),
+  detail: work.note || work.jobDescription || "",
+  date: validDate(work.statusChangedAt || work.updatedAt || work.createdAt || work.statusChangedAtMillis || work.updatedAtMillis),
+  bodyOfWaterId: work.bodyOfWaterId || "",
+  serviceLocationId: work.serviceLocationId || "",
+  target: work.jobId ? `/company/jobs/detail/${work.jobId}` : "",
+});
+
+const buildSuggestedWorkEvent = (work) => {
+  const priorityLevel = normalizeSuggestedWorkTier(work.priorityLevel || work.solutionTier);
+
+  return {
+    id: `suggested-work-${work.id || work.sourceId}`,
+    type: "suggestedWork",
+    label: "Suggested Work",
+    title: work.title || `${priorityLevel} - ${getSuggestedWorkTierLabel(priorityLevel)} suggested work`,
+    subtitle: compact([
+      `${priorityLevel} - ${getSuggestedWorkTierLabel(priorityLevel)}`,
+      work.status || "Open",
+      moneyFromCents(work.estimatedPriceCents || work.jobRateCents || work.rate),
+    ]).join(" • "),
+    detail: work.description || work.note || work.jobDescription || "",
+    date: validDate(work.statusChangedAt || work.updatedAt || work.createdAt || work.statusChangedAtMillis || work.updatedAtMillis),
+    bodyOfWaterId: work.bodyOfWaterId || "",
+    serviceLocationId: work.serviceLocationId || "",
+    target: work.jobId ? `/company/jobs/detail/${work.jobId}` : "/company/suggested-work",
+  };
+};
 
 const buildToDoEvent = (toDo) => ({
   id: `todo-${toDo.id}`,
@@ -310,6 +364,9 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     bodiesOfWaterSnap,
     workOrdersSnap,
     expiredJobsSnap,
+    outstandingWorkSnap,
+    suggestedWorkSnap,
+    customerNotesSnap,
     toDosSnap,
     repairRequestsSnap,
     homeownerRepairRequestsSnap,
@@ -325,6 +382,9 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     safeGetDocs(query(collection(db, "companies", companyId, "bodiesOfWater"), where("customerId", "==", customerId)), "bodies of water"),
     safeGetDocs(query(collection(db, "companies", companyId, "workOrders"), where("customerId", "==", customerId)), "jobs"),
     safeGetDocs(collection(db, "companies", companyId, "customers", customerId, "expiredJobs"), "expired jobs"),
+    safeGetDocs(collection(db, "companies", companyId, "customers", customerId, "outstandingWork"), "outstanding work"),
+    safeGetDocs(query(collection(db, "companies", companyId, "suggestedWork"), where("customerId", "==", customerId)), "suggested work"),
+    safeGetDocs(collection(db, "companies", companyId, "customers", customerId, "notes"), "customer notes"),
     safeGetDocs(query(collection(db, "companies", companyId, "toDos"), where("linkedCustomerId", "==", customerId)), "to-dos"),
     safeGetDocs(query(collection(db, "companies", companyId, "repairRequests"), where("customerId", "==", customerId)), "repair requests"),
     safeGetDocs(query(collection(db, "homeownerRepairRequests"), where("companyId", "==", companyId), where("customerId", "==", customerId)), "homeowner repair requests"),
@@ -343,6 +403,11 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
   const bodyOfWaterById = new Map(bodiesOfWater.map((item) => [item.id, item]));
   const workOrders = workOrdersSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const expiredJobs = expiredJobsSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const outstandingWork = outstandingWorkSnap.docs
+    .map((item) => ({ id: item.id, ...item.data() }))
+    .filter((item) => item.billingStatus !== "Expired");
+  const suggestedWork = suggestedWorkSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
+  const customerNotes = customerNotesSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const toDos = toDosSnap.docs.map((item) => ({ id: item.id, ...item.data() }));
   const repairRequestsById = new Map();
   [...repairRequestsSnap.docs, ...homeownerRepairRequestsSnap.docs].forEach((item) => {
@@ -410,12 +475,15 @@ export const loadCustomerTimeline = async ({ db, companyId, customerId }) => {
     ...serviceStops.map(buildServiceStopEvent),
     ...workOrders.map(buildWorkOrderEvent),
     ...expiredJobs.map(buildExpiredJobEvent),
+    ...outstandingWork.map(buildOutstandingWorkEvent),
+    ...suggestedWork.map(buildSuggestedWorkEvent),
     ...repairRequests.map(buildRepairRequestEvent),
     ...purchases.map(buildPurchaseEvent),
     ...agreements.map(buildSalesAgreementEvent),
     ...subscriptions.map(buildSalesSubscriptionEvent),
     ...invoices.map(buildSalesInvoiceEvent),
     ...payments.map(buildSalesPaymentEvent),
+    ...customerNotes.map(buildCustomerNoteEvent),
     ...commentEvents,
     ...stopData
       .filter((item) => (item.readings?.length || item.dosages?.length || item.observation?.length))

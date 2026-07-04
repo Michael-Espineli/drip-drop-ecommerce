@@ -563,7 +563,7 @@ const CreateNewRecurringContract = () => {
                     <div>
                         <Link
                             to="/company/recurring-contracts"
-                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            className="app-back-link"
                         >
                             &larr; Back to Recurring Contracts
                         </Link>

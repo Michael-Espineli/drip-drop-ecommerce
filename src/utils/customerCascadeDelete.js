@@ -202,6 +202,18 @@ const getCustomerContacts = (db, companyId, customerId) =>
 const getCustomerExpiredJobs = (db, companyId, customerId) =>
   getDocs(collection(db, "companies", companyId, "customers", customerId, "expiredJobs"));
 
+const getCustomerNotes = (db, companyId, customerId) =>
+  getDocs(collection(db, "companies", companyId, "customers", customerId, "notes"));
+
+const getCustomerOutstandingWork = (db, companyId, customerId) =>
+  getDocs(collection(db, "companies", companyId, "customers", customerId, "outstandingWork"));
+
+const getCustomerSuggestedWork = (db, companyId, customerId) =>
+  getDocs(query(
+    collection(db, "companies", companyId, "suggestedWork"),
+    where("customerId", "==", customerId)
+  ));
+
 const getDeleteTargetDocs = async (db, companyId, customerId) =>
   Promise.all(deleteTargets.map((target) => queryTargetDocs(db, companyId, target, customerId)));
 
@@ -249,11 +261,22 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
   }
 
   const customerRef = doc(db, "companies", companyId, "customers", customerId);
-  const [customerSnapshot, targetResults, contactsSnapshot, expiredJobsSnapshot] = await Promise.all([
+  const [
+    customerSnapshot,
+    targetResults,
+    contactsSnapshot,
+    expiredJobsSnapshot,
+    notesSnapshot,
+    outstandingWorkSnapshot,
+    suggestedWorkSnapshot,
+  ] = await Promise.all([
     getDoc(customerRef),
     getDeleteTargetDocs(db, companyId, customerId),
     getCustomerContacts(db, companyId, customerId),
     getCustomerExpiredJobs(db, companyId, customerId),
+    getCustomerNotes(db, companyId, customerId),
+    getCustomerOutstandingWork(db, companyId, customerId),
+    getCustomerSuggestedWork(db, companyId, customerId),
   ]);
 
   if (!customerSnapshot.exists()) {
@@ -265,6 +288,9 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
   let deletedSubcollectionDocs = 0;
   let deletedContactDocs = 0;
   let deletedExpiredJobDocs = 0;
+  let deletedNoteDocs = 0;
+  let deletedOutstandingWorkDocs = 0;
+  let deletedSuggestedWorkDocs = 0;
 
   for (const { target, docs } of targetResults) {
     let deletedForTarget = 0;
@@ -290,6 +316,21 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
     if (deleted) deletedExpiredJobDocs += 1;
   }
 
+  for (const noteSnapshot of notesSnapshot.docs) {
+    const deleted = await writer.delete(noteSnapshot.ref);
+    if (deleted) deletedNoteDocs += 1;
+  }
+
+  for (const outstandingWorkDoc of outstandingWorkSnapshot.docs) {
+    const deleted = await writer.delete(outstandingWorkDoc.ref);
+    if (deleted) deletedOutstandingWorkDocs += 1;
+  }
+
+  for (const suggestedWorkDoc of suggestedWorkSnapshot.docs) {
+    const deleted = await writer.delete(suggestedWorkDoc.ref);
+    if (deleted) deletedSuggestedWorkDocs += 1;
+  }
+
   await writer.delete(customerRef);
   const writeCount = await writer.commit();
   const deletedTargetDocs = targetCounts.reduce((total, item) => total + item.count, 0);
@@ -298,8 +339,11 @@ export const deleteCustomerCascade = async ({ db, companyId, customerId }) => {
     writeCount,
     contacts: deletedContactDocs,
     expiredJobs: deletedExpiredJobDocs,
+    notes: deletedNoteDocs,
+    outstandingWork: deletedOutstandingWorkDocs,
+    suggestedWork: deletedSuggestedWorkDocs,
     targets: targetCounts,
     deletedSubcollectionDocs,
-    totalDeleted: deletedTargetDocs + deletedSubcollectionDocs + deletedContactDocs + deletedExpiredJobDocs + 1,
+    totalDeleted: deletedTargetDocs + deletedSubcollectionDocs + deletedContactDocs + deletedExpiredJobDocs + deletedNoteDocs + deletedOutstandingWorkDocs + deletedSuggestedWorkDocs + 1,
   };
 };

@@ -20,6 +20,13 @@ import Select from "react-select";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
 import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
+import {
+    DEFAULT_SUGGESTED_WORK_TIER,
+    SUGGESTED_WORK_STATUS,
+    SUGGESTED_WORK_TIER_OPTIONS,
+    getSuggestedWorkTierLabel,
+    normalizeSuggestedWorkTier,
+} from "../../../utils/models/SuggestedWork";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -70,6 +77,7 @@ const CreateNewJob = () => {
     } = useParams();
 
     const repairRequest = location.state?.repairRequest || null;
+    const suggestedWork = location.state?.suggestedWork || null;
     const repairRequestSourcePath =
         location.state?.repairRequestSourcePath ||
         repairRequest?.sourcePath ||
@@ -122,6 +130,9 @@ const CreateNewJob = () => {
     const [description, setDescription] = useState("");
     const [rate, setRate] = useState("0");
     const [laborCost, setLaborCost] = useState("0");
+    const [solutionTier, setSolutionTier] = useState(
+        normalizeSuggestedWorkTier(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_SUGGESTED_WORK_TIER)
+    );
 
     const [taskList, setTaskList] = useState([]);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
@@ -488,18 +499,26 @@ const CreateNewJob = () => {
     useEffect(() => {
         if (!customerList.length) return;
 
-        const initialCustomerId = customerIdParam || repairRequest?.customerId || equipmentContext?.customerId;
+        const initialCustomerId = customerIdParam || repairRequest?.customerId || suggestedWork?.customerId || equipmentContext?.customerId;
         if (!initialCustomerId) return;
 
         const matchedCustomer = customerList.find((customer) => customer.id === initialCustomerId);
         if (matchedCustomer) {
             setSelectedCustomer(matchedCustomer);
         }
-    }, [customerList, customerIdParam, repairRequest, equipmentContext]);
+    }, [customerList, customerIdParam, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
         if (repairRequest?.description) {
             setDescription(repairRequest.description);
+            return;
+        }
+
+        if (suggestedWork?.description || suggestedWork?.title) {
+            setDescription((current) => current || [suggestedWork.title, suggestedWork.description].filter(Boolean).join("\n\n"));
+            setRate(((Number(suggestedWork.estimatedPriceCents || suggestedWork.jobRateCents || 0) / 100) || 0).toFixed(2));
+            setLaborCost(((Number(suggestedWork.estimatedCostCents || suggestedWork.jobLaborCostCents || 0) / 100) || 0).toFixed(2));
+            setSolutionTier(normalizeSuggestedWorkTier(suggestedWork.priorityLevel || suggestedWork.solutionTier));
             return;
         }
 
@@ -517,7 +536,7 @@ const CreateNewJob = () => {
             const equipmentName = equipmentContext.equipmentName || "equipment";
             setDescription((current) => current || `Create ${label} job for ${equipmentName}.`);
         }
-    }, [repairRequest, leadContext, equipmentContext, jobIntent]);
+    }, [repairRequest, suggestedWork, leadContext, equipmentContext, jobIntent]);
 
     useEffect(() => {
         if (!selectedCustomer || !recentlySelectedCompany) {
@@ -557,6 +576,7 @@ const CreateNewJob = () => {
                     locationIdParam ||
                     repairRequest?.locationId ||
                     repairRequest?.serviceLocationId ||
+                    suggestedWork?.serviceLocationId ||
                     equipmentContext?.serviceLocationId;
 
                 if (initialLocationId) {
@@ -576,7 +596,7 @@ const CreateNewJob = () => {
         };
 
         fetchServiceLocations();
-    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest, equipmentContext]);
+    }, [selectedCustomer, recentlySelectedCompany, locationIdParam, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
         if (!selectedServiceLocation || !recentlySelectedCompany) {
@@ -633,13 +653,13 @@ const CreateNewJob = () => {
                 setBodyOfWaterList(bodies);
                 setEquipmentList(equipment);
 
-                const initialBodyOfWaterId = repairRequest?.bodyOfWaterId || equipmentContext?.bodyOfWaterId;
+                const initialBodyOfWaterId = repairRequest?.bodyOfWaterId || suggestedWork?.bodyOfWaterId || equipmentContext?.bodyOfWaterId;
                 if (initialBodyOfWaterId) {
                     const matchedBody = bodies.find((item) => item.id === initialBodyOfWaterId);
                     if (matchedBody) setSelectedBodyOfWater(matchedBody);
                 }
 
-                const initialEquipmentId = repairRequest?.equipmentId || equipmentContext?.equipmentId;
+                const initialEquipmentId = repairRequest?.equipmentId || suggestedWork?.equipmentId || equipmentContext?.equipmentId;
                 if (initialEquipmentId) {
                     const matchedEquipment = equipment.find((item) => item.id === initialEquipmentId);
                     if (matchedEquipment) setSelectedEquipment(matchedEquipment);
@@ -650,7 +670,7 @@ const CreateNewJob = () => {
         };
 
         fetchLocationDetails();
-    }, [selectedServiceLocation, recentlySelectedCompany, repairRequest, equipmentContext]);
+    }, [selectedServiceLocation, recentlySelectedCompany, repairRequest, suggestedWork, equipmentContext]);
 
     useEffect(() => {
         if (!selectedTemplate || templateApplied) return;
@@ -942,6 +962,10 @@ const CreateNewJob = () => {
 
                 operationStatus: "Estimate Pending",
                 billingStatus: "Draft",
+                solutionTier,
+                solutionTierLabel: getSuggestedWorkTierLabel(solutionTier),
+                priorityLevel: solutionTier,
+                priorityLabel: getSuggestedWorkTierLabel(solutionTier),
 
                 customerId: selectedCustomer.id,
                 customerName,
@@ -981,6 +1005,8 @@ const CreateNewJob = () => {
                 equipmentName: selectedEquipment?.label || "",
                 repairRequestId: repairRequest?.id || "",
                 repairRequestSourcePath: repairRequest?.id ? repairRequestSourcePath : "",
+                suggestedWorkId: suggestedWork?.id || "",
+                sourceSuggestedWorkId: suggestedWork?.id || "",
                 leadId: leadContext?.id || "",
                 sourceLeadId: leadContext?.id || "",
                 leadSourcePath: leadContext?.id ? leadSourcePath : "",
@@ -1069,6 +1095,24 @@ const CreateNewJob = () => {
                 );
             }
 
+            if (suggestedWork?.id) {
+                try {
+                    await updateDoc(
+                        doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWork.id),
+                        {
+                            status: SUGGESTED_WORK_STATUS.CONVERTED_TO_JOB,
+                            convertedToJobId: jobId,
+                            convertedToJobInternalId: nextInternalId,
+                            jobIds: arrayUnion(jobId),
+                            updatedAt: serverTimestamp(),
+                            updatedAtMillis: nowMillis,
+                        }
+                    );
+                } catch (suggestionUpdateError) {
+                    console.warn("Job created, but the source suggested work could not be updated.", suggestionUpdateError);
+                }
+            }
+
             if (leadContext?.id) {
                 try {
                     await updateDoc(
@@ -1115,6 +1159,7 @@ const CreateNewJob = () => {
                         sourceTemplateId: selectedTemplate?.id || "",
                         sourceTemplateName: selectedTemplate?.name || "",
                         repairRequestId: repairRequest?.id || "",
+                        suggestedWorkId: suggestedWork?.id || "",
                         leadId: leadContext?.id || "",
                         leadSourcePath: leadContext?.id ? leadSourcePath : "",
                     },
@@ -1279,6 +1324,21 @@ const CreateNewJob = () => {
                                             className={`${fieldInputClasses} pl-7`}
                                         />
                                     </div>
+                                </div>
+
+                                <div>
+                                    <label className={fieldLabelClasses}>Solution Version</label>
+                                    <select
+                                        value={solutionTier}
+                                        onChange={(e) => setSolutionTier(normalizeSuggestedWorkTier(e.target.value))}
+                                        className={fieldInputClasses}
+                                    >
+                                        {SUGGESTED_WORK_TIER_OPTIONS.map((option) => (
+                                            <option key={option.value} value={option.value}>
+                                                {option.value} - {option.label}
+                                            </option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
                         </section>
@@ -1670,7 +1730,7 @@ const CreateNewJob = () => {
                         <div>
                             <Link
                                 to="/company/jobs"
-                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                                className="app-back-link"
                             >
                                 &larr; Back to Jobs
                             </Link>

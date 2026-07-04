@@ -90,6 +90,7 @@ export const allNav = [
     { id: 25, title: 'Customers', icon: <FaHouseUser />, role: 'Company', path: '/company/customers', category: 'Operations', permissionId: '10' },
     { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs/operations', category: 'Operations', permissionId: '20' },
     { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
+    { id: 39, title: 'Suggested Work', icon: <FaClipboardList />, role: 'Company', path: '/company/suggested-work', category: 'Operations', permissionId: '20' },
     { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
     { id: 37, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Company', path: '/company/part-approvals', category: 'Operations' },
     { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },

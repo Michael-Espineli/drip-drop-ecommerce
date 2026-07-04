@@ -69,6 +69,7 @@ const routePermissionRules = [
   [/^\/company\/reports/i, "870"],
   [/^\/company\/migration/i, "800"],
   [/^\/company\/settings\/payroll-setup/i, "400"],
+  [/^\/company\/settings\/stop-data/i, "840"],
   [/^\/company\/settings\/terms-templates/i, "880"],
   [/^\/company\/settings\/job-templates/i, "820"],
   [/^\/company\/settings\/subscriptions/i, "890"],

@@ -24,6 +24,11 @@ import {
     isDraftOperationJob,
     isFinishedOutstandingJob,
 } from "../../../utils/jobStatusFilters";
+import {
+    getSuggestedWorkTierLabel,
+    getSuggestedWorkTierTone,
+    normalizeSuggestedWorkTier,
+} from "../../../utils/models/SuggestedWork";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -87,6 +92,8 @@ const JOB_SORT_OPTIONS = [
     { value: "billingStatus-desc", label: "Billing Status: Reverse Order" },
     { value: "operationStatus-asc", label: "Operation Status: Workflow Order" },
     { value: "operationStatus-desc", label: "Operation Status: Reverse Order" },
+    { value: "solutionTier-asc", label: "Solution: Must Fix to Best" },
+    { value: "solutionTier-desc", label: "Solution: Best to Must Fix" },
     { value: "rate-desc", label: "Rate: High to Low" },
     { value: "rate-asc", label: "Rate: Low to High" },
 ];
@@ -97,6 +104,7 @@ const DEFAULT_SORT_DIRECTIONS = {
     adminName: "asc",
     billingStatus: "asc",
     operationStatus: "asc",
+    solutionTier: "asc",
     rate: "desc",
 };
 
@@ -197,6 +205,13 @@ const sortJobs = (jobList, sortBy) => {
             case "operationStatus":
                 result = compareStatus(left.operationStatus, right.operationStatus, direction, operationStatusOrder);
                 break;
+            case "solutionTier":
+                result = compareNumber(
+                    normalizeSuggestedWorkTier(left.solutionTier || left.priorityLevel),
+                    normalizeSuggestedWorkTier(right.solutionTier || right.priorityLevel),
+                    direction
+                );
+                break;
             case "rate":
                 result = compareNumber(left.rate, right.rate, direction);
                 break;
@@ -211,6 +226,34 @@ const sortJobs = (jobList, sortBy) => {
             compareText(left.internalId, right.internalId, "asc")
         );
     });
+};
+
+const getStatusKey = (value) => String(value || "").trim().toLowerCase();
+
+const statusInFilter = (value, filters) => {
+    if (!filters.length) return true;
+    const allowed = new Set(filters.map(getStatusKey));
+    return allowed.has(getStatusKey(value));
+};
+
+const statusConstraint = (field, filters) => {
+    if (!filters.length) return null;
+    return filters.length === 1
+        ? where(field, "==", filters[0])
+        : where(field, "in", filters);
+};
+
+const chooseServerStatusConstraint = (operationFilters, billingFilters) => {
+    if (operationFilters.length && billingFilters.length) {
+        return operationFilters.length <= billingFilters.length
+            ? statusConstraint("operationStatus", operationFilters)
+            : statusConstraint("billingStatus", billingFilters);
+    }
+
+    if (operationFilters.length) return statusConstraint("operationStatus", operationFilters);
+    if (billingFilters.length) return statusConstraint("billingStatus", billingFilters);
+
+    return null;
 };
 
 const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onSort }) => {
@@ -351,21 +394,19 @@ const Jobs = () => {
                 return;
             }
 
-            let q = workOrdersRef;
-            let queries = [];
+            const serverConstraint = chooseServerStatusConstraint(
+                operationStatusFilter,
+                billingStatusFilter
+            );
+            const jobsQuery = serverConstraint ? query(workOrdersRef, serverConstraint) : workOrdersRef;
 
-            if (operationStatusFilter.length > 0) {
-                queries.push(where("operationStatus", "in", operationStatusFilter));
-            }
-
-            if (billingStatusFilter.length > 0) {
-                queries.push(where("billingStatus", "in", billingStatusFilter));
-            }
-
-            q = query(q, ...queries);
-
-            const querySnapshot = await getDocs(q);
-            const jobsList = querySnapshot.docs.map(doc => Job.fromFirestore(doc));
+            const querySnapshot = await getDocs(jobsQuery);
+            const jobsList = querySnapshot.docs
+                .map(doc => Job.fromFirestore(doc))
+                .filter((job) => (
+                    statusInFilter(job.operationStatus, operationStatusFilter) &&
+                    statusInFilter(job.billingStatus, billingStatusFilter)
+                ));
             setJobs(jobsList);
         } catch (error) {
             console.error("Error fetching jobs: ", error);
@@ -394,6 +435,7 @@ const Jobs = () => {
                     job.description,
                     job.billingStatus,
                     job.operationStatus,
+                    getSuggestedWorkTierLabel(job.solutionTier || job.priorityLevel),
                 ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm))
             )
             : jobs;
@@ -786,6 +828,30 @@ const Jobs = () => {
             default:
                 return "bg-gray-100 text-gray-800";
         }
+    };
+
+    const getSolutionTierClass = (tier) => {
+        switch (getSuggestedWorkTierTone(tier)) {
+            case "red":
+                return "bg-red-100 text-red-800";
+            case "amber":
+                return "bg-amber-100 text-amber-800";
+            case "blue":
+                return "bg-blue-100 text-blue-800";
+            case "emerald":
+                return "bg-emerald-100 text-emerald-800";
+            default:
+                return "bg-gray-100 text-gray-800";
+        }
+    };
+
+    const renderSolutionTier = (tier) => {
+        const normalizedTier = normalizeSuggestedWorkTier(tier);
+        return (
+            <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getSolutionTierClass(normalizedTier)}`}>
+                {normalizedTier} - {getSuggestedWorkTierLabel(normalizedTier)}
+            </span>
+        );
     };
 
     const moneyFromCents = (value) => {
@@ -1299,6 +1365,11 @@ const Jobs = () => {
                                             Operation Status
                                         </SortHeaderButton>
                                     </th>
+                                    <th className="p-4 text-left">
+                                        <SortHeaderButton sortKey="solutionTier" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
+                                            Solution
+                                        </SortHeaderButton>
+                                    </th>
                                     <th className="p-4 text-left hidden sm:table-cell">
                                         <SortHeaderButton sortKey="rate" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Rate
@@ -1311,7 +1382,7 @@ const Jobs = () => {
                             <tbody className="divide-y divide-gray-200">
                                 {visibleJobs.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canUpdateJobs ? 9 : 8} className="p-8 text-center">
+                                        <td colSpan={canUpdateJobs ? 10 : 9} className="p-8 text-center">
                                             <p className="font-semibold text-gray-700">No jobs found.</p>
                                             <p className="text-sm text-gray-500 mt-1">
                                                 Create a blank job or start from a template.
@@ -1387,6 +1458,10 @@ const Jobs = () => {
                                                 <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.operationStatus)}`}>
                                                     {job.operationStatus}
                                                 </span>
+                                            </td>
+
+                                            <td className="p-4 whitespace-nowrap">
+                                                {renderSolutionTier(job.solutionTier || job.priorityLevel)}
                                             </td>
 
                                             <td className="p-4 whitespace-nowrap text-gray-800 hidden sm:table-cell">

@@ -2,7 +2,7 @@ import React, { useEffect, useState, useContext, useMemo } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
 import { getNav } from '../navigation/index';
-import { ArrowLeftOnRectangleIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftOnRectangleIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from 'firebase/auth';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import { db } from '../utils/config';
@@ -111,13 +111,13 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
 
       {/* Sidebar */}
       <div
-        className={`w-[260px] fixed z-50 top-0 h-screen shadow-2xl transition-all
+        className={`app-mobile-sidebar-shell w-full lg:w-[260px] fixed z-50 top-0 h-screen shadow-2xl transition-all
           bg-slate-950 text-slate-100 border-r border-slate-800/60
-          ${showSidebar ? 'left-0' : '-left-[260px] lg:left-0'}`}
+          ${showSidebar ? 'left-0' : '-left-full lg:left-0'}`}
       >
-        <div className="flex flex-col h-full">
+        <div className="flex h-full flex-col overflow-hidden">
           {/* Header */}
-          <div className="h-[95px] flex justify-center items-center border-b border-slate-800/60 shrink-0">
+          <div className="h-[95px] flex items-center justify-between border-b border-slate-800/60 px-4 shrink-0 lg:justify-center">
             <Link
               to="/"
               className="text-2xl font-extrabold tracking-tight transition"
@@ -127,10 +127,19 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
             >
               Drip Drop <span className="text-slate-300">[Admin]</span>
             </Link>
+            <button
+              type="button"
+              onClick={() => setShowSidebar(false)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-slate-700 text-slate-200 transition hover:bg-slate-900 lg:hidden"
+              aria-label="Close navigation"
+              title="Close navigation"
+            >
+              <XMarkIcon className="h-5 w-5" />
+            </button>
           </div>
 
           {/* Navigation */}
-          <nav className="px-2 pt-5 text-slate-200 flex-grow overflow-y-auto">
+          <nav className="min-h-0 flex-grow overflow-y-auto overscroll-contain px-2 pt-5 text-slate-200">
             {Object.keys(navItemsByCategory).map((category) => (
               <div
                 key={category}
@@ -201,7 +210,7 @@ const AdminSideBar = ({ showSidebar, setShowSidebar }) => {
           </nav>
 
           {/* Logout Button */}
-          <div className="p-4 border-t border-slate-800/60 shrink-0">
+          <div className="app-sidebar-mobile-footer-safe p-4 border-t border-slate-800/60 shrink-0">
             <button
               onClick={logout}
               className="w-full flex items-center px-4 py-3 text-left rounded-lg font-medium transition

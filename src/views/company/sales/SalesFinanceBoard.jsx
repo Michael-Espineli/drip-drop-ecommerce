@@ -493,7 +493,7 @@ const SalesFinanceBoard = ({ defaultView = 'invoices' }) => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <div>
-              <Link to="/company/sales" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+              <Link to="/company/sales" className="app-back-link">
                 Back to Sales Dashboard
               </Link>
               <div className="mt-2 flex items-center gap-2">

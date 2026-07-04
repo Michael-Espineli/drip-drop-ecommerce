@@ -188,7 +188,7 @@ export default function EquipmentServiceHistory() {
       <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-5">
         <div>
           <div>
-            <Link to={`/company/equipment/detail/${equipmentId}`} className="text-sm font-semibold text-slate-600 hover:text-slate-900">&larr; Back to Equipment</Link>
+            <Link to={`/company/equipment/detail/${equipmentId}`} className="app-back-link">&larr; Back to Equipment</Link>
 
             <h2 className="text-2xl font-semibold text-slate-900">
               Equipment Service History

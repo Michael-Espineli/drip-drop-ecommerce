@@ -86,17 +86,6 @@ const getRouteColorByIndex = (index = 0) => (
     ROUTE_MAP_COLORS[index % ROUTE_MAP_COLORS.length]
 );
 
-const getTechnicianId = (technician = {}) => (
-    technician.userId || technician.id || technician.docId || ''
-);
-
-const getTechnicianName = (technician = {}) => (
-    technician.userName ||
-    [technician.firstName, technician.lastName].filter(Boolean).join(' ') ||
-    technician.name ||
-    'Technician'
-);
-
 const buildRouteMetaById = (routes = []) => (
     new Map(
         [...routes]
@@ -617,112 +606,6 @@ const buildVehicleOptionsForRoute = (route, technicians, fleetVehicles) => {
     }
 
     return options;
-};
-
-const findTechnician = (technicians, id, name) => {
-    const normalizedName = String(name || '').trim().toLowerCase();
-
-    return technicians.find(technician => {
-        const technicianId = getTechnicianId(technician);
-        const technicianName = getTechnicianName(technician).trim().toLowerCase();
-
-        return (id && technicianId === id) || (normalizedName && technicianName === normalizedName);
-    }) || null;
-};
-
-const buildRouteTechnicianRows = (route, stops, technicians, fleetVehicles, routeColor) => {
-    const rowsByKey = new Map();
-
-    const addTechnician = ({ id, name, role, isPrimary = false }) => {
-        const technician = findTechnician(technicians, id, name);
-        const technicianId = id || getTechnicianId(technician) || name || role;
-        const technicianName = name || getTechnicianName(technician);
-
-        if (!technicianId && !technicianName) return null;
-
-        const key = technicianId || technicianName;
-        const existing = rowsByKey.get(key);
-
-        if (existing) {
-            existing.roles = Array.from(new Set([...existing.roles, role]));
-            existing.isPrimary = existing.isPrimary || isPrimary;
-            return existing;
-        }
-
-        const row = {
-            key,
-            id: technicianId,
-            name: technicianName,
-            roles: [role],
-            isPrimary,
-            technician,
-            route,
-            routeColor,
-            finishedStops: 0,
-            inProgressStops: 0,
-            openStops: 0,
-            stopCount: 0,
-        };
-
-        rowsByKey.set(key, row);
-        return row;
-    };
-
-    if (route?.techId || route?.techName) {
-        addTechnician({
-            id: route.techId,
-            name: route.techName,
-            role: 'Primary',
-            isPrimary: true,
-        });
-    }
-
-    if (route?.traineeId || route?.traineeName) {
-        addTechnician({
-            id: route.traineeId,
-            name: route.traineeName,
-            role: 'Trainee',
-        });
-    }
-
-    stops.forEach(stop => {
-        const row = addTechnician({
-            id: stop.techId || stop.routeTechId,
-            name: stop.tech || stop.routeTechName,
-            role: 'Assigned Stops',
-        });
-
-        if (!row) return;
-
-        const { start, end } = getStopTiming(stop);
-
-        row.stopCount += 1;
-        if (start && end) {
-            row.finishedStops += 1;
-        } else if (start && !end) {
-            row.inProgressStops += 1;
-        } else {
-            row.openStops += 1;
-        }
-    });
-
-    if (!rowsByKey.size && route?.techName) {
-        addTechnician({
-            name: route.techName,
-            role: 'Primary',
-            isPrimary: true,
-        });
-    }
-
-    return Array.from(rowsByKey.values())
-        .sort((left, right) => {
-            if (left.isPrimary !== right.isPrimary) return left.isPrimary ? -1 : 1;
-            return left.name.localeCompare(right.name);
-        })
-        .map(row => ({
-            ...row,
-            vehicleSummary: row.isPrimary ? routeVehicleSummary(route, fleetVehicles, technicians) : '',
-        }));
 };
 
 const distanceMeters = (from, to) => {
@@ -2290,6 +2173,8 @@ const RouteDashboard = () => {
                                 vehicleUpdatingRouteId={vehicleUpdatingRouteId}
                                 onSelectRoute={setSelectedRouteId}
                                 onSelectRouteStops={toggleRouteUnfinishedStops}
+                                onToggleStop={toggleSelectedStop}
+                                onOpenStop={(stop) => navigate(`/company/serviceStops/detail/${stop.id}`)}
                                 onVehicleChange={updateRouteVehicle}
                             />
 
@@ -2694,6 +2579,8 @@ const RouteWorkloadBoard = ({
     vehicleUpdatingRouteId,
     onSelectRoute,
     onSelectRouteStops,
+    onToggleStop,
+    onOpenStop,
     onVehicleChange,
 }) => {
     const routeGroups = useMemo(() => {
@@ -2732,10 +2619,10 @@ const RouteWorkloadBoard = ({
     const unfinishedCount = stops.filter(isStopMovable).length;
     const activeRouteGroups = routeGroups.filter(group => group.route);
     const selectedRouteGroup = routeGroups.find(group => group.route?.id === selectedRouteId) || null;
-    const technicianSourceGroups = selectedRouteGroup?.route ? [selectedRouteGroup] : activeRouteGroups;
-    const technicianRows = technicianSourceGroups.flatMap(group => (
-        buildRouteTechnicianRows(group.route, group.stops, technicians, fleetVehicles, group.routeColor)
-    ));
+    const selectedRouteStopCount = selectedRouteGroup?.stops.length || 0;
+    const selectedRouteSelectedCount = selectedRouteGroup
+        ? selectedRouteGroup.stops.filter(stop => selectedStopIds.includes(stop.id)).length
+        : 0;
 
     return (
         <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
@@ -2757,7 +2644,7 @@ const RouteWorkloadBoard = ({
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Active Routes</h3>
-                            <p className="text-xs text-gray-500">Select a route to review its assigned technicians.</p>
+                            <p className="text-xs text-gray-500">Select a route to review its service stops.</p>
                         </div>
                         <span className="rounded-full bg-gray-100 px-2 py-1 text-xs font-bold text-gray-600">
                             {activeRouteGroups.length}
@@ -2773,17 +2660,6 @@ const RouteWorkloadBoard = ({
                     const openCount = group.stops.length - finishedCount - inProgressCount;
                     const selectedInRoute = group.stops.filter(stop => selectedStopIds.includes(stop.id)).length;
                     const isFocused = group.route && selectedRouteId === group.route.id;
-                    const activeStop = group.stops.find(stop => {
-                        const { start, end } = getStopTiming(stop);
-                        return start && !end;
-                    });
-                    const routeDurationMinutes = getRouteDurationMinutes(group.route);
-                    const durationText = routeDurationMinutes
-                        ? `${Math.floor(routeDurationMinutes / 60)}h ${routeDurationMinutes % 60}m`
-                        : 'N/A';
-                    const mileageText = group.route?.distanceMiles
-                        ? `${Number(group.route.distanceMiles).toFixed(1)} mi`
-                        : 'N/A';
 
                     return (
                         <article
@@ -2813,12 +2689,23 @@ const RouteWorkloadBoard = ({
                                     </span>
                                 </div>
 
-                                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                                    <RouteSummaryDatum label="Stops" value={group.stops.length} helper={`${openCount} open`} />
-                                    <RouteSummaryDatum label="Active" value={activeStop?.customerName || 'None'} helper={activeStop?.address?.streetAddress || ''} />
-                                    <RouteSummaryDatum label="Mileage" value={mileageText} />
-                                    <RouteSummaryDatum label="Duration" value={durationText} />
+                                <div className="mt-3 grid grid-cols-3 gap-2">
+                                    <RouteSummaryDatum label="Stops" value={`${finishedCount}/${group.stops.length}`} helper="finished" />
+                                    <RouteSummaryDatum label="Open" value={openCount} helper={`${inProgressCount} active`} />
+                                    <RouteSummaryDatum label="Selected" value={selectedInRoute} helper="move queue" />
                                 </div>
+
+                                {group.route && (
+                                    <RouteTechnicianSummary
+                                        route={group.route}
+                                        stops={group.stops}
+                                        now={now}
+                                        technicians={technicians}
+                                        fleetVehicles={fleetVehicles}
+                                        onVehicleChange={onVehicleChange}
+                                        isVehicleUpdating={vehicleUpdatingRouteId === group.route.id}
+                                    />
+                                )}
 
                                 <div className="mt-3 flex flex-wrap items-center gap-2">
                                     {group.route && (
@@ -2830,7 +2717,7 @@ const RouteWorkloadBoard = ({
                                                     : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
                                                 }`}
                                         >
-                                            {isFocused ? 'Selected' : 'View Technicians'}
+                                            {isFocused ? 'Selected' : 'View Stops'}
                                         </button>
                                     )}
                                     {group.route && (
@@ -2856,96 +2743,83 @@ const RouteWorkloadBoard = ({
                 <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                     <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                         <div>
-                            <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Technicians</h3>
+                            <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Route Stops</h3>
                             <p className="text-sm font-semibold text-gray-900">
-                                {selectedRouteGroup?.route
-                                    ? selectedRouteGroup.techName
-                                    : 'All active route technicians'}
+                                {selectedRouteGroup?.route ? selectedRouteGroup.techName : 'Select an active route'}
                             </p>
                             <p className="text-xs text-gray-500">
                                 {selectedRouteGroup?.route
-                                    ? 'Assigned to the selected route.'
-                                    : 'Select a route card to focus this list.'}
+                                    ? `${selectedRouteStopCount} stop${selectedRouteStopCount === 1 ? '' : 's'} on this route.`
+                                    : 'Choose a route card on the left to show its service stops here.'}
                             </p>
                         </div>
                         {selectedRouteGroup?.route && (
-                            <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(selectedRouteGroup.route.status)}`}>
-                                {selectedRouteGroup.route.status || 'Did Not Start'}
-                            </span>
-                        )}
-                    </div>
-
-                    <div className="space-y-3">
-                        {technicianRows.length ? technicianRows.map(row => {
-                            const initials = row.name
-                                .split(/\s+/)
-                                .filter(Boolean)
-                                .slice(0, 2)
-                                .map(part => part[0]?.toUpperCase())
-                                .join('') || 'T';
-                            const statusLabel = row.inProgressStops > 0
-                                ? 'In Progress'
-                                : row.openStops > 0
-                                    ? 'Open'
-                                    : row.stopCount > 0
-                                        ? 'Finished'
-                                        : 'Assigned';
-                            const statusClassName = statusLabel === 'Finished'
-                                ? 'bg-green-100 text-green-800'
-                                : statusLabel === 'In Progress'
-                                    ? 'bg-blue-100 text-blue-800'
-                                    : 'bg-yellow-100 text-yellow-800';
-
-                            return (
-                                <div key={`${row.route?.id || 'route'}-${row.key}`} className="rounded-lg border border-gray-200 bg-white p-3">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div className="flex min-w-0 items-start gap-3">
-                                            <span
-                                                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold text-white"
-                                                style={{ backgroundColor: row.routeColor }}
-                                            >
-                                                {initials}
-                                            </span>
-                                            <div className="min-w-0">
-                                                <p className="truncate font-semibold text-gray-900">{row.name}</p>
-                                                <p className="truncate text-xs text-gray-500">
-                                                    {row.roles.join(' · ')}
-                                                    {!selectedRouteGroup?.route && row.route?.techName ? ` · ${row.route.techName}` : ''}
-                                                </p>
-                                            </div>
-                                        </div>
-                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${statusClassName}`}>
-                                            {statusLabel}
-                                        </span>
-                                    </div>
-
-                                    <div className="mt-3 grid grid-cols-3 gap-2">
-                                        <RouteSummaryDatum label="Stops" value={row.stopCount} helper={`${row.finishedStops} done`} />
-                                        <RouteSummaryDatum label="Open" value={row.openStops} helper={`${row.inProgressStops} active`} />
-                                        <RouteSummaryDatum label="Vehicle" value={row.vehicleSummary || 'N/A'} />
-                                    </div>
-
-                                    {row.isPrimary && row.route && (
-                                        <div className="mt-3">
-                                            <RouteTechnicianSummary
-                                                route={row.route}
-                                                stops={selectedRouteGroup?.route ? selectedRouteGroup.stops : getOrderedRouteStops(row.route, stops)}
-                                                now={now}
-                                                technicians={technicians}
-                                                fleetVehicles={fleetVehicles}
-                                                onVehicleChange={onVehicleChange}
-                                                isVehicleUpdating={vehicleUpdatingRouteId === row.route.id}
-                                            />
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        }) : (
-                            <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-6 text-sm text-gray-500">
-                                No technicians found for active routes on this date.
+                            <div className="flex flex-wrap gap-2">
+                                <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(selectedRouteGroup.route.status)}`}>
+                                    {selectedRouteGroup.route.status || 'Did Not Start'}
+                                </span>
+                                <span className="shrink-0 rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-gray-600 ring-1 ring-gray-200">
+                                    {selectedRouteSelectedCount} selected
+                                </span>
                             </div>
                         )}
                     </div>
+
+                    {selectedRouteGroup?.route ? (
+                        <div className="max-h-[560px] divide-y divide-gray-100 overflow-y-auto rounded-lg border border-gray-200 bg-white">
+                            {selectedRouteGroup.stops.length ? selectedRouteGroup.stops.map((stop, index) => {
+                                const status = getStopDisplayStatus(stop);
+                                const routeIndex = stop.routeStopIndex || index + 1;
+                                const isSelected = selectedStopIds.includes(stop.id);
+                                const movable = isStopMovable(stop);
+                                const stopKindMeta = getServiceStopKindMeta(stop);
+
+                                return (
+                                    <div
+                                        key={stop.id}
+                                        className={`grid grid-cols-[2rem_minmax(0,1fr)_auto_auto] items-center gap-2 border-l-4 px-3 py-2 ${stopKindMeta.rowClassName} ${isSelected ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                                    >
+                                        <button
+                                            type="button"
+                                            onClick={() => onToggleStop(stop)}
+                                            disabled={!movable}
+                                            className={`flex h-7 w-7 items-center justify-center rounded-full border text-xs font-bold ${isSelected
+                                                    ? 'border-blue-600 bg-blue-600 text-white'
+                                                    : movable
+                                                        ? 'border-blue-100 bg-blue-50 text-blue-700 hover:border-blue-400'
+                                                        : 'cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400'
+                                                }`}
+                                            title={movable ? 'Select stop to move' : 'Finished stops cannot be moved'}
+                                        >
+                                            {isSelected ? '✓' : routeIndex}
+                                        </button>
+                                        <span className="min-w-0 flex-1">
+                                            <button
+                                                type="button"
+                                                onClick={() => onOpenStop(stop)}
+                                                className="block min-w-0 text-left"
+                                            >
+                                                <span className="block truncate text-sm font-semibold text-gray-900">{stop.customerName || 'Service Stop'}</span>
+                                                <span className="block truncate text-xs text-gray-500">{stop.address?.streetAddress || 'No address'}</span>
+                                            </button>
+                                        </span>
+                                        <ServiceStopKindBadge stop={stop} compact />
+                                        <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${status.className}`}>
+                                            {status.label}
+                                        </span>
+                                    </div>
+                                );
+                            }) : (
+                                <div className="px-4 py-6 text-sm text-gray-500">
+                                    No service stops loaded for this route.
+                                </div>
+                            )}
+                        </div>
+                    ) : (
+                        <div className="rounded-lg border border-dashed border-gray-300 bg-white px-4 py-8 text-sm text-gray-500">
+                            Select an active route to see its service stops.
+                        </div>
+                    )}
                 </div>
             </div>
         </section>

@@ -663,7 +663,7 @@ const RecurringServiceStopDetails = () => {
           <div>
             <Link
               to="/company/recurringServiceStop"
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+              className="app-back-link"
             >
               &larr; Back to Recurring Service Stops
             </Link>

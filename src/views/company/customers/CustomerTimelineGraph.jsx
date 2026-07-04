@@ -44,6 +44,8 @@ const eventGroupStyles = {
     serviceStop: { dot: 'bg-blue-600', rail: '#2563eb', chip: 'bg-blue-50 text-blue-700 border-blue-100' },
     workOrder: { dot: 'bg-violet-500', rail: '#8b5cf6', chip: 'bg-violet-50 text-violet-700 border-violet-100' },
     expiredJob: { dot: 'bg-rose-500', rail: '#f43f5e', chip: 'bg-rose-50 text-rose-700 border-rose-100' },
+    outstandingWork: { dot: 'bg-amber-500', rail: '#f59e0b', chip: 'bg-amber-50 text-amber-700 border-amber-100' },
+    suggestedWork: { dot: 'bg-blue-500', rail: '#3b82f6', chip: 'bg-blue-50 text-blue-700 border-blue-100' },
     equipmentMaintenance: { dot: 'bg-amber-500', rail: '#f59e0b', chip: 'bg-amber-50 text-amber-700 border-amber-100' },
     equipmentRepair: { dot: 'bg-red-500', rail: '#ef4444', chip: 'bg-red-50 text-red-700 border-red-100' },
     equipmentReading: { dot: 'bg-cyan-500', rail: '#06b6d4', chip: 'bg-cyan-50 text-cyan-700 border-cyan-100' },
@@ -374,7 +376,13 @@ const CustomerTimelineGraph = ({ timeline, defaultRange, onRangeChange }) => {
     const equipmentCount = markerEvents.filter((event) => event.type === 'equipmentRepair').length;
     const equipmentReadingCount = markerEvents.filter((event) => event.type === 'equipmentReading').length;
     const waterCount = markerEvents.filter((event) => event.type === 'waterFill' || event.type === 'waterEmpty').length;
-    const serviceCount = markerEvents.filter((event) => event.type === 'serviceStop' || event.type === 'workOrder' || event.type === 'expiredJob').length;
+    const serviceCount = markerEvents.filter((event) => (
+        event.type === 'serviceStop' ||
+        event.type === 'workOrder' ||
+        event.type === 'expiredJob' ||
+        event.type === 'outstandingWork' ||
+        event.type === 'suggestedWork'
+    )).length;
     const billingCount = markerEvents.filter((event) => ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'].includes(event.type)).length;
 
     const summaryCards = [

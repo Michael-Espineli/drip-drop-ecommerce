@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { addDoc, doc, query, where, collection, getDocs, getDoc, limit, updateDoc, orderBy, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Select from "react-select";
@@ -72,6 +72,7 @@ const performanceLineTypes = [
 
 const emptyPerformanceDraft = {
     type: "kudo",
+    date: "",
     note: "",
     referenceStopIds: [],
     referenceJobIds: [],
@@ -79,6 +80,11 @@ const emptyPerformanceDraft = {
     reportUrl: "",
     reportNotes: "",
     reportTechnicianVisible: false,
+};
+
+const emptyPerformanceEditDraft = {
+    date: "",
+    note: "",
 };
 
 const emptySummaryDraft = {
@@ -207,6 +213,24 @@ const formatDateTime = (value) => {
             minute: "2-digit",
         })
         : "Not set";
+};
+
+const toDateInputValue = (value) => {
+    const date = toDate(value);
+    if (!date) return "";
+
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+};
+
+const fromDateInputValue = (value) => {
+    const [year, month, day] = String(value || "").split("-").map(Number);
+    if (!year || !month || !day) return null;
+
+    const date = new Date(year, month - 1, day, 12, 0, 0);
+    return Number.isNaN(date.getTime()) ? null : date;
 };
 
 const formatMoneyFromCents = (value) => {
@@ -517,6 +541,7 @@ const CompanyUserDetails = () => {
     const { recentlySelectedCompany, user: authUser, dataBaseUser } = useContext(Context);
     const { can, requirePermission, permissionsReady } = useCompanyPermissions();
     const { companyUserId, tab } = useParams();
+    const [searchParams, setSearchParams] = useSearchParams();
     const navigate = useNavigate();
 
     const getInitialTab = useCallback((tabValue) => (
@@ -554,6 +579,9 @@ const CompanyUserDetails = () => {
     const [isPerformanceLineModalOpen, setIsPerformanceLineModalOpen] = useState(false);
     const [isSummaryReportModalOpen, setIsSummaryReportModalOpen] = useState(false);
     const [selectedPerformanceReview, setSelectedPerformanceReview] = useState(null);
+    const [performanceEditDraft, setPerformanceEditDraft] = useState(emptyPerformanceEditDraft);
+    const [isEditingPerformanceReview, setIsEditingPerformanceReview] = useState(false);
+    const [isUpdatingPerformanceReview, setIsUpdatingPerformanceReview] = useState(false);
     const [showAllPerformanceHistory, setShowAllPerformanceHistory] = useState(false);
     const [summaryDraft, setSummaryDraft] = useState(emptySummaryDraft);
     const [isSavingPerformance, setIsSavingPerformance] = useState(false);
@@ -564,6 +592,12 @@ const CompanyUserDetails = () => {
     const [onboardingError, setOnboardingError] = useState("");
     const [isInitializingOnboarding, setIsInitializingOnboarding] = useState(false);
     const [updatingOnboardingItemId, setUpdatingOnboardingItemId] = useState("");
+
+    const openPerformanceNoteModal = useCallback(() => {
+        setPerformanceDraft(emptyPerformanceDraft);
+        setPerformanceFiles([]);
+        setIsPerformanceLineModalOpen(true);
+    }, []);
 
     const handleTabChange = useCallback((nextTab) => {
         const normalizedTab = getInitialTab(nextTab);
@@ -979,6 +1013,32 @@ const CompanyUserDetails = () => {
     const canViewPerformanceReviews = can("260");
     const canEditPerformanceReviews = can("264");
     const canEditOnboardingChecklist = can("264");
+
+    useEffect(() => {
+        if (
+            searchParams.get("action") !== "addPerformanceNote" ||
+            activeTab !== "performance" ||
+            !permissionsReady ||
+            !canEditPerformanceReviews
+        ) {
+            return;
+        }
+
+        openPerformanceNoteModal();
+        setSearchParams((currentParams) => {
+            const nextParams = new URLSearchParams(currentParams);
+            nextParams.delete("action");
+            return nextParams;
+        }, { replace: true });
+    }, [
+        activeTab,
+        canEditPerformanceReviews,
+        openPerformanceNoteModal,
+        permissionsReady,
+        searchParams,
+        setSearchParams,
+    ]);
+
     const visibleCompanyUserSections = useMemo(
         () => companyUserSections.filter((section) => !section.permissionId || can(section.permissionId)),
         [can]
@@ -1321,6 +1381,26 @@ const CompanyUserDetails = () => {
         setPerformanceDraft((current) => ({ ...current, [field]: value }));
     };
 
+    const openPerformanceReviewDetail = (review) => {
+        setSelectedPerformanceReview(review);
+        setPerformanceEditDraft(emptyPerformanceEditDraft);
+        setIsEditingPerformanceReview(false);
+    };
+
+    const closePerformanceReviewDetail = () => {
+        setSelectedPerformanceReview(null);
+        setPerformanceEditDraft(emptyPerformanceEditDraft);
+        setIsEditingPerformanceReview(false);
+    };
+
+    const startPerformanceReviewEdit = (review) => {
+        setPerformanceEditDraft({
+            date: toDateInputValue(review.date || review.createdAt || new Date()),
+            note: review.note || "",
+        });
+        setIsEditingPerformanceReview(true);
+    };
+
     const togglePerformanceReference = (field, referenceId) => {
         setPerformanceDraft((current) => {
             const currentIds = current[field] || [];
@@ -1347,7 +1427,7 @@ const CompanyUserDetails = () => {
     };
 
     const handleSavePerformanceLine = async () => {
-        if (!requirePermission("264", "create performance review lines")) return;
+        if (!requirePermission("264", "create performance notes")) return;
         if (!recentlySelectedCompany || !user?.id) return;
 
         const hasNote = isNonEmptyString(performanceDraft.note);
@@ -1362,7 +1442,8 @@ const CompanyUserDetails = () => {
         setIsSavingPerformance(true);
         setIsUploadingPerformanceFiles(hasFileAttachments);
         try {
-            const reviewDate = Timestamp.fromDate(new Date());
+            const selectedDate = fromDateInputValue(performanceDraft.date);
+            const reviewDate = Timestamp.fromDate(selectedDate || new Date());
             const filesVisibleToTechnician = Boolean(performanceDraft.reportTechnicianVisible);
             const uploadedAttachments = [];
 
@@ -1483,17 +1564,74 @@ const CompanyUserDetails = () => {
             }
 
             await batch.commit();
-            setPerformanceReviews((current) => [...localRecords, ...current]);
+            setPerformanceReviews((current) => (
+                sortByRecentDate(
+                    [...localRecords, ...current],
+                    (review) => review.date || review.createdAt
+                )
+            ));
             setPerformanceDraft(emptyPerformanceDraft);
             setPerformanceFiles([]);
             setIsPerformanceLineModalOpen(false);
-            toast.success("Performance line saved.");
+            toast.success("Performance note saved.");
         } catch (error) {
-            console.error("Error saving performance line:", error);
-            toast.error("Failed to save performance line.");
+            console.error("Error saving performance note:", error);
+            toast.error("Failed to save performance note.");
         } finally {
             setIsSavingPerformance(false);
             setIsUploadingPerformanceFiles(false);
+        }
+    };
+
+    const handleUpdatePerformanceReview = async () => {
+        if (!requirePermission("264", "edit performance notes")) return;
+        if (!recentlySelectedCompany || !user?.id || !selectedPerformanceReview?.id) return;
+
+        const nextDate = fromDateInputValue(performanceEditDraft.date);
+        if (!nextDate) {
+            toast.error("Choose a valid date before saving.");
+            return;
+        }
+
+        const reviewDate = Timestamp.fromDate(nextDate);
+        const localUpdatedAt = Timestamp.fromDate(new Date());
+        const payload = {
+            date: reviewDate,
+            note: performanceEditDraft.note.trim(),
+            updatedAt: serverTimestamp(),
+            updatedByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+            updatedByName: reviewerName,
+        };
+
+        setIsUpdatingPerformanceReview(true);
+        try {
+            await updateDoc(
+                doc(performanceReviewsRef(recentlySelectedCompany, user.id), selectedPerformanceReview.id),
+                payload
+            );
+
+            const localReview = {
+                ...selectedPerformanceReview,
+                ...payload,
+                updatedAt: localUpdatedAt,
+            };
+
+            setPerformanceReviews((current) => (
+                sortByRecentDate(
+                    current.map((review) => (
+                        review.id === selectedPerformanceReview.id ? localReview : review
+                    )),
+                    (review) => review.date || review.createdAt
+                )
+            ));
+            setSelectedPerformanceReview(localReview);
+            setIsEditingPerformanceReview(false);
+            toast.success("Performance note updated.");
+        } catch (error) {
+            console.error("Error updating performance note:", error);
+            toast.error("Failed to update performance note.");
+        } finally {
+            setIsUpdatingPerformanceReview(false);
         }
     };
 
@@ -1534,12 +1672,12 @@ const CompanyUserDetails = () => {
             `${summaryDraft.title || "Technician Performance Summary"} for ${displayName}`,
             `Generated ${formatDateTime(new Date())}`,
             "",
-            `Review lines: ${reviewLines.length}`,
+            `Performance notes: ${reviewLines.length}`,
             `Praise: ${performanceStats.praise}`,
             `Complaints: ${performanceStats.complaints}`,
             "",
             "Manager notes:",
-            ...(recentLineText.length ? recentLineText : ["- No saved performance lines yet."]),
+            ...(recentLineText.length ? recentLineText : ["- No saved performance notes yet."]),
             "",
             "Technician-facing reports:",
             ...(visibleReports.length
@@ -1807,7 +1945,7 @@ const CompanyUserDetails = () => {
                     </p>
                     <button
                         type="button"
-                        onClick={() => setSelectedPerformanceReview(review)}
+                        onClick={() => openPerformanceReviewDetail(review)}
                         className="mt-2 text-xs font-semibold text-blue-700 transition hover:text-blue-900"
                     >
                         View detail
@@ -1856,7 +1994,7 @@ const CompanyUserDetails = () => {
                                         </p>
                                         <button
                                             type="button"
-                                            onClick={() => setSelectedPerformanceReview(review)}
+                                            onClick={() => openPerformanceReviewDetail(review)}
                                             className="mt-2 text-xs font-semibold text-blue-700 transition hover:text-blue-900"
                                         >
                                             View full complaint
@@ -2433,9 +2571,9 @@ const CompanyUserDetails = () => {
 
     const renderPerformanceLineForm = ({ onCancel }) => (
         <div className="space-y-5">
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
                 <label className="space-y-1.5">
-                    <span className="text-sm font-semibold text-slate-700">Line Type</span>
+                    <span className="text-sm font-semibold text-slate-700">Note Type</span>
                     <select
                         value={performanceDraft.type}
                         onChange={(event) => updatePerformanceDraftField("type", event.target.value)}
@@ -2448,13 +2586,23 @@ const CompanyUserDetails = () => {
                 </label>
 
                 <label className="space-y-1.5">
-                    <span className="text-sm font-semibold text-slate-700">Notes</span>
+                    <span className="text-sm font-semibold text-slate-700">Date</span>
+                    <input
+                        type="date"
+                        value={performanceDraft.date || toDateInputValue(new Date())}
+                        onChange={(event) => updatePerformanceDraftField("date", event.target.value)}
+                        className={inputBase}
+                    />
+                </label>
+
+                <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Description</span>
                     <textarea
                         value={performanceDraft.note}
                         onChange={(event) => updatePerformanceDraftField("note", event.target.value)}
                         rows={4}
                         className={`${inputBase} min-h-[120px]`}
-                        placeholder="Document the performance line..."
+                        placeholder="Document the performance note..."
                     />
                 </label>
             </div>
@@ -2575,7 +2723,53 @@ const CompanyUserDetails = () => {
                     <PlusIcon className="h-4 w-4" />
                     {isSavingPerformance
                         ? (isUploadingPerformanceFiles ? "Uploading..." : "Saving...")
-                        : "Add Line"}
+                        : "Add Note"}
+                </button>
+            </div>
+        </div>
+    );
+
+    const renderPerformanceReviewEditForm = () => (
+        <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Date</span>
+                    <input
+                        type="date"
+                        value={performanceEditDraft.date}
+                        onChange={(event) => setPerformanceEditDraft((current) => ({ ...current, date: event.target.value }))}
+                        className={inputBase}
+                    />
+                </label>
+
+                <label className="space-y-1.5">
+                    <span className="text-sm font-semibold text-slate-700">Description</span>
+                    <textarea
+                        value={performanceEditDraft.note}
+                        onChange={(event) => setPerformanceEditDraft((current) => ({ ...current, note: event.target.value }))}
+                        rows={6}
+                        className={`${inputBase} min-h-[180px]`}
+                    />
+                </label>
+            </div>
+
+            <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                <button
+                    type="button"
+                    onClick={() => setIsEditingPerformanceReview(false)}
+                    disabled={isUpdatingPerformanceReview}
+                    className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    Cancel
+                </button>
+                <button
+                    type="button"
+                    onClick={handleUpdatePerformanceReview}
+                    disabled={isUpdatingPerformanceReview}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <CheckIcon className="h-4 w-4" />
+                    {isUpdatingPerformanceReview ? "Saving..." : "Save Changes"}
                 </button>
             </div>
         </div>
@@ -2671,7 +2865,7 @@ const CompanyUserDetails = () => {
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
                     <StatTile
                         icon={StarIcon}
-                        title="Review Lines"
+                        title="Performance Notes"
                         value={performanceStats.total}
                         subtitle="Saved history"
                     />
@@ -2702,37 +2896,37 @@ const CompanyUserDetails = () => {
                 </div>
 
                 <Section
-                    title="Performance Lines"
+                    title="Performance Notes"
                     description="Capture praise, complaints, coaching notes, supporting work references, and attachments."
                     action={canEditPerformanceReviews && (
                         <button
                             type="button"
-                            onClick={() => setIsPerformanceLineModalOpen(true)}
+                            onClick={openPerformanceNoteModal}
                             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
                         >
                             <PlusIcon className="h-4 w-4" />
-                            Add Performance Line
+                            Add Performance Note
                         </button>
                     )}
                 >
                     {!canEditPerformanceReviews ? (
                         <EmptyState
                             title="Update permission required"
-                            description="You can review history, but cannot add performance lines with this role."
+                            description="You can review history, but cannot add performance notes with this role."
                         />
                     ) : (
                         <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                             <div>
-                                <p className="text-sm font-semibold text-slate-900">Ready for the next performance line.</p>
-                                <p className="mt-1 text-sm text-slate-500">References and attachments are saved with the line.</p>
+                                <p className="text-sm font-semibold text-slate-900">Ready for the next performance note.</p>
+                                <p className="mt-1 text-sm text-slate-500">References and attachments are saved with the note.</p>
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setIsPerformanceLineModalOpen(true)}
+                                onClick={openPerformanceNoteModal}
                                 className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
                             >
                                 <PlusIcon className="h-4 w-4" />
-                                Add Line
+                                Add Note
                             </button>
                         </div>
                     )}
@@ -2775,7 +2969,7 @@ const CompanyUserDetails = () => {
                     )}
                 </Section>
 
-                <Section title="Recent Performance History" description="Recent saved review lines, summaries, and profile-attached reports.">
+                <Section title="Recent Performance History" description="Recent saved performance notes, summaries, and profile-attached reports.">
                     <div className="space-y-4">
                         {performanceError && (
                             <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
@@ -2837,7 +3031,7 @@ const CompanyUserDetails = () => {
                         >
                             <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                                 <div>
-                                    <h2 id="performance-line-modal-title" className="text-lg font-semibold text-slate-950">Add Performance Line</h2>
+                                    <h2 id="performance-line-modal-title" className="text-lg font-semibold text-slate-950">Add Performance Note</h2>
                                     <p className="mt-1 text-sm text-slate-500">Internal by default. Shared reports become visible to the technician.</p>
                                 </div>
                                 <button
@@ -2845,7 +3039,7 @@ const CompanyUserDetails = () => {
                                     onClick={() => setIsPerformanceLineModalOpen(false)}
                                     disabled={isSavingPerformance}
                                     className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
-                                    aria-label="Close performance line modal"
+                                    aria-label="Close performance note modal"
                                 >
                                     <XMarkIcon className="h-5 w-5" />
                                 </button>
@@ -2904,17 +3098,32 @@ const CompanyUserDetails = () => {
                                     <h2 id="performance-detail-modal-title" className="text-lg font-semibold text-slate-950">Performance Detail</h2>
                                     <p className="mt-1 text-sm text-slate-500">Full note, references, reports, and attachments.</p>
                                 </div>
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedPerformanceReview(null)}
-                                    className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-                                    aria-label="Close performance detail modal"
-                                >
-                                    <XMarkIcon className="h-5 w-5" />
-                                </button>
+                                <div className="flex shrink-0 items-center gap-2">
+                                    {canEditPerformanceReviews && !isEditingPerformanceReview && (
+                                        <button
+                                            type="button"
+                                            onClick={() => startPerformanceReviewEdit(selectedPerformanceReview)}
+                                            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                                        >
+                                            <PencilSquareIcon className="h-4 w-4" />
+                                            Edit
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={closePerformanceReviewDetail}
+                                        disabled={isUpdatingPerformanceReview}
+                                        className="inline-flex h-9 w-9 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                        aria-label="Close performance detail modal"
+                                    >
+                                        <XMarkIcon className="h-5 w-5" />
+                                    </button>
+                                </div>
                             </div>
                             <div className="overflow-y-auto bg-slate-50 p-5">
-                                {renderPerformanceReviewCard(selectedPerformanceReview)}
+                                {isEditingPerformanceReview
+                                    ? renderPerformanceReviewEditForm()
+                                    : renderPerformanceReviewCard(selectedPerformanceReview)}
                             </div>
                         </div>
                     </div>

@@ -49,6 +49,15 @@ import {
   INSTALL_ITEM_JOB_TASK_TYPES,
   jobTaskTypeOptionsFromDocs,
 } from "../../../utils/jobTaskTypes";
+import {
+  DEFAULT_SUGGESTED_WORK_TIER,
+  SUGGESTED_WORK_STATUS,
+  SUGGESTED_WORK_TIER_OPTIONS,
+  getSuggestedWorkTierLabel,
+  getSuggestedWorkTierTone,
+  normalizeSuggestedWorkTier,
+  suggestedWorkIdForSource,
+} from "../../../utils/models/SuggestedWork";
 
 /**
  * JobDetailView
@@ -143,6 +152,8 @@ const JobDetailView = () => {
     serviceLocationId: "",
     serviceStopIds: [],
     type: "",
+    solutionTier: DEFAULT_SUGGESTED_WORK_TIER,
+    solutionTierLabel: getSuggestedWorkTierLabel(DEFAULT_SUGGESTED_WORK_TIER),
     dateCreated: null,
     updatedAt: null,
     updatedAtMillis: 0,
@@ -223,6 +234,15 @@ const JobDetailView = () => {
     []
   );
 
+  const solutionTierOptions = useMemo(
+    () =>
+      SUGGESTED_WORK_TIER_OPTIONS.map((option) => ({
+        value: option.value,
+        label: `${option.value} - ${option.label}`,
+      })),
+    []
+  );
+
   const [selectedBillingStatus, setSelectedBillingStatus] = useState({
     value: "Draft",
     label: "Draft",
@@ -230,6 +250,10 @@ const JobDetailView = () => {
   const [selectedOperationStatus, setSelectedOperationStatus] = useState({
     value: "Estimate Pending",
     label: "Estimate Pending",
+  });
+  const [selectedSolutionTier, setSelectedSolutionTier] = useState({
+    value: DEFAULT_SUGGESTED_WORK_TIER,
+    label: getSuggestedWorkTierLabel(DEFAULT_SUGGESTED_WORK_TIER),
   });
 
   // Sections
@@ -729,12 +753,131 @@ const JobDetailView = () => {
     }
   };
 
+  const upsertSuggestedWorkRecord = async ({
+    billingStatus = job.billingStatus || "",
+    previousBillingStatus = job.billingStatus || "",
+    previousOperationStatus = job.operationStatus || "",
+    nextOperationStatus = job.operationStatus || "",
+    statusChangedAtMillis = Date.now(),
+    reason = "Job needs follow-up",
+    priorityLevel = job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER,
+  } = {}) => {
+    if (!recentlySelectedCompany || !jobId) return null;
+
+    const customerId = job.customerId || customer.id || "";
+    if (!customerId) {
+      throw new Error("This job needs a customer before it can be listed as suggested work.");
+    }
+
+    const normalizedPriority = normalizeSuggestedWorkTier(priorityLevel);
+    const priorityLabel = getSuggestedWorkTierLabel(normalizedPriority);
+    const customerName =
+      job.customerName ||
+      [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+      customer.companyName ||
+      "Customer";
+    const locationAddress = [
+      serviceLocation.streetAddress,
+      serviceLocation.city,
+      serviceLocation.state,
+      serviceLocation.zip,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    const locationName = serviceLocation.nickName || serviceLocation.name || "";
+    const openTaskCount = (taskList || []).filter(
+      (task) => String(task.status || "").toLowerCase() !== "finished"
+    ).length;
+    const jobLabel = job.internalId || job.type || jobId;
+    const statusLabel = billingStatus || "Outstanding";
+    const noteLines = [
+      `Job ${jobLabel} was converted to suggested work for later customer review.`,
+      `Priority: ${normalizedPriority} - ${priorityLabel}`,
+      job.type ? `Type: ${job.type}` : "",
+      job.description ? `Scope: ${job.description}` : "",
+      `Billing: ${previousBillingStatus || "Not set"} -> ${statusLabel}`,
+      `Operations: ${previousOperationStatus || "Not set"} -> ${nextOperationStatus || "Not set"}`,
+      Number(job.rate || 0) ? `Customer price: ${moneyFromCents(job.rate)}` : "",
+      locationName || locationAddress ? `Location: ${[locationName, locationAddress].filter(Boolean).join(" - ")}` : "",
+      job.bodyOfWaterName ? `Body of water: ${job.bodyOfWaterName}` : "",
+      job.equipmentName ? `Equipment: ${job.equipmentName}` : "",
+      `Tasks: ${(taskList || []).length}${openTaskCount ? ` (${openTaskCount} open)` : ""}`,
+      shoppingList.length ? `Planned materials: ${shoppingList.length}` : "",
+      purchasedItems.length ? `Purchased items: ${purchasedItems.length}` : "",
+      reason ? `Reason: ${reason}` : "",
+    ].filter(Boolean);
+    const suggestedWorkId = suggestedWorkIdForSource("job", jobId) || jobId;
+
+    const suggestedWorkRecord = {
+      id: suggestedWorkId,
+      companyId: recentlySelectedCompany,
+      customerId,
+      customerName,
+      sourceType: "job",
+      sourceId: jobId,
+      sourcePath: `companies/${recentlySelectedCompany}/workOrders/${jobId}`,
+      jobId,
+      jobInternalId: job.internalId || "",
+      jobType: job.type || "",
+      jobDescription: job.description || "",
+      jobRateCents: Number(job.rate || 0),
+      jobLaborCostCents: Number(job.laborCost || 0),
+      previousBillingStatus,
+      previousOperationStatus,
+      sourceBillingStatus: statusLabel,
+      sourceOperationStatus: nextOperationStatus || "",
+      billingStatus: statusLabel,
+      operationStatus: nextOperationStatus || "",
+      priorityLevel: normalizedPriority,
+      priorityLabel,
+      solutionTier: normalizedPriority,
+      solutionTierLabel: priorityLabel,
+      status: SUGGESTED_WORK_STATUS.OPEN,
+      suggestionStatus: SUGGESTED_WORK_STATUS.OPEN,
+      serviceLocationId: job.serviceLocationId || serviceLocation.id || "",
+      serviceLocationName: locationName,
+      serviceLocationAddress: locationAddress,
+      bodyOfWaterId: job.bodyOfWaterId || "",
+      bodyOfWaterName: job.bodyOfWaterName || "",
+      equipmentId: job.equipmentId || "",
+      equipmentName: job.equipmentName || "",
+      adminId: job.adminId || "",
+      adminName: job.adminName || "",
+      repairRequestId: job.repairRequestId || "",
+      serviceStopIds: Array.isArray(job.serviceStopIds) ? job.serviceStopIds : [],
+      taskCount: (taskList || []).length,
+      openTaskCount,
+      plannedServiceStopCount: (plannedServiceStops || []).length,
+      plannedMaterialCount: (shoppingList || []).length,
+      purchasedItemCount: (purchasedItems || []).length,
+      title: `${priorityLabel}: ${jobLabel}`,
+      description: job.description || reason || "",
+      note: noteLines.join("\n"),
+      reason,
+      statusChangedAt: serverTimestamp(),
+      statusChangedAtMillis,
+      updatedAt: serverTimestamp(),
+      updatedAtMillis: statusChangedAtMillis,
+      lastUpdatedByUserId: getUserId() || "",
+      lastUpdatedByUserName: getAuditUserName(),
+    };
+
+    await setDoc(
+      doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWorkId),
+      suggestedWorkRecord,
+      { merge: true }
+    );
+
+    return suggestedWorkRecord;
+  };
+
   const upsertExpiredJobRecord = async ({
     previousBillingStatus = job.billingStatus || "",
     previousOperationStatus = job.operationStatus || "",
     nextOperationStatus = job.operationStatus || "",
     expiredAtMillis = Date.now(),
     reason = "Job canceled from job detail",
+    priorityLevel = job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER,
   } = {}) => {
     if (!recentlySelectedCompany || !jobId) return null;
 
@@ -823,6 +966,16 @@ const JobDetailView = () => {
       expiredJobRecord,
       { merge: true }
     );
+
+    await upsertSuggestedWorkRecord({
+      billingStatus: "Expired",
+      previousBillingStatus,
+      previousOperationStatus,
+      nextOperationStatus,
+      statusChangedAtMillis: expiredAtMillis,
+      reason,
+      priorityLevel,
+    });
 
     return expiredJobRecord;
   };
@@ -1174,6 +1327,31 @@ const JobDetailView = () => {
       {formatStatusLabel(status) || "Not set"}
     </span>
   );
+
+  const solutionTierTone = (tier) => {
+    switch (getSuggestedWorkTierTone(tier)) {
+      case "red":
+        return "border-red-200 bg-red-50 text-red-700";
+      case "amber":
+        return "border-amber-200 bg-amber-50 text-amber-800";
+      case "blue":
+        return "border-blue-200 bg-blue-50 text-blue-700";
+      case "emerald":
+        return "border-emerald-200 bg-emerald-50 text-emerald-700";
+      default:
+        return "border-slate-200 bg-slate-50 text-slate-700";
+    }
+  };
+
+  const SolutionTierBadge = ({ tier }) => {
+    const normalizedTier = normalizeSuggestedWorkTier(tier);
+
+    return (
+      <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${solutionTierTone(normalizedTier)}`}>
+        {normalizedTier} - {getSuggestedWorkTierLabel(normalizedTier)}
+      </span>
+    );
+  };
 
   const selectTheme = (theme) => ({
     ...theme,
@@ -3083,6 +3261,11 @@ const JobDetailView = () => {
           value: j.billingStatus || "Draft",
           label: j.billingStatus || "Draft",
         });
+        const nextSolutionTier = normalizeSuggestedWorkTier(j.solutionTier || j.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
+        setSelectedSolutionTier({
+          value: nextSolutionTier,
+          label: `${nextSolutionTier} - ${getSuggestedWorkTierLabel(nextSolutionTier)}`,
+        });
 
         setShoppingFormData((prev) => ({
           ...prev,
@@ -3617,6 +3800,11 @@ const JobDetailView = () => {
         value: job.operationStatus || "Estimate Pending",
         label: job.operationStatus || "Estimate Pending",
       });
+      const nextSolutionTier = normalizeSuggestedWorkTier(job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
+      setSelectedSolutionTier({
+        value: nextSolutionTier,
+        label: `${nextSolutionTier} - ${getSuggestedWorkTierLabel(nextSolutionTier)}`,
+      });
     } catch (err) {
       console.error(err);
       toast.error("Failed to enter edit mode");
@@ -3634,6 +3822,11 @@ const JobDetailView = () => {
     setSelectedOperationStatus({
       value: job.operationStatus || "Estimate Pending",
       label: job.operationStatus || "Estimate Pending",
+    });
+    const nextSolutionTier = normalizeSuggestedWorkTier(job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
+    setSelectedSolutionTier({
+      value: nextSolutionTier,
+      label: `${nextSolutionTier} - ${getSuggestedWorkTierLabel(nextSolutionTier)}`,
     });
   };
 
@@ -3670,8 +3863,17 @@ const JobDetailView = () => {
         updates.operationStatus = selectedOperationStatus.value;
       }
 
-      if (updates.billingStatus === "Expired" && !(job.customerId || customer.id)) {
-        return toast.error("Attach a customer before canceling this job.");
+      const nextSolutionTier = normalizeSuggestedWorkTier(selectedSolutionTier?.value);
+      const currentSolutionTier = normalizeSuggestedWorkTier(job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
+      if (nextSolutionTier !== currentSolutionTier) {
+        updates.solutionTier = nextSolutionTier;
+        updates.solutionTierLabel = getSuggestedWorkTierLabel(nextSolutionTier);
+        updates.priorityLevel = nextSolutionTier;
+        updates.priorityLabel = getSuggestedWorkTierLabel(nextSolutionTier);
+      }
+
+      if (["Expired", "Rejected"].includes(updates.billingStatus) && !(job.customerId || customer.id)) {
+        return toast.error("Attach a customer before marking this job as expired or rejected.");
       }
 
       if (Object.keys(updates).length) {
@@ -3683,6 +3885,7 @@ const JobDetailView = () => {
             buildHistoryChange("rate", "Customer Price", moneyFromCents(job.rate), moneyFromCents(updates.rate ?? job.rate)),
             buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", updates.billingStatus ?? job.billingStatus),
             buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", updates.operationStatus ?? job.operationStatus),
+            buildHistoryChange("solutionTier", "Solution Version", getSuggestedWorkTierLabel(job.solutionTier || job.priorityLevel), getSuggestedWorkTierLabel(updates.solutionTier ?? job.solutionTier ?? job.priorityLevel)),
           ],
         });
 
@@ -3692,6 +3895,18 @@ const JobDetailView = () => {
             previousOperationStatus: job.operationStatus || "",
             nextOperationStatus: updates.operationStatus ?? job.operationStatus ?? "",
             reason: "Job expired from edit status",
+            priorityLevel: updates.solutionTier ?? job.solutionTier ?? DEFAULT_SUGGESTED_WORK_TIER,
+          });
+        }
+
+        if (updates.billingStatus === "Rejected") {
+          await upsertSuggestedWorkRecord({
+            billingStatus: "Rejected",
+            previousBillingStatus: job.billingStatus || "",
+            previousOperationStatus: job.operationStatus || "",
+            nextOperationStatus: updates.operationStatus ?? job.operationStatus ?? "",
+            reason: "Job rejected from edit status",
+            priorityLevel: updates.solutionTier ?? job.solutionTier ?? DEFAULT_SUGGESTED_WORK_TIER,
           });
         }
 
@@ -3710,6 +3925,8 @@ const JobDetailView = () => {
           adminName: j.adminName || "",
           billingStatus: j.billingStatus || "",
           operationStatus: j.operationStatus || "",
+          solutionTier: normalizeSuggestedWorkTier(j.solutionTier || j.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER),
+          solutionTierLabel: getSuggestedWorkTierLabel(j.solutionTier || j.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER),
           rate: Number(j.rate || 0),
         }));
 
@@ -3721,6 +3938,11 @@ const JobDetailView = () => {
         setSelectedOperationStatus({
           value: j.operationStatus || "Estimate Pending",
           label: j.operationStatus || "Estimate Pending",
+        });
+        const refreshedSolutionTier = normalizeSuggestedWorkTier(j.solutionTier || j.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
+        setSelectedSolutionTier({
+          value: refreshedSolutionTier,
+          label: `${refreshedSolutionTier} - ${getSuggestedWorkTierLabel(refreshedSolutionTier)}`,
         });
       }
 
@@ -3746,23 +3968,30 @@ const JobDetailView = () => {
         "Expired",
         job.operationStatus || "Estimate Pending"
       );
+      const nextSolutionTier = normalizeSuggestedWorkTier(selectedSolutionTier?.value || job.solutionTier || job.priorityLevel);
+      const nextSolutionTierLabel = getSuggestedWorkTierLabel(nextSolutionTier);
       if (!(job.customerId || customer.id)) {
         return toast.error("Attach a customer before canceling this job.");
       }
 
       const ok = isJobExpired
         ? true
-        : window.confirm("Cancel this job? The job will not be deleted. Billing status will be set to Expired and a note will be added to the customer history.");
+        : window.confirm("Cancel this job? The job will not be deleted. Billing status will be set to Expired and the scope will be copied to Suggested Work.");
       if (!ok) return;
 
       setExpiringJob(true);
       const nowMillis = Date.now();
       const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
+      const currentSolutionTier = normalizeSuggestedWorkTier(job.solutionTier || job.priorityLevel || DEFAULT_SUGGESTED_WORK_TIER);
 
-      if (!isJobExpired || job.operationStatus !== nextOperationStatus) {
+      if (!isJobExpired || job.operationStatus !== nextOperationStatus || currentSolutionTier !== nextSolutionTier) {
         await updateDoc(jobRef, {
           billingStatus: "Expired",
           operationStatus: nextOperationStatus,
+          solutionTier: nextSolutionTier,
+          solutionTierLabel: nextSolutionTierLabel,
+          priorityLevel: nextSolutionTier,
+          priorityLabel: nextSolutionTierLabel,
           updatedAt: serverTimestamp(),
           updatedAtMillis: nowMillis,
         });
@@ -3774,21 +4003,24 @@ const JobDetailView = () => {
         nextOperationStatus,
         expiredAtMillis: nowMillis,
         reason: "Job canceled from job detail",
+        priorityLevel: nextSolutionTier,
       });
 
       await recordJobHistory({
         eventType: "Job Canceled",
         title: isJobExpired ? "Expired job customer note refreshed" : "Job canceled and marked expired",
-        description: "The job was preserved and copied to the customer's expired jobs history.",
+        description: "The job was preserved and copied to suggested work.",
         changes: isJobExpired
           ? []
           : [
             buildHistoryChange("billingStatus", "Billing Status", previousBillingStatus || "—", "Expired"),
             buildHistoryChange("operationStatus", "Operation Status", previousOperationStatus || "—", nextOperationStatus),
+            buildHistoryChange("solutionTier", "Solution Version", getSuggestedWorkTierLabel(job.solutionTier || job.priorityLevel), nextSolutionTierLabel),
           ],
         metadata: {
           customerId: job.customerId || customer.id || "",
           customerExpiredJobId: jobId,
+          suggestedWorkId: suggestedWorkIdForSource("job", jobId),
         },
         severity: "warning",
       });
@@ -3797,11 +4029,14 @@ const JobDetailView = () => {
         ...prev,
         billingStatus: "Expired",
         operationStatus: nextOperationStatus,
+        solutionTier: nextSolutionTier,
+        solutionTierLabel: nextSolutionTierLabel,
         updatedAt: new Date(nowMillis),
         updatedAtMillis: nowMillis,
       }));
       setSelectedBillingStatus({ value: "Expired", label: "Expired" });
       setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
+      setSelectedSolutionTier({ value: nextSolutionTier, label: `${nextSolutionTier} - ${nextSolutionTierLabel}` });
       toast.success(isJobExpired ? "Expired job note refreshed" : "Job canceled");
     } catch (err) {
       console.error(err);
@@ -7080,7 +7315,7 @@ const JobDetailView = () => {
                 <div className="animate-pulse space-y-3">
                   <Link
                     to="/company/jobs"
-                    className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                    className="app-back-link"
                   >
                     &larr; Back to Jobs
                   </Link>
@@ -7097,7 +7332,7 @@ const JobDetailView = () => {
                   <div className="flex flex-wrap items-center gap-2">
                     <Link
                       to="/company/jobs"
-                      className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                      className="app-back-link"
                     >
                       &larr; Back to Jobs
                     </Link>
@@ -7132,11 +7367,24 @@ const JobDetailView = () => {
                             styles={selectStyles}
                           />
                         </div>
+                        <div className="min-w-[170px]">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Solution</p>
+                          <Select
+                            value={selectedSolutionTier}
+                            options={solutionTierOptions}
+                            onChange={setSelectedSolutionTier}
+                            isSearchable={false}
+                            placeholder="Solution version"
+                            theme={selectTheme}
+                            styles={selectStyles}
+                          />
+                        </div>
                       </>
                     ) : (
                       <>
                         <StatusBadge status={job.billingStatus} />
                         <StatusBadge status={job.operationStatus} />
+                        <SolutionTierBadge tier={job.solutionTier || job.priorityLevel} />
                       </>
                     )}
                   </div>
@@ -7280,6 +7528,12 @@ const JobDetailView = () => {
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Admin</dt>
                     <dd className="mt-1 font-semibold text-slate-900">{job.adminName || "Not set"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Solution</dt>
+                    <dd className="mt-1">
+                      <SolutionTierBadge tier={job.solutionTier || job.priorityLevel} />
+                    </dd>
                   </div>
                   <div>
                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Site</dt>

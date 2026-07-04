@@ -519,7 +519,7 @@ const ReceiptDetailView = () => {
                     <div>
                         <Link
                             to="/company/receipts"
-                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            className="app-back-link"
                         >
                             &larr; Back to Receipts
                         </Link>

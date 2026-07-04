@@ -270,7 +270,7 @@ const CreateBodyOfWater = () => {
                     <div>
                         <Link
                             to={selectedCustomerId ? `/company/customers/details/${selectedCustomerId}/locations` : '/company/bodiesOfWater'}
-                            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                            className="app-back-link"
                         >
                             &larr; Back
                         </Link>

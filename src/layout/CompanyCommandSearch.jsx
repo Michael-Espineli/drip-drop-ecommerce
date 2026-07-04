@@ -260,6 +260,18 @@ const searchSources = [
         path: (_data, id) => `/company/repair-requests/detail/${id}`,
     },
     {
+        key: "suggestedWork",
+        label: "Suggested Work",
+        icon: FiFileText,
+        ...companyCollection("suggestedWork"),
+        keywords: ["suggested work", "recommendation", "repair suggestion", "good better best"],
+        dateFields: ["updatedAt", "createdAt", "statusChangedAt", "updatedAtMillis"],
+        searchFields: ["title", "description", "note", "status", "customerName", "priorityLabel", "solutionTierLabel", "jobInternalId", "repairRequestId", "equipmentName"],
+        title: (data, id) => data.title || data.description || data.customerName || id,
+        subtitle: (data) => compact([data.customerName, data.priorityLabel, data.status]).join(" | "),
+        path: () => "/company/suggested-work",
+    },
+    {
         key: "shoppingList",
         label: "Shopping Item",
         icon: FiShoppingCart,

@@ -239,6 +239,9 @@ const CompanyUserDashboard = () => {
     () => companyUsers.find((u) => u.id === selectedUserId || u.userId === selectedUserId) || null,
     [companyUsers, selectedUserId]
   );
+  const selectedUserPerformanceNotePath = selectedUser
+    ? `/company/companyUsers/${selectedUser.userId || selectedUser.id}/performance?action=addPerformanceNote`
+    : "";
 
   const visibleWorkLogs = useMemo(() => {
     if (!selectedUser) return workLogs;
@@ -317,6 +320,23 @@ const CompanyUserDashboard = () => {
           </div>
 
           <div className="flex flex-wrap gap-2">
+            {selectedUser ? (
+              <Link
+                to={selectedUserPerformanceNotePath}
+                className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition"
+              >
+                Add Performance Note
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                title="Select a user first"
+                className="inline-flex cursor-not-allowed items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white opacity-50 shadow-sm"
+              >
+                Add Performance Note
+              </button>
+            )}
             <Link
               to="/company/companyUsers"
               className="inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"

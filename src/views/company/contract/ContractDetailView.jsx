@@ -259,7 +259,7 @@ Thank you.`
                         <div>
                             <Link
                                 to="/company/contracts"
-                                className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+                                className="app-back-link"
                             >
                                 &larr; Back to Contracts
                             </Link>

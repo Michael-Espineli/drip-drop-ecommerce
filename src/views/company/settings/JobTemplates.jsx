@@ -521,7 +521,7 @@ const JobTemplates = () => {
       <div className="w-full">
         <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <Link to="/company/settings" className="text-sm font-semibold text-slate-600 hover:text-slate-900">
+            <Link to="/company/settings" className="app-back-link">
               &larr; Back to Settings
             </Link>
             <h1 className="mt-3 text-3xl font-bold text-slate-900">Job Templates</h1>

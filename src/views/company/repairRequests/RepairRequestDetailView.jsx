@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useContext } from 'react';
 import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
-import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where } from 'firebase/firestore';
+import { arrayUnion, collection, doc, getDoc, getDocs, query, updateDoc, deleteDoc, where, serverTimestamp, setDoc } from 'firebase/firestore';
 import { XMarkIcon } from '@heroicons/react/24/outline';
 import { db, storage } from '../../../utils/config';
 import {
@@ -21,6 +21,14 @@ import {
   getRepairRequestPhotoUrl,
   uploadRepairRequestPhoto,
 } from '../../../utils/repairRequestPhotos';
+import {
+  DEFAULT_SUGGESTED_WORK_TIER,
+  SUGGESTED_WORK_STATUS,
+  SUGGESTED_WORK_TIER_OPTIONS,
+  getSuggestedWorkTierLabel,
+  normalizeSuggestedWorkTier,
+  suggestedWorkIdForSource,
+} from '../../../utils/models/SuggestedWork';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
@@ -46,6 +54,8 @@ const RepairRequestDetailView = () => {
   const [loadingJobs, setLoadingJobs] = useState(false);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [connectingJob, setConnectingJob] = useState(false);
+  const [suggestedWorkTier, setSuggestedWorkTier] = useState(DEFAULT_SUGGESTED_WORK_TIER);
+  const [convertingToSuggestedWork, setConvertingToSuggestedWork] = useState(false);
   const [photoFiles, setPhotoFiles] = useState([]);
   const [uploadingPhotos, setUploadingPhotos] = useState(false);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
@@ -226,6 +236,104 @@ const RepairRequestDetailView = () => {
         repairRequestSourcePath: sourcePath,
       },
     });
+  };
+
+  const handleConvertToSuggestedWork = async () => {
+    if (!repairRequest?.id || convertingToSuggestedWork) return;
+    if (!requirePermission("34", "update repair requests")) return;
+    if (!recentlySelectedCompany) return;
+    if (!repairRequest.customerId) {
+      alert("Attach this request to a customer before converting it to suggested work.");
+      return;
+    }
+
+    const ok = window.confirm("Move this repair request to Suggested Work? It will stay linked here and will be available from the company suggested work page.");
+    if (!ok) return;
+
+    try {
+      setConvertingToSuggestedWork(true);
+
+      const normalizedTier = normalizeSuggestedWorkTier(suggestedWorkTier);
+      const priorityLabel = getSuggestedWorkTierLabel(normalizedTier);
+      const suggestedWorkId = suggestedWorkIdForSource("repair_request", repairRequest.id);
+      const nowMillis = Date.now();
+      const sourceCollection = sourcePath === "homeowner"
+        ? "homeownerRepairRequests"
+        : `companies/${recentlySelectedCompany}/repairRequests`;
+
+      const suggestedWorkRecord = {
+        id: suggestedWorkId,
+        companyId: recentlySelectedCompany,
+        customerId: repairRequest.customerId || "",
+        customerName: repairRequest.customerName || "",
+        title: repairRequest.description
+          ? `${priorityLabel}: ${repairRequest.description.slice(0, 90)}`
+          : `${priorityLabel}: Repair request`,
+        description: repairRequest.description || "",
+        note: repairRequest.description || "",
+        status: SUGGESTED_WORK_STATUS.OPEN,
+        suggestionStatus: SUGGESTED_WORK_STATUS.OPEN,
+        priorityLevel: normalizedTier,
+        priorityLabel,
+        solutionTier: normalizedTier,
+        solutionTierLabel: priorityLabel,
+        sourceType: "repairRequest",
+        sourceId: repairRequest.id,
+        sourcePath: sourcePath === "homeowner"
+          ? `homeownerRepairRequests/${repairRequest.id}`
+          : `companies/${recentlySelectedCompany}/repairRequests/${repairRequest.id}`,
+        sourceCollection,
+        repairRequestId: repairRequest.id,
+        repairRequestSourcePath: sourcePath,
+        requestStatus: repairRequest.status || "",
+        requesterId: repairRequest.requesterId || "",
+        requesterName: repairRequest.requesterName || "",
+        serviceLocationId: repairRequest.locationId || repairRequest.serviceLocationId || "",
+        serviceLocationName: repairRequest.locationName || repairRequest.serviceLocationName || "",
+        bodyOfWaterId: repairRequest.bodyOfWaterId || "",
+        bodyOfWaterName: repairRequest.bodyOfWaterName || "",
+        equipmentId: repairRequest.equipmentId || "",
+        equipmentName: repairRequest.equipmentName || repairRequest.equipmentModel || "",
+        photoUrls: repairRequest.photoUrls || [],
+        createdAt: serverTimestamp(),
+        createdAtMillis: nowMillis,
+        updatedAt: serverTimestamp(),
+        updatedAtMillis: nowMillis,
+      };
+
+      await Promise.all([
+        setDoc(
+          doc(db, "companies", recentlySelectedCompany, "suggestedWork", suggestedWorkId),
+          suggestedWorkRecord,
+          { merge: true }
+        ),
+        updateDoc(getRequestRef(), {
+          status: REPAIR_REQUEST_STATUS.SUGGESTED_WORK,
+          suggestedWorkId,
+          suggestedWorkPriorityLevel: normalizedTier,
+          suggestedWorkPriorityLabel: priorityLabel,
+          updatedAt: serverTimestamp(),
+        }),
+      ]);
+
+      setRepairRequest((prev) => ({
+        ...prev,
+        status: REPAIR_REQUEST_STATUS.SUGGESTED_WORK,
+        suggestedWorkId,
+        suggestedWorkPriorityLevel: normalizedTier,
+        suggestedWorkPriorityLabel: priorityLabel,
+      }));
+      setFormData((prev) => ({
+        ...prev,
+        status: REPAIR_REQUEST_STATUS.SUGGESTED_WORK,
+      }));
+      alert("Repair request moved to Suggested Work.");
+    } catch (error) {
+      console.error("Error converting repair request to suggested work:", error);
+      alert("Failed to convert this repair request to suggested work.");
+    } finally {
+      setConvertingToSuggestedWork(false);
+    }
   };
 
   const handleStatusChange = async (e) => {
@@ -458,7 +566,7 @@ const RepairRequestDetailView = () => {
           <div>
             <Link
               to={"/company/repair-requests"}
-              className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+              className="app-back-link"
             >&larr; Back to Repair Requests</Link>
             <h2 className="text-3xl font-bold text-gray-800">Repair Request Details</h2>
             <p className="text-sm text-gray-500">{displayRepairRequestStatus(repairRequest.status)} request</p>
@@ -596,6 +704,42 @@ const RepairRequestDetailView = () => {
 
           <div className="space-y-6">
             <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              {can("34") && (
+                <div className="space-y-3 rounded-md border border-blue-100 bg-blue-50 p-3">
+                  <div>
+                    <p className="text-sm font-bold text-blue-950">Suggested Work</p>
+                    <p className="text-xs text-blue-800">Keep this request as a customer recommendation instead of an active job.</p>
+                  </div>
+
+                  <select
+                    value={suggestedWorkTier}
+                    onChange={(event) => setSuggestedWorkTier(normalizeSuggestedWorkTier(event.target.value))}
+                    disabled={convertingToSuggestedWork}
+                    className="w-full rounded-md border border-blue-200 bg-white p-2 text-sm text-slate-800 disabled:bg-gray-100 disabled:text-gray-400"
+                  >
+                    {SUGGESTED_WORK_TIER_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.value} - {option.label}
+                      </option>
+                    ))}
+                  </select>
+
+                  <button
+                    type="button"
+                    onClick={handleConvertToSuggestedWork}
+                    disabled={convertingToSuggestedWork}
+                    className={[
+                      "w-full rounded-md px-4 py-2 text-sm font-bold transition",
+                      convertingToSuggestedWork
+                        ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                        : "bg-blue-600 text-white hover:bg-blue-700",
+                    ].join(" ")}
+                  >
+                    {convertingToSuggestedWork ? "Moving..." : "Move to Suggested Work"}
+                  </button>
+                </div>
+              )}
+
               {can("22") && (
                 <button
                   onClick={handleCreateJob}
@@ -683,9 +827,10 @@ const RepairRequestDetailView = () => {
                           ? 'bg-red-100 text-red-800'
                           : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)
                             ? 'bg-gray-100 text-gray-700'
-                            : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
-                              ? 'bg-blue-100 text-blue-800'
-                              : 'bg-yellow-100 text-yellow-800'
+                            : normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.SUGGESTED_WORK) ||
+                              normalizeRepairRequestStatus(repairRequest.status) === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)
+                                ? 'bg-blue-100 text-blue-800'
+                                : 'bg-yellow-100 text-yellow-800'
                         }`}
                     >
                       {displayRepairRequestStatus(repairRequest.status)}

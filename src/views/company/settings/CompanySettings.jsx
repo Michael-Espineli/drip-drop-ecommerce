@@ -481,6 +481,12 @@ const CompanySettings = () => {
                 description: 'Set up measurement units and chemical dosages.'
             },
             {
+                to: '/company/settings/stop-data',
+                icon: <BeakerIcon className="w-6 h-6" />,
+                title: 'Stop Data',
+                description: 'Review captured readings, dosages, observations, and service stop details.'
+            },
+            {
                 to: '/Company/Roles',
                 icon: <UsersIcon className="w-6 h-6" />,
                 title: 'User Roles',

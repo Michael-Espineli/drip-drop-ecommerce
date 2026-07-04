@@ -241,7 +241,7 @@ const BodiesOfWaterDetails = () => {
 
             <Link 
             to={`/company/customers/details/${bodyOfWater.customerId}/locations`}
-            className="text-sm font-semibold text-slate-600 hover:text-slate-900"
+            className="app-back-link"
             >&larr; Back to Customer View</Link>
             <h2 className="text-3xl font-bold text-gray-800">Body of Water</h2>
             <p className="text-gray-600 mt-1">

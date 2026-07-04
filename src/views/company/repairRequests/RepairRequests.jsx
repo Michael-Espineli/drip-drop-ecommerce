@@ -210,6 +210,7 @@ const RepairRequests = () => {
         if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.RESOLVED)) return "bg-green-100 text-green-800";
         if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CANCELLED) || value === "canceled") return "bg-red-100 text-red-800";
         if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.CONVERTED_TO_JOB)) return "bg-gray-100 text-gray-700";
+        if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.SUGGESTED_WORK)) return "bg-blue-100 text-blue-800";
         if (value === normalizeRepairRequestStatus(REPAIR_REQUEST_STATUS.LEGACY_IN_PROGRESS)) return "bg-blue-100 text-blue-800";
 
         return "bg-yellow-100 text-yellow-800";

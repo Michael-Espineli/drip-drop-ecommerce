@@ -1,5 +1,6 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { collection, doc, getDoc, getDocs, query, where } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, Timestamp, where } from "firebase/firestore";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
 import {
@@ -12,7 +13,7 @@ import {
 } from "@heroicons/react/24/outline";
 import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { estimateServiceStopPaySummary } from "../../../utils/payroll/payEstimate";
 import {
   customerHasAnyTag,
@@ -53,8 +54,8 @@ const reportCatalog = [
 const fixedGroupingReportTypes = new Set(["funReadingsDosages", "readingHealth", "readingPerformance", "pnlPerPool"]);
 
 const readingPerformanceViewOptions = [
-  { value: "users", label: "Users" },
-  { value: "customers", label: "Customers" },
+  { value: "users", label: "User" },
+  { value: "customers", label: "Customer" },
 ];
 
 const groupOptions = [
@@ -372,6 +373,51 @@ const groupKey = (item, groupBy, fallbackName = "Company") => {
   return { id: "company", name: fallbackName };
 };
 
+const normalizeLookupValue = (value) => String(value || "").trim().toLowerCase();
+
+const companyUserDisplayName = (user = {}) => (
+  user.userName ||
+  user.displayName ||
+  [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+  user.name ||
+  user.email ||
+  user.userId ||
+  user.id ||
+  "Company User"
+);
+
+const companyUserLookupValues = (user = {}) => (
+  [
+    user.id,
+    user.userId,
+    user.docId,
+    user.uid,
+    user.companyUserId,
+    user.email,
+  ].filter(Boolean).map(normalizeLookupValue)
+);
+
+const resolveCompanyUserForReportGroup = (group = {}, companyUsers = []) => {
+  const groupId = normalizeLookupValue(group.id);
+  if (groupId) {
+    const exactMatch = companyUsers.find((user) => companyUserLookupValues(user).includes(groupId));
+    if (exactMatch) return exactMatch;
+  }
+
+  const groupName = normalizeLookupValue(group.name);
+  if (!groupName) return null;
+
+  return companyUsers.find((user) => (
+    [
+      companyUserDisplayName(user),
+      user.userName,
+      user.displayName,
+      user.name,
+      user.email,
+    ].filter(Boolean).map(normalizeLookupValue).includes(groupName)
+  )) || null;
+};
+
 const workerDisplayName = (record = {}, fallback = "-") =>
   record.userName ||
   record.techName ||
@@ -445,9 +491,9 @@ const purchaseCategory = (item, databaseItemById) => {
 
   return normalizePurchaseCategory(
     item.category ||
-      item.itemCategory ||
-      item.materialCategory ||
-      databaseItem?.category
+    item.itemCategory ||
+    item.materialCategory ||
+    databaseItem?.category
   );
 };
 
@@ -682,10 +728,10 @@ const activeRangeOverlapDays = (recordStart, recordEnd, rangeStart, rangeEnd) =>
 const billingIntervalDays = (record = {}) => {
   const frequency = reportStatusKey(
     record.billingFrequency ||
-      record.billingCadence ||
-      record.invoiceFrequency ||
-      record.rateType ||
-      "monthly"
+    record.billingCadence ||
+    record.invoiceFrequency ||
+    record.rateType ||
+    "monthly"
   );
   const count = Math.max(
     Number(record.billingFrequencyCount || record.billingCadenceCount || record.invoiceFrequencyCount || 1),
@@ -1375,6 +1421,104 @@ const exportReportPdf = (reportData) => {
   }, 250);
 };
 
+const performanceReviewsRef = (companyId, companyUserId) => (
+  collection(db, "companyUserPerformanceReviews", companyId, "companyUsers", companyUserId, "reviews")
+);
+
+const matchingIndividualSummaryRows = (section = {}, group = {}) => {
+  const groupId = normalizeLookupValue(group.id);
+  const groupName = normalizeLookupValue(group.name);
+
+  return (section.rows || []).filter((row) => {
+    const rowId = normalizeLookupValue(row.id || row.userId || row.companyUserId || row.customerId);
+    const rowName = normalizeLookupValue(row.user || row.customer || row.worker || row.technician || row.name);
+    return (groupId && rowId === groupId) || (groupName && rowName === groupName);
+  });
+};
+
+const individualReportDataForGroup = (reportData, group) => {
+  const summarySections = reportSummarySections(reportData)
+    .map((section) => ({
+      ...section,
+      rows: matchingIndividualSummaryRows(section, group),
+    }))
+    .filter((section) => section.rows.length > 0);
+  const groupMetricStats = Object.entries(group.metrics || {}).map(([label, value]) => ({
+    label,
+    value: typeof value === "number" ? value.toLocaleString() : String(value || "-"),
+  }));
+  const contextStats = (reportData.stats || []).filter((stat) =>
+    ["Date Range", "Customer Tags"].includes(stat.label)
+  );
+
+  return {
+    ...reportData,
+    title: `${reportData.title || "Report"} - ${group.name}`,
+    stats: [
+      { label: "Technician", value: group.technicianName || group.name },
+      ...groupMetricStats,
+      ...contextStats,
+    ],
+    summarySections: summarySections.length
+      ? summarySections
+      : group.summary
+        ? [{
+          title: "Technician Summary",
+          columns: Object.keys(group.summary)
+            .filter((key) => !["id"].includes(key))
+            .map((key) => ({ key, label: key.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (char) => char.toUpperCase()) })),
+          rows: [group.summary],
+        }]
+        : [],
+    groups: [{
+      ...group,
+      name: group.technicianName || group.name,
+    }],
+  };
+};
+
+const individualPerformanceNoteText = (reportData, group) => {
+  const rows = Array.isArray(group.rows) ? group.rows : [];
+  const standardLines = rows.slice(0, 10).map((row) => {
+    if (row.standard) {
+      return [
+        `- ${row.standard}`,
+        row.successRate ? `Success: ${row.successRate}` : "",
+        row.failingRate ? `Fail: ${row.failingRate}` : "",
+        row.failingReadings !== undefined ? `Failing readings: ${row.failingReadings}` : "",
+        row.latestFail ? `Latest fail: ${row.latestFail}` : "",
+      ].filter(Boolean).join(" | ");
+    }
+
+    return [
+      `- ${row.date || "No date"}`,
+      row.customer,
+      row.pool,
+      row.reading,
+      row.value,
+      row.rule,
+    ].filter(Boolean).join(" | ");
+  });
+  const metricLines = Object.entries(group.metrics || {}).map(([label, value]) => (
+    `- ${label}: ${typeof value === "number" ? value.toLocaleString() : value}`
+  ));
+  const dateRange = (reportData.stats || []).find((stat) => stat.label === "Date Range")?.value;
+
+  return [
+    `Reading performance note for ${group.technicianName || group.name}.`,
+    dateRange ? `Date range: ${dateRange}` : "",
+    "",
+    "Performance summary:",
+    ...(metricLines.length ? metricLines : ["- No metrics available."]),
+    "",
+    "Standards and detail:",
+    ...(standardLines.length ? standardLines : ["- No failing standards found in this individual report."]),
+    rows.length > 10 ? `- ${rows.length - 10} more row(s) included in the attached report.` : "",
+    "",
+    "Attached report includes only this technician's performance data.",
+  ].filter((line) => line !== "").join("\n");
+};
+
 const buildReadingReport = ({ stopData, readingTemplates, dosageTemplates = [], mode, groupBy }) => {
   const readingTemplatesById = templateMap(readingTemplates, "readingsTemplateId");
   const dosageTemplatesById = templateMap(dosageTemplates, "dosageTemplateId");
@@ -1475,19 +1619,19 @@ const buildReadingReport = ({ stopData, readingTemplates, dosageTemplates = [], 
     ],
     columns: mode === "summary"
       ? [
-          { key: "name", label: "Name" },
-          { key: "average", label: "Average", align: "right", render: (row) => formatDecimal(row.count ? row.total / row.count : 0) },
-          { key: "min", label: "Low", align: "right", render: (row) => formatDecimal(row.min) },
-          { key: "max", label: "High", align: "right", render: (row) => formatDecimal(row.max) },
-          { key: "unit", label: "Unit" },
-        ]
+        { key: "name", label: "Name" },
+        { key: "average", label: "Average", align: "right", render: (row) => formatDecimal(row.count ? row.total / row.count : 0) },
+        { key: "min", label: "Low", align: "right", render: (row) => formatDecimal(row.min) },
+        { key: "max", label: "High", align: "right", render: (row) => formatDecimal(row.max) },
+        { key: "unit", label: "Unit" },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "customer", label: "Customer" },
-          { key: "worker", label: "Worker" },
-          { key: "readings", label: "Readings" },
-          { key: "dosages", label: "Dosages" },
-        ],
+        { key: "date", label: "Date" },
+        { key: "customer", label: "Customer" },
+        { key: "worker", label: "Worker" },
+        { key: "readings", label: "Readings" },
+        { key: "dosages", label: "Dosages" },
+      ],
     groups: resultGroups,
   };
 };
@@ -1815,24 +1959,24 @@ const buildReadingHealthReport = ({
     ],
     columns: mode === "summary"
       ? [
-          { key: "pool", label: "Pool" },
-          { key: "customer", label: "Customer" },
-          { key: "contact", label: "Contact" },
-          { key: "matches", label: "Matches", align: "right" },
-          { key: "latestValue", label: "Latest Match", align: "right" },
-          { key: "latestDate", label: "Latest Date" },
-          { key: "lastWorker", label: "Worker" },
-        ]
+        { key: "pool", label: "Pool" },
+        { key: "customer", label: "Customer" },
+        { key: "contact", label: "Contact" },
+        { key: "matches", label: "Matches", align: "right" },
+        { key: "latestValue", label: "Latest Match", align: "right" },
+        { key: "latestDate", label: "Latest Date" },
+        { key: "lastWorker", label: "Worker" },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "pool", label: "Pool" },
-          { key: "customer", label: "Customer" },
-          { key: "contact", label: "Contact" },
-          { key: "worker", label: "Worker" },
-          { key: "reading", label: "Reading" },
-          { key: "value", label: "Value", align: "right" },
-          { key: "serviceStop", label: "Service Stop" },
-        ],
+        { key: "date", label: "Date" },
+        { key: "pool", label: "Pool" },
+        { key: "customer", label: "Customer" },
+        { key: "contact", label: "Contact" },
+        { key: "worker", label: "Worker" },
+        { key: "reading", label: "Reading" },
+        { key: "value", label: "Value", align: "right" },
+        { key: "serviceStop", label: "Service Stop" },
+      ],
     groups: [
       {
         id: "reading-health",
@@ -1852,6 +1996,7 @@ const buildReadingPerformanceReport = ({
   readingTemplates,
   bodiesOfWater,
   customersById = new Map(),
+  companyUsers = [],
   serviceStops = [],
   recurringServiceStops = [],
   readingPerformanceStandards,
@@ -2061,6 +2206,9 @@ const buildReadingPerformanceReport = ({
 
   const resultGroups = [...groups.values()]
     .map((group) => {
+      const companyUser = performanceView === "users"
+        ? resolveCompanyUserForReportGroup(group, companyUsers)
+        : null;
       const performance = group.performance || {
         totalStops: 0,
         failingStopIds: new Set(),
@@ -2113,6 +2261,10 @@ const buildReadingPerformanceReport = ({
       return {
         id: group.id,
         name: group.name,
+        reportSubjectType: performanceView === "users" ? "companyUser" : "customer",
+        companyUserId: companyUser?.id || "",
+        technicianUserId: companyUser?.userId || group.id || "",
+        technicianName: companyUser ? companyUserDisplayName(companyUser) : group.name,
         sortFailRate: performance.totalStops ? failingStops / performance.totalStops : 0,
         sortFailingStops: failingStops,
         sortSuccessRate: performance.totalStops ? successfulStops / performance.totalStops : 0,
@@ -2156,6 +2308,7 @@ const buildReadingPerformanceReport = ({
   const userSummaryRows = resultGroups.map((group) => group.summary);
   const failedGroupCount = resultGroups.filter((group) => (group.summary?.failingStops || 0) > 0).length;
   const totalServicedGroupCount = resultGroups.length;
+  const successfulGroupCount = Math.max(totalServicedGroupCount - failedGroupCount, 0);
   const standardSummaryRows = [...overallStandardSummaries.values()]
     .sort((a, b) => b.failingStops - a.failingStops || a.standard.localeCompare(b.standard))
     .map((summary) => ({
@@ -2174,41 +2327,41 @@ const buildReadingPerformanceReport = ({
   const summaryEntityLabel = performanceView === "customers" ? "Customer" : "User";
   const summaryFailingRateKey = performanceView === "customers" ? "customerFailingRate" : "userFailingRate";
   const summarySuccessRateKey = performanceView === "customers" ? "customerSuccessRate" : "userSuccessRate";
-  const summaryColumns = performanceView === "users"
-    ? [
-        { key: summaryEntityKey, label: summaryEntityLabel },
-        { key: "serviceStops", label: "Service Stops", align: "right" },
-        { key: "successfulStops", label: "Successful Stops", align: "right" },
-        { key: summarySuccessRateKey, label: "Success Rate", align: "right" },
-        { key: "failingStops", label: "Failing Stops", align: "right" },
-        { key: summaryFailingRateKey, label: "Fail Rate", align: "right" },
-        { key: "failingReadings", label: "Failing Readings", align: "right" },
-        { key: "latestFail", label: "Latest Fail" },
-      ]
-    : [
-        { key: summaryEntityKey, label: summaryEntityLabel },
-        { key: "serviceStops", label: "Service Stops", align: "right" },
-        { key: "failingStops", label: "Failing Stops", align: "right" },
-        { key: summaryFailingRateKey, label: `% of ${summaryEntityLabel} Stops`, align: "right" },
-        { key: "companyFailingShare", label: "% of Company Fails", align: "right" },
-        { key: "failingReadings", label: "Failing Readings", align: "right" },
-        { key: "assignedRssTechs", label: "Assigned RSS Techs" },
-        { key: "latestFail", label: "Latest Fail" },
-      ];
-  const baseTitle = performanceView === "customers" ? "Reading Performance by Customer Report" : "Reading Performance Report";
+  const summaryColumns = [
+    { key: summaryEntityKey, label: summaryEntityLabel },
+    { key: "serviceStops", label: "Service Stops", align: "right" },
+    { key: "successfulStops", label: "Successful Stops", align: "right" },
+    { key: summarySuccessRateKey, label: "Success Rate", align: "right" },
+    { key: "failingStops", label: "Failing Stops", align: "right" },
+    { key: summaryFailingRateKey, label: "Fail Rate", align: "right" },
+    ...(performanceView === "customers" ? [{ key: "companyFailingShare", label: "% of Company Fails", align: "right" }] : []),
+    { key: "failingReadings", label: "Failing Readings", align: "right" },
+    ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
+    { key: "latestFail", label: "Latest Fail" },
+  ];
+  const baseTitle = performanceView === "customers" ? "Reading Performance by Customer Report" : "Reading Performance by User Report";
   const titleDateRange = displayDateRangeFromValues(dateRangeStart, dateRangeEnd);
   const totalSuccessfulStops = Math.max(stopData.length - overallFailingStopIds.size, 0);
 
   return {
+    reportType: "readingPerformance",
+    performanceView,
     title: [baseTitle, titleDateRange].filter(Boolean).join(" "),
     stats: [
       numberMetric("Service Stops", stopData.length),
       ...(performanceView === "customers"
-        ? [{
+        ? [
+          {
+            label: "Successful Customers",
+            value: `${successfulGroupCount.toLocaleString()} of ${totalServicedGroupCount.toLocaleString()}`,
+            subtitle: `${percentString(successfulGroupCount, totalServicedGroupCount)} of serviced customers`,
+          },
+          {
             label: "Failed Customers",
             value: `${failedGroupCount.toLocaleString()} of ${totalServicedGroupCount.toLocaleString()}`,
             subtitle: `${percentString(failedGroupCount, totalServicedGroupCount)} of serviced customers`,
-          }]
+          },
+        ]
         : []),
       numberMetric("Successful Stops", totalSuccessfulStops),
       {
@@ -2229,33 +2382,29 @@ const buildReadingPerformanceReport = ({
     ],
     columns: mode === "summary"
       ? [
-          { key: "standard", label: "Standard" },
-          ...(performanceView === "users"
-            ? [
-                { key: "successfulStops", label: "Successful Stops", align: "right" },
-                { key: "successRate", label: "Success Rate", align: "right" },
-              ]
-            : []),
-          { key: "failingStops", label: "Failing Stops", align: "right" },
-          { key: "failingRate", label: "Fail Rate", align: "right" },
-          { key: "failingReadings", label: "Failing Readings", align: "right" },
-          ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
-          { key: "latestFail", label: "Latest Fail" },
-          { key: "lastCustomer", label: "Last Customer" },
-          { key: "lastValue", label: "Last Value", align: "right" },
-        ]
+        { key: "standard", label: "Standard" },
+        { key: "successfulStops", label: "Successful Stops", align: "right" },
+        { key: "successRate", label: "Success Rate", align: "right" },
+        { key: "failingStops", label: "Failing Stops", align: "right" },
+        { key: "failingRate", label: "Fail Rate", align: "right" },
+        { key: "failingReadings", label: "Failing Readings", align: "right" },
+        ...(performanceView === "customers" ? [{ key: "assignedRssTechs", label: "Assigned RSS Techs" }] : []),
+        { key: "latestFail", label: "Latest Fail" },
+        { key: "lastCustomer", label: "Last Customer" },
+        { key: "lastValue", label: "Last Value", align: "right" },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "customer", label: "Customer" },
-          { key: "pool", label: "Pool" },
-          { key: "worker", label: "Technician" },
-          ...(performanceView === "customers" ? [{ key: "assignedRssTech", label: "RSS Tech" }] : []),
-          { key: "standard", label: "Standard" },
-          { key: "value", label: "Value", align: "right" },
-          { key: "rule", label: "Rule" },
-          { key: "serviceStop", label: "Service Stop" },
-          { key: "status", label: "Status" },
-        ],
+        { key: "date", label: "Date" },
+        { key: "customer", label: "Customer" },
+        { key: "pool", label: "Pool" },
+        { key: "worker", label: "Technician" },
+        ...(performanceView === "customers" ? [{ key: "assignedRssTech", label: "RSS Tech" }] : []),
+        { key: "standard", label: "Standard" },
+        { key: "value", label: "Value", align: "right" },
+        { key: "rule", label: "Rule" },
+        { key: "serviceStop", label: "Service Stop" },
+        { key: "status", label: "Status" },
+      ],
     summarySections: [
       {
         title: `${summaryEntityLabel} Summary`,
@@ -2329,16 +2478,16 @@ const buildChemicalReport = ({ stopData, dosageTemplates, mode, groupBy }) => {
     ],
     columns: mode === "summary"
       ? [
-          { key: "name", label: "Dosage" },
-          { key: "count", label: "Uses", align: "right" },
-          { key: "amount", label: "Total Amount", align: "right", render: (row) => row.amount.toLocaleString() },
-        ]
+        { key: "name", label: "Dosage" },
+        { key: "count", label: "Uses", align: "right" },
+        { key: "amount", label: "Total Amount", align: "right", render: (row) => row.amount.toLocaleString() },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "customer", label: "Customer" },
-          { key: "worker", label: "Worker" },
-          { key: "values", label: "Dosages" },
-        ],
+        { key: "date", label: "Date" },
+        { key: "customer", label: "Customer" },
+        { key: "worker", label: "Worker" },
+        { key: "values", label: "Dosages" },
+      ],
     groups: [...groups.values()],
   };
 };
@@ -2380,17 +2529,17 @@ const buildPurchaseReport = ({ purchases, databaseItemById, mode, groupBy }) => 
     footerRow:
       mode === "summary"
         ? {
-            name: "Total",
-            count: group.metrics.items || 0,
-            totalCents: group.metrics.spend || 0,
-          }
+          name: "Total",
+          count: group.metrics.items || 0,
+          totalCents: group.metrics.spend || 0,
+        }
         : {
-            date: "Total",
-            name: "",
-            category: "",
-            quantity: "",
-            totalCents: group.metrics.spend || 0,
-          },
+          date: "Total",
+          name: "",
+          category: "",
+          quantity: "",
+          totalCents: group.metrics.spend || 0,
+        },
   }));
 
   return {
@@ -2402,17 +2551,17 @@ const buildPurchaseReport = ({ purchases, databaseItemById, mode, groupBy }) => 
     ],
     columns: mode === "summary"
       ? [
-          { key: "name", label: "Category" },
-          { key: "count", label: "Lines", align: "right" },
-          { key: "totalCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.totalCents) },
-        ]
+        { key: "name", label: "Category" },
+        { key: "count", label: "Lines", align: "right" },
+        { key: "totalCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.totalCents) },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "name", label: "Item" },
-          { key: "category", label: "Category" },
-          { key: "quantity", label: "Qty", align: "right" },
-          { key: "totalCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.totalCents) },
-        ],
+        { key: "date", label: "Date" },
+        { key: "name", label: "Item" },
+        { key: "category", label: "Category" },
+        { key: "quantity", label: "Qty", align: "right" },
+        { key: "totalCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.totalCents) },
+      ],
     total: {
       label: "Purchases Total",
       value: moneyFromCents(totalCents),
@@ -2674,26 +2823,26 @@ const buildWasteReport = ({ stopData, purchases, dosageTemplates, databaseItemBy
     ],
     columns: mode === "detail"
       ? [
-          { key: "date", label: "Date" },
-          { key: "type", label: "Type" },
-          { key: "name", label: "Dosage" },
-          { key: "quantity", label: "Quantity", align: "right" },
-          { key: "worker", label: "User" },
-          { key: "customer", label: "Customer" },
-          { key: "linkedItems", label: "Linked Items" },
-          { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => row.purchaseSpendCents ? moneyFromCents(row.purchaseSpendCents) : "-" },
-          { key: "status", label: "Status" },
-        ]
+        { key: "date", label: "Date" },
+        { key: "type", label: "Type" },
+        { key: "name", label: "Dosage" },
+        { key: "quantity", label: "Quantity", align: "right" },
+        { key: "worker", label: "User" },
+        { key: "customer", label: "Customer" },
+        { key: "linkedItems", label: "Linked Items" },
+        { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => row.purchaseSpendCents ? moneyFromCents(row.purchaseSpendCents) : "-" },
+        { key: "status", label: "Status" },
+      ]
       : [
-          { key: "name", label: "Dosage" },
-          { key: "linkedItems", label: "Linked Purchase Items" },
-          { key: "usedDisplay", label: "Quantity Used", align: "right" },
-          { key: "purchasedDisplay", label: "Purchased", align: "right" },
-          { key: "purchasedVsUsedPercent", label: "Purchased / Used %", align: "right" },
-          { key: "differenceDisplay", label: "Remaining / Waste", align: "right" },
-          { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => moneyFromCents(row.purchaseSpendCents) },
-          { key: "status", label: "Status" },
-        ],
+        { key: "name", label: "Dosage" },
+        { key: "linkedItems", label: "Linked Purchase Items" },
+        { key: "usedDisplay", label: "Quantity Used", align: "right" },
+        { key: "purchasedDisplay", label: "Purchased", align: "right" },
+        { key: "purchasedVsUsedPercent", label: "Purchased / Used %", align: "right" },
+        { key: "differenceDisplay", label: "Remaining / Waste", align: "right" },
+        { key: "purchaseSpendCents", label: "Spend", align: "right", render: (row) => moneyFromCents(row.purchaseSpendCents) },
+        { key: "status", label: "Status" },
+      ],
     total: {
       label: "Linked Chemical Spend",
       value: moneyFromCents(linkedPurchaseSpendCents),
@@ -2776,16 +2925,16 @@ const buildPayrollReport = ({ payrollLines, mode, groupBy }) => {
     .map((group) => {
       const rows = mode === "summary"
         ? payrollCategoryOrder
-            .filter((category) => category !== "predicted")
-            .map((category) => ({
-              id: `${group.id}-${category}`,
-              category: payrollCategoryLabel(category),
-              lines: group.metrics[`${category}Count`] || 0,
-              amountCents: group.metrics[`${category}Cents`] || 0,
-            }))
+          .filter((category) => category !== "predicted")
+          .map((category) => ({
+            id: `${group.id}-${category}`,
+            category: payrollCategoryLabel(category),
+            lines: group.metrics[`${category}Count`] || 0,
+            amountCents: group.metrics[`${category}Cents`] || 0,
+          }))
         : [...group.rows]
-            .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
-            .map(({ sortCategory, sortTime, ...row }) => row);
+          .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
+          .map(({ sortCategory, sortTime, ...row }) => row);
 
       return {
         ...group,
@@ -2799,21 +2948,21 @@ const buildPayrollReport = ({ payrollLines, mode, groupBy }) => {
         rows,
         footerRow: mode === "summary"
           ? {
-              category: "Total",
-              lines: group.metrics.totalCount || 0,
-              amountCents: group.metrics.totalCents || 0,
-            }
+            category: "Total",
+            lines: group.metrics.totalCount || 0,
+            amountCents: group.metrics.totalCents || 0,
+          }
           : {
-              date: "Total",
-              paidDate: "",
-              category: "",
-              worker: "",
-              customer: "",
-              title: "",
-              status: "",
-              amountCents: group.metrics.totalCents || 0,
-              paymentReference: "",
-            },
+            date: "Total",
+            paidDate: "",
+            category: "",
+            worker: "",
+            customer: "",
+            title: "",
+            status: "",
+            amountCents: group.metrics.totalCents || 0,
+            paymentReference: "",
+          },
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -2829,21 +2978,21 @@ const buildPayrollReport = ({ payrollLines, mode, groupBy }) => {
     ],
     columns: mode === "summary"
       ? [
-          { key: "category", label: "Category" },
-          { key: "lines", label: "Lines", align: "right" },
-          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
-        ]
+        { key: "category", label: "Category" },
+        { key: "lines", label: "Lines", align: "right" },
+        { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+      ]
       : [
-          { key: "date", label: "Completed" },
-          { key: "paidDate", label: "Paid" },
-          { key: "category", label: "Category" },
-          { key: "worker", label: "User" },
-          { key: "customer", label: "Customer" },
-          { key: "title", label: "Work" },
-          { key: "status", label: "Status" },
-          { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
-          { key: "paymentReference", label: "Payment Ref" },
-        ],
+        { key: "date", label: "Completed" },
+        { key: "paidDate", label: "Paid" },
+        { key: "category", label: "Category" },
+        { key: "worker", label: "User" },
+        { key: "customer", label: "Customer" },
+        { key: "title", label: "Work" },
+        { key: "status", label: "Status" },
+        { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        { key: "paymentReference", label: "Payment Ref" },
+      ],
     summarySections: [
       {
         title: "Payroll Categories",
@@ -3117,14 +3266,14 @@ const buildFuturePayrollReport = ({
     .map((group) => {
       const rows = mode === "summary"
         ? ["approved", "unapproved", "predicted"].map((category) => ({
-            id: `${group.id}-${category}`,
-            category: payrollCategoryLabel(category),
-            lines: group.metrics[`${category}Count`] || 0,
-            amountCents: group.metrics[`${category}Cents`] || 0,
-          }))
+          id: `${group.id}-${category}`,
+          category: payrollCategoryLabel(category),
+          lines: group.metrics[`${category}Count`] || 0,
+          amountCents: group.metrics[`${category}Cents`] || 0,
+        }))
         : [...group.rows]
-            .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
-            .map(({ sortCategory, sortTime, ...row }) => row);
+          .sort((a, b) => a.sortCategory - b.sortCategory || b.sortTime - a.sortTime)
+          .map(({ sortCategory, sortTime, ...row }) => row);
 
       return {
         ...group,
@@ -3138,21 +3287,21 @@ const buildFuturePayrollReport = ({
         rows,
         footerRow: mode === "summary"
           ? {
-              category: "Total",
-              lines: group.metrics.totalCount || 0,
-              amountCents: group.metrics.totalCents || 0,
-            }
+            category: "Total",
+            lines: group.metrics.totalCount || 0,
+            amountCents: group.metrics.totalCents || 0,
+          }
           : {
-              date: "Total",
-              category: "",
-              source: "",
-              worker: "",
-              customer: "",
-              title: "",
-              status: "",
-              amountCents: group.metrics.totalCents || 0,
-              notes: "",
-            },
+            date: "Total",
+            category: "",
+            source: "",
+            worker: "",
+            customer: "",
+            title: "",
+            status: "",
+            amountCents: group.metrics.totalCents || 0,
+            notes: "",
+          },
       };
     })
     .sort((left, right) => left.name.localeCompare(right.name));
@@ -3168,21 +3317,21 @@ const buildFuturePayrollReport = ({
     ],
     columns: mode === "summary"
       ? [
-          { key: "category", label: "Category" },
-          { key: "lines", label: "Lines", align: "right" },
-          { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
-        ]
+        { key: "category", label: "Category" },
+        { key: "lines", label: "Lines", align: "right" },
+        { key: "amountCents", label: "Total", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "category", label: "Category" },
-          { key: "source", label: "Source" },
-          { key: "worker", label: "User" },
-          { key: "customer", label: "Customer" },
-          { key: "title", label: "Work" },
-          { key: "status", label: "Status" },
-          { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
-          { key: "notes", label: "Notes" },
-        ],
+        { key: "date", label: "Date" },
+        { key: "category", label: "Category" },
+        { key: "source", label: "Source" },
+        { key: "worker", label: "User" },
+        { key: "customer", label: "Customer" },
+        { key: "title", label: "Work" },
+        { key: "status", label: "Status" },
+        { key: "amountCents", label: "Amount", align: "right", render: (row) => moneyFromCents(row.amountCents) },
+        { key: "notes", label: "Notes" },
+      ],
     summarySections: [
       {
         title: "Future Payroll Categories",
@@ -3625,11 +3774,11 @@ const buildPnlPerPoolReport = ({
     const locationIds = agreementServiceLocationIds(agreement);
     const descriptors = locationIds.length
       ? locationIds.flatMap((serviceLocationId) =>
-          poolDescriptorsForLocation(serviceLocationId, {
-            customerId: agreement.customerId,
-            customerName: agreement.customerName,
-          })
-        )
+        poolDescriptorsForLocation(serviceLocationId, {
+          customerId: agreement.customerId,
+          customerName: agreement.customerName,
+        })
+      )
       : fallbackPoolDescriptorsForCustomer(agreement.customerId, agreement.customerName);
 
     distributeAmount(
@@ -4048,11 +4197,11 @@ const buildVehicleReport = ({ vehicles, activeRoutes, mode }) => {
       rows: mode === "summary"
         ? [{ type: vehicle.vehicalType || "-", status: vehicle.status || "-", miles: toNumber(vehicle.miles), routes: routes.length, distance }]
         : routes.map((route) => ({
-            date: shortDate(itemDate(route, ["date", "routeDate", "startTime", "createdAt"])),
-            worker: route.techName || route.companyUserName || "-",
-            status: route.status || "-",
-            distance: toNumber(route.distanceMiles || route.distance || 0),
-          })),
+          date: shortDate(itemDate(route, ["date", "routeDate", "startTime", "createdAt"])),
+          worker: route.techName || route.companyUserName || "-",
+          status: route.status || "-",
+          distance: toNumber(route.distanceMiles || route.distance || 0),
+        })),
     };
   });
 
@@ -4065,18 +4214,18 @@ const buildVehicleReport = ({ vehicles, activeRoutes, mode }) => {
     ],
     columns: mode === "summary"
       ? [
-          { key: "type", label: "Type" },
-          { key: "status", label: "Status" },
-          { key: "miles", label: "Odometer", align: "right", render: (row) => row.miles.toLocaleString() },
-          { key: "routes", label: "Routes", align: "right" },
-          { key: "distance", label: "Route Miles", align: "right", render: (row) => row.distance.toLocaleString() },
-        ]
+        { key: "type", label: "Type" },
+        { key: "status", label: "Status" },
+        { key: "miles", label: "Odometer", align: "right", render: (row) => row.miles.toLocaleString() },
+        { key: "routes", label: "Routes", align: "right" },
+        { key: "distance", label: "Route Miles", align: "right", render: (row) => row.distance.toLocaleString() },
+      ]
       : [
-          { key: "date", label: "Date" },
-          { key: "worker", label: "Worker" },
-          { key: "status", label: "Status" },
-          { key: "distance", label: "Miles", align: "right", render: (row) => row.distance.toLocaleString() },
-        ],
+        { key: "date", label: "Date" },
+        { key: "worker", label: "Worker" },
+        { key: "status", label: "Status" },
+        { key: "distance", label: "Miles", align: "right", render: (row) => row.distance.toLocaleString() },
+      ],
     groups,
   };
 };
@@ -4133,11 +4282,10 @@ const ReportSummaryBar = ({ stats = [], total }) => {
       {items.map((item) => (
         <div
           key={item.label}
-          className={`min-w-[150px] shrink-0 px-3 py-1.5 ${
-            item.emphasized
-              ? "rounded-md bg-slate-900 text-white"
-              : "border-r border-slate-200 last:border-r-0"
-          }`}
+          className={`min-w-[150px] shrink-0 px-3 py-1.5 ${item.emphasized
+            ? "rounded-md bg-slate-900 text-white"
+            : "border-r border-slate-200 last:border-r-0"
+            }`}
         >
           <p className={`text-[11px] font-semibold uppercase ${item.emphasized ? "text-slate-300" : "text-slate-500"}`}>{item.label}</p>
           <p className={`mt-0.5 break-words text-sm font-bold leading-snug ${item.emphasized ? "text-white" : "text-slate-900"}`}>{item.value}</p>
@@ -4152,9 +4300,8 @@ const ReportCatalogCard = ({ report, selected, onSelect }) => (
   <button
     type="button"
     onClick={() => onSelect(report.value)}
-    className={`h-full rounded-lg border p-3 text-left shadow-sm transition ${
-      selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:border-slate-400"
-    }`}
+    className={`h-full rounded-lg border p-3 text-left shadow-sm transition ${selected ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-900 hover:border-slate-400"
+      }`}
   >
     <div className="flex items-start justify-between gap-3">
       <div>
@@ -4457,10 +4604,9 @@ const GeneratedReportView = ({ data }) => {
 const ExportSection = ({ reportData }) => {
   const disabled = !reportData;
   const buttonClass = (accent) =>
-    `flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
-      accent === "dark"
-        ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
-        : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+    `flex w-full items-center justify-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${accent === "dark"
+      ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+      : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
     }`;
 
   return (
@@ -4509,8 +4655,95 @@ const ExportSection = ({ reportData }) => {
   );
 };
 
+const IndividualUsersExportSection = ({ reportData, onCreatePerformanceNote, creatingPerformanceNoteGroupId }) => {
+  const isEligible = reportData?.reportType === "readingPerformance" && reportData.performanceView === "users";
+  if (!isEligible) return null;
+
+  const groups = reportData.groups || [];
+  const buttonClass = (accent) =>
+    `inline-flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${accent === "dark"
+      ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
+      : accent === "blue"
+        ? "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+        : "border-slate-200 bg-white text-slate-700 hover:border-slate-400"
+    }`;
+
+  return (
+    <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+      <div>
+        <h3 className="text-sm font-bold text-slate-900">Export Individual Users</h3>
+        <p className="mt-1 text-xs text-slate-600">Export or attach one technician's report without including everyone else's scores.</p>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        {groups.length ? (
+          groups.map((group) => {
+            const individualReport = individualReportDataForGroup(reportData, group);
+            const isCreatingNote = creatingPerformanceNoteGroupId === group.id;
+            const canCreateNote = Boolean(group.companyUserId);
+
+            return (
+              <div key={group.id} className="rounded-md border border-blue-100 bg-white p-2">
+                <div className="flex flex-col gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{group.technicianName || group.name}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {canCreateNote ? "Matched to company user" : "Could not match this report row to a company user"}
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => exportReportPdf(individualReport)}
+                      className={buttonClass("dark")}
+                      title={`Export ${group.name} PDF`}
+                    >
+                      <PrinterIcon className="h-3.5 w-3.5" />
+                      PDF
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportReportExcel(individualReport)}
+                      className={buttonClass()}
+                      title={`Export ${group.name} Excel`}
+                    >
+                      <TableCellsIcon className="h-3.5 w-3.5" />
+                      Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => exportReportCsv(individualReport)}
+                      className={buttonClass()}
+                      title={`Export ${group.name} CSV`}
+                    >
+                      <DocumentTextIcon className="h-3.5 w-3.5" />
+                      CSV
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canCreateNote || isCreatingNote}
+                      onClick={() => onCreatePerformanceNote(group)}
+                      className={buttonClass("blue")}
+                      title={canCreateNote ? `Create performance note for ${group.name}` : "No matched company user"}
+                    >
+                      <PlusIcon className="h-3.5 w-3.5" />
+                      {isCreatingNote ? "Saving..." : "Note"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        ) : (
+          <p className="text-sm text-slate-500">No individual user groups in this report.</p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const Reports = () => {
-  const { recentlySelectedCompany, companyRole } = useContext(Context);
+  const { recentlySelectedCompany, companyRole, user: authUser, dataBaseUser } = useContext(Context);
   const [reportType, setReportType] = useState("readings");
   const [mode, setMode] = useState("summary");
   const [groupBy, setGroupBy] = useState("company");
@@ -4530,6 +4763,7 @@ const Reports = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [reportSearchDraft, setReportSearchDraft] = useState("");
   const [reportSearchTerm, setReportSearchTerm] = useState("");
+  const [creatingPerformanceNoteGroupId, setCreatingPerformanceNoteGroupId] = useState("");
 
   const selectedReport = useMemo(
     () => reportCatalog.find((report) => report.value === reportType) || reportCatalog[0],
@@ -4691,6 +4925,115 @@ const Reports = () => {
     );
   };
 
+  const handleCreatePerformanceNoteFromGroup = async (group) => {
+    if (!recentlySelectedCompany) {
+      toast.error("Please select a company.");
+      return;
+    }
+    if (!reportData || reportData.reportType !== "readingPerformance") {
+      toast.error("Generate a reading performance report first.");
+      return;
+    }
+    if (!group?.companyUserId) {
+      toast.error("This report row could not be matched to a company user.");
+      return;
+    }
+
+    const individualReport = individualReportDataForGroup(reportData, group);
+    const now = new Date();
+    const reportTimestamp = Timestamp.fromDate(now);
+    const fileBaseName = `${safeFilePart(individualReport.title)}_${format(now, "yyyy-MM-dd_HH-mm")}`;
+    const fileName = `${fileBaseName}.html`;
+    const storagePath = [
+      "companies",
+      recentlySelectedCompany,
+      "performanceReviews",
+      group.companyUserId,
+      "shared",
+      fileName,
+    ].join("/");
+    const reviewerName = (
+      dataBaseUser?.userName ||
+      dataBaseUser?.displayName ||
+      dataBaseUser?.firstName ||
+      authUser?.displayName ||
+      authUser?.email ||
+      "Management"
+    );
+
+    setCreatingPerformanceNoteGroupId(group.id);
+    const toastId = toast.loading(`Creating performance note for ${group.technicianName || group.name}...`);
+
+    try {
+      const reportHtml = printableReportHtml(individualReport);
+      const reportBlob = new Blob([reportHtml], { type: "text/html;charset=utf-8" });
+      const storageRef = ref(storage, storagePath);
+
+      await uploadBytes(storageRef, reportBlob, {
+        contentType: "text/html",
+      });
+      const reportUrl = await getDownloadURL(storageRef);
+      const attachment = {
+        id: `individual_report_${Date.now()}`,
+        name: fileName,
+        title: individualReport.title,
+        url: reportUrl,
+        contentType: "text/html",
+        size: reportBlob.size,
+        storagePath,
+        isTechnicianVisible: true,
+        attachedAt: reportTimestamp,
+      };
+      const attachedReport = {
+        id: `report_${Date.now()}`,
+        title: individualReport.title,
+        url: reportUrl,
+        notes: "Individual reading performance report generated from Reports.",
+        isTechnicianVisible: true,
+        attachments: [attachment],
+        attachedAt: reportTimestamp,
+      };
+
+      await addDoc(performanceReviewsRef(recentlySelectedCompany, group.companyUserId), {
+        type: "observation",
+        title: individualReport.title,
+        note: individualPerformanceNoteText(reportData, group),
+        date: reportTimestamp,
+        references: {
+          serviceStops: [],
+          jobs: [],
+        },
+        attachedReports: [attachedReport],
+        attachments: [attachment],
+        visibleToTechnician: true,
+        isSummaryReport: false,
+        companyInternal: true,
+        companyId: recentlySelectedCompany,
+        companyUserId: group.companyUserId,
+        technicianUserId: group.technicianUserId || "",
+        technicianName: group.technicianName || group.name,
+        createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+        createdByName: reviewerName,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+        sourceReport: {
+          type: "readingPerformance",
+          title: reportData.title || "",
+          mode: reportData.mode || "",
+          groupId: group.id,
+          generatedAt: reportTimestamp,
+        },
+      });
+
+      toast.success(`Performance note created for ${group.technicianName || group.name}.`, { id: toastId });
+    } catch (error) {
+      console.error("Error creating performance note from report:", error);
+      toast.error(`Could not create performance note: ${error.message}`, { id: toastId });
+    } finally {
+      setCreatingPerformanceNoteGroupId("");
+    }
+  };
+
   const handleGenerateReport = async () => {
     if (!recentlySelectedCompany) {
       toast.error("Please select a company.");
@@ -4753,7 +5096,7 @@ const Reports = () => {
       const needsJobs = ["pnl", "job", "tax", "users"].includes(reportType);
       const needsPayroll = ["payroll", "futurePayroll", "pnl", "job", "users", "pnlPerPool"].includes(reportType);
       const needsPayrollFallback = ["futurePayroll", "pnlPerPool"].includes(reportType);
-      const needsUsers = reportType === "users" || needsPayrollFallback;
+      const needsUsers = reportType === "users" || needsPayrollFallback || reportType === "readingPerformance";
       const needsFleet = reportType === "vehicle";
       const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
       const needsServiceStops = ["users", "readingPerformance", "futurePayroll", "pnlPerPool"].includes(reportType);
@@ -4919,6 +5262,8 @@ const Reports = () => {
       const nextReport = builders[reportType](context);
       setReportData({
         ...nextReport,
+        reportType,
+        performanceView: reportType === "readingPerformance" ? readingPerformanceView : nextReport.performanceView,
         mode,
         stats: [
           ...(nextReport.stats || []),
@@ -5158,11 +5503,10 @@ const Reports = () => {
                             key={tag}
                             type="button"
                             onClick={() => toggleCustomerTagFilter(tag)}
-                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                              selected
-                                ? "border-blue-600 bg-blue-600 text-white"
-                                : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
-                            }`}
+                            className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${selected
+                              ? "border-blue-600 bg-blue-600 text-white"
+                              : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                              }`}
                           >
                             {tag}
                           </button>
@@ -5217,6 +5561,11 @@ const Reports = () => {
                 </button>
 
                 <ExportSection reportData={reportData} />
+                <IndividualUsersExportSection
+                  reportData={reportData}
+                  onCreatePerformanceNote={handleCreatePerformanceNoteFromGroup}
+                  creatingPerformanceNoteGroupId={creatingPerformanceNoteGroupId}
+                />
               </div>
             </div>
 

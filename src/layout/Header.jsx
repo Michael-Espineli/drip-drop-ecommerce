@@ -113,7 +113,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         {canAddLead && (
                             <Link
                                 to="/company/leads/new"
-                                className="app-header-primary-action flex h-10 items-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-bold transition"
+                                className="app-header-primary-action hidden h-10 items-center gap-2 whitespace-nowrap rounded-md px-3 text-sm font-bold transition lg:flex"
                             >
                                 <FaUserPlus className="h-4 w-4" />
                                 <span>Add Lead</span>

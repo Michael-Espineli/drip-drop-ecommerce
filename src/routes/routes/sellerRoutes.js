@@ -19,6 +19,7 @@ const ServiceStopDetails = lazy(() => import("../../views/company/serviceStops/S
 const RepairRequests = lazy(() => import("../../views/company/repairRequests/RepairRequests"))
 const CreateNewRepairRequest = lazy(() => import("../../views/company/repairRequests/CreateNewRepairRequest"))
 const RepairRequestDetailView = lazy(() => import("../../views/company/repairRequests/RepairRequestDetailView"))
+const SuggestedWork = lazy(() => import("../../views/company/suggestedWork/SuggestedWork"))
 
 const PublicPage = lazy(() => import("../../views/company/PublicPage"))
 const Settings = lazy(() => import("../../views/company/settings/Settings"))
@@ -102,6 +103,7 @@ const WorkLogs = lazy(() => import("../../views/company/worklogs/WorkLogs"))
 const WorkLogDetails = lazy(() => import("../../views/company/worklogs/WorkLogDetails"))
 
 const CompanyUsers = lazy(() => import("../../views/company/companyUsers/CompanyUsers"))
+const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
 const CompanyUserDetails = lazy(() => import("../../views/company/companyUsers/CompanyUserDetails"))
 const CreateNewCompanyUser = lazy(() => import("../../views/company/companyUsers/CreateNewCompanyUser"))
 
@@ -128,6 +130,7 @@ const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySe
 
 const EmailConfiguration = lazy(() => import("../../views/company/settings/EmailConfiguration/EmailConfiguration"))
 const ReadingsAndDosages = lazy(() => import("../../views/company/settings/ReadingsAndDosages/ReadingsAndDosages"))
+const StopData = lazy(() => import("../../views/company/settings/StopData"))
 const CompanyInfo = lazy(() => import("../../views/company/companyInfo/CompanyInfo"))
 
 const Subscriptions = lazy(() => import("../../views/company/settings/Subscriptions/Subscriptions"))
@@ -404,6 +407,11 @@ export const sellerRoutes = [
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, {
+        path: '/company/suggested-work',
+        element: <SuggestedWork />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
         path: '/company/repair-requests/detail/:repairRequestId',
         element: <RepairRequestDetailView />,
         ability: ['Admin', 'Seller'],
@@ -621,6 +629,14 @@ export const sellerRoutes = [
         element: <ReadingsAndDosages />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }
+    ,
+    {
+        path: '/company/settings/stop-data',
+        element: <StopData />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '840',
     }
     // ,
     // {
@@ -1237,7 +1253,7 @@ export const sellerRoutes = [
     },
     {
         path: '/company/user-dashboard',
-        element: <CompanyUsers />,
+        element: <CompanyUserDashboard />,
         role: 'Company',
     },
     {

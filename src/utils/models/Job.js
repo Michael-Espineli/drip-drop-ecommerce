@@ -51,7 +51,9 @@ export class Job {
     invoiceDate,
     invoiceRef,
     invoiceType,
-    invoiceNotes
+    invoiceNotes,
+    solutionTier = 2,
+    solutionTierLabel = 'Good'
   ) {
     this.id = id;
     this.internalId = internalId;
@@ -84,6 +86,8 @@ export class Job {
     this.invoiceRef = invoiceRef;
     this.invoiceType = invoiceType;
     this.invoiceNotes = invoiceNotes;
+    this.solutionTier = solutionTier;
+    this.solutionTierLabel = solutionTierLabel;
   }
 
   get cost() {
@@ -143,7 +147,9 @@ export class Job {
       invoiceDate,
       invoiceRef,
       data.invoiceType ?? null,
-      data.invoiceNotes ?? null
+      data.invoiceNotes ?? null,
+      data.solutionTier ?? data.priorityLevel ?? data.suggestedWorkTier ?? 2,
+      data.solutionTierLabel ?? data.priorityLabel ?? ''
     );
   }
 }
