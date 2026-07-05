@@ -18,7 +18,7 @@ const companyCustomerTargets = [
   { collectionName: "serviceStops", label: "Service stops", subcollections: ["tasks"] },
   { collectionName: "stopData", label: "Stop data" },
   { collectionName: "recurringServiceStop", label: "Recurring service stops", subcollections: ["tasks", "history"] },
-  { collectionName: "workOrders", label: "Jobs", subcollections: ["history", "changeOrders", "tasks", "comments", "workOfferRefs", "plannedServiceStops"] },
+  { collectionName: "workOrders", label: "Jobs", subcollections: ["history", "changeOrders", "plans", "solutions", "tasks", "comments", "workOfferRefs", "plannedServiceStops"] },
   { collectionName: "repairRequests", label: "Repair requests" },
   { collectionName: "purchasedItems", label: "Purchased items" },
   { collectionName: "shoppingList", label: "Shopping list items" },

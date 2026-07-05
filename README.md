@@ -1,12 +1,40 @@
 # Getting Started with Drip Drop
 
-## for production run 
+## Environments
 
-# firebase use production
+The Firebase CLI project and the React app Firebase config are separate.
 
-## for Development run 
+For local development against the development Firebase project:
 
-# firebase use development
+```sh
+npm run start:dev
+```
+
+For local development against the Firebase emulators:
+
+```sh
+npm run test:emulate
+```
+
+For a production-optimized build that still uses the development Firebase project:
+
+```sh
+npm run build:dev
+```
+
+To deploy the development website and functions to `the-pool-app-dev`:
+
+```sh
+npm run deploy:dev
+```
+
+For production:
+
+```sh
+npm run deploy:prod
+```
+
+`firebase use development` only changes which Firebase project CLI commands target. It does not change the Firebase config baked into the React browser bundle.
 
 ## Available Scripts
 

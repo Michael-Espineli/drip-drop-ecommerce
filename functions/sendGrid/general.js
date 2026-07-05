@@ -890,6 +890,11 @@ const buildServiceAgreementTemplateData = ({
     const companyName = agreement.companyName || companyData.name || companyData.companyName || "Your Pool Company";
     const location = normalizeAgreementLocation(agreement);
     const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+    const planOptions = Array.isArray(agreement.planOptions) && agreement.planOptions.length
+        ? agreement.planOptions
+        : Array.isArray(agreement.solutionOptions)
+            ? agreement.solutionOptions
+            : [];
     const terms = buildAgreementTerms(agreement);
     const includedChemicalKeywords = normalizeAgreementList(agreement.includedChemicalKeywords);
     const includedChemicalIds = normalizeAgreementList(agreement.includedChemicalIds);
@@ -947,6 +952,37 @@ const buildServiceAgreementTemplateData = ({
         billingStartDate: formatDate(agreement.startDate),
         paymentTerms: labelize(agreement.paymentTerms || "dueOnReceipt"),
         autopayStatus: "Optional",
+        allowPlanSelection: agreement.allowPlanSelection === true || agreement.allowSolutionSelection === true,
+        allowSolutionSelection: agreement.allowSolutionSelection === true || agreement.allowPlanSelection === true,
+        selectedPlanId: agreement.selectedPlanId || agreement.selectedSolutionId || "",
+        selectedSolutionId: agreement.selectedSolutionId || "",
+        planOptions: planOptions.map((option) => ({
+            id: option.planId || option.solutionId || option.id || "",
+            planId: option.planId || option.solutionId || option.id || "",
+            solutionId: option.solutionId || option.planId || option.id || "",
+            title: option.title || option.name || "Plan Option",
+            description: option.description || "",
+            planTier: option.planTier || option.solutionTier || "",
+            planTierLabel: option.planTierLabel || option.solutionTierLabel || "",
+            solutionTier: option.solutionTier || option.planTier || "",
+            solutionTierLabel: option.solutionTierLabel || option.planTierLabel || "",
+            totalAmount: formatCurrency(option.totalAmountCents || option.rateAmountCents),
+            taskCount: Number(option.taskCount || 0),
+            plannedStopCount: Number(option.plannedStopCount || 0),
+            materialCount: Number(option.materialCount || 0),
+        })),
+        solutionOptions: planOptions.map((option) => ({
+            id: option.solutionId || option.planId || option.id || "",
+            solutionId: option.solutionId || option.planId || option.id || "",
+            title: option.title || option.name || "Plan Option",
+            description: option.description || "",
+            solutionTier: option.solutionTier || option.planTier || "",
+            solutionTierLabel: option.solutionTierLabel || option.planTierLabel || "",
+            totalAmount: formatCurrency(option.totalAmountCents || option.rateAmountCents),
+            taskCount: Number(option.taskCount || 0),
+            plannedStopCount: Number(option.plannedStopCount || 0),
+            materialCount: Number(option.materialCount || 0),
+        })),
         lineItems: lineItems.map((item) => ({
             name: item.name || item.description || "Service",
             description: item.description || "",
@@ -991,6 +1027,14 @@ const publicServiceAgreementSnapshot = (agreement = {}, options = {}) => {
         serviceLocationIds: Array.isArray(agreement.serviceLocationIds) ? agreement.serviceLocationIds : [],
         serviceLocationSnapshots: Array.isArray(agreement.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : [],
         lineItems: Array.isArray(agreement.lineItems) ? agreement.lineItems : [],
+        planOptions: Array.isArray(agreement.planOptions) ? agreement.planOptions : Array.isArray(agreement.solutionOptions) ? agreement.solutionOptions : [],
+        solutionOptions: Array.isArray(agreement.solutionOptions) ? agreement.solutionOptions : [],
+        allowPlanSelection: agreement.allowPlanSelection === true || agreement.allowSolutionSelection === true,
+        allowSolutionSelection: agreement.allowSolutionSelection === true || agreement.allowPlanSelection === true,
+        selectedPlanId: agreement.selectedPlanId || agreement.selectedSolutionId || "",
+        selectedSolutionId: agreement.selectedSolutionId || agreement.selectedPlanId || "",
+        acceptedPlanId: agreement.acceptedPlanId || agreement.acceptedSolutionId || "",
+        acceptedSolutionId: agreement.acceptedSolutionId || agreement.acceptedPlanId || "",
         terms: agreement.terms || "",
         termsList: Array.isArray(agreement.termsList) ? agreement.termsList : [],
         termsTemplateName: agreement.termsTemplateName || "",

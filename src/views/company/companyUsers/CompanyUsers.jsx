@@ -1,12 +1,13 @@
 
 import React, { useState, useEffect, useContext, useMemo } from "react";
-import { collection, getDocs } from "firebase/firestore";
+import { addDoc, collection, getDocs, serverTimestamp, Timestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { useNavigate } from 'react-router-dom';
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
 import { Link } from 'react-router-dom';
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import toast from "react-hot-toast";
 import {
     MdAdd,
     MdHistory,
@@ -58,6 +59,38 @@ const getUserPhotoUrl = (user = {}) => (
     ''
 );
 
+const performanceLineTypes = [
+    { value: "kudo", label: "Praise" },
+    { value: "complaint", label: "Complaint" },
+    { value: "coaching", label: "Coaching" },
+    { value: "observation", label: "Observation" },
+];
+
+const emptyPerformanceNoteDraft = {
+    companyUserId: "",
+    type: "kudo",
+    date: "",
+    note: "",
+};
+
+const dateInputValue = (date = new Date()) => {
+    const safeDate = date instanceof Date && !Number.isNaN(date.getTime()) ? date : new Date();
+    const year = safeDate.getFullYear();
+    const month = String(safeDate.getMonth() + 1).padStart(2, "0");
+    const day = String(safeDate.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+};
+
+const dateFromInputValue = (value) => {
+    if (!value) return null;
+    const parsed = new Date(`${value}T00:00:00`);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const performanceReviewsRef = (companyId, companyUserId) => (
+    collection(db, "companyUserPerformanceReviews", companyId, "companyUsers", companyUserId, "reviews")
+);
+
 const formatDate = (value) => {
     const date = value?.toDate ? value.toDate() : value instanceof Date ? value : value ? new Date(value) : null;
     return date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString() : 'N/A';
@@ -92,6 +125,24 @@ const ActionLink = ({ to, children, icon: Icon, variant = 'secondary' }) => {
             {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
             <span>{children}</span>
         </Link>
+    );
+};
+
+const ActionButton = ({ onClick, children, icon: Icon, variant = 'secondary', disabled = false }) => {
+    const classes = variant === 'primary'
+        ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 disabled:hover:bg-blue-50'
+        : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:hover:bg-white';
+
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            disabled={disabled}
+            className={`inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${classes}`}
+        >
+            {Icon ? <Icon className="h-4 w-4" aria-hidden="true" /> : null}
+            <span>{children}</span>
+        </button>
     );
 };
 
@@ -154,13 +205,16 @@ const CompanyUsers = () => {
     const [allUsers, setAllUsers] = useState([]);
     const [recentWorkLogCount, setRecentWorkLogCount] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
-    const { recentlySelectedCompany } = useContext(Context);
-    const { can } = useCompanyPermissions();
+    const { recentlySelectedCompany, user: authUser, dataBaseUser } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
     // Filtering state
     const [statusFilter, setStatusFilter] = useState(null);
     const [roleFilter, setRoleFilter] = useState(null);
+    const [isPerformanceNoteModalOpen, setIsPerformanceNoteModalOpen] = useState(false);
+    const [performanceNoteDraft, setPerformanceNoteDraft] = useState(emptyPerformanceNoteDraft);
+    const [isSavingPerformanceNote, setIsSavingPerformanceNote] = useState(false);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -226,6 +280,105 @@ const CompanyUsers = () => {
         filteredUsers: filteredUsers.length,
     }), [allUsers, filteredUsers.length, recentWorkLogCount]);
 
+    const performanceUserOptions = useMemo(() => (
+        allUsers
+            .slice()
+            .sort((left, right) => getUserDisplayName(left).localeCompare(getUserDisplayName(right)))
+            .map((user) => ({
+                value: user.id,
+                label: getUserDisplayName(user),
+                user,
+            }))
+    ), [allUsers]);
+
+    const selectedPerformanceUserOption = performanceUserOptions.find((option) => (
+        option.value === performanceNoteDraft.companyUserId
+    )) || null;
+    const selectedPerformanceUser = selectedPerformanceUserOption?.user || null;
+    const reviewerName = (
+        dataBaseUser?.userName ||
+        dataBaseUser?.displayName ||
+        dataBaseUser?.firstName ||
+        authUser?.displayName ||
+        authUser?.email ||
+        "Management"
+    );
+
+    const openPerformanceNoteModal = () => {
+        setPerformanceNoteDraft({
+            ...emptyPerformanceNoteDraft,
+            date: dateInputValue(new Date()),
+        });
+        setIsPerformanceNoteModalOpen(true);
+    };
+
+    const closePerformanceNoteModal = () => {
+        if (isSavingPerformanceNote) return;
+        setIsPerformanceNoteModalOpen(false);
+        setPerformanceNoteDraft(emptyPerformanceNoteDraft);
+    };
+
+    const updatePerformanceNoteDraft = (field, value) => {
+        setPerformanceNoteDraft((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const handleSavePerformanceNote = async () => {
+        if (!requirePermission("264", "create performance notes")) return;
+        if (!recentlySelectedCompany) {
+            toast.error("Please select a company.");
+            return;
+        }
+        if (!selectedPerformanceUser?.id) {
+            toast.error("Select a user before saving.");
+            return;
+        }
+        if (!performanceNoteDraft.note.trim()) {
+            toast.error("Add a description before saving.");
+            return;
+        }
+
+        const selectedDate = dateFromInputValue(performanceNoteDraft.date);
+        const reviewDate = Timestamp.fromDate(selectedDate || new Date());
+
+        setIsSavingPerformanceNote(true);
+        try {
+            await addDoc(performanceReviewsRef(recentlySelectedCompany, selectedPerformanceUser.id), {
+                type: performanceNoteDraft.type,
+                note: performanceNoteDraft.note.trim(),
+                date: reviewDate,
+                references: {
+                    serviceStops: [],
+                    jobs: [],
+                },
+                attachedReports: [],
+                attachments: [],
+                visibleToTechnician: false,
+                isSummaryReport: false,
+                companyInternal: true,
+                companyId: recentlySelectedCompany,
+                companyUserId: selectedPerformanceUser.id,
+                technicianUserId: selectedPerformanceUser.userId || "",
+                technicianName: getUserDisplayName(selectedPerformanceUser),
+                createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+                createdByName: reviewerName,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            });
+
+            toast.success("Performance note saved.");
+            setIsPerformanceNoteModalOpen(false);
+            setPerformanceNoteDraft(emptyPerformanceNoteDraft);
+        } catch (error) {
+            console.error("Error saving performance note from company users:", error);
+            toast.error("Failed to save performance note.");
+        } finally {
+            setIsSavingPerformanceNote(false);
+        }
+    };
+
     return (
         <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
             <div className="mx-auto">
@@ -252,9 +405,9 @@ const CompanyUsers = () => {
                             Payroll
                         </ActionLink>
                         {can("264") && (
-                            <ActionLink to="/company/user-dashboard" icon={MdNoteAdd} variant="primary">
+                            <ActionButton onClick={openPerformanceNoteModal} icon={MdNoteAdd} variant="primary">
                                 Add Performance Note
-                            </ActionLink>
+                            </ActionButton>
                         )}
                         {can("262") && (
                             <ActionLink
@@ -267,6 +420,107 @@ const CompanyUsers = () => {
                         )}
                     </div>
                 </header>
+
+                {isPerformanceNoteModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-3 sm:p-6">
+                        <div
+                            className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="company-users-performance-note-title"
+                        >
+                            <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                                <div>
+                                    <h2 id="company-users-performance-note-title" className="text-lg font-semibold text-slate-950">Add Performance Note</h2>
+                                    <p className="mt-1 text-sm text-slate-500">Create an internal performance note for a selected company user.</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closePerformanceNoteModal}
+                                    disabled={isSavingPerformanceNote}
+                                    className="inline-flex items-center justify-center rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Close
+                                </button>
+                            </div>
+
+                            <div className="overflow-y-auto p-5">
+                                <div className="space-y-5">
+                                    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+                                        <label className="space-y-1.5">
+                                            <span className="text-sm font-semibold text-slate-700">User</span>
+                                            <Select
+                                                options={performanceUserOptions}
+                                                value={selectedPerformanceUserOption}
+                                                onChange={(option) => updatePerformanceNoteDraft("companyUserId", option?.value || "")}
+                                                placeholder="Select a user..."
+                                                isClearable
+                                                isDisabled={isSavingPerformanceNote}
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1.5">
+                                            <span className="text-sm font-semibold text-slate-700">Note Type</span>
+                                            <select
+                                                value={performanceNoteDraft.type}
+                                                onChange={(event) => updatePerformanceNoteDraft("type", event.target.value)}
+                                                disabled={isSavingPerformanceNote}
+                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                            >
+                                                {performanceLineTypes.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </label>
+
+                                        <label className="space-y-1.5">
+                                            <span className="text-sm font-semibold text-slate-700">Date</span>
+                                            <input
+                                                type="date"
+                                                value={performanceNoteDraft.date || dateInputValue(new Date())}
+                                                onChange={(event) => updatePerformanceNoteDraft("date", event.target.value)}
+                                                disabled={isSavingPerformanceNote}
+                                                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                            />
+                                        </label>
+                                    </div>
+
+                                    <label className="block space-y-1.5">
+                                        <span className="text-sm font-semibold text-slate-700">Description</span>
+                                        <textarea
+                                            value={performanceNoteDraft.note}
+                                            onChange={(event) => updatePerformanceNoteDraft("note", event.target.value)}
+                                            disabled={isSavingPerformanceNote}
+                                            rows={6}
+                                            className="min-h-[160px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100"
+                                            placeholder="Document the performance note..."
+                                        />
+                                    </label>
+
+                                    <div className="flex flex-col-reverse gap-3 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={closePerformanceNoteModal}
+                                            disabled={isSavingPerformanceNote}
+                                            className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={handleSavePerformanceNote}
+                                            disabled={isSavingPerformanceNote}
+                                            className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <MdNoteAdd className="h-4 w-4" aria-hidden="true" />
+                                            {isSavingPerformanceNote ? "Saving..." : "Add Note"}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
 
                 <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <StatCard title="Total Users" value={stats.totalUsers} />

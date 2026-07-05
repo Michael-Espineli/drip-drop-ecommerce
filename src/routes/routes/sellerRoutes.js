@@ -103,7 +103,6 @@ const WorkLogs = lazy(() => import("../../views/company/worklogs/WorkLogs"))
 const WorkLogDetails = lazy(() => import("../../views/company/worklogs/WorkLogDetails"))
 
 const CompanyUsers = lazy(() => import("../../views/company/companyUsers/CompanyUsers"))
-const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
 const CompanyUserDetails = lazy(() => import("../../views/company/companyUsers/CompanyUserDetails"))
 const CreateNewCompanyUser = lazy(() => import("../../views/company/companyUsers/CreateNewCompanyUser"))
 
@@ -926,6 +925,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/CompanyUsers',
+        element: <CompanyUsers />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/companyUsers/:companyUserId',
         element: <CompanyUserDetails />,
         ability: ['Admin', 'Seller'],
@@ -1253,7 +1259,7 @@ export const sellerRoutes = [
     },
     {
         path: '/company/user-dashboard',
-        element: <CompanyUserDashboard />,
+        element: <CompanyUsers />,
         role: 'Company',
     },
     {

@@ -3742,6 +3742,8 @@ const serializeCallableDate = (value) => {
 const ADMIN_CALLABLE_CORS_ORIGINS = [
   "https://dripdrop-poolapp.com",
   "https://www.dripdrop-poolapp.com",
+  "https://the-pool-app-dev.web.app",
+  "https://the-pool-app-dev.firebaseapp.com",
   "https://the-pool-app-3e652.web.app",
   "https://the-pool-app-3e652.firebaseapp.com",
   "http://localhost:3000",

@@ -25,10 +25,10 @@ import {
     isFinishedOutstandingJob,
 } from "../../../utils/jobStatusFilters";
 import {
-    getSuggestedWorkTierLabel,
-    getSuggestedWorkTierTone,
-    normalizeSuggestedWorkTier,
-} from "../../../utils/models/SuggestedWork";
+    getIssuePriorityLabel,
+    getIssuePriorityTone,
+    normalizeIssuePriority,
+} from "../../../utils/models/JobPlan";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -92,8 +92,8 @@ const JOB_SORT_OPTIONS = [
     { value: "billingStatus-desc", label: "Billing Status: Reverse Order" },
     { value: "operationStatus-asc", label: "Operation Status: Workflow Order" },
     { value: "operationStatus-desc", label: "Operation Status: Reverse Order" },
-    { value: "solutionTier-asc", label: "Solution: Must Fix to Best" },
-    { value: "solutionTier-desc", label: "Solution: Best to Must Fix" },
+    { value: "solutionTier-asc", label: "Priority: Critical to Optional" },
+    { value: "solutionTier-desc", label: "Priority: Optional to Critical" },
     { value: "rate-desc", label: "Rate: High to Low" },
     { value: "rate-asc", label: "Rate: Low to High" },
 ];
@@ -207,8 +207,8 @@ const sortJobs = (jobList, sortBy) => {
                 break;
             case "solutionTier":
                 result = compareNumber(
-                    normalizeSuggestedWorkTier(left.solutionTier || left.priorityLevel),
-                    normalizeSuggestedWorkTier(right.solutionTier || right.priorityLevel),
+                    normalizeIssuePriority(left.issuePriorityLevel || left.priorityLevel || left.solutionTier),
+                    normalizeIssuePriority(right.issuePriorityLevel || right.priorityLevel || right.solutionTier),
                     direction
                 );
                 break;
@@ -435,7 +435,7 @@ const Jobs = () => {
                     job.description,
                     job.billingStatus,
                     job.operationStatus,
-                    getSuggestedWorkTierLabel(job.solutionTier || job.priorityLevel),
+                    getIssuePriorityLabel(job.issuePriorityLevel || job.priorityLevel || job.solutionTier),
                 ].some((value) => String(value || "").toLowerCase().includes(normalizedSearchTerm))
             )
             : jobs;
@@ -831,7 +831,7 @@ const Jobs = () => {
     };
 
     const getSolutionTierClass = (tier) => {
-        switch (getSuggestedWorkTierTone(tier)) {
+        switch (getIssuePriorityTone(tier)) {
             case "red":
                 return "bg-red-100 text-red-800";
             case "amber":
@@ -846,10 +846,10 @@ const Jobs = () => {
     };
 
     const renderSolutionTier = (tier) => {
-        const normalizedTier = normalizeSuggestedWorkTier(tier);
+        const normalizedTier = normalizeIssuePriority(tier);
         return (
             <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getSolutionTierClass(normalizedTier)}`}>
-                {normalizedTier} - {getSuggestedWorkTierLabel(normalizedTier)}
+                {normalizedTier} - {getIssuePriorityLabel(normalizedTier)}
             </span>
         );
     };
@@ -1367,7 +1367,7 @@ const Jobs = () => {
                                     </th>
                                     <th className="p-4 text-left">
                                         <SortHeaderButton sortKey="solutionTier" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
-                                            Solution
+                                            Priority
                                         </SortHeaderButton>
                                     </th>
                                     <th className="p-4 text-left hidden sm:table-cell">
@@ -1461,7 +1461,7 @@ const Jobs = () => {
                                             </td>
 
                                             <td className="p-4 whitespace-nowrap">
-                                                {renderSolutionTier(job.solutionTier || job.priorityLevel)}
+                                                {renderSolutionTier(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)}
                                             </td>
 
                                             <td className="p-4 whitespace-nowrap text-gray-800 hidden sm:table-cell">

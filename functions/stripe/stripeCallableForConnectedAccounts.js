@@ -448,12 +448,252 @@ const linkedJobIdForAgreement = (agreement = {}) => {
   return '';
 };
 
+const solutionOptionForAgreement = (agreement = {}, requestedSolutionId = '') => {
+  const options = Array.isArray(agreement.planOptions) && agreement.planOptions.length
+    ? agreement.planOptions
+    : Array.isArray(agreement.solutionOptions)
+      ? agreement.solutionOptions
+      : [];
+  if (!options.length) return null;
+
+  const cleanRequestedId = String(
+    requestedSolutionId ||
+    agreement.selectedPlanId ||
+    agreement.selectedSolutionId ||
+    agreement.acceptedPlanId ||
+    agreement.acceptedSolutionId ||
+    agreement.defaultPlanId ||
+    agreement.defaultSolutionId ||
+    ''
+  ).trim();
+
+  return (
+    options.find((option) => String(option.planId || option.solutionId || option.id || '').trim() === cleanRequestedId) ||
+    options[0]
+  );
+};
+
+const agreementWithSelectedSolution = (agreement = {}, requestedSolutionId = '') => {
+  const selectedOption = solutionOptionForAgreement(agreement, requestedSolutionId);
+  if (!selectedOption) return { agreement, selectedOption: null, selectedSolutionId: '' };
+
+  const selectedSolutionId = selectedOption.planId || selectedOption.solutionId || selectedOption.id || '';
+  const lineItems = Array.isArray(selectedOption.lineItems) && selectedOption.lineItems.length
+    ? selectedOption.lineItems
+    : Array.isArray(agreement.lineItems)
+      ? agreement.lineItems
+      : [];
+  const totalAmountCents = Number(
+    selectedOption.totalAmountCents ||
+    selectedOption.rateAmountCents ||
+    lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0) ||
+    agreement.totalAmountCents ||
+    agreement.rateAmountCents ||
+    0
+  );
+
+  return {
+    agreement: {
+      ...agreement,
+      selectedPlanId: selectedSolutionId,
+      selectedSolutionId,
+      acceptedPlanId: selectedSolutionId,
+      acceptedSolutionId: selectedSolutionId,
+      acceptedPlanTitle: selectedOption.title || selectedOption.name || '',
+      acceptedSolutionTitle: selectedOption.title || selectedOption.name || '',
+      acceptedPlanTier: selectedOption.planTier || selectedOption.solutionTier || null,
+      acceptedSolutionTier: selectedOption.solutionTier || selectedOption.planTier || null,
+      acceptedPlanTierLabel: selectedOption.planTierLabel || selectedOption.solutionTierLabel || '',
+      acceptedSolutionTierLabel: selectedOption.solutionTierLabel || selectedOption.planTierLabel || '',
+      lineItems,
+      subtotalAmountCents: lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0),
+      totalAmountCents,
+      rateAmountCents: totalAmountCents,
+    },
+    selectedOption,
+    selectedSolutionId,
+  };
+};
+
+const commitAdminBatchOperations = async (operations = [], chunkSize = 400) => {
+  for (let index = 0; index < operations.length; index += chunkSize) {
+    const batch = db.batch();
+    operations.slice(index, index + chunkSize).forEach((operation) => operation(batch));
+    await batch.commit();
+  }
+};
+
+const promoteSelectedJobSolutionScope = async ({
+  companyId,
+  jobId,
+  selectedSolutionId,
+  selectedSolutionOption = null,
+  timestamp = admin.firestore.FieldValue.serverTimestamp(),
+  actorUserId = '',
+  actorUserName = '',
+}) => {
+  if (!companyId || !jobId || !selectedSolutionId) return;
+
+  const companyRef = db.collection('companies').doc(companyId);
+  const jobRef = companyRef.collection('workOrders').doc(jobId);
+  const planRef = jobRef.collection('plans').doc(selectedSolutionId);
+  const legacySolutionRef = jobRef.collection('solutions').doc(selectedSolutionId);
+  const [planSnap, legacySolutionSnap] = await Promise.all([
+    planRef.get(),
+    legacySolutionRef.get(),
+  ]);
+  const selectedPlanRef = planSnap.exists || !legacySolutionSnap.exists ? planRef : legacySolutionRef;
+  const solutionSnap = planSnap.exists ? planSnap : legacySolutionSnap;
+  const solution = solutionSnap.exists
+    ? { id: solutionSnap.id, ...solutionSnap.data() }
+    : { ...(selectedSolutionOption || {}), id: selectedSolutionId, planId: selectedSolutionId };
+
+  const tasks = Array.isArray(solution.tasks) ? solution.tasks : [];
+  const plannedStops = Array.isArray(solution.plannedServiceStops) ? solution.plannedServiceStops : [];
+  const shoppingItems = Array.isArray(solution.shoppingItems) ? solution.shoppingItems : [];
+
+  if (!tasks.length && !plannedStops.length && !shoppingItems.length) {
+    await selectedPlanRef.set({
+      status: 'Accepted',
+      isAccepted: true,
+      isActivePlan: true,
+      acceptedAt: timestamp,
+      acceptedByUserId: actorUserId,
+      acceptedByUserName: actorUserName,
+      updatedAt: timestamp,
+    }, { merge: true });
+    return;
+  }
+
+  const [taskDocs, plannedStopDocs, shoppingDocs, planDocs, solutionDocs] = await Promise.all([
+    jobRef.collection('tasks').get(),
+    jobRef.collection('plannedServiceStops').get(),
+    companyRef.collection('shoppingList').where('jobId', '==', jobId).get(),
+    jobRef.collection('plans').get(),
+    jobRef.collection('solutions').get(),
+  ]);
+
+  const operations = [];
+  taskDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
+  plannedStopDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
+  shoppingDocs.docs.forEach((docSnap) => operations.push((batch) => batch.delete(docSnap.ref)));
+
+  const taskIds = new Set();
+  tasks.forEach((task, index) => {
+    const taskId = task.id || `comp_job_task_${uuidv4()}`;
+    taskIds.add(taskId);
+    operations.push((batch) => batch.set(jobRef.collection('tasks').doc(taskId), {
+      ...task,
+      id: taskId,
+      companyId,
+      jobId,
+      status: task.status || 'Unassigned',
+      sortOrder: Number(task.sortOrder ?? index),
+      sourcePlanId: selectedSolutionId,
+      sourceSolutionId: selectedSolutionId,
+    }));
+  });
+
+  plannedStops.forEach((stop, index) => {
+    const stopId = stop.id || `comp_job_plan_stop_${uuidv4()}`;
+    operations.push((batch) => batch.set(jobRef.collection('plannedServiceStops').doc(stopId), {
+      ...stop,
+      id: stopId,
+      companyId,
+      jobId,
+      taskIds: Array.isArray(stop.taskIds) ? stop.taskIds.filter((taskId) => taskIds.has(taskId)) : [],
+      sortOrder: Number(stop.sortOrder ?? index),
+      sourcePlanId: selectedSolutionId,
+      sourceSolutionId: selectedSolutionId,
+    }));
+  });
+
+  shoppingItems.forEach((item, index) => {
+    const itemId = item.id || `comp_shop_${uuidv4()}`;
+    operations.push((batch) => batch.set(companyRef.collection('shoppingList').doc(itemId), {
+      ...item,
+      id: itemId,
+      companyId,
+      category: 'Job',
+      jobId,
+      status: item.customerApprovalRequired && item.customerApprovalStatus !== 'approved'
+        ? 'Needs Customer Approval'
+        : 'Ready to Purchase',
+      estimateAccepted: true,
+      estimateAcceptedAt: timestamp,
+      jobBillingStatus: 'accepted',
+      planId: selectedSolutionId,
+      sourcePlanId: selectedSolutionId,
+      solutionId: selectedSolutionId,
+      sourceSolutionId: selectedSolutionId,
+      sortOrder: Number(item.sortOrder ?? index),
+    }));
+  });
+
+  [...planDocs.docs, ...solutionDocs.docs].forEach((docSnap) => {
+    const isSelected = docSnap.id === selectedSolutionId;
+    const currentStatus = normalizeStatus(docSnap.data()?.status || '');
+    operations.push((batch) => batch.set(docSnap.ref, {
+      isActivePlan: isSelected,
+      isAccepted: isSelected,
+      status: isSelected
+        ? 'Accepted'
+        : currentStatus === 'accepted'
+          ? 'Superseded'
+          : docSnap.data()?.status || 'Draft',
+      ...(isSelected
+        ? {
+          acceptedAt: timestamp,
+          acceptedByUserId: actorUserId,
+          acceptedByUserName: actorUserName,
+        }
+        : currentStatus === 'accepted'
+          ? { supersededAt: timestamp }
+          : {}),
+      updatedAt: timestamp,
+    }, { merge: true }));
+  });
+
+  const historyId = `comp_job_hist_${uuidv4()}`;
+  operations.push((batch) => batch.set(jobRef.collection('history').doc(historyId), {
+    id: historyId,
+    companyId,
+    jobId,
+    eventType: 'Plan',
+    title: `Customer accepted plan: ${solution.title || solution.name || selectedSolutionId}`,
+    description: solution.description || '',
+    changes: [
+      { field: 'acceptedPlanId', label: 'Accepted Plan', before: '—', after: selectedSolutionId },
+      { field: 'tasks', label: 'Tasks', before: '—', after: String(tasks.length) },
+      { field: 'plannedServiceStops', label: 'Planned Stops', before: '—', after: String(plannedStops.length) },
+      { field: 'shoppingItems', label: 'Planned Materials', before: '—', after: String(shoppingItems.length) },
+    ],
+    metadata: {
+      planId: selectedSolutionId,
+      planTier: solution.planTier || solution.solutionTier || selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
+      planTierLabel: solution.planTierLabel || solution.solutionTierLabel || selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
+      solutionId: selectedSolutionId,
+      solutionTier: solution.solutionTier || solution.planTier || selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
+      solutionTierLabel: solution.solutionTierLabel || solution.planTierLabel || selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
+    },
+    severity: 'success',
+    actorUserId,
+    actorUserName,
+    createdAt: timestamp,
+    createdAtMillis: Date.now(),
+  }));
+
+  await commitAdminBatchOperations(operations);
+};
+
 const syncLinkedJobForAgreementStatus = async ({
   agreement,
   status,
   actorUserId = '',
   actorUserName = '',
   timestamp = admin.firestore.FieldValue.serverTimestamp(),
+  selectedSolutionId = '',
+  selectedSolutionOption = null,
 }) => {
   const companyId = agreement.companyId || '';
   const jobId = linkedJobIdForAgreement(agreement);
@@ -477,6 +717,34 @@ const syncLinkedJobForAgreementStatus = async ({
   if (statusKey === 'accepted') {
     update.billingStatus = 'Accepted';
     update.salesAgreementAcceptedAt = timestamp;
+    if (selectedSolutionId) {
+      update.activePlanId = selectedSolutionId;
+      update.acceptedPlanId = selectedSolutionId;
+      update.activeSolutionId = selectedSolutionId;
+      update.acceptedSolutionId = selectedSolutionId;
+      update.planSelectionStatus = 'Accepted';
+      update.solutionSelectionStatus = 'Accepted';
+      update.acceptedPlanTitle = selectedSolutionOption?.title || selectedSolutionOption?.name || '';
+      update.acceptedSolutionTitle = selectedSolutionOption?.title || selectedSolutionOption?.name || '';
+      update.acceptedPlanTier = selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null;
+      update.acceptedPlanTierLabel = selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '';
+      update.activePlanTier = selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null;
+      update.activePlanTierLabel = selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '';
+      update.acceptedSolutionTier = selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null;
+      update.acceptedSolutionTierLabel = selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '';
+      update.activeSolutionTier = selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null;
+      update.activeSolutionTierLabel = selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '';
+      if (selectedSolutionOption?.totalAmountCents || selectedSolutionOption?.rateAmountCents) {
+        update.rate = Number(selectedSolutionOption.totalAmountCents || selectedSolutionOption.rateAmountCents || 0);
+      }
+      const selectedLaborCostCents =
+        selectedSolutionOption?.laborCostCents ||
+        selectedSolutionOption?.costSummary?.plannedLaborCostCents ||
+        0;
+      if (selectedLaborCostCents) {
+        update.laborCost = Number(selectedLaborCostCents || 0);
+      }
+    }
     if (!job.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(job.operationStatus)) {
       update.operationStatus = 'Unscheduled';
     }
@@ -491,6 +759,18 @@ const syncLinkedJobForAgreementStatus = async ({
   }
 
   await jobRef.set(update, { merge: true });
+
+  if (statusKey === 'accepted' && selectedSolutionId) {
+    await promoteSelectedJobSolutionScope({
+      companyId,
+      jobId,
+      selectedSolutionId,
+      selectedSolutionOption,
+      timestamp,
+      actorUserId,
+      actorUserName,
+    });
+  }
 };
 
 const mapStripeSubscriptionStatus = (status) => {
@@ -922,6 +1202,7 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   const callableAuth = await getCallableAuth(data, context, 'You must be signed in to accept a service agreement.');
   const receivedData = getCallableData(data);
   const agreementId = receivedData.agreementId;
+  const requestedSolutionId = String(receivedData.selectedPlanId || receivedData.selectedSolutionId || '').trim();
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
   const acceptanceConfirmation = validateAgreementAcceptance(receivedData);
   const acceptanceAudit = getAgreementAcceptanceAudit(context);
@@ -949,10 +1230,16 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
-  const companyDoc = await db.collection('companies').doc(agreement.companyId).get();
+  const {
+    agreement: acceptanceAgreement,
+    selectedOption: selectedSolutionOption,
+    selectedSolutionId,
+  } = agreementWithSelectedSolution(agreement, requestedSolutionId);
+
+  const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
-  const stripeConnectedAccountId = agreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
-  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement, stripeConnectedAccountId });
+  const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
+  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
   const acceptedByEmail = callableAuth.token?.email || agreement.email || '';
@@ -1125,6 +1412,18 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         title: freshAgreement.title || 'Service Agreement',
         totalAmountCents: Number(freshAgreement.totalAmountCents || freshAgreement.rateAmountCents || 0),
         lineItems: Array.isArray(freshAgreement.lineItems) ? freshAgreement.lineItems : [],
+        planOptions: Array.isArray(freshAgreement.planOptions) ? freshAgreement.planOptions : [],
+        solutionOptions: Array.isArray(freshAgreement.solutionOptions) ? freshAgreement.solutionOptions : [],
+        selectedPlanId: selectedSolutionId,
+        selectedSolutionId,
+        acceptedPlanId: selectedSolutionId,
+        acceptedSolutionId: selectedSolutionId,
+        acceptedPlanTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+        acceptedSolutionTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+        acceptedPlanTier: selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
+        acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
+        acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
+        acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
         terms: freshAgreement.terms || '',
         termsList: Array.isArray(freshAgreement.termsList) ? freshAgreement.termsList : [],
         acceptedAt,
@@ -1150,6 +1449,16 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
         manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       },
       billingSubscriptionId: subscriptionDraft.id,
+      selectedPlanId: selectedSolutionId,
+      selectedSolutionId,
+      acceptedPlanId: selectedSolutionId,
+      acceptedSolutionId: selectedSolutionId,
+      acceptedPlanTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+      acceptedSolutionTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+      acceptedPlanTier: selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
+      acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
+      acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
+      acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
@@ -1200,17 +1509,21 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
   });
 
   await syncLinkedJobForAgreementStatus({
-    agreement,
+    agreement: acceptanceAgreement,
     status: 'accepted',
     actorUserId: callableAuth.uid,
     actorUserName: acceptedByName,
     timestamp: acceptedAt,
+    selectedSolutionId,
+    selectedSolutionOption,
   });
 
   return {
     status: 'success',
     agreementId,
     billingSubscriptionId: subscriptionDraft.id,
+    selectedPlanId: selectedSolutionId,
+    selectedSolutionId,
     customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
     nextAction: subscriptionDraft.nextAction,
   };
@@ -1221,6 +1534,7 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   const agreementId = receivedData.agreementId;
   const accessToken = String(receivedData.accessToken || receivedData.reviewToken || '').trim();
   const email = receivedData.email || '';
+  const requestedSolutionId = String(receivedData.selectedPlanId || receivedData.selectedSolutionId || '').trim();
   const acceptanceNote = String(receivedData.acceptanceNote || '').trim();
   const acceptanceConfirmation = validateAgreementAcceptance(receivedData);
   const acceptanceAudit = getAgreementAcceptanceAudit(context);
@@ -1250,10 +1564,16 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     throw new functions.https.HttpsError('failed-precondition', 'This service agreement is no longer available to accept.');
   }
 
-  const companyDoc = await db.collection('companies').doc(agreement.companyId).get();
+  const {
+    agreement: acceptanceAgreement,
+    selectedOption: selectedSolutionOption,
+    selectedSolutionId,
+  } = agreementWithSelectedSolution(agreement, requestedSolutionId);
+
+  const companyDoc = await db.collection('companies').doc(acceptanceAgreement.companyId).get();
   const companyData = companyDoc.exists ? companyDoc.data() : {};
-  const stripeConnectedAccountId = agreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
-  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement, stripeConnectedAccountId });
+  const stripeConnectedAccountId = acceptanceAgreement.stripeConnectedAccountId || companyData.stripeConnectedAccountId || '';
+  const subscriptionDraft = buildSalesBillingSubscriptionFromAgreement({ agreement: acceptanceAgreement, stripeConnectedAccountId });
   const subscriptionRef = db.collection(salesCollectionNames.billingSubscriptions).doc(subscriptionDraft.id);
   const acceptedAt = admin.firestore.FieldValue.serverTimestamp();
   const acceptedByEmail = normalizeEmail(email || agreement.email || agreement.customerEmail || agreement.billingEmail);
@@ -1430,6 +1750,18 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
         title: freshAgreement.title || 'Service Agreement',
         totalAmountCents: Number(freshAgreement.totalAmountCents || freshAgreement.rateAmountCents || 0),
         lineItems: Array.isArray(freshAgreement.lineItems) ? freshAgreement.lineItems : [],
+        planOptions: Array.isArray(freshAgreement.planOptions) ? freshAgreement.planOptions : [],
+        solutionOptions: Array.isArray(freshAgreement.solutionOptions) ? freshAgreement.solutionOptions : [],
+        selectedPlanId: selectedSolutionId,
+        selectedSolutionId,
+        acceptedPlanId: selectedSolutionId,
+        acceptedSolutionId: selectedSolutionId,
+        acceptedPlanTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+        acceptedSolutionTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+        acceptedPlanTier: selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
+        acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
+        acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
+        acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
         terms: freshAgreement.terms || '',
         termsList: Array.isArray(freshAgreement.termsList) ? freshAgreement.termsList : [],
         acceptedAt,
@@ -1455,6 +1787,16 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
         manualBillingAutoSendEnabled: nextSubscription.manualBillingAutoSendEnabled,
       },
       billingSubscriptionId: subscriptionDraft.id,
+      selectedPlanId: selectedSolutionId,
+      selectedSolutionId,
+      acceptedPlanId: selectedSolutionId,
+      acceptedSolutionId: selectedSolutionId,
+      acceptedPlanTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+      acceptedSolutionTitle: selectedSolutionOption?.title || selectedSolutionOption?.name || '',
+      acceptedPlanTier: selectedSolutionOption?.planTier || selectedSolutionOption?.solutionTier || null,
+      acceptedPlanTierLabel: selectedSolutionOption?.planTierLabel || selectedSolutionOption?.solutionTierLabel || '',
+      acceptedSolutionTier: selectedSolutionOption?.solutionTier || selectedSolutionOption?.planTier || null,
+      acceptedSolutionTierLabel: selectedSolutionOption?.solutionTierLabel || selectedSolutionOption?.planTierLabel || '',
       billingFlowStatus: nextSubscription.status,
       billingFlowNextAction: nextSubscription.nextAction,
       billingFlowUpdatedAt: acceptedAt,
@@ -1505,17 +1847,21 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
   });
 
   await syncLinkedJobForAgreementStatus({
-    agreement,
+    agreement: acceptanceAgreement,
     status: 'accepted',
     actorUserId: acceptedByUserId || 'email-link',
     actorUserName: acceptedByName,
     timestamp: acceptedAt,
+    selectedSolutionId,
+    selectedSolutionOption,
   });
 
   return {
     status: 'success',
     agreementId,
     billingSubscriptionId: subscriptionDraft.id,
+    selectedPlanId: selectedSolutionId,
+    selectedSolutionId,
     customerCanPayImmediately: subscriptionDraft.customerCanPayImmediately,
     nextAction: subscriptionDraft.nextAction,
   };

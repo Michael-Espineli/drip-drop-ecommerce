@@ -21,12 +21,19 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { REPAIR_REQUEST_STATUS } from "../../../utils/models/RepairRequest";
 import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
 import {
-    DEFAULT_SUGGESTED_WORK_TIER,
     SUGGESTED_WORK_STATUS,
-    SUGGESTED_WORK_TIER_OPTIONS,
-    getSuggestedWorkTierLabel,
-    normalizeSuggestedWorkTier,
 } from "../../../utils/models/SuggestedWork";
+import {
+    DEFAULT_ISSUE_PRIORITY,
+    DEFAULT_JOB_PLAN_TIER,
+    ISSUE_PRIORITY_OPTIONS,
+    JOB_PLAN_STATUS,
+    JOB_PLAN_TIER_OPTIONS,
+    getIssuePriorityLabel,
+    getJobPlanTierLabel,
+    normalizeIssuePriority,
+    normalizeJobPlanTier,
+} from "../../../utils/models/JobPlan";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -130,9 +137,10 @@ const CreateNewJob = () => {
     const [description, setDescription] = useState("");
     const [rate, setRate] = useState("0");
     const [laborCost, setLaborCost] = useState("0");
-    const [solutionTier, setSolutionTier] = useState(
-        normalizeSuggestedWorkTier(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_SUGGESTED_WORK_TIER)
+    const [issuePriorityLevel, setIssuePriorityLevel] = useState(
+        normalizeIssuePriority(suggestedWork?.priorityLevel || suggestedWork?.solutionTier || DEFAULT_ISSUE_PRIORITY)
     );
+    const [starterPlanTier, setStarterPlanTier] = useState(DEFAULT_JOB_PLAN_TIER);
 
     const [taskList, setTaskList] = useState([]);
     const [plannedServiceStops, setPlannedServiceStops] = useState([]);
@@ -194,17 +202,24 @@ const CreateNewJob = () => {
         );
     }, [shoppingList]);
 
+    const calculatedPlanPriceCents = useMemo(() => {
+        const calculated = plannedTotalLaborCents + plannedMaterialPriceCents;
+        return calculated || rateCents;
+    }, [plannedTotalLaborCents, plannedMaterialPriceCents, rateCents]);
+
+    const calculatedPlanInternalCostCents = useMemo(() => {
+        return plannedTotalLaborCents + plannedMaterialCostCents;
+    }, [plannedTotalLaborCents, plannedMaterialCostCents]);
+
     const projectedProfitCents = useMemo(() => {
-        return rateCents - laborCostCents - plannedMaterialCostCents;
-    }, [rateCents, laborCostCents, plannedMaterialCostCents]);
+        return calculatedPlanPriceCents - calculatedPlanInternalCostCents;
+    }, [calculatedPlanPriceCents, calculatedPlanInternalCostCents]);
 
     const canCreateJob =
         !!recentlySelectedCompany &&
         !!selectedAdmin?.id &&
         !!selectedCustomer?.id &&
-        !!selectedServiceLocation?.id &&
-        Number.isFinite(Number(rate)) &&
-        Number.isFinite(Number(laborCost));
+        !!selectedServiceLocation?.id;
 
     const selectStyles = {
         control: (provided, state) => ({
@@ -352,6 +367,246 @@ const CreateNewJob = () => {
 
             createdAt: Timestamp.fromDate(new Date()),
             createdByUserId: createdByUserId || "",
+        };
+    };
+
+    const quantityNumber = (value) => {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+    };
+
+    const plannedMaterialTotalCostCents = (item) => {
+        if (item.plannedTotalCostCents !== undefined && item.plannedTotalCostCents !== null) {
+            return Number(item.plannedTotalCostCents || 0);
+        }
+
+        return Math.round(Number(item.plannedUnitCostCents || item.cost || 0) * quantityNumber(item.quantity));
+    };
+
+    const plannedMaterialTotalPriceCents = (item) => {
+        if (item.plannedTotalPriceCents !== undefined && item.plannedTotalPriceCents !== null) {
+            return Number(item.plannedTotalPriceCents || 0);
+        }
+
+        return Math.round(Number(item.plannedUnitPriceCents || item.price || 0) * quantityNumber(item.quantity));
+    };
+
+    const buildStarterPlanLineItems = ({ planId, normalizedTasks, normalizedPlannedStops, normalizedShoppingItems }) => ([
+        ...normalizedPlannedStops.map((stop) => {
+            const amount = Number(stop.plannedLaborCostCents || 0);
+            return {
+                id: `${planId}_${stop.id || "planned_stop"}`,
+                sourceType: "serviceStopType",
+                sourceId: stop.serviceStopTypeId || stop.id || "",
+                salesItemType: "service",
+                billingBehavior: "oneTime",
+                type: "Planned Stop",
+                name: stop.name || stop.serviceStopTypeName || "Planned Service Stop",
+                description: stop.description || stop.plannedLaborNotes || "",
+                quantity: 1,
+                unitAmountCents: amount,
+                totalAmountCents: amount,
+                amount,
+                taxable: false,
+                displayAmount: moneyFromCents(amount),
+            };
+        }),
+        ...normalizedTasks.map((task) => {
+            const amount = Number(task.contractedRate || 0);
+            return {
+                id: `${planId}_${task.id || "task"}`,
+                sourceType: "task",
+                sourceId: task.id || "",
+                salesItemType: "labor",
+                billingBehavior: "oneTime",
+                type: "Task",
+                name: task.name || task.description || task.type || "Task",
+                description: task.type || "",
+                quantity: 1,
+                unitAmountCents: amount,
+                totalAmountCents: amount,
+                amount,
+                taxable: false,
+                displayAmount: moneyFromCents(amount),
+            };
+        }),
+        ...normalizedShoppingItems.map((item) => {
+            const quantity = quantityNumber(item.quantity) || 1;
+            const amount = plannedMaterialTotalPriceCents(item);
+            const unitAmountCents = quantity ? Math.round(amount / quantity) : amount;
+            return {
+                id: `${planId}_${item.id || "material"}`,
+                sourceType: item.dbItemId || item.itemId ? "databaseItem" : "shoppingListItem",
+                sourceId: item.dbItemId || item.itemId || item.id || "",
+                salesItemType: "material",
+                billingBehavior: "oneTime",
+                type: "Material",
+                name: item.name || "Material",
+                description: item.description || "",
+                quantity,
+                unitAmountCents,
+                totalAmountCents: amount,
+                amount,
+                taxable: Boolean(item.taxable),
+                displayAmount: moneyFromCents(amount),
+            };
+        }),
+    ]).filter((item) => item.totalAmountCents > 0 || item.name);
+
+    const buildStarterPlanRecord = ({
+        planId,
+        nextInternalId,
+        customerName,
+        issuePriority,
+        issuePriorityLabel,
+        planTierValue,
+        planTierLabel,
+        normalizedTasks,
+        normalizedPlannedStops,
+        normalizedShoppingItems,
+        nowTimestamp,
+        nowMillis,
+    }) => {
+        const lineItems = buildStarterPlanLineItems({
+            planId,
+            normalizedTasks,
+            normalizedPlannedStops,
+            normalizedShoppingItems,
+        });
+        const subtotalAmountCents = lineItems.reduce((total, item) => total + Number(item.totalAmountCents || 0), 0);
+        const totalAmountCents = subtotalAmountCents || rateCents;
+        const materialCostCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalCostCents(item), 0);
+        const materialPriceCents = normalizedShoppingItems.reduce((total, item) => total + plannedMaterialTotalPriceCents(item), 0);
+        const internalCostCents = plannedTotalLaborCents + materialCostCents;
+        const projectedProfitCents = totalAmountCents - internalCostCents;
+        const profitMarginPercent = totalAmountCents > 0
+            ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
+            : 0;
+
+        return {
+            id: planId,
+            planId,
+            solutionId: planId,
+            companyId: recentlySelectedCompany,
+            jobId,
+            jobInternalId: nextInternalId,
+            customerId: selectedCustomer.id,
+            customerName,
+            serviceLocationId: selectedServiceLocation.id,
+            serviceLocationName: selectedServiceLocation.label || "",
+            bodyOfWaterId: selectedBodyOfWater?.id || "",
+            bodyOfWaterName: selectedBodyOfWater?.label || "",
+            equipmentId: selectedEquipment?.id || "",
+            equipmentName: selectedEquipment?.label || "",
+            sourceType: selectedTemplate?.id ? "template" : "initialJobPlan",
+            sourceTemplateId: selectedTemplate?.id || "",
+            sourceTemplateName: selectedTemplate?.name || "",
+            title: `${planTierValue} - ${planTierLabel}`,
+            name: planTierLabel,
+            description: description || "",
+            status: JOB_PLAN_STATUS.DRAFT,
+            planTier: planTierValue,
+            planTierLabel,
+            solutionTier: planTierValue,
+            solutionTierLabel: planTierLabel,
+            issuePriorityLevel: issuePriority,
+            issuePriorityLabel,
+            isActivePlan: true,
+            isAccepted: false,
+            rateAmountCents: totalAmountCents,
+            totalAmountCents,
+            subtotalAmountCents,
+            laborCostCents: plannedTotalLaborCents || laborCostCents,
+            plannedLaborCostCents: plannedTotalLaborCents,
+            materialCostCents,
+            materialPriceCents,
+            internalCostCents,
+            projectedProfitCents,
+            profitMarginPercent,
+            scopeOfWork: {
+                title: `${planTierValue} - ${planTierLabel}`,
+                customerDescription: description || "",
+                issueDescription: description || "",
+                taskSummaries: normalizedTasks.map((task, index) => ({
+                    id: task.id || "",
+                    sortOrder: Number(task.sortOrder ?? index),
+                    name: task.name || task.description || `Task ${index + 1}`,
+                    type: task.type || "",
+                    estimatedMinutes: Number(task.estimatedTime || 0),
+                    plannedLaborCostCents: Number(task.contractedRate || 0),
+                })),
+                plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
+                    id: stop.id || "",
+                    sortOrder: Number(stop.sortOrder ?? index),
+                    name: stop.name || stop.serviceStopTypeName || `Planned Visit ${index + 1}`,
+                    serviceStopTypeId: stop.serviceStopTypeId || "",
+                    serviceStopTypeName: stop.serviceStopTypeName || "",
+                    estimatedMinutes: Number(stop.estimatedMinutes || 0),
+                    plannedLaborCostCents: Number(stop.plannedLaborCostCents || 0),
+                    taskIds: Array.isArray(stop.taskIds) ? stop.taskIds : [],
+                })),
+                materialSummaries: normalizedShoppingItems.map((item, index) => ({
+                    id: item.id || "",
+                    sortOrder: Number(item.sortOrder ?? index),
+                    name: item.name || item.dbItemName || `Material ${index + 1}`,
+                    description: item.description || "",
+                    quantity: item.quantity || "1",
+                    plannedTotalCostCents: plannedMaterialTotalCostCents(item),
+                    plannedTotalPriceCents: plannedMaterialTotalPriceCents(item),
+                })),
+                counts: {
+                    tasks: normalizedTasks.length,
+                    plannedServiceStops: normalizedPlannedStops.length,
+                    shoppingItems: normalizedShoppingItems.length,
+                    lineItems: lineItems.length,
+                },
+            },
+            costSummary: {
+                plannedLaborCostCents: plannedTotalLaborCents,
+                plannedTaskLaborCents,
+                plannedServiceStopLaborCostCents: plannedStopLaborCents,
+                plannedMaterialCostCents: materialCostCents,
+                plannedMaterialPriceCents: materialPriceCents,
+                internalCostCents,
+            },
+            billingSummary: {
+                pricingSource: lineItems.length ? "plannedScopeLineItems" : "jobFallbackRate",
+                lineItemCount: lineItems.length,
+                subtotalAmountCents,
+                totalAmountCents,
+                projectedProfitCents,
+                profitMarginPercent,
+            },
+            tasks: normalizedTasks.map((task, index) => ({
+                ...task,
+                sortOrder: Number(task.sortOrder ?? index),
+                sourcePlanId: planId,
+                sourceSolutionId: planId,
+            })),
+            plannedServiceStops: normalizedPlannedStops.map((stop, index) => ({
+                ...stop,
+                sortOrder: Number(stop.sortOrder ?? index),
+                sourcePlanId: planId,
+                sourceSolutionId: planId,
+            })),
+            shoppingItems: normalizedShoppingItems.map((item, index) => ({
+                ...item,
+                sortOrder: Number(item.sortOrder ?? index),
+                planId,
+                sourcePlanId: planId,
+                sourceSolutionId: planId,
+            })),
+            lineItems,
+            estimateLineItems: lineItems,
+            taskCount: normalizedTasks.length,
+            plannedStopCount: normalizedPlannedStops.length,
+            materialCount: normalizedShoppingItems.length,
+            createdAt: nowTimestamp,
+            createdAtMillis: nowMillis,
+            createdByUserId,
+            createdByUserName,
+            updatedAt: nowTimestamp,
+            updatedAtMillis: nowMillis,
         };
     };
 
@@ -518,7 +773,7 @@ const CreateNewJob = () => {
             setDescription((current) => current || [suggestedWork.title, suggestedWork.description].filter(Boolean).join("\n\n"));
             setRate(((Number(suggestedWork.estimatedPriceCents || suggestedWork.jobRateCents || 0) / 100) || 0).toFixed(2));
             setLaborCost(((Number(suggestedWork.estimatedCostCents || suggestedWork.jobLaborCostCents || 0) / 100) || 0).toFixed(2));
-            setSolutionTier(normalizeSuggestedWorkTier(suggestedWork.priorityLevel || suggestedWork.solutionTier));
+            setIssuePriorityLevel(normalizeIssuePriority(suggestedWork.priorityLevel || suggestedWork.solutionTier));
             return;
         }
 
@@ -922,7 +1177,7 @@ const CreateNewJob = () => {
         if (!requirePermission("22", "create jobs")) return;
 
         if (!canCreateJob) {
-            alert("Please fill all required fields: Admin, Customer, Service Location, Rate, and Labor Cost.");
+            alert("Please fill all required fields: Admin, Customer, and Service Location.");
             return;
         }
 
@@ -948,6 +1203,60 @@ const CreateNewJob = () => {
             const now = new Date();
             const nowTimestamp = Timestamp.fromDate(now);
             const nowMillis = now.getTime();
+            const normalizedIssuePriority = normalizeIssuePriority(issuePriorityLevel);
+            const issuePriorityLabel = getIssuePriorityLabel(normalizedIssuePriority);
+            const normalizedStarterPlanTier = normalizeJobPlanTier(starterPlanTier);
+            const starterPlanTierLabel = getJobPlanTierLabel(normalizedStarterPlanTier);
+            const starterPlanId = `comp_job_plan_${uuidv4()}`;
+            const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => ({
+                ...plannedStop,
+                companyId: recentlySelectedCompany,
+                jobId,
+                createdAt: plannedStop.createdAt || nowTimestamp,
+                createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
+                sourcePlanId: starterPlanId,
+                sourceSolutionId: starterPlanId,
+            }));
+            const normalizedTasks = taskList.map((task) =>
+                normalizeJobTask(task, {
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
+                    bodyOfWaterId: task.bodyOfWaterId || selectedBodyOfWater?.id || "",
+                    equipmentId: task.equipmentId || selectedEquipment?.id || "",
+                    sourcePlanId: starterPlanId,
+                    sourceSolutionId: starterPlanId,
+                })
+            );
+            const normalizedShoppingItems = shoppingList.map((item) =>
+                normalizeShoppingItemForJob(item, {
+                    companyId: recentlySelectedCompany,
+                    jobId,
+                    customerId: selectedCustomer.id,
+                    customerName,
+                    purchaserId: item.purchaserId || createdByUserId || "",
+                    purchaserName: item.purchaserName || createdByUserName || "",
+                    status: "Needs Customer Approval",
+                    planId: starterPlanId,
+                    sourcePlanId: starterPlanId,
+                    solutionId: starterPlanId,
+                    sourceSolutionId: starterPlanId,
+                })
+            );
+            const starterPlanRecord = buildStarterPlanRecord({
+                planId: starterPlanId,
+                nextInternalId,
+                customerName,
+                issuePriority: normalizedIssuePriority,
+                issuePriorityLabel,
+                planTierValue: normalizedStarterPlanTier,
+                planTierLabel: starterPlanTierLabel,
+                normalizedTasks,
+                normalizedPlannedStops,
+                normalizedShoppingItems,
+                nowTimestamp,
+                nowMillis,
+            });
 
             const jobData = {
                 id: jobId,
@@ -962,10 +1271,22 @@ const CreateNewJob = () => {
 
                 operationStatus: "Estimate Pending",
                 billingStatus: "Draft",
-                solutionTier,
-                solutionTierLabel: getSuggestedWorkTierLabel(solutionTier),
-                priorityLevel: solutionTier,
-                priorityLabel: getSuggestedWorkTierLabel(solutionTier),
+                issuePriorityLevel: normalizedIssuePriority,
+                issuePriorityLabel,
+                priorityLevel: normalizedIssuePriority,
+                priorityLabel: issuePriorityLabel,
+                solutionTier: normalizedIssuePriority,
+                solutionTierLabel: issuePriorityLabel,
+                activePlanId: starterPlanId,
+                activePlanTier: normalizedStarterPlanTier,
+                activePlanTierLabel: starterPlanTierLabel,
+                acceptedPlanId: "",
+                activeSolutionId: starterPlanId,
+                activeSolutionTier: normalizedStarterPlanTier,
+                activeSolutionTierLabel: starterPlanTierLabel,
+                acceptedSolutionId: "",
+                planSelectionStatus: "Draft",
+                solutionSelectionStatus: "Draft",
 
                 customerId: selectedCustomer.id,
                 customerName,
@@ -980,8 +1301,8 @@ const CreateNewJob = () => {
 
                 purchasedItemsIds: [],
 
-                rate: rateCents,
-                laborCost: laborCostCents,
+                rate: starterPlanRecord.totalAmountCents || rateCents,
+                laborCost: starterPlanRecord.plannedLaborCostCents || laborCostCents,
 
                 otherCompany: false,
                 receivedLaborContractId: "",
@@ -1022,15 +1343,12 @@ const CreateNewJob = () => {
                 jobData
             );
 
-            for (const plannedStop of plannedServiceStops) {
-                const stopData = {
-                    ...plannedStop,
-                    companyId: recentlySelectedCompany,
-                    jobId,
-                    createdAt: plannedStop.createdAt || Timestamp.fromDate(new Date()),
-                    createdByUserId: plannedStop.createdByUserId || createdByUserId || "",
-                };
+            await setDoc(
+                doc(db, "companies", recentlySelectedCompany, "workOrders", jobId, "plans", starterPlanId),
+                starterPlanRecord
+            );
 
+            for (const stopData of normalizedPlannedStops) {
                 await setDoc(
                     doc(
                         db,
@@ -1045,13 +1363,7 @@ const CreateNewJob = () => {
                 );
             }
 
-            for (const task of taskList) {
-                const taskData = normalizeJobTask(task, {
-                    serviceLocationId: task.serviceLocationId || selectedServiceLocation.id || "",
-                    bodyOfWaterId: task.bodyOfWaterId || selectedBodyOfWater?.id || "",
-                    equipmentId: task.equipmentId || selectedEquipment?.id || "",
-                });
-
+            for (const taskData of normalizedTasks) {
                 await setDoc(
                     doc(
                         db,
@@ -1066,15 +1378,7 @@ const CreateNewJob = () => {
                 );
             }
 
-            for (const item of shoppingList) {
-                const itemData = normalizeShoppingItemForJob(item, {
-                    jobId,
-                    customerId: selectedCustomer.id,
-                    customerName,
-                    purchaserId: item.purchaserId || createdByUserId || "",
-                    purchaserName: item.purchaserName || createdByUserName || "",
-                });
-
+            for (const itemData of normalizedShoppingItems) {
                 await setDoc(
                     doc(db, "companies", recentlySelectedCompany, "shoppingList", itemData.id),
                     itemData
@@ -1150,14 +1454,19 @@ const CreateNewJob = () => {
                         { field: "adminName", label: "Admin", before: "—", after: adminName || "—" },
                         { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
                         { field: "serviceLocationName", label: "Service Location", before: "—", after: selectedServiceLocation.label || "—" },
-                        { field: "rate", label: "Customer Price", before: "—", after: `$${(Number(rateCents || 0) / 100).toFixed(2)}` },
-                        { field: "tasks", label: "Tasks", before: "—", after: String(taskList.length) },
-                        { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(plannedServiceStops.length) },
-                        { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(shoppingList.length) },
+                        { field: "issuePriority", label: "Issue Priority", before: "—", after: `${normalizedIssuePriority} - ${issuePriorityLabel}` },
+                        { field: "starterPlan", label: "Starter Plan", before: "—", after: `${normalizedStarterPlanTier} - ${starterPlanTierLabel}` },
+                        { field: "rate", label: "Calculated Customer Price", before: "—", after: `$${(Number(starterPlanRecord.totalAmountCents || 0) / 100).toFixed(2)}` },
+                        { field: "tasks", label: "Tasks", before: "—", after: String(normalizedTasks.length) },
+                        { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
+                        { field: "shoppingItems", label: "Planned Materials", before: "—", after: String(normalizedShoppingItems.length) },
                     ],
                     metadata: {
                         sourceTemplateId: selectedTemplate?.id || "",
                         sourceTemplateName: selectedTemplate?.name || "",
+                        starterPlanId,
+                        activePlanId: starterPlanId,
+                        activeSolutionId: starterPlanId,
                         repairRequestId: repairRequest?.id || "",
                         suggestedWorkId: suggestedWork?.id || "",
                         leadId: leadContext?.id || "",
@@ -1218,136 +1527,190 @@ const CreateNewJob = () => {
         switch (activeStep) {
             case "Info":
                 return (
-                    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)]">
-                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+                        <div className="space-y-6">
+                            <SectionCard
+                                title="Assignment"
+                                subtitle="Choose who owns the job and who it is for."
+                            >
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <div>
+                                        <label className={fieldLabelClasses}>Admin</label>
+                                        <Select
+                                            options={adminList}
+                                            value={selectedAdmin}
+                                            onChange={setSelectedAdmin}
+                                            placeholder="Select Admin"
+                                            styles={selectStyles}
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className={fieldLabelClasses}>Customer</label>
+                                        <Select
+                                            options={customerList}
+                                            value={selectedCustomer}
+                                            onChange={setSelectedCustomer}
+                                            placeholder="Select Customer"
+                                            styles={selectStyles}
+                                            isDisabled={!!customerIdParam || !!repairRequest?.customerId}
+                                        />
+                                    </div>
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard
+                                title="Location & Assets"
+                                subtitle="Tie the job to the service location and any related pool or equipment."
+                            >
+                                <div className="grid gap-4 lg:grid-cols-3">
+                                    <div>
+                                        <label className={fieldLabelClasses}>Service Location</label>
+                                        <Select
+                                            options={serviceLocationList}
+                                            value={selectedServiceLocation}
+                                            onChange={setSelectedServiceLocation}
+                                            placeholder="Select Service Location"
+                                            styles={selectStyles}
+                                            isDisabled={
+                                                !selectedCustomer ||
+                                                !!locationIdParam ||
+                                                !!repairRequest?.locationId ||
+                                                !!repairRequest?.serviceLocationId
+                                            }
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className={fieldLabelClasses}>Body Of Water</label>
+                                        <Select
+                                            options={bodyOfWaterList}
+                                            value={selectedBodyOfWater}
+                                            onChange={setSelectedBodyOfWater}
+                                            placeholder="Select Body Of Water"
+                                            styles={selectStyles}
+                                            isDisabled={!selectedServiceLocation}
+                                            isClearable
+                                        />
+                                    </div>
+
+                                    <div>
+                                        <label className={fieldLabelClasses}>Equipment</label>
+                                        <Select
+                                            options={equipmentList}
+                                            value={selectedEquipment}
+                                            onChange={setSelectedEquipment}
+                                            placeholder="Select Equipment"
+                                            styles={selectStyles}
+                                            isDisabled={!selectedServiceLocation}
+                                            isClearable
+                                        />
+                                    </div>
+                                </div>
+                            </SectionCard>
+
+                            <SectionCard
+                                title="Plan Pricing"
+                                subtitle="Calculated from planned labor, visits, and billable materials."
+                            >
+                                <div className="grid gap-4 lg:grid-cols-3">
+                                    <StatCard
+                                        title="Estimated Price"
+                                        value={moneyFromCents(calculatedPlanPriceCents)}
+                                        subtitle="Labor plus billable materials"
+                                        tone="blue"
+                                    />
+                                    <StatCard
+                                        title="Internal Cost"
+                                        value={moneyFromCents(calculatedPlanInternalCostCents)}
+                                        subtitle="Labor plus material cost"
+                                    />
+                                    <StatCard
+                                        title="Projected Profit"
+                                        value={moneyFromCents(projectedProfitCents)}
+                                        subtitle="Calculated"
+                                        tone={projectedProfitCents < 0 ? "red" : "green"}
+                                    />
+                                </div>
+
+                                <dl className="mt-5 grid gap-3 border-t border-slate-200 pt-4 sm:grid-cols-3">
+                                    <div>
+                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                                            Materials
+                                        </dt>
+                                        <dd className="mt-1 text-sm font-bold text-slate-900">
+                                            {moneyFromCents(plannedMaterialCostCents)}
+                                        </dd>
+                                    </div>
+
+                                    <div>
+                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                                            Planned Labor
+                                        </dt>
+                                        <dd className="mt-1 text-sm font-bold text-slate-900">
+                                            {moneyFromCents(plannedTotalLaborCents)}
+                                        </dd>
+                                    </div>
+
+                                    <div>
+                                        <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+                                            Projected Profit
+                                        </dt>
+                                        <dd
+                                            className={[
+                                                "mt-1 text-sm font-bold",
+                                                projectedProfitCents < 0 ? "text-red-700" : "text-green-700",
+                                            ].join(" ")}
+                                        >
+                                            {moneyFromCents(projectedProfitCents)}
+                                        </dd>
+                                    </div>
+                                </dl>
+                            </SectionCard>
+
+                            <SectionCard
+                                title="Priority & Plan"
+                                subtitle="Set the problem priority and the starter plan version."
+                            >
+                                <div className="grid gap-4 lg:grid-cols-2">
+                                    <div>
+                                        <label className={fieldLabelClasses}>Issue Priority</label>
+                                        <select
+                                            value={issuePriorityLevel}
+                                            onChange={(e) => setIssuePriorityLevel(normalizeIssuePriority(e.target.value))}
+                                            className={fieldInputClasses}
+                                        >
+                                            {ISSUE_PRIORITY_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.value} - {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+
+                                    <div>
+                                        <label className={fieldLabelClasses}>Starter Plan</label>
+                                        <select
+                                            value={starterPlanTier}
+                                            onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
+                                            className={fieldInputClasses}
+                                        >
+                                            {JOB_PLAN_TIER_OPTIONS.map((option) => (
+                                                <option key={option.value} value={option.value}>
+                                                    {option.value} - {option.label}
+                                                </option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                </div>
+                            </SectionCard>
+                        </div>
+
+                        <section className="flex min-h-[24rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:sticky xl:top-6 xl:min-h-[calc(100vh-20rem)]">
                             <div className="border-b border-slate-200 pb-4">
-                                <h3 className="text-xl font-bold text-slate-950">Job Info</h3>
+                                <h3 className="text-xl font-bold text-slate-950">Scope Notes</h3>
                                 <p className="mt-1 text-sm text-slate-600">
-                                    Select the admin, customer, service location, and base pricing.
-                                </p>
-                            </div>
-
-                            <div className="mt-5 grid gap-4 lg:grid-cols-3">
-                                <div>
-                                    <label className={fieldLabelClasses}>Admin</label>
-                                    <Select
-                                        options={adminList}
-                                        value={selectedAdmin}
-                                        onChange={setSelectedAdmin}
-                                        placeholder="Select Admin"
-                                        styles={selectStyles}
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Customer</label>
-                                    <Select
-                                        options={customerList}
-                                        value={selectedCustomer}
-                                        onChange={setSelectedCustomer}
-                                        placeholder="Select Customer"
-                                        styles={selectStyles}
-                                        isDisabled={!!customerIdParam || !!repairRequest?.customerId}
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Service Location</label>
-                                    <Select
-                                        options={serviceLocationList}
-                                        value={selectedServiceLocation}
-                                        onChange={setSelectedServiceLocation}
-                                        placeholder="Select Service Location"
-                                        styles={selectStyles}
-                                        isDisabled={
-                                            !selectedCustomer ||
-                                            !!locationIdParam ||
-                                            !!repairRequest?.locationId ||
-                                            !!repairRequest?.serviceLocationId
-                                        }
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Body Of Water</label>
-                                    <Select
-                                        options={bodyOfWaterList}
-                                        value={selectedBodyOfWater}
-                                        onChange={setSelectedBodyOfWater}
-                                        placeholder="Select Body Of Water"
-                                        styles={selectStyles}
-                                        isDisabled={!selectedServiceLocation}
-                                        isClearable
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Equipment</label>
-                                    <Select
-                                        options={equipmentList}
-                                        value={selectedEquipment}
-                                        onChange={setSelectedEquipment}
-                                        placeholder="Select Equipment"
-                                        styles={selectStyles}
-                                        isDisabled={!selectedServiceLocation}
-                                        isClearable
-                                    />
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Customer Price</label>
-                                    <div className="relative">
-                                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">$</span>
-                                        <input
-                                            value={rate}
-                                            onChange={(e) => setRate(e.target.value)}
-                                            placeholder="0.00"
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            className={`${fieldInputClasses} pl-7`}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Saved Labor Cost</label>
-                                    <div className="relative">
-                                        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-sm font-bold text-slate-500">$</span>
-                                        <input
-                                            value={laborCost}
-                                            onChange={(e) => setLaborCost(e.target.value)}
-                                            placeholder="0.00"
-                                            type="number"
-                                            min="0"
-                                            step="0.01"
-                                            className={`${fieldInputClasses} pl-7`}
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className={fieldLabelClasses}>Solution Version</label>
-                                    <select
-                                        value={solutionTier}
-                                        onChange={(e) => setSolutionTier(normalizeSuggestedWorkTier(e.target.value))}
-                                        className={fieldInputClasses}
-                                    >
-                                        {SUGGESTED_WORK_TIER_OPTIONS.map((option) => (
-                                            <option key={option.value} value={option.value}>
-                                                {option.value} - {option.label}
-                                            </option>
-                                        ))}
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section className="flex min-h-[24rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:min-h-[calc(100vh-20rem)]">
-                            <div className="mb-3 border-b border-slate-200 pb-4">
-                                <h3 className="text-xl font-bold text-slate-950">Description</h3>
-                                <p className="mt-1 text-sm text-slate-600">
-                                    Scope notes for the job.
+                                    Add the job description and anything the crew should know.
                                 </p>
                             </div>
 
@@ -1355,7 +1718,7 @@ const CreateNewJob = () => {
                                 value={description}
                                 onChange={(e) => setDescription(e.target.value)}
                                 placeholder="Job description..."
-                                className="min-h-[18rem] flex-1 resize-none rounded-md border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 xl:min-h-0"
+                                className="mt-5 min-h-[18rem] flex-1 resize-none rounded-md border border-slate-300 px-4 py-3 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 xl:min-h-0"
                             />
                         </section>
                     </div>
@@ -1383,7 +1746,7 @@ const CreateNewJob = () => {
                                     Template Applied: {selectedTemplate.name}
                                 </p>
                                 <p className="text-sm text-blue-700 mt-1">
-                                    Tasks, planned stops, materials, rate, and labor cost were copied into this new job.
+                                    Tasks, planned stops, materials, and calculated plan pricing were copied into this new job.
                                 </p>
                             </div>
                         ) : (
@@ -1635,16 +1998,16 @@ const CreateNewJob = () => {
                     >
                         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                             <StatCard
-                                title="Customer Price"
-                                value={moneyFromCents(rateCents)}
-                                subtitle="Saved to job.rate"
+                                title="Estimated Price"
+                                value={moneyFromCents(calculatedPlanPriceCents)}
+                                subtitle="From starter plan scope"
                                 tone="blue"
                             />
 
                             <StatCard
-                                title="Saved Labor Cost"
-                                value={moneyFromCents(laborCostCents)}
-                                subtitle="Saved to job.laborCost"
+                                title="Internal Cost"
+                                value={moneyFromCents(calculatedPlanInternalCostCents)}
+                                subtitle="Labor plus material cost"
                             />
 
                             <StatCard

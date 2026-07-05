@@ -490,7 +490,7 @@ const SuggestedWork = () => {
             <p className="mt-2 text-2xl font-bold text-slate-950">{summary.current}</p>
           </div>
           <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-red-900 shadow-sm">
-            <p className="text-xs font-bold uppercase tracking-wide opacity-70">Must Fix</p>
+            <p className="text-xs font-bold uppercase tracking-wide opacity-70">Critical</p>
             <p className="mt-2 text-2xl font-bold">{summary.mustFix}</p>
           </div>
           <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-emerald-900 shadow-sm">

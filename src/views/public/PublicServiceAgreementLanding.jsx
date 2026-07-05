@@ -102,6 +102,7 @@ const PublicServiceAgreementLanding = () => {
   const [signatureName, setSignatureName] = useState('');
   const [acceptanceNote, setAcceptanceNote] = useState('');
   const [accepting, setAccepting] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState('');
 
   useEffect(() => {
     if (!agreementId) {
@@ -152,6 +153,20 @@ const PublicServiceAgreementLanding = () => {
   }, [accessToken, agreementId, emailParam]);
 
   const lineItems = Array.isArray(agreement?.lineItems) ? agreement.lineItems : [];
+  const planOptions = Array.isArray(agreement?.planOptions) ? agreement.planOptions : Array.isArray(agreement?.solutionOptions) ? agreement.solutionOptions : [];
+  const selectedPlanOption = planOptions.find((option) => (
+    String(option.planId || option.solutionId || option.id || '') === String(selectedPlanId || agreement?.selectedPlanId || agreement?.selectedSolutionId || agreement?.acceptedPlanId || agreement?.acceptedSolutionId || '')
+  )) || planOptions[0] || null;
+  const displayLineItems = Array.isArray(selectedPlanOption?.lineItems) && selectedPlanOption.lineItems.length
+    ? selectedPlanOption.lineItems
+    : lineItems;
+  const displayTotalAmountCents = Number(
+    selectedPlanOption?.totalAmountCents ||
+    selectedPlanOption?.rateAmountCents ||
+    agreement?.totalAmountCents ||
+    agreement?.rateAmountCents ||
+    0
+  );
   const termsList = Array.isArray(agreement?.termsList) ? agreement.termsList : [];
   const statusKey = normalizeStatus(agreement?.status);
   const isAccepted = statusKey === normalizeStatus(SalesAgreementStatus.accepted);
@@ -176,6 +191,22 @@ const PublicServiceAgreementLanding = () => {
 
     setSignatureName(agreement.customerName || agreement.email || emailParam || '');
   }, [agreement, emailParam, signatureName]);
+
+  useEffect(() => {
+    if (!agreement || selectedPlanId) return;
+    const options = Array.isArray(agreement.planOptions) ? agreement.planOptions : Array.isArray(agreement.solutionOptions) ? agreement.solutionOptions : [];
+    const defaultSolutionId =
+      agreement.acceptedPlanId ||
+      agreement.acceptedSolutionId ||
+      agreement.selectedPlanId ||
+      agreement.selectedSolutionId ||
+      agreement.defaultPlanId ||
+      agreement.defaultSolutionId ||
+      options[0]?.planId || options[0]?.solutionId ||
+      options[0]?.id ||
+      '';
+    if (defaultSolutionId) setSelectedPlanId(defaultSolutionId);
+  }, [agreement, selectedPlanId]);
 
   const acceptAgreement = async () => {
     if (!agreement || accepting || isAccepted || isClosed) return;
@@ -203,6 +234,8 @@ const PublicServiceAgreementLanding = () => {
         acceptedPricing,
         acceptedAutopayNotice,
         signatureName: signatureName.trim(),
+        selectedPlanId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
+        selectedSolutionId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
       });
 
       toast.success('Service agreement accepted.');
@@ -212,6 +245,11 @@ const PublicServiceAgreementLanding = () => {
         acceptedAt: new Date().toISOString(),
         acceptedByEmail: emailParam || agreement.email || '',
         acceptedSource: 'emailLink',
+        selectedPlanId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
+        acceptedPlanId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
+        acceptedSolutionId: selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId || '',
+        totalAmountCents: displayTotalAmountCents,
+        lineItems: displayLineItems,
         billingSubscriptionId: result.data?.billingSubscriptionId || current?.billingSubscriptionId || '',
         billingFlowStatus: result.data?.nextAction ? 'pendingPaymentMethod' : current?.billingFlowStatus,
         billingFlowNextAction: result.data?.nextAction || current?.billingFlowNextAction,
@@ -315,7 +353,7 @@ const PublicServiceAgreementLanding = () => {
               </div>
 
               <dl className="grid grid-cols-1 gap-4 p-5 sm:grid-cols-2 lg:grid-cols-5">
-                <Field label="Total" value={formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)} />
+                <Field label="Total" value={formatCurrency(displayTotalAmountCents)} />
                 <Field label="Service Frequency" value={formatServiceFrequency(agreement)} />
                 <Field label="Billing Frequency" value={formatBillingFrequency(agreement)} />
                 <Field label="Payment Terms" value={labelize(agreement.paymentTerms)} />
@@ -353,12 +391,61 @@ const PublicServiceAgreementLanding = () => {
               </section>
             )}
 
+            {planOptions.length > 0 && (
+              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 p-5">
+                  <h2 className="text-lg font-bold text-slate-950">Plan Options</h2>
+                  <p className="mt-1 text-sm text-slate-500">Choose how you want this job solved.</p>
+                </div>
+                <div className="grid gap-3 p-5 md:grid-cols-2">
+                  {planOptions.map((option) => {
+                    const optionId = option.planId || option.solutionId || option.id || '';
+                    const active = optionId === (selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId);
+                    return (
+                      <label
+                        key={optionId || option.title}
+                        className={[
+                          'cursor-pointer rounded-lg border p-4 transition',
+                          active ? 'border-blue-300 bg-blue-50' : 'border-slate-200 bg-white hover:bg-slate-50',
+                        ].join(' ')}
+                      >
+                        <div className="flex items-start gap-3">
+                          <input
+                            type="radio"
+                            name="planOption"
+                            checked={active}
+                            onChange={() => setSelectedPlanId(optionId)}
+                            disabled={isAccepted || isClosed}
+                            className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block text-sm font-bold text-slate-950">
+                              {[(option.planTierLabel || option.solutionTierLabel), option.title || option.name].filter(Boolean).join(' - ') || 'Plan Option'}
+                            </span>
+                            {option.description && (
+                              <span className="mt-1 block text-sm text-slate-600">{option.description}</span>
+                            )}
+                            <span className="mt-3 block text-lg font-bold text-slate-950">
+                              {formatCurrency(option.totalAmountCents || option.rateAmountCents)}
+                            </span>
+                            <span className="mt-1 block text-xs text-slate-500">
+                              {Number(option.taskCount || 0)} task(s) • {Number(option.plannedStopCount || 0)} stop(s) • {Number(option.materialCount || 0)} material item(s)
+                            </span>
+                          </span>
+                        </div>
+                      </label>
+                    );
+                  })}
+                </div>
+              </section>
+            )}
+
             <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
               <div className="border-b border-slate-200 p-5">
                 <h2 className="text-lg font-bold text-slate-950">Line Items</h2>
               </div>
 
-              {lineItems.length === 0 ? (
+              {displayLineItems.length === 0 ? (
                 <div className="p-5 text-sm text-slate-500">No line items were included.</div>
               ) : (
                 <div className="overflow-x-auto">
@@ -372,7 +459,7 @@ const PublicServiceAgreementLanding = () => {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 bg-white">
-                      {lineItems.map((item, index) => (
+                      {displayLineItems.map((item, index) => (
                         <tr key={item.id || item.catalogItemId || `${item.name}-${index}`}>
                           <td className="px-5 py-4">
                             <p className="font-semibold text-slate-950">{item.name || item.description || 'Service'}</p>

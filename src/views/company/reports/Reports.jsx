@@ -3,6 +3,7 @@ import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, Times
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
+
 import {
   DocumentTextIcon,
   MagnifyingGlassIcon,
@@ -4655,11 +4656,18 @@ const ExportSection = ({ reportData }) => {
   );
 };
 
-const IndividualUsersExportSection = ({ reportData, onCreatePerformanceNote, creatingPerformanceNoteGroupId }) => {
+const IndividualUsersExportSection = ({
+  reportData,
+  onCreatePerformanceNote,
+  onCreateAllPerformanceNotes,
+  creatingPerformanceNoteGroupId,
+  isCreatingAllPerformanceNotes,
+}) => {
   const isEligible = reportData?.reportType === "readingPerformance" && reportData.performanceView === "users";
   if (!isEligible) return null;
 
   const groups = reportData.groups || [];
+  const matchedGroups = groups.filter((group) => Boolean(group.companyUserId));
   const buttonClass = (accent) =>
     `inline-flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${accent === "dark"
       ? "border-slate-900 bg-slate-900 text-white hover:bg-slate-800"
@@ -4674,6 +4682,17 @@ const IndividualUsersExportSection = ({ reportData, onCreatePerformanceNote, cre
         <h3 className="text-sm font-bold text-slate-900">Export Individual Users</h3>
         <p className="mt-1 text-xs text-slate-600">Export or attach one technician's report without including everyone else's scores.</p>
       </div>
+
+      <button
+        type="button"
+        disabled={!matchedGroups.length || isCreatingAllPerformanceNotes}
+        onClick={() => onCreateAllPerformanceNotes(matchedGroups)}
+        className={`${buttonClass("blue")} mt-3 w-full`}
+        title={matchedGroups.length ? "Create performance notes for every matched technician" : "No matched technicians"}
+      >
+        <PlusIcon className="h-3.5 w-3.5" />
+        {isCreatingAllPerformanceNotes ? "Adding Reports..." : "Add All Reports to Technicians"}
+      </button>
 
       <div className="mt-3 space-y-2">
         {groups.length ? (
@@ -4721,7 +4740,7 @@ const IndividualUsersExportSection = ({ reportData, onCreatePerformanceNote, cre
                     </button>
                     <button
                       type="button"
-                      disabled={!canCreateNote || isCreatingNote}
+                      disabled={!canCreateNote || isCreatingNote || isCreatingAllPerformanceNotes}
                       onClick={() => onCreatePerformanceNote(group)}
                       className={buttonClass("blue")}
                       title={canCreateNote ? `Create performance note for ${group.name}` : "No matched company user"}
@@ -4764,6 +4783,7 @@ const Reports = () => {
   const [reportSearchDraft, setReportSearchDraft] = useState("");
   const [reportSearchTerm, setReportSearchTerm] = useState("");
   const [creatingPerformanceNoteGroupId, setCreatingPerformanceNoteGroupId] = useState("");
+  const [isCreatingAllPerformanceNotes, setIsCreatingAllPerformanceNotes] = useState(false);
 
   const selectedReport = useMemo(
     () => reportCatalog.find((report) => report.value === reportType) || reportCatalog[0],
@@ -4925,24 +4945,11 @@ const Reports = () => {
     );
   };
 
-  const handleCreatePerformanceNoteFromGroup = async (group) => {
-    if (!recentlySelectedCompany) {
-      toast.error("Please select a company.");
-      return;
-    }
-    if (!reportData || reportData.reportType !== "readingPerformance") {
-      toast.error("Generate a reading performance report first.");
-      return;
-    }
-    if (!group?.companyUserId) {
-      toast.error("This report row could not be matched to a company user.");
-      return;
-    }
-
+  const createPerformanceNoteFromReportGroup = async (group) => {
     const individualReport = individualReportDataForGroup(reportData, group);
     const now = new Date();
     const reportTimestamp = Timestamp.fromDate(now);
-    const fileBaseName = `${safeFilePart(individualReport.title)}_${format(now, "yyyy-MM-dd_HH-mm")}`;
+    const fileBaseName = `${safeFilePart(individualReport.title)}_${format(now, "yyyy-MM-dd_HH-mm")}_${now.getTime()}`;
     const fileName = `${fileBaseName}.html`;
     const storagePath = [
       "companies",
@@ -4961,76 +4968,138 @@ const Reports = () => {
       "Management"
     );
 
+    const reportHtml = printableReportHtml(individualReport);
+    const reportBlob = new Blob([reportHtml], { type: "text/html;charset=utf-8" });
+    const storageRef = ref(storage, storagePath);
+
+    await uploadBytes(storageRef, reportBlob, {
+      contentType: "text/html",
+    });
+    const reportUrl = await getDownloadURL(storageRef);
+    const attachment = {
+      id: `individual_report_${Date.now()}`,
+      name: fileName,
+      title: individualReport.title,
+      url: reportUrl,
+      contentType: "text/html",
+      size: reportBlob.size,
+      storagePath,
+      isTechnicianVisible: true,
+      attachedAt: reportTimestamp,
+    };
+    const attachedReport = {
+      id: `report_${Date.now()}`,
+      title: individualReport.title,
+      url: reportUrl,
+      notes: "Individual reading performance report generated from Reports.",
+      isTechnicianVisible: true,
+      attachments: [attachment],
+      attachedAt: reportTimestamp,
+    };
+
+    await addDoc(performanceReviewsRef(recentlySelectedCompany, group.companyUserId), {
+      type: "observation",
+      title: individualReport.title,
+      note: individualPerformanceNoteText(reportData, group),
+      date: reportTimestamp,
+      references: {
+        serviceStops: [],
+        jobs: [],
+      },
+      attachedReports: [attachedReport],
+      attachments: [attachment],
+      visibleToTechnician: true,
+      isSummaryReport: false,
+      companyInternal: true,
+      companyId: recentlySelectedCompany,
+      companyUserId: group.companyUserId,
+      technicianUserId: group.technicianUserId || "",
+      technicianName: group.technicianName || group.name,
+      createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
+      createdByName: reviewerName,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      sourceReport: {
+        type: "readingPerformance",
+        title: reportData.title || "",
+        mode: reportData.mode || "",
+        groupId: group.id,
+        generatedAt: reportTimestamp,
+      },
+    });
+  };
+
+  const handleCreatePerformanceNoteFromGroup = async (group) => {
+    if (!recentlySelectedCompany) {
+      toast.error("Please select a company.");
+      return;
+    }
+    if (!reportData || reportData.reportType !== "readingPerformance") {
+      toast.error("Generate a reading performance report first.");
+      return;
+    }
+    if (!group?.companyUserId) {
+      toast.error("This report row could not be matched to a company user.");
+      return;
+    }
+
     setCreatingPerformanceNoteGroupId(group.id);
     const toastId = toast.loading(`Creating performance note for ${group.technicianName || group.name}...`);
 
     try {
-      const reportHtml = printableReportHtml(individualReport);
-      const reportBlob = new Blob([reportHtml], { type: "text/html;charset=utf-8" });
-      const storageRef = ref(storage, storagePath);
-
-      await uploadBytes(storageRef, reportBlob, {
-        contentType: "text/html",
-      });
-      const reportUrl = await getDownloadURL(storageRef);
-      const attachment = {
-        id: `individual_report_${Date.now()}`,
-        name: fileName,
-        title: individualReport.title,
-        url: reportUrl,
-        contentType: "text/html",
-        size: reportBlob.size,
-        storagePath,
-        isTechnicianVisible: true,
-        attachedAt: reportTimestamp,
-      };
-      const attachedReport = {
-        id: `report_${Date.now()}`,
-        title: individualReport.title,
-        url: reportUrl,
-        notes: "Individual reading performance report generated from Reports.",
-        isTechnicianVisible: true,
-        attachments: [attachment],
-        attachedAt: reportTimestamp,
-      };
-
-      await addDoc(performanceReviewsRef(recentlySelectedCompany, group.companyUserId), {
-        type: "observation",
-        title: individualReport.title,
-        note: individualPerformanceNoteText(reportData, group),
-        date: reportTimestamp,
-        references: {
-          serviceStops: [],
-          jobs: [],
-        },
-        attachedReports: [attachedReport],
-        attachments: [attachment],
-        visibleToTechnician: true,
-        isSummaryReport: false,
-        companyInternal: true,
-        companyId: recentlySelectedCompany,
-        companyUserId: group.companyUserId,
-        technicianUserId: group.technicianUserId || "",
-        technicianName: group.technicianName || group.name,
-        createdByUserId: dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "",
-        createdByName: reviewerName,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-        sourceReport: {
-          type: "readingPerformance",
-          title: reportData.title || "",
-          mode: reportData.mode || "",
-          groupId: group.id,
-          generatedAt: reportTimestamp,
-        },
-      });
-
+      await createPerformanceNoteFromReportGroup(group);
       toast.success(`Performance note created for ${group.technicianName || group.name}.`, { id: toastId });
     } catch (error) {
       console.error("Error creating performance note from report:", error);
       toast.error(`Could not create performance note: ${error.message}`, { id: toastId });
     } finally {
       setCreatingPerformanceNoteGroupId("");
+    }
+  };
+
+  const handleCreateAllPerformanceNotesFromGroups = async (groupsToCreate = []) => {
+    if (!recentlySelectedCompany) {
+      toast.error("Please select a company.");
+      return;
+    }
+    if (!reportData || reportData.reportType !== "readingPerformance") {
+      toast.error("Generate a reading performance report first.");
+      return;
+    }
+
+    const matchedGroups = groupsToCreate.filter((group) => Boolean(group?.companyUserId));
+    if (!matchedGroups.length) {
+      toast.error("No report rows could be matched to company users.");
+      return;
+    }
+
+    setIsCreatingAllPerformanceNotes(true);
+    const toastId = toast.loading(`Creating performance notes for ${matchedGroups.length} technicians...`);
+    const failures = [];
+
+    try {
+      for (let index = 0; index < matchedGroups.length; index += 1) {
+        const group = matchedGroups[index];
+        setCreatingPerformanceNoteGroupId(group.id);
+        toast.loading(`Creating ${index + 1} of ${matchedGroups.length}: ${group.technicianName || group.name}`, { id: toastId });
+
+        try {
+          await createPerformanceNoteFromReportGroup(group);
+        } catch (error) {
+          console.error("Error creating bulk performance note from report:", error);
+          failures.push({ group, error });
+        }
+      }
+
+      const createdCount = matchedGroups.length - failures.length;
+      if (failures.length) {
+        toast.error(`Created ${createdCount} performance notes. ${failures.length} failed.`, { id: toastId });
+      } else {
+        toast.success(`Created performance notes for ${createdCount} technicians.`, { id: toastId });
+      }
+    } finally {
+      setCreatingPerformanceNoteGroupId("");
+      setIsCreatingAllPerformanceNotes(false);
     }
   };
 
@@ -5564,7 +5633,9 @@ const Reports = () => {
                 <IndividualUsersExportSection
                   reportData={reportData}
                   onCreatePerformanceNote={handleCreatePerformanceNoteFromGroup}
+                  onCreateAllPerformanceNotes={handleCreateAllPerformanceNotesFromGroups}
                   creatingPerformanceNoteGroupId={creatingPerformanceNoteGroupId}
+                  isCreatingAllPerformanceNotes={isCreatingAllPerformanceNotes}
                 />
               </div>
             </div>

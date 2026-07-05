@@ -7,6 +7,7 @@ import { useLocation } from "react-router-dom";
 import { Context } from "./context/AuthContext";
 import AppErrorBoundary from "./components/AppErrorBoundary";
 import AppErrorReporter from "./components/AppErrorReporter";
+import { firebaseEnvironment } from "./firebase";
 
 // export default function App() {
 
@@ -16,6 +17,20 @@ import AppErrorReporter from "./components/AppErrorReporter";
 //         <Router allRoutes={allRoutes}/>
 //   );
 // }
+const showDevelopmentAppBanner = firebaseEnvironment === 'development';
+
+const DevelopmentAppBanner = () => {
+  if (!showDevelopmentAppBanner) {
+    return null;
+  }
+
+  return (
+    <div className="development-app-banner" role="status">
+      DEVELOPMENT APP
+    </div>
+  );
+};
+
 const AppShell = () => {
 
   const [allRoutes,setAllRoutes] = useState([...publicRoutes]);
@@ -61,7 +76,8 @@ const AppShell = () => {
 
   return (
         // <RouterProvider router={allRoutes}/>
-        <div className={`dark-theme app-theme-root theme-${resolvedTheme}`}>
+        <div className={`dark-theme app-theme-root theme-${resolvedTheme}${showDevelopmentAppBanner ? ' has-development-banner' : ''}`}>
+          <DevelopmentAppBanner />
           <AppErrorReporter context={errorContext} />
           <AppErrorBoundary context={errorContext}>
             <Router allRoutes={allRoutes}/>

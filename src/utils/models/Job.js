@@ -116,7 +116,7 @@ export class Job {
       : [];
 
 
-    return new Job(
+    const job = new Job(
       docId(doc),
       data.internalId ?? '',
       data.type ?? '',
@@ -151,5 +151,24 @@ export class Job {
       data.solutionTier ?? data.priorityLevel ?? data.suggestedWorkTier ?? 2,
       data.solutionTierLabel ?? data.priorityLabel ?? ''
     );
+
+    job.issuePriorityLevel = data.issuePriorityLevel ?? data.priorityLevel ?? data.solutionTier ?? 2;
+    job.issuePriorityLabel = data.issuePriorityLabel ?? data.priorityLabel ?? data.solutionTierLabel ?? '';
+    job.activePlanId = data.activePlanId ?? data.activeSolutionId ?? '';
+    job.activePlanTier = data.activePlanTier ?? data.activeSolutionTier ?? null;
+    job.activePlanTierLabel = data.activePlanTierLabel ?? data.activeSolutionTierLabel ?? '';
+    job.acceptedPlanId = data.acceptedPlanId ?? data.acceptedSolutionId ?? '';
+    job.acceptedPlanTier = data.acceptedPlanTier ?? data.acceptedSolutionTier ?? null;
+    job.acceptedPlanTierLabel = data.acceptedPlanTierLabel ?? data.acceptedSolutionTierLabel ?? '';
+    job.activeSolutionId = data.activeSolutionId ?? '';
+    job.activeSolutionTier = data.activeSolutionTier ?? null;
+    job.activeSolutionTierLabel = data.activeSolutionTierLabel ?? '';
+    job.acceptedSolutionId = data.acceptedSolutionId ?? '';
+    job.acceptedSolutionTier = data.acceptedSolutionTier ?? null;
+    job.acceptedSolutionTierLabel = data.acceptedSolutionTierLabel ?? '';
+    job.planSelectionStatus = data.planSelectionStatus ?? data.solutionSelectionStatus ?? '';
+    job.solutionSelectionStatus = data.solutionSelectionStatus ?? data.planSelectionStatus ?? '';
+
+    return job;
   }
 }

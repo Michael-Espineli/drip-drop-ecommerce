@@ -38,16 +38,23 @@
     "xlsx": "^0.18.5"
   },
   "scripts": {
-    "start": "react-scripts start",
-    "build": "react-scripts build",
-    "deploy:prod": "npm run build && firebase deploy --only hosting,functions,storage --project the-pool-app-3e652",
-    "deploy:prod:rules": "firebase deploy --only storage,firestore:rules --project the-pool-app-3e652",
+    "start": "npm run start:dev",
+    "start:dev": "REACT_APP_FIREBASE_ENV=development react-scripts start",
+    "start:emulate": "REACT_APP_FIREBASE_ENV=development REACT_APP_USE_FIREBASE_EMULATORS=true react-scripts start",
+    "start:prod-config": "REACT_APP_FIREBASE_ENV=production react-scripts start",
+    "build": "npm run build:prod",
+    "build:dev": "REACT_APP_FIREBASE_ENV=development react-scripts build",
+    "build:prod": "REACT_APP_FIREBASE_ENV=production react-scripts build",
+    "deploy:dev": "npm run build:dev && firebase deploy --only hosting,functions,storage --project development",
+    "deploy:dev:rules": "firebase deploy --only storage,firestore:rules --project development",
+    "deploy:prod": "npm run build:prod && firebase deploy --only hosting,functions,storage --project production",
+    "deploy:prod:rules": "firebase deploy --only storage,firestore:rules --project production",
     "test": "react-scripts test",
     "test:ci": "react-scripts test --watchAll=false",
     "verify": "npm run test:ci && npm run build",
     "eject": "react-scripts eject",
-    "firebase:emulate": "firebase use development && firebase emulators:start",
-    "test:emulate": "npm-run-all --parallel start firebase:emulate"
+    "firebase:emulate": "firebase emulators:start --project development",
+    "test:emulate": "npm-run-all --parallel start:emulate firebase:emulate"
   },
   "eslintConfig": {
     "extends": [

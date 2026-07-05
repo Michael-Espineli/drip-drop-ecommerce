@@ -88,7 +88,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     // const profileLink = '/company/profile' 
     return (
         <>
-            <div className='fixed top-0 left-0 z-40 w-full px-3 py-3 lg:px-4'>
+            <div className='app-header-shell fixed top-0 left-0 z-40 w-full px-3 py-3 lg:px-4'>
                 <div className={`app-header-bar ml-0 ${shellMarginClass} flex h-16 items-center justify-between gap-4 rounded-lg px-3 transition-all sm:px-5`}>
                     <div className="flex min-w-0 flex-1 items-center gap-3">
                         {/* Hamburger Icon */}
