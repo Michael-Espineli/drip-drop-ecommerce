@@ -17,6 +17,7 @@ import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
+import { appConfirm } from "../../../utils/appDialog";
 
 const ReceiptDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -413,7 +414,12 @@ const ReceiptDetailView = () => {
     };
 
     const deleteJob = async () => {
-        const confirmed = window.confirm("Delete this receipt and all purchased items attached to it?");
+        const confirmed = await appConfirm({
+            title: "Delete Receipt",
+            message: "Delete this receipt and all purchased items attached to it?",
+            confirmLabel: "Delete Receipt",
+            variant: "danger",
+        });
         if (!confirmed) return;
 
         try {
@@ -488,7 +494,12 @@ const ReceiptDetailView = () => {
     };
 
     const removeUploadedFile = async (url) => {
-        const confirmed = window.confirm("Remove this receipt file from the receipt?");
+        const confirmed = await appConfirm({
+            title: "Remove Receipt File",
+            message: "Remove this receipt file from the receipt?",
+            confirmLabel: "Remove File",
+            variant: "danger",
+        });
         if (!confirmed) return;
 
         try {

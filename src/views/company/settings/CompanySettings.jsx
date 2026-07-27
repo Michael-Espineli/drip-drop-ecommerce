@@ -35,11 +35,11 @@ const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
         <Link
             to={to}
             className={`group flex items-center gap-4 px-4 py-3 transition-colors sm:px-5 ${isAccounting
-                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                    ? "border-l-4 border-l-[#34d399] bg-emerald-800 text-white shadow-sm ring-1 ring-emerald-950/10 hover:bg-emerald-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#34d399] focus-visible:ring-offset-2"
                     : "bg-white hover:bg-slate-50"
                 }`}
         >
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${isAccounting ? "bg-white/15 text-white ring-1 ring-white/20" : "bg-slate-100 text-slate-600"
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md ${isAccounting ? "bg-white text-[#065f46] shadow-sm ring-1 ring-white/40" : "bg-slate-100 text-slate-600"
                 }`}>
                 {icon}
             </div>
@@ -47,7 +47,7 @@ const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
                 <p className={`font-semibold ${isAccounting ? "text-white" : "text-slate-900"}`}>{title}</p>
                 <p className={`mt-0.5 text-sm ${isAccounting ? "text-emerald-50" : "text-slate-500"}`}>{description}</p>
             </div>
-            <ChevronRightIcon className={`h-5 w-5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isAccounting ? "text-white/80" : "text-slate-400"
+            <ChevronRightIcon className={`h-5 w-5 shrink-0 transition-transform group-hover:translate-x-0.5 ${isAccounting ? "text-white" : "text-slate-400"
                 }`} />
         </Link>
     );
@@ -479,6 +479,12 @@ const CompanySettings = () => {
                 icon: <BeakerIcon className="w-6 h-6" />,
                 title: 'Reading and Dosages',
                 description: 'Set up measurement units and chemical dosages.'
+            },
+            {
+                to: '/company/settings/tester-strips',
+                icon: <BeakerIcon className="w-6 h-6" />,
+                title: 'Tester Strips',
+                description: 'Enable strip profiles and map strip readings to company reading templates.'
             },
             {
                 to: '/company/settings/stop-data',

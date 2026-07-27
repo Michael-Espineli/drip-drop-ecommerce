@@ -5,6 +5,7 @@ import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { linkedReferenceText } from "../../../utils/displayReferences";
+import { appConfirm } from "../../../utils/appDialog";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
@@ -331,7 +332,12 @@ const ShoppingListDetailView = () => {
     };
 
     const deleteJob = async () => {
-        const confirmed = window.confirm("Are you sure you want to delete this item?");
+        const confirmed = await appConfirm({
+            title: "Delete Item",
+            message: "Are you sure you want to delete this item?",
+            confirmLabel: "Delete Item",
+            variant: "danger",
+        });
         if (!confirmed) return;
 
         try {

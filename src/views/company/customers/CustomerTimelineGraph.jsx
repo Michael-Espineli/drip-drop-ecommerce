@@ -57,6 +57,8 @@ const eventGroupStyles = {
     salesSubscription: { dot: 'bg-teal-500', rail: '#14b8a6', chip: 'bg-teal-50 text-teal-700 border-teal-100' },
     salesInvoice: { dot: 'bg-fuchsia-500', rail: '#d946ef', chip: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-100' },
     salesPayment: { dot: 'bg-emerald-500', rail: '#10b981', chip: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    note: { dot: 'bg-emerald-500', rail: '#10b981', chip: 'bg-emerald-50 text-emerald-700 border-emerald-100' },
+    toDo: { dot: 'bg-slate-500', rail: '#64748b', chip: 'bg-slate-50 text-slate-700 border-slate-100' },
 };
 
 const chartPalette = ['#0891b2', '#16a34a', '#7c3aed', '#dc2626', '#ea580c', '#2563eb'];
@@ -229,7 +231,7 @@ const EventRail = ({ events, rangeStart, rangeEnd }) => {
     if (events.length === 0) {
         return (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-500">
-                No maintenance, equipment, service, or body-of-water events in this timeline yet.
+                No timeline events in this date range yet.
             </div>
         );
     }
@@ -384,6 +386,7 @@ const CustomerTimelineGraph = ({ timeline, defaultRange, onRangeChange }) => {
         event.type === 'suggestedWork'
     )).length;
     const billingCount = markerEvents.filter((event) => ['salesAgreement', 'salesSubscription', 'salesInvoice', 'salesPayment', 'purchase'].includes(event.type)).length;
+    const notesCount = markerEvents.filter((event) => event.type === 'note' || event.type === 'toDo').length;
 
     const summaryCards = [
         { label: 'Reading points', value: readingSeries.reduce((total, item) => total + item.data.length, 0) },
@@ -394,6 +397,7 @@ const CustomerTimelineGraph = ({ timeline, defaultRange, onRangeChange }) => {
         { label: 'Body of water', value: waterCount },
         { label: 'Service history', value: serviceCount },
         { label: 'Billing', value: billingCount },
+        { label: 'Notes', value: notesCount },
     ];
 
     return (
@@ -457,7 +461,7 @@ const CustomerTimelineGraph = ({ timeline, defaultRange, onRangeChange }) => {
                 )}
             </div>
 
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-7">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-9">
                 {summaryCards.map((card) => (
                     <div key={card.label} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                         <p className="text-2xl font-bold text-slate-900">{card.value}</p>

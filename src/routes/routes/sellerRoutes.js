@@ -20,6 +20,7 @@ const RepairRequests = lazy(() => import("../../views/company/repairRequests/Rep
 const CreateNewRepairRequest = lazy(() => import("../../views/company/repairRequests/CreateNewRepairRequest"))
 const RepairRequestDetailView = lazy(() => import("../../views/company/repairRequests/RepairRequestDetailView"))
 const SuggestedWork = lazy(() => import("../../views/company/suggestedWork/SuggestedWork"))
+const OfferedWork = lazy(() => import("../../views/company/offeredWork/OfferedWork"))
 
 const PublicPage = lazy(() => import("../../views/company/PublicPage"))
 const Settings = lazy(() => import("../../views/company/settings/Settings"))
@@ -53,6 +54,7 @@ const Products = lazy(() => import("../../views/company/stripe-subscriptions/pro
 const EditProduct = lazy(() => import("../../views/company/stripe-subscriptions/products/EditProduct"))
 const Alerts = lazy(() => import("../../views/company/Alerts"))
 const TodoList = lazy(() => import("../../views/company/todo/TodoList"))
+const TodoHistory = lazy(() => import("../../views/company/todo/TodoHistory"))
 
 const Contracts = lazy(() => import("../../views/company/contract/Contracts"))
 const CreateNew = lazy(() => import("../../views/company/contract/CreateNew"))
@@ -95,6 +97,7 @@ const EquipmentRepairHistory = lazy(() => import("../../views/company/equipment/
 const EquipmentServiceHistory = lazy(() => import("../../views/company/equipment/EquipmentServiceHistory"))
 const CreateNewEquipment = lazy(() => import("../../views/company/equipment/CreateNewEquipment"))
 const FleetList = lazy(() => import("../../views/company/fleet/FleetList"))
+const FleetTripDetail = lazy(() => import("../../views/company/fleet/FleetTripDetail"))
 
 const Roles = lazy(() => import("../../views/company/roles/Roles"))
 const RoleDetails = lazy(() => import("../../views/company/roles/RoleDetails"))
@@ -123,6 +126,7 @@ const PerformanceHistoryImport = lazy(() => import("../../views/company/migratio
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
 const CompanySettings = lazy(() => import("../../views/company/settings/CompanySettings"))
+const TesterStripSettings = lazy(() => import("../../views/company/settings/TesterStripSettings"))
 const StripeBillingSnapshot = lazy(() => import("../../views/company/settings/StripeBillingSnapshot"))
 const OnboardingChecklistSettings = lazy(() => import("../../views/company/settings/OnboardingChecklistSettings"))
 const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySetupGuide"))
@@ -183,6 +187,12 @@ export const sellerRoutes = [
         element: <CompanySettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/settings/tester-strips',
+        element: <TesterStripSettings />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '800',
     }, {
         path: '/company/settings/stripe-billing',
         element: <StripeBillingSnapshot />,
@@ -320,6 +330,13 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/fleet/trips/:routeId',
+        element: <FleetTripDetail />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
         path: '/company/jobs',
         element: <Jobs />,
         ability: ['Admin', 'Seller'],
@@ -408,6 +425,11 @@ export const sellerRoutes = [
     }, {
         path: '/company/suggested-work',
         element: <SuggestedWork />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
+        path: '/company/offered-work',
+        element: <OfferedWork />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, {
@@ -840,6 +862,14 @@ export const sellerRoutes = [
     {
         path: '/company/todo-list',
         element: <TodoList />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        featureFlagId: 'feature_flag_010',
+    }
+    ,
+    {
+        path: '/company/todo-history',
+        element: <TodoHistory />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
         featureFlagId: 'feature_flag_010',

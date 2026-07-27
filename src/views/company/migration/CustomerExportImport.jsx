@@ -17,6 +17,7 @@ import {
   summarizeCustomerExportComparison,
   summarizeCustomerExportRecords,
 } from "./customerExportImportUtils";
+import { appConfirm, appPrompt } from "../../../utils/appDialog";
 
 const MAX_WRITES_PER_BATCH = 450;
 
@@ -567,9 +568,11 @@ function CustomerExportImport() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Import ${importableRecords.length} export rows for ${importableSummary.customers} customers, ${importableSummary.serviceLocations} service locations, ${importableSummary.bodiesOfWater} pools, and ${importableSummary.equipment} default equipment records into this company?\n\n${manuallySkippedSelectedRecords.length} selected row(s) will be skipped manually.`
-    );
+    const confirmed = await appConfirm({
+      title: "Import Customer Export",
+      message: `Import ${importableRecords.length} export rows for ${importableSummary.customers} customers, ${importableSummary.serviceLocations} service locations, ${importableSummary.bodiesOfWater} pools, and ${importableSummary.equipment} default equipment records into this company?\n\n${manuallySkippedSelectedRecords.length} selected row(s) will be skipped manually.`,
+      confirmLabel: "Import Rows",
+    });
     if (!confirmed) return;
 
     setUploading(true);
@@ -686,9 +689,13 @@ function CustomerExportImport() {
       return;
     }
 
-    const confirmation = window.prompt(
-      "Delete all customer, service location, pool, equipment, and equipment part records marked as Customer Export migration data for this company?\n\nType DELETE CUSTOMER EXPORT to confirm."
-    );
+    const confirmation = await appPrompt({
+      title: "Delete Customer Export Data",
+      message: "Delete all customer, service location, pool, equipment, and equipment part records marked as Customer Export migration data for this company?",
+      inputLabel: "Type DELETE CUSTOMER EXPORT to confirm",
+      confirmLabel: "Delete Migration Data",
+      variant: "danger",
+    });
 
     if (confirmation !== "DELETE CUSTOMER EXPORT") return;
 

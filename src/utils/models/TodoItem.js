@@ -7,6 +7,8 @@ export const TODO_STATUS = {
   archived: "archived",
 };
 
+export const TODO_DONE_BOARD_LOOKBACK_DAYS = 14;
+
 export const TODO_STATUS_LABELS = {
   [TODO_STATUS.open]: "Open",
   [TODO_STATUS.inProgress]: "In Progress",
@@ -54,6 +56,10 @@ export const toDate = (value) => {
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? null : date;
   }
+  if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [year, month, day] = value.split("-").map(Number);
+    return new Date(year, month - 1, day);
+  }
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -89,6 +95,67 @@ export const dateTimeInputValue = (value) => {
   ].join("-") + `T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 };
 
+export const dateInputValue = (value) => {
+  const date = toDate(value);
+  if (!date) return "";
+
+  const pad = (part) => String(part).padStart(2, "0");
+
+  return [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+  ].join("-");
+};
+
+export const startOfDay = (value) => {
+  const date = toDate(value);
+  if (!date) return null;
+
+  const start = new Date(date);
+  start.setHours(0, 0, 0, 0);
+  return start;
+};
+
+export const endOfDay = (value) => {
+  const date = toDate(value);
+  if (!date) return null;
+
+  const end = new Date(date);
+  end.setHours(23, 59, 59, 999);
+  return end;
+};
+
+export const defaultTodoHistoryDateRange = (now = new Date(), dayCount = TODO_DONE_BOARD_LOOKBACK_DAYS) => {
+  const endDate = endOfDay(now);
+  const startDate = startOfDay(now);
+  startDate.setDate(startDate.getDate() - Math.max(dayCount - 1, 0));
+
+  return {
+    startDate,
+    endDate,
+    startInput: dateInputValue(startDate),
+    endInput: dateInputValue(endDate),
+  };
+};
+
+export const normalizeTodoHistoryDateRange = ({ start, end, now = new Date(), dayCount = TODO_DONE_BOARD_LOOKBACK_DAYS } = {}) => {
+  const fallback = defaultTodoHistoryDateRange(now, dayCount);
+  let startDate = startOfDay(start) || fallback.startDate;
+  let endDate = endOfDay(end) || fallback.endDate;
+
+  if (startDate > endDate) {
+    endDate = endOfDay(startDate);
+  }
+
+  return {
+    startDate,
+    endDate,
+    startInput: dateInputValue(startDate),
+    endInput: dateInputValue(endDate),
+  };
+};
+
 export const todoIsDone = (todo = {}) => (
   todo.status === TODO_STATUS.done || todo.status === TODO_STATUS.archived
 );
@@ -121,6 +188,19 @@ export const todoNeedsAttention = (todo = {}, now = new Date()) => {
     state === "today" ||
     (todo.reminderEnabled && reminderAt && reminderAt <= now && todoIsOpen(todo))
   );
+};
+
+export const todoCompletionDate = (todo = {}) => (
+  toDate(todo.completedAt || todo.completedDate || todo.doneAt || todo.updatedAt || todo.createdAt)
+);
+
+export const todoCompletedInDateRange = (todo = {}, startDate, endDate) => {
+  if (todo.status !== TODO_STATUS.done) return false;
+
+  const completedDate = todoCompletionDate(todo);
+  if (!completedDate) return false;
+
+  return (!startDate || completedDate >= startDate) && (!endDate || completedDate <= endDate);
 };
 
 const priorityRank = {

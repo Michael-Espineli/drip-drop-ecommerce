@@ -11,6 +11,7 @@ import {
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { appConfirm } from "../../../utils/appDialog";
 
 const DEFAULT_ONBOARDING_TEMPLATE_ITEMS = [
   {
@@ -185,7 +186,13 @@ const OnboardingChecklistSettings = () => {
   const removeItem = async (item) => {
     if (!requirePermission("800", "manage company settings")) return;
     if (!recentlySelectedCompany || !item?.id) return;
-    if (!window.confirm(`Delete "${item.name}" from the onboarding template?`)) return;
+    const confirmed = await appConfirm({
+      title: "Delete Onboarding Item",
+      message: `Delete "${item.name}" from the onboarding template?`,
+      confirmLabel: "Delete Item",
+      variant: "danger",
+    });
+    if (!confirmed) return;
 
     setIsSaving(true);
     try {

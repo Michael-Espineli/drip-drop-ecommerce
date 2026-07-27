@@ -272,6 +272,18 @@ const searchSources = [
         path: () => "/company/suggested-work",
     },
     {
+        key: "workOffers",
+        label: "Offered Work",
+        icon: FiBriefcase,
+        ...companyCollection("workOffers"),
+        keywords: ["offered work", "work offer", "work offers", "board post", "technician offer"],
+        dateFields: ["updatedAt", "createdAt", "sentAt", "postedAt", "acceptedAt"],
+        searchFields: ["title", "description", "status", "offerType", "jobInternalId", "jobName", "customerName", "serviceLocationName", "offeredToUserName", "acceptedByUserName", "serviceStopTypeName"],
+        title: (data, id) => data.title || data.jobInternalId || data.customerName || id,
+        subtitle: (data) => compact([data.customerName, data.status, data.offeredToUserName || data.acceptedByUserName || data.offerType]).join(" | "),
+        path: (data) => data.jobId ? `/company/jobs/detail/${data.jobId}` : "/company/offered-work",
+    },
+    {
         key: "shoppingList",
         label: "Shopping Item",
         icon: FiShoppingCart,

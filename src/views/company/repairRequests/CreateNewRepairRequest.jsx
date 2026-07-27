@@ -9,6 +9,7 @@ import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { buildCompanyRepairRequestPhotoPath, uploadRepairRequestPhoto } from "../../../utils/repairRequestPhotos";
+import { appAlert } from "../../../utils/appDialog";
 
 const CreateNewRepairRequest = () => {
   const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
@@ -301,17 +302,17 @@ const CreateNewRepairRequest = () => {
     if (saving) return;
 
     if (!recentlySelectedCompany) {
-      alert("Please select a company before creating a repair request.");
+      await appAlert("Please select a company before creating a repair request.");
       return;
     }
 
     if (!user?.uid) {
-      alert("Please sign in before creating a repair request.");
+      await appAlert("Please sign in before creating a repair request.");
       return;
     }
 
     if (!selectedCustomer || !description.trim()) {
-      alert("Please select a customer and provide a description.");
+      await appAlert("Please select a customer and provide a description.");
       return;
     }
 
@@ -374,7 +375,7 @@ const CreateNewRepairRequest = () => {
       navigate("/company/repair-requests");
     } catch (error) {
       console.error("Error creating repair request: ", error);
-      alert("Failed to create repair request.");
+      appAlert("Failed to create repair request.");
     } finally {
       setSaving(false);
     }

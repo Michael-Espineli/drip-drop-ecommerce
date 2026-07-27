@@ -2,13 +2,14 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
 import { EQUIPMENT_STATUS } from '../../../utils/models/Equipment';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { appAlert } from '../../../utils/appDialog';
 
 const getDateFromReplacementContext = (value) => {
     if (!value) return new Date();
@@ -19,7 +20,7 @@ const getDateFromReplacementContext = (value) => {
 const CreateNewEquipment = () => {
     const navigate = useNavigate();
     const location = useLocation();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     const { customerId: customerIdParam, locationId: locationIdParam, bodyOfWaterId: bodyOfWaterIdParam } = useParams();
     const replacementContext = location.state?.replacementContext || null;
@@ -38,6 +39,7 @@ const CreateNewEquipment = () => {
     const [customModel, setCustomModel] = useState('');
     const [dateInstalled, setDateInstalled] = useState(new Date().toISOString().split('T')[0]);
     const [cleanFilterPressure, setCleanFilterPressure] = useState('');
+    const [needsService, setNeedsService] = useState(false);
     const [serviceFrequency, setServiceFrequency] = useState('Month');
     const [serviceFrequencyEvery, setServiceFrequencyEvery] = useState(6);
     const [notes, setNotes] = useState('');
@@ -224,12 +226,46 @@ const CreateNewEquipment = () => {
         await Promise.all(writes);
     };
 
+    const createCustomEquipmentSuggestion = async (equipmentId, equipmentData, flags) => {
+        if (!flags?.isCustomMake && !flags?.isCustomModel) return;
+
+        const suggestionId = `unv_equ_sug_${equipmentId}`;
+
+        await setDoc(doc(db, 'universalEquipmentSuggestions', suggestionId), {
+            id: suggestionId,
+            status: 'New',
+            source: 'companyEquipmentCreate',
+            companyId: recentlySelectedCompany,
+            companyName: recentlySelectedCompanyName || '',
+            createdByUserId: user?.uid || '',
+            createdByUserEmail: user?.email || '',
+            createdAt: serverTimestamp(),
+            createdAtMillis: Date.now(),
+            equipmentId,
+            equipmentName: equipmentData.name || '',
+            customerId: equipmentData.customerId || '',
+            customerName: equipmentData.customerName || '',
+            serviceLocationId: equipmentData.serviceLocationId || '',
+            bodyOfWaterId: equipmentData.bodyOfWaterId || '',
+            type: equipmentData.type || '',
+            typeId: equipmentData.typeId || '',
+            make: equipmentData.make || '',
+            makeId: equipmentData.makeId || '',
+            model: equipmentData.model || '',
+            modelId: equipmentData.modelId || '',
+            customCategoryRequested: flags.isCustomType,
+            customMakeRequested: flags.isCustomMake,
+            customModelRequested: flags.isCustomModel,
+            notes: equipmentData.notes || '',
+        });
+    };
+
     const handleCreate = async (e) => {
         e.preventDefault();
         if (!requirePermission("62", "create equipment")) return;
 
         if (!recentlySelectedCompany || !selectedCustomer) {
-            alert('A customer must be selected.');
+            await appAlert('A customer must be selected.');
             return;
         }
 
@@ -253,8 +289,8 @@ const CreateNewEquipment = () => {
                 manualPdfLink: isCustomModel ? '' : (model?.manualPdfLink || ''),
                 dateInstalled: new Date(dateInstalled),
                 cleanFilterPressure: cleanFilterPressure === '' ? null : Number(cleanFilterPressure),
-                serviceFrequency: serviceFrequencyEvery === '' ? null : Number(serviceFrequencyEvery),
-                serviceFrequencyEvery: serviceFrequency,
+                serviceFrequency: needsService && serviceFrequencyEvery !== '' ? Number(serviceFrequencyEvery) : null,
+                serviceFrequencyEvery: needsService ? serviceFrequency : null,
                 notes,
                 customerId: selectedCustomer?.value || '',
                 customerName: selectedCustomer?.label || '',
@@ -265,7 +301,7 @@ const CreateNewEquipment = () => {
                 isActive: true,
                 active: true,
                 dateUninstalled: null,
-                needsService: false,
+                needsService,
                 status: EQUIPMENT_STATUS.OPERATIONAL,
                 currentPressure: null,
                 ...(isReplacementFlow ? {
@@ -274,6 +310,11 @@ const CreateNewEquipment = () => {
                 } : {})
             };
             await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
+            try {
+                await createCustomEquipmentSuggestion(equipmentId, newEquipment, { isCustomType, isCustomMake, isCustomModel });
+            } catch (suggestionError) {
+                console.error("Error creating custom equipment suggestion: ", suggestionError);
+            }
             await copyCatalogPartsToEquipment(equipmentId, catalogEquipmentId);
             if (isReplacementFlow) {
                 await updateDoc(
@@ -294,7 +335,7 @@ const CreateNewEquipment = () => {
             navigate(`/company/equipment/detail/${equipmentId}`);
         } catch (error) {
             console.error("Error creating new equipment: ", error);
-            alert("Failed to create equipment. Please check the console for details.");
+            appAlert("Failed to create equipment. Please check the console for details.");
         }
     };
 
@@ -393,18 +434,31 @@ const CreateNewEquipment = () => {
                             <label className="block text-sm font-medium text-gray-700 mb-1">Clean Filter Pressure (PSI)</label>
                             <input type="text" value={cleanFilterPressure} onChange={e => setCleanFilterPressure(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., 25" />
                         </div>
-                        <div className="md:col-span-3">
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Service Frequency</label>
-                            <div className='flex gap-4'>
-                                <input type="number" value={serviceFrequencyEvery} onChange={e => setServiceFrequencyEvery(e.target.value)} className="w-1/3 p-2 border border-gray-300 rounded-lg" />
-                                <select value={serviceFrequency} onChange={e => setServiceFrequency(e.target.value)} className="w-2/3 p-2 border border-gray-300 rounded-lg bg-white">
-                                    <option value="Day">Days</option>
-                                    <option value="Week">Weeks</option>
-                                    <option value="Month">Months</option>
-                                    <option value="Year">Years</option>
-                                </select>
-                            </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">Will This Equipment Need Service?</label>
+                            <select
+                                value={needsService ? 'yes' : 'no'}
+                                onChange={e => setNeedsService(e.target.value === 'yes')}
+                                className="w-full p-2 border border-gray-300 rounded-lg bg-white"
+                            >
+                                <option value="no">No</option>
+                                <option value="yes">Yes</option>
+                            </select>
                         </div>
+                        {needsService && (
+                            <div className="md:col-span-3">
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Service Frequency</label>
+                                <div className='flex gap-4'>
+                                    <input type="number" min="1" value={serviceFrequencyEvery} onChange={e => setServiceFrequencyEvery(e.target.value)} className="w-1/3 p-2 border border-gray-300 rounded-lg" />
+                                    <select value={serviceFrequency} onChange={e => setServiceFrequency(e.target.value)} className="w-2/3 p-2 border border-gray-300 rounded-lg bg-white">
+                                        <option value="Day">Days</option>
+                                        <option value="Week">Weeks</option>
+                                        <option value="Month">Months</option>
+                                        <option value="Year">Years</option>
+                                    </select>
+                                </div>
+                            </div>
+                        )}
                         <div className='md:col-span-3'>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
                             <textarea value={notes} onChange={e => setNotes(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" rows="4" placeholder="Add any relevant notes here..."></textarea>

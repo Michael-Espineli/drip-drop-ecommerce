@@ -4,6 +4,7 @@ import { collection, deleteDoc, doc, getDoc, getDocs, orderBy, query, setDoc, up
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
+import { appConfirm } from "../../../utils/appDialog";
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -440,7 +441,13 @@ const JobTemplates = () => {
 
   const deleteTemplateItem = async (type, item) => {
     if (!recentlySelectedCompany || !detailTemplate || !item?.id) return;
-    if (!window.confirm(`Delete "${item.name || "template item"}"?`)) return;
+    const confirmed = await appConfirm({
+      title: "Delete Template Item",
+      message: `Delete "${item.name || "template item"}"?`,
+      confirmLabel: "Delete Item",
+      variant: "danger",
+    });
+    if (!confirmed) return;
 
     setSavingItem(true);
     setActionError("");

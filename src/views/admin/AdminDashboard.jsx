@@ -5,11 +5,13 @@ import {
   FaExternalLinkAlt,
   FaFlag,
   FaInbox,
+  FaSyncAlt,
   FaTools,
   FaUsers,
 } from 'react-icons/fa';
 import { MdCurrencyExchange, MdMarkEmailUnread, MdOutlineFeedback } from 'react-icons/md';
 import { Link } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import {
   query,
   collection,
@@ -28,8 +30,9 @@ import {
   CONTACT_MESSAGES_COLLECTION,
   PRODUCT_FEEDBACK_COLLECTION,
 } from '../../utils/adminInbox';
-import { APP_ERRORS_COLLECTION } from '../../utils/errorReporting';
+import { APP_ERRORS_COLLECTION, reportAppError } from '../../utils/errorReporting';
 import { APP_LIVE_FEATURE_FLAG_ID } from '../../utils/models/FeatureFlag';
+import { appConfirm } from '../../utils/appDialog';
 
 const functions = getFunctions();
 
@@ -57,7 +60,7 @@ const formatCount = (value) => Number(value || 0).toLocaleString();
 const AdminDashboard = () => {
   const ADMIN_YELLOW = '#efb12f';
 
-  const { recentlySelectedCompany } = useContext(Context);
+  const { accountType, dataBaseUser, recentlySelectedCompany, user } = useContext(Context);
   const selectedCompanyId = recentlySelectedCompany?.id || recentlySelectedCompany;
 
   const [alertList, setAlertList] = useState([]);
@@ -94,6 +97,8 @@ const AdminDashboard = () => {
   });
 
   const [recentReachOutMessages, setRecentReachOutMessages] = useState([]);
+  const [isRefreshingRecurringStops, setIsRefreshingRecurringStops] = useState(false);
+  const [lastRecurringStopRefresh, setLastRecurringStopRefresh] = useState(null);
 
   useEffect(() => {
     (async () => {
@@ -213,20 +218,59 @@ const AdminDashboard = () => {
     })();
   }, [selectedCompanyId]);
 
-  async function sendServiceReportOnFinish(e) {
-    e.preventDefault();
+  async function refreshRecurringServiceStops() {
+    if (isRefreshingRecurringStops) return;
 
-    const functionName = httpsCallable(functions, 'sendServiceReportOnFinish');
-    functionName({
-      email: 'michaelespineli2000@gmail.com',
-      customerName: 'Brett Murdock',
-    })
-      .then((result) => {
-        console.log(result);
-      })
-      .catch((error) => {
-        console.error(error);
+    const confirmed = await appConfirm({
+      title: 'Queue RSS Catch-Up Tasks',
+      message: 'Queue RSS catch-up tasks for every recurring service stop? This can create hundreds of Cloud Tasks.',
+      confirmLabel: 'Queue Tasks',
+    });
+
+    if (!confirmed) return;
+
+    const toastId = toast.loading('Queueing RSS catch-up tasks...');
+    setIsRefreshingRecurringStops(true);
+
+    try {
+      const catchUpRecurringServiceStops = httpsCallable(functions, 'catchUpRecurringServiceStops');
+      const result = await catchUpRecurringServiceStops({});
+      const summary = result.data || {};
+      const issueCount = Number(summary.failedCompanies || 0) + Number(summary.enqueueFailed || 0);
+
+      setLastRecurringStopRefresh(summary);
+
+      if (issueCount > 0) {
+        toast.error(
+          `RSS catch-up queued with ${formatCount(issueCount)} issue${issueCount === 1 ? '' : 's'}. Check Admin > Errors.`,
+          { id: toastId }
+        );
+        return;
+      }
+
+      toast.success(
+        `RSS catch-up queued ${formatCount(summary.enqueued)} task${Number(summary.enqueued) === 1 ? '' : 's'}.`,
+        { id: toastId }
+      );
+    } catch (error) {
+      console.error('Error queueing RSS catch-up:', error);
+      await reportAppError(error, {
+        title: 'RSS catch-up dashboard action failed',
+        description: 'The admin dashboard could not call catchUpRecurringServiceStops.',
+        where: 'AdminDashboard.refreshRecurringServiceStops',
+        severity: 'critical',
+        source: 'admin-dashboard',
+        context: {
+          userId: user?.uid,
+          userEmail: user?.email || dataBaseUser?.email,
+          accountType,
+          companyId: selectedCompanyId,
+        },
       });
+      toast.error(error.message || 'Could not queue RSS catch-up.', { id: toastId });
+    } finally {
+      setIsRefreshingRecurringStops(false);
+    }
   }
 
   const pageWrap = 'px-2 md:px-7 py-5 bg-slate-900 min-h-screen';
@@ -467,10 +511,12 @@ const AdminDashboard = () => {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={(e) => sendServiceReportOnFinish(e)}
-              className="px-3 py-2 rounded-md bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition"
+              onClick={refreshRecurringServiceStops}
+              disabled={isRefreshingRecurringStops}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-[#efb12f]/10 text-[#efb12f] ring-1 ring-[#efb12f]/30 hover:bg-[#efb12f]/15 transition disabled:cursor-not-allowed disabled:opacity-60"
             >
-              Tester Function
+              <FaSyncAlt className={isRefreshingRecurringStops ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              {isRefreshingRecurringStops ? 'Queueing RSS...' : 'Refresh RSS Functions'}
             </button>
             <Link to="/company/alerts" className="font-semibold text-sm text-slate-300 hover:text-slate-100">
               View All
@@ -479,6 +525,18 @@ const AdminDashboard = () => {
         </div>
 
         <p className="text-sm text-slate-400">Display most important and recent alerts</p>
+        {lastRecurringStopRefresh && (
+          <p className="mt-2 text-xs text-slate-500">
+            Last RSS catch-up: {formatCount(lastRecurringStopRefresh.totalSelected)} selected,{' '}
+            {formatCount(lastRecurringStopRefresh.enqueued)} queued,{' '}
+            {formatCount(lastRecurringStopRefresh.alreadyQueued)} already queued,{' '}
+            {formatCount(
+              Number(lastRecurringStopRefresh.enqueueFailed || 0) +
+                Number(lastRecurringStopRefresh.failedCompanies || 0)
+            )}{' '}
+            failed.
+          </p>
+        )}
 
         <div className="mt-3 space-y-2">
           {alertList?.map((alert) => (

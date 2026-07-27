@@ -1,10 +1,14 @@
 const { onSchedule } = require("firebase-functions/scheduler");
 const { onDocumentCreated, onDocumentUpdated, onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const { onTaskDispatched } = require("firebase-functions/v2/tasks");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { getFirestore, Timestamp, FieldValue } = require('firebase-admin/firestore');
+const { getFunctions } = require("firebase-admin/functions");
 const { defineSecret } = require('firebase-functions/params');
 const admin = require("firebase-admin");
 const sgMail = require("@sendgrid/mail");
 const { v4: uuidv4 } = require("uuid");
+const crypto = require("crypto");
 const { sendSalesInvoiceEmailForAutomation } = require("../sendGrid/general");
 
 // Initialize admin SDK if not already done
@@ -18,57 +22,665 @@ const salesCollectionNames = {
   billingSubscriptions: "salesBillingSubscriptions",
   invoices: "salesInvoices",
 };
+const APP_ERRORS_COLLECTION = "appErrors";
+const RECURRING_SERVICE_STOP_TASK_FUNCTION = "processRecurringServiceStopTask";
+const RECURRING_SERVICE_STOP_TASK_DISPATCH_DEADLINE_SECONDS = 1800;
+const RSS_TASK_ENQUEUE_BATCH_SIZE = 25;
+const ADMIN_CALLABLE_CORS_ORIGINS = [
+  "https://dripdrop-poolapp.com",
+  "https://www.dripdrop-poolapp.com",
+  "https://the-pool-app-dev.web.app",
+  "http://localhost:3000",
+  "http://localhost:5173",
+];
 
 /**
  * Runs every Sunday at 00:00 America/New_York (explicit).
  */
 exports.weeklySundayRSSCreate = onSchedule(
-  { schedule: "every sunday 00:00", timeZone: "America/New_York" },
+  { schedule: "every sunday 00:00", timeZone: "America/New_York", timeoutSeconds: 1800 },
   async (event) => {
+    const runContext = {
+      runId: buildWeeklyRssRunId(event),
+      jobName: event?.jobName || "",
+      scheduleTime: event?.scheduleTime || "",
+    };
+
     console.log("Weekly Service Stop Generator Started");
+    logRecurringServiceStopEvent("log", "run-start", {
+      ...runContext,
+    });
 
     const db = getFirestore();
     const companiesSnap = await db.collection("companies").get();
+    const runSummary = {
+      totalCompanies: companiesSnap.size,
+      companiesVisited: 0,
+      failedCompanies: 0,
+      totalFetched: 0,
+      enqueued: 0,
+      alreadyQueued: 0,
+      enqueueFailed: 0,
+    };
 
     for (const companyDoc of companiesSnap.docs) {
       const companyId = companyDoc.id;
       try {
         console.log("  Company Id: " + companyId);
+        logRecurringServiceStopEvent("log", "company-start", {
+          ...runContext,
+          companyId,
+        });
 
-        await processCompanyRecurringStops(companyId);
+        const companySummary = await processCompanyRecurringStops(companyId, runContext);
+        runSummary.companiesVisited += 1;
+        runSummary.totalFetched += companySummary.totalFetched;
+        runSummary.enqueued += companySummary.enqueued;
+        runSummary.alreadyQueued += companySummary.alreadyQueued;
+        runSummary.enqueueFailed += companySummary.enqueueFailed;
       } catch (err) {
+        runSummary.failedCompanies += 1;
         console.error(`Company ${companyId} failed`, err);
+        logRecurringServiceStopEvent("error", "company-error", {
+          ...runContext,
+          companyId,
+          error: summarizeError(err),
+        });
+        await reportCloudFunctionError(err, {
+          ...runContext,
+          companyId,
+          eventName: "company-dispatch-error",
+          title: `weeklySundayRSSCreate failed for company ${companyId}`,
+          description: "The scheduled RSS dispatcher could not enqueue tasks for this company.",
+          severity: "critical",
+        });
       }
     }
 
+    logRecurringServiceStopEvent("log", "run-complete", {
+      ...runContext,
+      ...runSummary,
+    });
     console.log("Weekly Service Stop Generator Finished");
     return null;
   }
 );
 
-async function processCompanyRecurringStops(companyId) {
+exports.processRecurringServiceStopTask = onTaskDispatched(
+  {
+    timeoutSeconds: RECURRING_SERVICE_STOP_TASK_DISPATCH_DEADLINE_SECONDS,
+    retryConfig: {
+      maxAttempts: 5,
+      minBackoffSeconds: 60,
+      maxBackoffSeconds: 300,
+      maxDoublings: 3,
+    },
+    rateLimits: {
+      maxConcurrentDispatches: 6,
+      maxDispatchesPerSecond: 3,
+    },
+  },
+  async (request) => {
+    const taskData = request.data || {};
+    const taskContext = {
+      taskId: request.id || "",
+      queueName: request.queueName || "",
+      retryCount: Number(request.retryCount || 0),
+      executionCount: Number(request.executionCount || 0),
+      scheduledTime: request.scheduledTime || "",
+      previousResponse: request.previousResponse || "",
+      retryReason: request.retryReason || "",
+    };
+    const companyId = taskData.companyId || "";
+    const rssId = taskData.recurringServiceStopId || "";
+    const startedAt = Date.now();
+
+    if (!companyId || !rssId) {
+      const error = new Error("Recurring service stop task is missing companyId or recurringServiceStopId.");
+      logRecurringServiceStopEvent("error", "rss-task-invalid", {
+        ...taskData,
+        ...taskContext,
+        error: summarizeError(error),
+      });
+      await reportCloudFunctionError(error, {
+        ...taskData,
+        ...taskContext,
+        companyId,
+        recurringServiceStopId: rssId,
+        eventName: "rss-task-invalid",
+        title: "Invalid weeklySundayRSSCreate task payload",
+        description: "A Cloud Task was dispatched without the IDs required to process an RSS.",
+        severity: "critical",
+      });
+      return;
+    }
+
+    logRecurringServiceStopEvent("log", "rss-worker-start", {
+      ...taskData,
+      ...taskContext,
+    });
+
+    try {
+      const db = getFirestore();
+      const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssId);
+      const rssDoc = await rssRef.get();
+
+      if (!rssDoc.exists) {
+        logRecurringServiceStopEvent("warn", "rss-skipped", {
+          ...taskData,
+          ...taskContext,
+          elapsedMs: Date.now() - startedAt,
+          status: "skipped",
+          reason: "rss_doc_not_found",
+        });
+        return;
+      }
+
+      const rssData = {
+        ...rssDoc.data(),
+        id: rssDoc.data()?.id || rssDoc.id,
+      };
+      const result = await expandRecurringServiceStop({
+        companyId,
+        rssData,
+      });
+      const normalizedResult = result?.status
+        ? result
+        : makeRssOutcome("skipped", "missing_expander_outcome", {
+          rawOutcomeType: typeof result,
+        });
+      const logDetails = {
+        ...taskData,
+        ...taskContext,
+        companyId,
+        recurringServiceStopId: rssData.id,
+        docId: rssDoc.id,
+        elapsedMs: Date.now() - startedAt,
+        ...getRssLogContext(rssData),
+        ...normalizedResult,
+      };
+
+      if (normalizedResult.status === "skipped") {
+        logRecurringServiceStopEvent("warn", "rss-skipped", logDetails);
+      } else {
+        logRecurringServiceStopEvent("log", "rss-created", logDetails);
+      }
+    } catch (error) {
+      const errorDetails = {
+        ...taskData,
+        ...taskContext,
+        companyId,
+        recurringServiceStopId: rssId,
+        elapsedMs: Date.now() - startedAt,
+        error: summarizeError(error),
+      };
+
+      logRecurringServiceStopEvent("error", "rss-error", errorDetails);
+      await reportCloudFunctionError(error, {
+        ...errorDetails,
+        eventName: "rss-worker-error",
+        title: `RSS worker failed for ${rssId}`,
+        description: "A weeklySundayRSSCreate Cloud Task failed while creating service stops.",
+        severity: "error",
+      });
+
+      if (isPermanentRssError(error)) {
+        return;
+      }
+
+      throw error;
+    }
+  }
+);
+
+exports.catchUpRecurringServiceStops = onCall(
+  {
+    cors: ADMIN_CALLABLE_CORS_ORIGINS,
+    timeoutSeconds: 1800,
+  },
+  async (request) => {
+    const payload = request.data || {};
+    const authUserId = request.auth?.uid || "";
+    const firestore = getFirestore();
+
+    if (!authUserId) {
+      throw new HttpsError("unauthenticated", "You must be signed in.");
+    }
+
+    const adminUserData = await getPlatformAdminUserData(firestore, authUserId);
+
+    if (!adminUserData) {
+      throw new HttpsError("permission-denied", "Only platform admins can run RSS catch-up.");
+    }
+
+    const companyIds = await resolveCatchUpCompanyIds(firestore, payload);
+    const rssIds = normalizeStringArray([
+      payload.recurringServiceStopId,
+      payload.rssId,
+      ...(Array.isArray(payload.recurringServiceStopIds) ? payload.recurringServiceStopIds : []),
+      ...(Array.isArray(payload.rssIds) ? payload.rssIds : []),
+    ]);
+
+    if (rssIds.length > 0 && companyIds.length !== 1) {
+      throw new HttpsError(
+        "invalid-argument",
+        "RSS ID filters require exactly one companyId so the catch-up can find the RSS documents."
+      );
+    }
+
+    const runContext = {
+      runId: buildManualRssRunId("catchup"),
+      jobName: "manual-catch-up",
+      scheduleTime: new Date().toISOString(),
+      mode: "catch-up",
+      requestedByUserId: authUserId,
+      requestedByEmail: adminUserData.email || adminUserData.userEmail || "",
+    };
+    const summary = {
+      ...runContext,
+      totalCompanies: companyIds.length,
+      companiesVisited: 0,
+      failedCompanies: 0,
+      totalFetched: 0,
+      totalSelected: 0,
+      enqueued: 0,
+      alreadyQueued: 0,
+      enqueueFailed: 0,
+    };
+
+    logRecurringServiceStopEvent("log", "catchup-start", {
+      ...summary,
+      companyIds,
+      recurringServiceStopIds: rssIds,
+    });
+
+    for (const companyId of companyIds) {
+      try {
+        const companySummary = await processCompanyRecurringStops(companyId, runContext, {
+          recurringServiceStopIds: rssIds,
+        });
+        summary.companiesVisited += 1;
+        summary.totalFetched += companySummary.totalFetched;
+        summary.totalSelected += companySummary.totalSelected;
+        summary.enqueued += companySummary.enqueued;
+        summary.alreadyQueued += companySummary.alreadyQueued;
+        summary.enqueueFailed += companySummary.enqueueFailed;
+      } catch (error) {
+        summary.failedCompanies += 1;
+        logRecurringServiceStopEvent("error", "catchup-company-error", {
+          ...runContext,
+          companyId,
+          error: summarizeError(error),
+        });
+        await reportCloudFunctionError(error, {
+          ...runContext,
+          companyId,
+          eventName: "catchup-company-error",
+          title: `RSS catch-up failed for company ${companyId}`,
+          description: "The manual RSS catch-up dispatcher could not enqueue tasks for this company.",
+          severity: "critical",
+        });
+      }
+    }
+
+    logRecurringServiceStopEvent("log", "catchup-complete", summary);
+    return summary;
+  }
+);
+
+function logRecurringServiceStopEvent(level, eventName, details = {}) {
+  const payload = {
+    functionName: "weeklySundayRSSCreate",
+    event: eventName,
+    ...details,
+  };
+
+  let serializedPayload;
+  try {
+    serializedPayload = JSON.stringify(payload, (_key, value) => {
+      if (value instanceof Date) return value.toISOString();
+      if (typeof value?.toDate === "function") return value.toDate().toISOString();
+      return value;
+    });
+  } catch (error) {
+    serializedPayload = JSON.stringify({
+      functionName: "weeklySundayRSSCreate",
+      event: "log-serialization-error",
+      originalEvent: eventName,
+      error: summarizeError(error),
+    });
+  }
+
+  const message = `[weeklySundayRSSCreate][${eventName}] ${serializedPayload}`;
+  if (level === "error") {
+    console.error(message);
+  } else if (level === "warn") {
+    console.warn(message);
+  } else {
+    console.log(message);
+  }
+}
+
+function summarizeError(error) {
+  return {
+    message: error?.message || String(error),
+    stack: error?.stack || "",
+    code: error?.code || "",
+  };
+}
+
+function hashString(value, length = 32) {
+  return crypto
+    .createHash("sha256")
+    .update(String(value || ""))
+    .digest("hex")
+    .slice(0, length);
+}
+
+function buildWeeklyRssRunId(event) {
+  const scheduleTime = event?.scheduleTime || new Date().toISOString();
+  return `weekly_sunday_rss_${hashString(scheduleTime, 16)}`;
+}
+
+function buildManualRssRunId(label) {
+  return `manual_${String(label || "rss").replace(/[^a-z0-9_-]/gi, "_")}_${hashString(`${Date.now()}|${uuidv4()}`, 16)}`;
+}
+
+function buildRssTaskId({ runId, companyId, recurringServiceStopId }) {
+  return `rss_${hashString(`${runId}|${companyId}|${recurringServiceStopId}`, 40)}`;
+}
+
+function isTaskAlreadyExistsError(error) {
+  return (
+    error?.code === "functions/task-already-exists" ||
+    /already exists/i.test(String(error?.message || ""))
+  );
+}
+
+function isPermanentRssError(error) {
+  return /^Invalid rssData\.day:/i.test(String(error?.message || ""));
+}
+
+function truncateString(value, maxLength = 1000) {
+  const text = String(value || "").trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 3)}...` : text;
+}
+
+function safeSerializeForAdminError(value, maxLength = 10000) {
+  try {
+    return truncateString(JSON.stringify(value || {}, (_key, nestedValue) => {
+      if (nestedValue instanceof Date) return nestedValue.toISOString();
+      if (typeof nestedValue?.toDate === "function") return nestedValue.toDate().toISOString();
+      if (nestedValue instanceof Error) return summarizeError(nestedValue);
+      if (typeof nestedValue === "function") return `[Function ${nestedValue.name || "anonymous"}]`;
+      return nestedValue;
+    }, 2), maxLength);
+  } catch (error) {
+    return truncateString(String(value || ""), maxLength);
+  }
+}
+
+async function reportCloudFunctionError(error, context = {}) {
+  try {
+    const db = getFirestore();
+    const normalizedError = summarizeError(error);
+    const functionName = context.functionName || "weeklySundayRSSCreate";
+    const eventName = context.eventName || "cloud-function-error";
+    const recurringServiceStopId = context.recurringServiceStopId || "";
+    const companyId = context.companyId || "";
+    const fingerprint = [
+      functionName,
+      eventName,
+      companyId,
+      recurringServiceStopId,
+      normalizedError.message,
+    ].join("|").toLowerCase();
+    const errorRef = db
+      .collection(APP_ERRORS_COLLECTION)
+      .doc(`cf_${hashString(fingerprint, 40)}`);
+    const existingSnap = await errorRef.get();
+    const existingStatus = existingSnap.exists ? existingSnap.data()?.status : "";
+    const basePayload = {
+      title: truncateString(context.title || `${functionName}: ${normalizedError.message}`, 220),
+      description: truncateString(
+        context.description || `A Cloud Function error was captured from ${functionName}.`,
+        5000
+      ),
+      message: truncateString(normalizedError.message, 5000),
+      where: truncateString(`${functionName}.${eventName}`, 500),
+      severity: ["info", "warning", "error", "critical"].includes(context.severity)
+        ? context.severity
+        : "error",
+      source: "cloud-function",
+      userId: "",
+      userEmail: "",
+      accountType: "system",
+      companyId: truncateString(companyId, 320),
+      companyName: truncateString(context.companyName || "", 320),
+      location: truncateString(`cloud-functions://${functionName}/${eventName}`, 1000),
+      pathname: "/admin/errors",
+      data: safeSerializeForAdminError({
+        ...context,
+        errorCode: normalizedError.code,
+        recurringServiceStopId,
+      }),
+      stack: truncateString(normalizedError.stack, 15000),
+      fingerprint: truncateString(fingerprint, 500),
+      updatedAt: FieldValue.serverTimestamp(),
+      lastSeenAt: FieldValue.serverTimestamp(),
+    };
+
+    if (existingSnap.exists) {
+      await errorRef.set({
+        ...basePayload,
+        status: existingStatus === "Ignored" ? "Ignored" : "New",
+        occurrenceCount: FieldValue.increment(1),
+      }, { merge: true });
+    } else {
+      await errorRef.set({
+        ...basePayload,
+        status: "New",
+        occurrenceCount: 1,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+    }
+  } catch (loggingError) {
+    console.error("Unable to report Cloud Function error to appErrors", loggingError);
+  }
+}
+
+function dateToLog(value) {
+  const parsed = parseDate(value);
+  return parsed ? parsed.toISOString() : null;
+}
+
+function getRssLogContext(rssData = {}) {
+  return {
+    frequency: rssData.frequency || "",
+    day: rssData.day || "",
+    startDate: dateToLog(rssData.startDate),
+    endDate: dateToLog(rssData.endDate),
+    noEndDate: Boolean(rssData.noEndDate),
+    lastCreated: dateToLog(rssData.lastCreated),
+    serviceLocationId: rssData.serviceLocationId || "",
+    customerId: rssData.customerId || "",
+  };
+}
+
+function makeRssOutcome(status, reason, details = {}) {
+  return {
+    status,
+    reason,
+    ...details,
+  };
+}
+
+function normalizeStringArray(values) {
+  return Array.from(new Set(
+    (values || [])
+      .flat()
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  ));
+}
+
+async function getPlatformAdminUserData(firestore, authUserId) {
+  if (!authUserId) return null;
+
+  const userSnap = await firestore.collection("users").doc(authUserId).get();
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+
+  return userData.accountType === "Admin" ? userData : null;
+}
+
+async function resolveCatchUpCompanyIds(firestore, payload = {}) {
+  const requestedCompanyIds = normalizeStringArray([
+    payload.companyId,
+    ...(Array.isArray(payload.companyIds) ? payload.companyIds : []),
+  ]);
+
+  if (requestedCompanyIds.length > 0) {
+    return requestedCompanyIds;
+  }
+
+  const companiesSnap = await firestore.collection("companies").get();
+  return companiesSnap.docs.map((companyDoc) => companyDoc.id);
+}
+
+async function processCompanyRecurringStops(companyId, runContext = {}, options = {}) {
   const db = getFirestore();
 
   const rssSnap = await db
     .collection(`companies/${companyId}/recurringServiceStop`)
     .get();
+  const selectedRssIds = new Set(normalizeStringArray(options.recurringServiceStopIds || []));
+  const rssDocs = selectedRssIds.size
+    ? rssSnap.docs.filter((rssDoc) => {
+      const data = rssDoc.data() || {};
+      return selectedRssIds.has(rssDoc.id) || selectedRssIds.has(data.id || "");
+    })
+    : rssSnap.docs;
 
-  if (rssSnap.empty) return;
+  const summary = {
+    ...runContext,
+    companyId,
+    totalFetched: rssSnap.size,
+    totalSelected: rssDocs.length,
+    enqueued: 0,
+    alreadyQueued: 0,
+    enqueueFailed: 0,
+  };
+
+  if (rssSnap.empty || rssDocs.length === 0) {
+    logRecurringServiceStopEvent("log", "company-complete", summary);
+    return summary;
+  }
+
   console.log(`    [processCompanyRecurringStops]RSS Count: ${rssSnap.size}`);
+  logRecurringServiceStopEvent("log", "company-rss-count", {
+    ...runContext,
+    companyId,
+    totalFetched: rssSnap.size,
+  });
 
-  for (const rssDoc of rssSnap.docs) {
-    const rssData = rssDoc.data();
-    try {
-      await expandRecurringServiceStop({
-        companyId,
-        rssData: {
-          ...rssData,
-          id: rssData.id || rssDoc.id,
-        },
+  const taskQueue = getFunctions().taskQueue(RECURRING_SERVICE_STOP_TASK_FUNCTION);
+  const results = await mapInBatches(
+    rssDocs,
+    RSS_TASK_ENQUEUE_BATCH_SIZE,
+    async (rssDoc, index) => enqueueRecurringServiceStopTask({
+      taskQueue,
+      companyId,
+      rssDoc,
+      index: index + 1,
+      totalFetched: rssSnap.size,
+      totalSelected: rssDocs.length,
+      runContext,
+    })
+  );
+
+  for (const result of results) {
+    if (result.status === "enqueued") summary.enqueued += 1;
+    if (result.status === "alreadyQueued") summary.alreadyQueued += 1;
+    if (result.status === "enqueueFailed") summary.enqueueFailed += 1;
+  }
+
+  logRecurringServiceStopEvent("log", "company-complete", summary);
+  return summary;
+}
+
+async function mapInBatches(items, batchSize, mapper) {
+  const results = [];
+
+  for (let start = 0; start < items.length; start += batchSize) {
+    const batch = items.slice(start, start + batchSize);
+    const batchResults = await Promise.all(batch.map((item, offset) => mapper(item, start + offset)));
+    results.push(...batchResults);
+  }
+
+  return results;
+}
+
+async function enqueueRecurringServiceStopTask({
+  taskQueue,
+  companyId,
+  rssDoc,
+  index,
+  totalFetched,
+  totalSelected,
+  runContext = {},
+}) {
+  const rssData = rssDoc.data();
+  const rssId = rssData.id || rssDoc.id;
+  const taskId = buildRssTaskId({
+    runId: runContext.runId || "manual",
+    companyId,
+    recurringServiceStopId: rssId,
+  });
+  const taskPayload = {
+    runId: runContext.runId || "",
+    jobName: runContext.jobName || "",
+    scheduleTime: runContext.scheduleTime || "",
+    companyId,
+    recurringServiceStopId: rssId,
+    docId: rssDoc.id,
+    index,
+    totalFetched,
+    totalSelected,
+  };
+  const logContext = {
+    ...taskPayload,
+    taskId,
+    ...getRssLogContext(rssData),
+  };
+
+  try {
+    await taskQueue.enqueue(taskPayload, {
+      id: taskId,
+      dispatchDeadlineSeconds: RECURRING_SERVICE_STOP_TASK_DISPATCH_DEADLINE_SECONDS,
+    });
+    logRecurringServiceStopEvent("log", "rss-task-enqueued", logContext);
+    return { status: "enqueued", recurringServiceStopId: rssId };
+  } catch (error) {
+    if (isTaskAlreadyExistsError(error)) {
+      logRecurringServiceStopEvent("warn", "rss-task-already-queued", {
+        ...logContext,
+        error: summarizeError(error),
       });
-    } catch (error) {
-      console.error(`    RSS ${rssDoc.id} failed`, error);
+      return { status: "alreadyQueued", recurringServiceStopId: rssId };
     }
+
+    logRecurringServiceStopEvent("error", "rss-task-enqueue-error", {
+      ...logContext,
+      error: summarizeError(error),
+    });
+    await reportCloudFunctionError(error, {
+      ...logContext,
+      eventName: "rss-task-enqueue-error",
+      title: `Failed to enqueue RSS task for ${rssId}`,
+      description: "The scheduled RSS dispatcher could not enqueue this RSS into Cloud Tasks.",
+      severity: "critical",
+    });
+    return { status: "enqueueFailed", recurringServiceStopId: rssId };
   }
 }
 
@@ -105,8 +717,10 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
   if (!noEndDate && endDate) {
     const normalizedEndDate = normalizeToNoon(endDate);
     if (normalizedEndDate < startDate) {
-      console.log(`RSS ${rssData.id}: endDate is before startDate. Skipping.`);
-      return;
+      return makeRssOutcome("skipped", "end_date_before_start_date", {
+        startDate: dateToLog(startDate),
+        endDate: dateToLog(normalizedEndDate),
+      });
     }
 
     if (normalizedEndDate < effectiveHorizon) {
@@ -115,44 +729,67 @@ async function expandRecurringServiceStop({ companyId, rssData }) {
   }
 
   if (startDate > effectiveHorizon) {
-    console.log(`RSS ${rssData.id}: startDate is beyond the 4-week horizon. Skipping.`);
-    return;
+    return makeRssOutcome("skipped", "start_date_after_horizon", {
+      startDate: dateToLog(startDate),
+      effectiveHorizon: dateToLog(effectiveHorizon),
+    });
   }
 
   const lastCreated = parseDate(rssData.lastCreated);
+  const missingLastCreated = !lastCreated;
   if (!lastCreated) {
     // If missing, treat as "startDate - 1 day" for daily-ish so we create starting at startDate.
     // This is safer than doing nothing.
-    console.log(`RSS ${rssData.id}: missing lastCreated`);
+    logRecurringServiceStopEvent("warn", "rss-warning", {
+      companyId,
+      recurringServiceStopId: rssData.id || "",
+      reason: "missing_last_created",
+      ...getRssLogContext(rssData),
+    });
   } else {
     // Stop early if already ahead
-    if (normalizeToNoon(lastCreated) >= effectiveHorizon) return;
+    if (normalizeToNoon(lastCreated) >= effectiveHorizon) {
+      return makeRssOutcome("skipped", "last_created_on_or_after_horizon", {
+        lastCreated: dateToLog(lastCreated),
+        effectiveHorizon: dateToLog(effectiveHorizon),
+      });
+    }
   }
 
+  let outcome;
   switch (rssData.frequency) {
     case "Daily":
-      await createDailyStops(companyId, rssData, lastCreated, effectiveHorizon);
+      outcome = await createDailyStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     case "Week Day":
-      await createWeekdayStops(companyId, rssData, lastCreated, effectiveHorizon);
+      outcome = await createWeekdayStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     case "Weekly":
-      await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
+      outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 7);
       break;
 
     case "Bi-Weekly":
-      await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 14);
+      outcome = await createWeeklyStops(companyId, rssData, lastCreated, effectiveHorizon, 14);
       break;
 
     case "Monthly":
-      await createMonthlyStops(companyId, rssData, lastCreated, effectiveHorizon);
+      outcome = await createMonthlyStops(companyId, rssData, lastCreated, effectiveHorizon);
       break;
 
     default:
+      outcome = makeRssOutcome("skipped", "unsupported_frequency", {
+        frequency: rssData.frequency || "",
+      });
       break;
   }
+
+  return {
+    ...outcome,
+    missingLastCreated,
+    effectiveHorizon: dateToLog(effectiveHorizon),
+  };
 }
 
 // ---------- Helpers (match iOS semantics) ----------
@@ -241,20 +878,13 @@ function normalizeServiceStopTypeFields(source, contextLabel) {
   };
 
   if (!hasTypeId || !hasType) {
-    console.warn("[ServiceStopTypeFunction][fallback]", {
+    logRecurringServiceStopEvent("warn", "rss-type-fallback", {
       context: contextLabel,
       recurringServiceStopId: source?.id || "",
       incomingTypeId: source?.typeId || "",
       incomingType: source?.type || "",
       resolvedTypeId: fields.typeId,
       resolvedType: fields.type,
-    });
-  } else {
-    console.log("[ServiceStopTypeFunction][resolved]", {
-      context: contextLabel,
-      recurringServiceStopId: source?.id || "",
-      typeId: fields.typeId,
-      type: fields.type,
     });
   }
 
@@ -318,6 +948,8 @@ function buildServiceStopIOSShape({ companyId, rssData, serviceDate, idss, inter
     techId: rssData.techId ?? "",
 
     recurringServiceStopId: rssData.id ?? "",
+    recurringServiceStopDateKey: buildServiceDateKey(serviceDate),
+    recurringServiceStopDedupKey: `${rssData.id ?? ""}|${buildServiceDateKey(serviceDate)}`,
 
     description: rssData.description ?? "",
     serviceLocationId: rssData.serviceLocationId ?? "",
@@ -380,11 +1012,81 @@ async function loadRecurringServiceStopTasks(db, companyId, rssData) {
   }));
 }
 
-function buildServiceStopTask({ task, serviceStop, rssData }) {
-  const serviceStopTaskId = "com_ss_tas_" + uuidv4();
+function buildServiceDateKey(serviceDate) {
+  return normalizeToNoon(serviceDate).toISOString().slice(0, 10);
+}
+
+function buildServiceStopIdForRssDate(companyId, rssId, serviceDate) {
+  return `com_ss_rss_${hashString(`${companyId}|${rssId}|${buildServiceDateKey(serviceDate)}`, 32)}`;
+}
+
+function buildServiceStopTaskId(serviceStopId, task) {
+  return `com_ss_tas_${hashString(`${serviceStopId}|${task.id || task.taskGroupTaskId || task.name || ""}`, 32)}`;
+}
+
+function isAlreadyExistsFirestoreError(error) {
+  return (
+    error?.code === 6 ||
+    error?.code === "already-exists" ||
+    /already exists/i.test(String(error?.message || ""))
+  );
+}
+
+function buildServiceStopFromExistingSnapshot(serviceStopId, data = {}, rssData = {}) {
+  return {
+    ...data,
+    id: data.id || serviceStopId,
+    internalId: data.internalId || "",
+    serviceLocationId: data.serviceLocationId || rssData.serviceLocationId || "",
+  };
+}
+
+async function findExistingServiceStopForRssDate({ db, companyId, rssData, serviceDate }) {
+  const serviceStopsCol = `companies/${companyId}/serviceStops`;
+  const deterministicServiceStopId = buildServiceStopIdForRssDate(companyId, rssData.id, serviceDate);
+  const deterministicRef = db.collection(serviceStopsCol).doc(deterministicServiceStopId);
+  const deterministicSnap = await deterministicRef.get();
+
+  if (deterministicSnap.exists) {
+    return {
+      serviceDate,
+      serviceStopId: deterministicSnap.id,
+      serviceStopRef: deterministicRef,
+      exists: true,
+      existingData: deterministicSnap.data(),
+    };
+  }
+
+  const duplicateSnap = await db
+    .collection(serviceStopsCol)
+    .where("recurringServiceStopId", "==", rssData.id)
+    .where("serviceDate", "==", normalizeToNoon(serviceDate))
+    .limit(1)
+    .get();
+
+  if (!duplicateSnap.empty) {
+    const duplicateDoc = duplicateSnap.docs[0];
+    return {
+      serviceDate,
+      serviceStopId: duplicateDoc.id,
+      serviceStopRef: duplicateDoc.ref,
+      exists: true,
+      existingData: duplicateDoc.data(),
+    };
+  }
 
   return {
-    id: serviceStopTaskId,
+    serviceDate,
+    serviceStopId: deterministicServiceStopId,
+    serviceStopRef: deterministicRef,
+    exists: false,
+    existingData: null,
+  };
+}
+
+function buildServiceStopTask({ task, serviceStop, rssData, serviceStopTaskId }) {
+  return {
+    id: serviceStopTaskId || "com_ss_tas_" + uuidv4(),
     name: String(task.name || "").trim(),
     type: task.type,
     status: task.status || "Not Finished",
@@ -425,9 +1127,30 @@ function buildServiceStopTask({ task, serviceStop, rssData }) {
   };
 }
 
-async function uploadServiceStopFromRss({ db, companyId, rssData, serviceDate, internalId, taskList }) {
+async function ensureServiceStopTasks({ serviceStopRef, serviceStop, rssData, taskList }) {
+  for (const task of taskList) {
+    const serviceStopTaskId = buildServiceStopTaskId(serviceStop.id, task);
+    const serviceStopTask = buildServiceStopTask({
+      task,
+      serviceStop,
+      rssData,
+      serviceStopTaskId,
+    });
+    await serviceStopRef.collection("tasks").doc(serviceStopTask.id).set(serviceStopTask, { merge: true });
+  }
+}
+
+async function uploadServiceStopFromRss({
+  db,
+  companyId,
+  rssData,
+  serviceDate,
+  internalId,
+  taskList,
+  serviceStopId,
+}) {
   const serviceStopsCol = `companies/${companyId}/serviceStops`;
-  const idss = "com_ss_" + uuidv4();
+  const idss = serviceStopId || "com_ss_" + uuidv4();
   const serviceStop = buildServiceStopIOSShape({
     companyId,
     rssData,
@@ -437,21 +1160,121 @@ async function uploadServiceStopFromRss({ db, companyId, rssData, serviceDate, i
   });
   const serviceStopRef = db.collection(serviceStopsCol).doc(idss);
 
-  await serviceStopRef.set(serviceStop);
+  try {
+    await serviceStopRef.create(serviceStop);
+    await ensureServiceStopTasks({ serviceStopRef, serviceStop, rssData, taskList });
+    return { serviceStop, created: true };
+  } catch (error) {
+    if (!serviceStopId || !isAlreadyExistsFirestoreError(error)) {
+      throw error;
+    }
 
-  for (const task of taskList) {
-    const serviceStopTask = buildServiceStopTask({ task, serviceStop, rssData });
-    await serviceStopRef.collection("tasks").doc(serviceStopTask.id).set(serviceStopTask);
+    const existingSnap = await serviceStopRef.get();
+    const existingServiceStop = buildServiceStopFromExistingSnapshot(
+      idss,
+      existingSnap.data(),
+      rssData
+    );
+    await ensureServiceStopTasks({
+      serviceStopRef,
+      serviceStop: existingServiceStop,
+      rssData,
+      taskList,
+    });
+    return { serviceStop: existingServiceStop, created: false };
+  }
+}
+
+async function createServiceStopsForDates({
+  companyId,
+  rssData,
+  dates,
+  lastCreated,
+  horizon,
+  noDatesReason = "no_service_dates_within_horizon",
+  outcomeDetails = {},
+}) {
+  const db = getFirestore();
+  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
+
+  if (dates.length === 0) {
+    return makeRssOutcome("skipped", noDatesReason, {
+      frequency: rssData.frequency || "",
+      lastCreated: dateToLog(lastCreated),
+      horizon: dateToLog(horizon),
+      serviceStopsCreated: 0,
+      ...outcomeDetails,
+    });
   }
 
-  return serviceStop;
+  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
+  const dateEntries = await Promise.all(dates.map((serviceDate) => (
+    findExistingServiceStopForRssDate({ db, companyId, rssData, serviceDate })
+  )));
+  const datesToCreate = dateEntries.filter((entry) => !entry.exists);
+  const internalIds = datesToCreate.length
+    ? await allocateInternalIds(db, companyId, datesToCreate.length)
+    : [];
+  const internalIdsByServiceStopId = new Map(
+    datesToCreate.map((entry, index) => [entry.serviceStopId, internalIds[index]])
+  );
+  let serviceStopsCreated = 0;
+  let existingServiceStops = 0;
+  let last = lastCreated ? new Date(lastCreated) : null;
+
+  for (const entry of dateEntries) {
+    if (entry.exists) {
+      existingServiceStops += 1;
+      const existingServiceStop = buildServiceStopFromExistingSnapshot(
+        entry.serviceStopId,
+        entry.existingData,
+        rssData
+      );
+      await ensureServiceStopTasks({
+        serviceStopRef: entry.serviceStopRef,
+        serviceStop: existingServiceStop,
+        rssData,
+        taskList,
+      });
+    } else {
+      const uploadResult = await uploadServiceStopFromRss({
+        db,
+        companyId,
+        rssData,
+        serviceDate: entry.serviceDate,
+        internalId: internalIdsByServiceStopId.get(entry.serviceStopId),
+        taskList,
+        serviceStopId: entry.serviceStopId,
+      });
+
+      if (uploadResult.created) {
+        serviceStopsCreated += 1;
+      } else {
+        existingServiceStops += 1;
+      }
+    }
+
+    last = entry.serviceDate;
+  }
+
+  if (last) await rssRef.update({ lastCreated: last });
+
+  return makeRssOutcome("created", serviceStopsCreated > 0
+    ? "service_stops_created"
+    : "service_stops_already_existed", {
+    frequency: rssData.frequency || "",
+    serviceStopsCreated,
+    existingServiceStops,
+    serviceDatesConsidered: dates.length,
+    firstServiceDate: dateToLog(dates[0]),
+    lastServiceDate: dateToLog(last),
+    horizon: dateToLog(horizon),
+    ...outcomeDetails,
+  });
 }
 
 // ---------- Daily ----------
 async function createDailyStops(companyId, rssData, lastCreated, horizon) {
-  const db = getFirestore();
-  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
-
   // Next date is lastCreated + 1 day; if lastCreated missing, start at startDate
   const startBase = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
   let cursor = lastCreated ? addDays(startBase, 1) : new Date(startBase);
@@ -462,36 +1285,17 @@ async function createDailyStops(companyId, rssData, lastCreated, horizon) {
     dates.push(normalizeToNoon(cursor));
     cursor = addDays(cursor, 1);
   }
-  if (dates.length === 0) return;
-
-  // Allocate internal IDs in one transaction
-  const internalIds = await allocateInternalIds(db, companyId, dates.length);
-  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
-
-  let last = lastCreated ? new Date(lastCreated) : null;
-
-  // Write stops sequentially
-  for (let i = 0; i < dates.length; i++) {
-    await uploadServiceStopFromRss({
-      db,
-      companyId,
-      rssData,
-      serviceDate: dates[i],
-      internalId: internalIds[i],
-      taskList,
-    });
-
-    last = dates[i];
-  }
-
-  if (last) await rssRef.update({ lastCreated: last });
+  return createServiceStopsForDates({
+    companyId,
+    rssData,
+    dates,
+    lastCreated,
+    horizon,
+  });
 }
 
 // ---------- Weekday ----------
 async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
-  const db = getFirestore();
-  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
-
   const startBase = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
   let cursor = lastCreated ? addDays(startBase, 1) : new Date(startBase);
 
@@ -500,49 +1304,34 @@ async function createWeekdayStops(companyId, rssData, lastCreated, horizon) {
     if (!isWeekend(cursor)) dates.push(normalizeToNoon(cursor));
     cursor = addDays(cursor, 1);
   }
-  if (dates.length === 0) return;
-
-  const internalIds = await allocateInternalIds(db, companyId, dates.length);
-  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
-
-  let last = lastCreated ? new Date(lastCreated) : null;
-
-  for (let i = 0; i < dates.length; i++) {
-    await uploadServiceStopFromRss({
-      db,
-      companyId,
-      rssData,
-      serviceDate: dates[i],
-      internalId: internalIds[i],
-      taskList,
-    });
-
-    last = dates[i];
-  }
-
-  if (last) await rssRef.update({ lastCreated: last });
+  return createServiceStopsForDates({
+    companyId,
+    rssData,
+    dates,
+    lastCreated,
+    horizon,
+    noDatesReason: "no_weekdays_within_horizon",
+  });
 }
 
 // ---------- Weekly / Biweekly ----------
 async function createWeeklyStops(companyId, rssData, lastCreated, horizon, intervalDays) {
-  const db = getFirestore();
-  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
-
   // Base cursor: lastCreated + interval, or align from startDate if lastCreated missing
   let serviceDate;
 
   if (lastCreated) {
     const nextAlignedDate = alignDateToDayOnOrAfter(addDays(lastCreated, 1), rssData.day);
     serviceDate = addDays(nextAlignedDate, -intervalDays);
-    console.log('      [createWeeklyStops] lastCreated: ' + lastCreated)
   } else {
     const startDate = normalizeToNoon(parseDate(rssData.startDate) || new Date());
     const alignedStartDate = alignDateToDayOnOrAfter(startDate, rssData.day);
     const targetDow = dayNameToIndex(rssData.day);
 
     if (alignedStartDate.getTime() !== startDate.getTime()) {
-      console.warn("Weekly RSS startDate day does not match selected day", {
+      logRecurringServiceStopEvent("warn", "rss-warning", {
+        companyId,
         recurringServiceStopId: rssData.id || "",
+        reason: "weekly_start_date_day_mismatch",
         rssDay: rssData.day,
         targetDow,
         startDow: startDate.getDay(),
@@ -552,52 +1341,33 @@ async function createWeeklyStops(companyId, rssData, lastCreated, horizon, inter
       });
     }
 
-    console.log('      [createWeeklyStops] targetDow: ' + targetDow)
-    console.log('      [createWeeklyStops] startDow: ' + startDate.getDay())
     serviceDate = addDays(alignedStartDate, -intervalDays);
   }
 
   // Collect dates to create up to horizon
   const dates = [];
 
-  console.log('      [createWeeklyStops] serviceDate: ' + serviceDate)
   while (true) {
-    console.log('      [createWeeklyStops] horizon: ' + horizon)
     serviceDate = addDays(serviceDate, intervalDays);
-    console.log('      [createWeeklyStops] serviceDate: ' + serviceDate)
     const normalizedServiceDate = normalizeToNoon(serviceDate);
     if (normalizedServiceDate > horizon) break;
     dates.push(normalizedServiceDate);
   }
-  if (dates.length === 0) {
-    console.log('      [createWeeklyStops] dates.length: Empty')
-    return;
-  }
-  const internalIds = await allocateInternalIds(db, companyId, dates.length);
-  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
-
-  let last = lastCreated ? new Date(lastCreated) : null;
-  console.log('      [createWeeklyStops] dates.length: ' + dates.length)
-  for (let i = 0; i < dates.length; i++) {
-    await uploadServiceStopFromRss({
-      db,
-      companyId,
-      rssData,
-      serviceDate: dates[i],
-      internalId: internalIds[i],
-      taskList,
-    });
-
-    last = dates[i];
-  }
-  console.log('      [createWeeklyStops] Last Created: ' + last)
-  if (last) await rssRef.update({ lastCreated: last });
+  return createServiceStopsForDates({
+    companyId,
+    rssData,
+    dates,
+    lastCreated,
+    horizon,
+    outcomeDetails: {
+      intervalDays,
+      day: rssData.day || "",
+    },
+  });
 }
 
 // ---------- Monthly ----------
 async function createMonthlyStops(companyId, rssData, lastCreated, horizon) {
-  const db = getFirestore();
-  const rssRef = db.collection(`companies/${companyId}/recurringServiceStop`).doc(rssData.id);
   let cursor = normalizeToNoon(lastCreated || parseDate(rssData.startDate) || new Date());
 
   if (lastCreated) {
@@ -610,26 +1380,13 @@ async function createMonthlyStops(companyId, rssData, lastCreated, horizon) {
     cursor = addMonths(cursor, 1);
   }
 
-  if (dates.length === 0) return;
-
-  const internalIds = await allocateInternalIds(db, companyId, dates.length);
-  const taskList = await loadRecurringServiceStopTasks(db, companyId, rssData);
-  let last = lastCreated ? new Date(lastCreated) : null;
-
-  for (let i = 0; i < dates.length; i++) {
-    await uploadServiceStopFromRss({
-      db,
-      companyId,
-      rssData,
-      serviceDate: dates[i],
-      internalId: internalIds[i],
-      taskList,
-    });
-
-    last = dates[i];
-  }
-
-  if (last) await rssRef.update({ lastCreated: last });
+  return createServiceStopsForDates({
+    companyId,
+    rssData,
+    dates,
+    lastCreated,
+    horizon,
+  });
 }
 
 // --------- CONFIG / HELPERS ---------

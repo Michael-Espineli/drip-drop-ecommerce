@@ -2427,7 +2427,7 @@ const RouteWeekNavigator = ({
                             type="button"
                             onClick={() => onSelectDate(date)}
                             className={`min-w-0 rounded-lg border px-3 py-2 text-left transition ${isSelected
-                                    ? 'border-blue-500 bg-blue-600 text-white shadow-sm'
+                                    ? 'border-slate-950 bg-slate-900 text-white shadow-md hover:bg-slate-800'
                                     : isToday
                                         ? 'border-blue-200 bg-blue-50 text-gray-900 hover:bg-blue-100'
                                         : 'border-gray-200 bg-gray-50 text-gray-800 hover:border-gray-300 hover:bg-white'
@@ -2438,19 +2438,19 @@ const RouteWeekNavigator = ({
                                     <p className={`truncate text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>
                                         {dayName}
                                     </p>
-                                    <p className={`text-xs font-semibold ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                    <p className={`text-xs font-semibold ${isSelected ? 'text-slate-200' : 'text-gray-500'}`}>
                                         {format(date, 'MMM d')}
                                     </p>
                                 </div>
                                 {isToday && (
-                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white/20 text-white' : 'bg-blue-100 text-blue-700'}`}>
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white text-slate-900' : 'bg-blue-100 text-blue-700'}`}>
                                         Today
                                     </span>
                                 )}
                             </div>
                             <div className="mt-2 grid grid-cols-2 gap-1">
                                 <div className={`rounded-md px-2 py-1 ${isSelected ? 'bg-white/15' : 'bg-white'}`}>
-                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-slate-200' : 'text-gray-500'}`}>
                                         Stops
                                     </p>
                                     <p className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>
@@ -2458,7 +2458,7 @@ const RouteWeekNavigator = ({
                                     </p>
                                 </div>
                                 <div className={`rounded-md px-2 py-1 ${isSelected ? 'bg-white/15' : 'bg-white'}`}>
-                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-blue-100' : 'text-gray-500'}`}>
+                                    <p className={`text-[10px] font-semibold uppercase ${isSelected ? 'text-slate-200' : 'text-gray-500'}`}>
                                         Routes
                                     </p>
                                     <p className={`text-sm font-bold ${isSelected ? 'text-white' : 'text-gray-900'}`}>

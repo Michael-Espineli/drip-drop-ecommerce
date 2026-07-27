@@ -20,6 +20,7 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { db } from "../../../utils/config";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import BillingReadinessCard from "../sales/components/BillingReadinessCard";
+import { appConfirm } from "../../../utils/appDialog";
 
 const emptyCounts = {
   companyUsers: 0,
@@ -773,7 +774,12 @@ const CompanySetupGuide = () => {
   const handleSkipGuide = async () => {
     if (!requirePermission("800", "skip the startup guide")) return;
     if (!recentlySelectedCompany) return;
-    if (!window.confirm("Skip the startup guide for this company? You can restart it from this page later.")) return;
+    const confirmed = await appConfirm({
+      title: "Skip Startup Guide",
+      message: "Skip the startup guide for this company? You can restart it from this page later.",
+      confirmLabel: "Skip Guide",
+    });
+    if (!confirmed) return;
 
     setGuideSaving(true);
     const localNow = Timestamp.fromDate(new Date());
@@ -816,7 +822,13 @@ const CompanySetupGuide = () => {
   const handleRestartGuide = async () => {
     if (!requirePermission("800", "restart the startup guide")) return;
     if (!recentlySelectedCompany) return;
-    if (!window.confirm("Restart the startup guide and clear saved checklist progress? Completed steps may be marked done again when the app sees the required data.")) return;
+    const confirmed = await appConfirm({
+      title: "Restart Startup Guide",
+      message: "Restart the startup guide and clear saved checklist progress? Completed steps may be marked done again when the app sees the required data.",
+      confirmLabel: "Restart Guide",
+      variant: "danger",
+    });
+    if (!confirmed) return;
 
     setGuideSaving(true);
     const localNow = Timestamp.fromDate(new Date());

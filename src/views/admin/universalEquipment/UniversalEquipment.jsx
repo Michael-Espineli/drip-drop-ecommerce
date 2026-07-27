@@ -11,11 +11,12 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 
 const UniversalEquipment = () => {
-  const [view, setView] = useState('list'); // list, detail, create, edit
+  const [view, setView] = useState('list'); // list, detail, create, edit, suggestions
   const [equipment, setEquipment] = useState([]);
   const [filteredEquipment, setFilteredEquipment] = useState([]);
   const [selectedEquipment, setSelectedEquipment] = useState(null);
@@ -28,6 +29,9 @@ const UniversalEquipment = () => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [modalType, setModalType] = useState(''); // 'type' or 'make'
   const [newItemName, setNewItemName] = useState('');
+  const [equipmentSuggestions, setEquipmentSuggestions] = useState([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [suggestionStatusFilter, setSuggestionStatusFilter] = useState('New');
 
   // Form state
   const [name, setName] = useState('');
@@ -64,11 +68,50 @@ const UniversalEquipment = () => {
   const btnDangerSolid =
     'px-4 py-2 rounded-md font-semibold bg-red-500 text-white hover:bg-red-400 transition';
 
+  const formatDateTime = (value) => {
+    if (!value) return 'No date';
+    const date = value?.toDate ? value.toDate() : new Date(value);
+    if (Number.isNaN(date.getTime())) return 'No date';
+
+    return date.toLocaleString([], {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+  };
+
+  const suggestionStatusClass = (status) => {
+    if (status === 'Reviewed') return 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30';
+    if (status === 'Dismissed') return 'bg-slate-700/60 text-slate-300 ring-1 ring-slate-600/60';
+
+    return 'bg-[#efb12f]/15 text-[#efb12f] ring-1 ring-[#efb12f]/30';
+  };
+
   const fetchEquipmentTypes = async () => {
     const q = query(collection(db, 'universal', 'equipment', 'equipmentTypes'));
     const querySnapshot = await getDocs(q);
     const typesList = querySnapshot.docs.map((docu) => ({ id: docu.id, ...docu.data() }));
     setEquipmentTypes(typesList);
+  };
+
+  const fetchEquipmentSuggestions = async () => {
+    setSuggestionsLoading(true);
+
+    try {
+      const q = query(
+        collection(db, 'universalEquipmentSuggestions'),
+        orderBy('createdAt', 'desc')
+      );
+      const querySnapshot = await getDocs(q);
+      setEquipmentSuggestions(querySnapshot.docs.map((docu) => ({ id: docu.id, ...docu.data() })));
+    } catch (error) {
+      console.error('Error loading potential new equipment:', error);
+      setEquipmentSuggestions([]);
+    } finally {
+      setSuggestionsLoading(false);
+    }
   };
 
   const fetchEquipmentMakes = async () => {
@@ -110,6 +153,12 @@ const UniversalEquipment = () => {
       fetchEquipment();
     }
   }, [view, sortField, sortDirection]);
+
+  useEffect(() => {
+    if (view === 'suggestions') {
+      fetchEquipmentSuggestions();
+    }
+  }, [view]);
 
   useEffect(() => {
     let results = equipment;
@@ -331,6 +380,19 @@ const UniversalEquipment = () => {
     }
   };
 
+  const handleUpdateSuggestionStatus = async (suggestionId, status) => {
+    await updateDoc(doc(db, 'universalEquipmentSuggestions', suggestionId), {
+      status,
+      reviewedAt: serverTimestamp(),
+    });
+
+    fetchEquipmentSuggestions();
+  };
+
+  const visibleEquipmentSuggestions = equipmentSuggestions.filter((suggestion) => (
+    !suggestionStatusFilter || suggestion.status === suggestionStatusFilter
+  ));
+
   const renderListView = () => (
     <div className={cardClass}>
       <div className="flex items-start justify-between gap-4 mb-4">
@@ -373,6 +435,10 @@ const UniversalEquipment = () => {
 
           <button onClick={() => handleOpenAddModal('make')} className={btnAccentOutline}>
             Add Make
+          </button>
+
+          <button onClick={() => setView('suggestions')} className={btnAccentOutline}>
+            Potential New Equipment
           </button>
 
           <button onClick={handleCreateNew} className={btnAccentOutline}>
@@ -436,6 +502,135 @@ const UniversalEquipment = () => {
           </tbody>
         </table>
       </div>
+    </div>
+  );
+
+  const renderSuggestionsView = () => (
+    <div className={cardClass}>
+      <div className="flex flex-col gap-4 mb-4 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <h1 className="font-extrabold text-xl tracking-tight" style={{ color: ADMIN_YELLOW }}>
+            Potential New Equipment
+          </h1>
+          <p className="text-sm text-slate-400">Custom make and model submissions from company equipment creation</p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <select
+            value={suggestionStatusFilter}
+            onChange={(e) => setSuggestionStatusFilter(e.target.value)}
+            className={selectClass + ' w-[180px]'}
+          >
+            <option value="">All Statuses</option>
+            <option value="New">New</option>
+            <option value="Reviewed">Reviewed</option>
+            <option value="Dismissed">Dismissed</option>
+          </select>
+
+          <button onClick={fetchEquipmentSuggestions} className={btnSecondary}>
+            Refresh
+          </button>
+
+          <button onClick={() => setView('list')} className={btnSecondary}>
+            Back to Catalog
+          </button>
+        </div>
+      </div>
+
+      {suggestionsLoading ? (
+        <div className="rounded-lg border border-slate-800/60 p-6 text-sm text-slate-400">
+          Loading potential equipment...
+        </div>
+      ) : visibleEquipmentSuggestions.length === 0 ? (
+        <div className="rounded-lg border border-slate-800/60 p-6 text-sm text-slate-400">
+          No potential equipment found.
+        </div>
+      ) : (
+        <div className="relative overflow-x-auto rounded-lg border border-slate-800/60">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-900/70">
+              <tr className="text-slate-200">
+                <th className="px-4 py-3 text-left font-bold">Submitted</th>
+                <th className="px-4 py-3 text-left font-bold">Equipment</th>
+                <th className="px-4 py-3 text-left font-bold">Catalog Values</th>
+                <th className="px-4 py-3 text-left font-bold">Company</th>
+                <th className="px-4 py-3 text-left font-bold">Status</th>
+                <th className="px-4 py-3 text-left font-bold">Actions</th>
+              </tr>
+            </thead>
+
+            <tbody className="divide-y divide-slate-800/60">
+              {visibleEquipmentSuggestions.map((suggestion) => (
+                <tr key={suggestion.id} className="align-top">
+                  <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
+                    {formatDateTime(suggestion.createdAt || suggestion.createdAtMillis)}
+                  </td>
+                  <td className="px-4 py-3 text-slate-200">
+                    <p className="font-semibold text-slate-100">{suggestion.equipmentName || 'Equipment'}</p>
+                    <p className="mt-1 text-xs text-slate-500">{suggestion.equipmentId || 'No equipment id'}</p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {suggestion.customCategoryRequested && (
+                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom category</span>
+                      )}
+                      {suggestion.customMakeRequested && (
+                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom make</span>
+                      )}
+                      {suggestion.customModelRequested && (
+                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom model</span>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-4 py-3 text-slate-300">
+                    <p><span className="text-slate-500">Type:</span> {suggestion.type || 'None'}</p>
+                    <p><span className="text-slate-500">Make:</span> {suggestion.make || 'None'}</p>
+                    <p><span className="text-slate-500">Model:</span> {suggestion.model || 'None'}</p>
+                  </td>
+                  <td className="px-4 py-3 text-slate-300">
+                    <p>{suggestion.companyName || suggestion.companyId || 'Company'}</p>
+                    <p className="mt-1 text-xs text-slate-500">{suggestion.customerName || 'No customer name'}</p>
+                  </td>
+                  <td className="px-4 py-3">
+                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${suggestionStatusClass(suggestion.status)}`}>
+                      {suggestion.status || 'New'}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col gap-2">
+                      {suggestion.status !== 'Reviewed' && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Reviewed')}
+                          className={btnPrimary}
+                        >
+                          Mark Reviewed
+                        </button>
+                      )}
+                      {suggestion.status !== 'Dismissed' && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Dismissed')}
+                          className={btnSecondary}
+                        >
+                          Dismiss
+                        </button>
+                      )}
+                      {suggestion.status !== 'New' && (
+                        <button
+                          type="button"
+                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'New')}
+                          className={btnAccentOutline}
+                        >
+                          Reopen
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 
@@ -691,6 +886,7 @@ const UniversalEquipment = () => {
   return (
     <div className="px-2 md:px-7 py-5 bg-slate-900 min-h-screen">
       {view === 'list' && renderListView()}
+      {view === 'suggestions' && renderSuggestionsView()}
       {view === 'detail' && renderDetailView()}
       {(view === 'create' || view === 'edit') && renderCreateEditView()}
       {showAddModal && renderAddTypeMakeModal()}

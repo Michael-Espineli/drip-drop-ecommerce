@@ -11,6 +11,7 @@ import {
   setDoc,
 } from 'firebase/firestore';
 import { db } from '../../../utils/config';
+import { appConfirm } from '../../../utils/appDialog';
 
 const ADMIN_YELLOW = '#efb12f';
 
@@ -223,7 +224,12 @@ function UniversalReadingsDosages() {
   };
 
   const handleDelete = async (template) => {
-    const confirmed = window.confirm(`Delete ${template.name || 'this template'}?`);
+    const confirmed = await appConfirm({
+      title: 'Delete Universal Template',
+      message: `Delete ${template.name || 'this template'}?`,
+      confirmLabel: 'Delete Template',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
     try {

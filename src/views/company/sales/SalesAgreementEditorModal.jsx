@@ -1,40 +1,24 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import {
   collection,
   doc,
-  getDoc,
-  getDocs,
   increment,
   onSnapshot,
-  query,
   serverTimestamp,
   updateDoc,
-  where,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import toast from 'react-hot-toast';
 import {
-  FaCheckCircle,
-  FaCopy,
-  FaCreditCard,
-  FaEdit,
-  FaEnvelope,
-  FaExclamationTriangle,
-  FaFileSignature,
-  FaMapMarkerAlt,
   FaPlus,
-  FaReceipt,
-  FaRoute,
   FaSave,
   FaTimes,
   FaTrash,
-  FaUserCheck,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
 import { db, functions } from '../../../utils/config';
 import {
-  SalesAgreement,
   SalesCatalogBillingBehavior,
   SalesCatalogItem,
   SalesCatalogItemType,
@@ -43,26 +27,15 @@ import {
   SalesAgreementPnlChemicalCostMode,
   SalesInvoiceLineItem,
   SalesAgreementStatus,
-  SalesAutopayStatus,
   salesCollectionNames,
 } from '../../../utils/models/Sales';
-import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
-import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
-import {
-  salesCatalogCollection,
-  saveSalesCatalogItem,
-  saveSalesModel,
-} from '../../../utils/sales/salesFirestore';
-import { AgreementBillingType, getAgreementBillingType } from '../../../utils/sales/agreementRouting';
 import {
   billingFrequencyForAgreement,
   billingFrequencyOptions,
-  formatBillingFrequency,
   formatServiceFrequency,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
-import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
 import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
 import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
 import {
@@ -72,6 +45,10 @@ import {
   saveContractTerm,
   updateTermsTemplate,
 } from '../../../utils/terms/termsTemplateFirestore';
+import {
+  salesCatalogCollection,
+  saveSalesCatalogItem,
+} from '../../../utils/sales/salesFirestore';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { appConfirm } from '../../../utils/appDialog';
 
@@ -91,16 +68,6 @@ const toMillis = (value) => {
 
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? 0 : parsed;
-};
-
-const formatDate = (value) => {
-  const millis = toMillis(value);
-  if (!millis) return 'Not set';
-  return new Intl.DateTimeFormat('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-  }).format(new Date(millis));
 };
 
 const toInputDate = (value) => {
@@ -162,42 +129,6 @@ const getSalesDeleteOwnershipIssue = ({
   }
 
   return '';
-};
-
-const renewalPreviousAgreementId = (agreement = {}) => (
-  agreement.supersedesAgreementId ||
-  agreement.previousAgreementId ||
-  agreement.renewalSourceAgreementId ||
-  ''
-);
-
-const agreementHistoryGroupId = (agreement = {}) => (
-  agreement.agreementHistoryGroupId ||
-  renewalPreviousAgreementId(agreement) ||
-  agreement.id ||
-  ''
-);
-
-const nextAgreementStartDate = (agreement = {}) => {
-  const endMillis = toMillis(agreement.endDate);
-  if (endMillis) {
-    const nextDate = new Date(endMillis);
-    nextDate.setDate(nextDate.getDate() + 1);
-    return nextDate;
-  }
-
-  return new Date();
-};
-
-const statusTone = {
-  draft: 'bg-slate-50 text-slate-700 border-slate-200',
-  sent: 'bg-sky-50 text-sky-700 border-sky-200',
-  revised: 'bg-amber-50 text-amber-700 border-amber-200',
-  accepted: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  superseded: 'bg-violet-50 text-violet-700 border-violet-200',
-  rejected: 'bg-rose-50 text-rose-700 border-rose-200',
-  expired: 'bg-slate-100 text-slate-500 border-slate-200',
-  canceled: 'bg-slate-100 text-slate-500 border-slate-200',
 };
 
 const chemicalBillingModeOptions = [
@@ -385,60 +316,6 @@ const normalizeAgreementTerms = (terms = []) => {
     .filter((term) => term.description.trim());
 };
 
-const termsToStrings = (terms = []) => (
-  normalizeAgreementTerms(terms)
-    .map((term) => term.description.trim())
-    .filter(Boolean)
-);
-
-const numberedTermsText = (terms = []) => (
-  terms
-    .map((term) => String(term || '').trim())
-    .filter(Boolean)
-    .map((term, index) => `${index + 1}. ${term}`)
-    .join('\n')
-);
-
-const stripNumberedTermsFromContent = (content = '', terms = []) => {
-  const text = String(content || '').trim();
-  const numberedTerms = numberedTermsText(terms).trim();
-
-  if (!text || !numberedTerms || !text.includes(numberedTerms)) return text;
-
-  return text.replace(numberedTerms, '').trim();
-};
-
-const StatusBadge = ({ status }) => {
-  const key = normalizeStatus(status);
-  const tone = statusTone[key] || statusTone.draft;
-
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${tone}`}>
-      {labelize(status)}
-    </span>
-  );
-};
-
-const ReadinessRow = ({ ready, title, helper }) => (
-  <div className="flex items-start gap-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-    {ready ? (
-      <FaCheckCircle className="mt-0.5 shrink-0 text-emerald-600" />
-    ) : (
-      <FaExclamationTriangle className="mt-0.5 shrink-0 text-amber-600" />
-    )}
-    <div>
-      <p className="font-semibold text-slate-900">{title}</p>
-      {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
-    </div>
-  </div>
-);
-
-const locationLine = (location = {}) => [
-  location.streetAddress,
-  location.address02,
-  [location.city, location.state, location.zip].filter(Boolean).join(' '),
-].filter(Boolean).join(', ');
-
 const createEditDraft = (agreement) => ({
   title: agreement?.title || '',
   description: agreement?.description || '',
@@ -515,46 +392,26 @@ const initialCatalogItemDraft = {
   taxable: false,
 };
 
-const acceptanceSourceLabel = (source) => {
-  if (source === 'internalManual') return 'Internal manual acceptance';
-  if (source === 'customerOffline') return 'Customer told us offline';
-  if (source === 'customerPortal') return 'Customer portal';
-  return labelize(source || 'Not accepted');
-};
-
-const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
-  if (agreement.inspectionServiceStopId) return agreement.inspectionServiceStopId;
-  if (agreement.serviceAgreementEstimateServiceStopId) return agreement.serviceAgreementEstimateServiceStopId;
-  if (agreement.estimateServiceStopId) return agreement.estimateServiceStopId;
-  if (agreement.serviceStopId) return agreement.serviceStopId;
-  if (Array.isArray(agreement.serviceStopIds) && agreement.serviceStopIds.length) return agreement.serviceStopIds[0];
-  return '';
-};
-
-const SalesAgreementDetail = () => {
-  const { agreementId } = useParams();
-  const navigate = useNavigate();
-  const { dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, stripeConnectedAccountId, user } = useContext(Context);
+const SalesAgreementEditorModal = ({
+  agreement,
+  open,
+  onClose,
+  onDeleted,
+}) => {
+  const {
+    dataBaseUser,
+    recentlySelectedCompany,
+    stripeConnectedAccountId,
+    user,
+  } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
-  const [agreement, setAgreement] = useState(null);
-  const [billingSubscription, setBillingSubscription] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [sending, setSending] = useState(false);
-  const [includeInspectionReport, setIncludeInspectionReport] = useState(false);
-  const [editing, setEditing] = useState(false);
+  const [activeAgreementId, setActiveAgreementId] = useState('');
   const [editDraft, setEditDraft] = useState(null);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [billingSubscription, setBillingSubscription] = useState(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState('');
   const [deleting, setDeleting] = useState(false);
-  const [confirmingAcceptance, setConfirmingAcceptance] = useState(false);
-  const [acceptanceSource, setAcceptanceSource] = useState('customerOffline');
-  const [acceptanceNote, setAcceptanceNote] = useState('');
-  const [markingAccepted, setMarkingAccepted] = useState(false);
-  const [creatingBilling, setCreatingBilling] = useState(false);
-  const [creatingRenewal, setCreatingRenewal] = useState(false);
-  const [startingStripeCheckout, setStartingStripeCheckout] = useState(false);
   const [termsTemplates, setTermsTemplates] = useState([]);
   const [loadingTermsTemplates, setLoadingTermsTemplates] = useState(false);
   const [applyingTermsTemplate, setApplyingTermsTemplate] = useState(false);
@@ -570,45 +427,44 @@ const SalesAgreementDetail = () => {
   const [catalogItemDraft, setCatalogItemDraft] = useState(initialCatalogItemDraft);
   const [savingCatalogItem, setSavingCatalogItem] = useState(false);
 
+  const resetEditorState = () => {
+    setActiveAgreementId('');
+    setEditDraft(null);
+    setSavingEdit(false);
+    setBillingSubscription(null);
+    setConfirmingDelete(false);
+    setDeleteConfirmation('');
+    setDeleting(false);
+    setTermsTemplates([]);
+    setLoadingTermsTemplates(false);
+    setApplyingTermsTemplate(false);
+    setUpdatingTermsTemplate(false);
+    setDosageTemplates([]);
+    setLoadingDosageTemplates(false);
+    setCatalogItems([]);
+    setLoadingCatalogItems(false);
+    setSelectedCatalogItemId('');
+    setSelectedCatalogQuantity('1');
+    setShowCatalogItemSelector(false);
+    setShowCreateCatalogItem(false);
+    setCatalogItemDraft(initialCatalogItemDraft);
+    setSavingCatalogItem(false);
+  };
+
   useEffect(() => {
-    if (!agreementId) {
-      setAgreement(null);
-      setLoading(false);
-      setError('Missing agreement id.');
-      return undefined;
+    if (!open) {
+      resetEditorState();
+      return;
     }
 
-    setLoading(true);
-    setError('');
-
-    return onSnapshot(
-      doc(db, salesCollectionNames.agreements, agreementId),
-      (snapshot) => {
-        if (!snapshot.exists()) {
-          setAgreement(null);
-          setError('Service agreement not found.');
-          setLoading(false);
-          return;
-        }
-
-        setAgreement({ id: snapshot.id, ...snapshot.data() });
-        setLoading(false);
-      },
-      (snapshotError) => {
-        console.error('Unable to load service agreement', snapshotError);
-        setError(snapshotError.message || 'Unable to load service agreement.');
-        setLoading(false);
-      }
-    );
-  }, [agreementId]);
+    if (agreement?.id && agreement.id !== activeAgreementId) {
+      setActiveAgreementId(agreement.id);
+      setEditDraft(createEditDraft(agreement));
+    }
+  }, [activeAgreementId, agreement, open]);
 
   useEffect(() => {
-    if (!agreement?.id) return;
-    setIncludeInspectionReport(Boolean(agreement.emailDelivery?.includeInspectionReport));
-  }, [agreement?.emailDelivery?.includeInspectionReport, agreement?.id]);
-
-  useEffect(() => {
-    if (!agreement?.billingSubscriptionId) {
+    if (!open || !agreement?.billingSubscriptionId) {
       setBillingSubscription(null);
       return undefined;
     }
@@ -619,14 +475,14 @@ const SalesAgreementDetail = () => {
         setBillingSubscription(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
       },
       (subscriptionError) => {
-        console.error('Unable to load billing subscription', subscriptionError);
+        console.error('Unable to load billing subscription for agreement editor', subscriptionError);
         setBillingSubscription(null);
       }
     );
-  }, [agreement?.billingSubscriptionId]);
+  }, [agreement?.billingSubscriptionId, open]);
 
   useEffect(() => {
-    if (!recentlySelectedCompany) {
+    if (!open || !recentlySelectedCompany) {
       setTermsTemplates([]);
       setLoadingTermsTemplates(false);
       return undefined;
@@ -647,10 +503,10 @@ const SalesAgreementDetail = () => {
         setLoadingTermsTemplates(false);
       }
     );
-  }, [recentlySelectedCompany]);
+  }, [open, recentlySelectedCompany]);
 
   useEffect(() => {
-    if (!recentlySelectedCompany) {
+    if (!open || !recentlySelectedCompany) {
       setCatalogItems([]);
       setSelectedCatalogItemId('');
       setLoadingCatalogItems(false);
@@ -683,10 +539,10 @@ const SalesAgreementDetail = () => {
         setLoadingCatalogItems(false);
       }
     );
-  }, [recentlySelectedCompany]);
+  }, [open, recentlySelectedCompany]);
 
   useEffect(() => {
-    if (!recentlySelectedCompany) {
+    if (!open || !recentlySelectedCompany) {
       setDosageTemplates([]);
       setLoadingDosageTemplates(false);
       return undefined;
@@ -711,56 +567,8 @@ const SalesAgreementDetail = () => {
         setLoadingDosageTemplates(false);
       }
     );
-  }, [recentlySelectedCompany]);
+  }, [open, recentlySelectedCompany]);
 
-  const companyMismatch = Boolean(
-    agreement &&
-    recentlySelectedCompany &&
-    agreement.companyId &&
-    agreement.companyId !== recentlySelectedCompany
-  );
-
-  const lineItems = useMemo(
-    () => (Array.isArray(agreement?.lineItems) ? agreement.lineItems : []),
-    [agreement]
-  );
-  const locations = useMemo(
-    () => (Array.isArray(agreement?.serviceLocationSnapshots) ? agreement.serviceLocationSnapshots : []),
-    [agreement]
-  );
-  const agreementTermsList = useMemo(
-    () => termsToStrings(agreement?.termsList),
-    [agreement?.termsList]
-  );
-  const agreementTermsIntro = useMemo(
-    () => stripNumberedTermsFromContent(agreement?.terms, agreementTermsList),
-    [agreement?.terms, agreementTermsList]
-  );
-  const hasTerms = Boolean(agreementTermsIntro || agreementTermsList.length);
-  const subtotalAmountCents = agreement?.subtotalAmountCents ?? lineItems.reduce(
-    (total, item) => total + (Number(item.totalAmountCents) || 0),
-    0
-  );
-  const totalAmountCents = agreement?.totalAmountCents ?? agreement?.rateAmountCents ?? subtotalAmountCents;
-  const emailDelivery = agreement?.emailDelivery || {};
-  const linkedInspectionServiceStopId = linkedInspectionServiceStopIdForAgreement(agreement || {});
-  const inspectionReportUrl = (
-    emailDelivery.inspectionReportUrl ||
-    agreement?.inspectionReportUrl ||
-    agreement?.serviceAgreementInspectionReportUrl ||
-    agreement?.inspectionReport?.url ||
-    ''
-  );
-  const inspectionReportLink = inspectionReportUrl || (
-    linkedInspectionServiceStopId ? `/company/serviceStops/detail/${linkedInspectionServiceStopId}` : ''
-  );
-  const hasLinkedInspectionReport = Boolean(inspectionReportLink);
-  const emailTestMode = emailDelivery.testMode === true || emailDelivery.testMode === 'true';
-  const currentStatusKey = normalizeStatus(agreement?.status);
-  const isAccepted = currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted);
-  const hasAcceptanceAudit = Boolean(agreement?.acceptedAt || agreement?.acceptedByUserName || agreement?.acceptedSource);
-  const acceptanceIsCurrent = isAccepted && hasAcceptanceAudit;
-  const supersedesAgreementId = renewalPreviousAgreementId(agreement || {});
   const actorName = [
     dataBaseUser?.firstName,
     dataBaseUser?.lastName,
@@ -770,6 +578,12 @@ const SalesAgreementDetail = () => {
     || user?.displayName
     || user?.email
     || 'Company user';
+  const companyMismatch = Boolean(
+    agreement &&
+    recentlySelectedCompany &&
+    agreement.companyId &&
+    agreement.companyId !== recentlySelectedCompany
+  );
   const editTotals = useMemo(() => {
     const draftLineItems = Array.isArray(editDraft?.lineItems) ? editDraft.lineItems : [];
     const subtotal = draftLineItems.reduce((total, item) => {
@@ -791,371 +605,10 @@ const SalesAgreementDetail = () => {
     () => catalogItems.find((item) => item.id === selectedCatalogItemId) || null,
     [catalogItems, selectedCatalogItemId]
   );
-  const dosageTemplateById = useMemo(() => {
-    const nextMap = new Map();
-    dosageTemplates.forEach((template) => {
-      dosageTemplateKeys(template).forEach((key) => nextMap.set(key, template));
-    });
-    return nextMap;
-  }, [dosageTemplates]);
-  const chemicalSelectionDisplay = (ids = [], keywords = []) => {
-    const labels = normalizeCommaList(ids).map((chemicalId) => {
-      const template = dosageTemplateById.get(chemicalId);
-      return template ? dosageLabel(template) : chemicalId;
-    });
-    return [...labels, ...normalizeCommaList(keywords)].join(', ');
-  };
-  const separatelyBilledChemicalDisplay = chemicalSelectionDisplay(
-    agreement?.separatelyBilledChemicalIds,
-    agreement?.separatelyBilledChemicalKeywords
-  );
-  const includedChemicalDisplay = chemicalSelectionDisplay(
-    agreement?.includedChemicalIds,
-    agreement?.includedChemicalKeywords
-  );
-  const customerPurchasedChemicalDisplay = chemicalSelectionDisplay(
-    agreement?.customerPurchasedChemicalIds,
-    agreement?.customerPurchasedChemicalKeywords
-  );
-
-  const readinessItems = [
-    {
-      ready: Boolean(agreement?.email),
-      title: 'Customer email',
-      helper: agreement?.email || 'Add a billing email before sending.',
-    },
-    {
-      ready: locations.length > 0,
-      title: 'Service location snapshot',
-      helper: `${locations.length} location${locations.length === 1 ? '' : 's'} included.`,
-    },
-    {
-      ready: lineItems.length > 0,
-      title: 'Catalog line items',
-      helper: `${lineItems.length} line item${lineItems.length === 1 ? '' : 's'} included.`,
-    },
-    {
-      ready: hasTerms,
-      title: 'Terms snapshot',
-      helper: agreement?.termsTemplateName || 'Copied terms are required before send.',
-    },
-  ];
-  const canSend = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    !editing &&
-    readinessItems.every((item) => item.ready) &&
-    !sending &&
-    normalizeStatus(agreement.status) !== normalizeStatus(SalesAgreementStatus.accepted) &&
-    !['canceled', 'rejected', 'expired', 'superseded'].includes(normalizeStatus(agreement.status))
-  );
-  const sendEmailDisabledReasons = [];
-
-  if (!agreement) {
-    sendEmailDisabledReasons.push('Agreement is still loading.');
-  }
-  if (agreement && !user) {
-    sendEmailDisabledReasons.push('You must be signed in to send this agreement.');
-  }
-  if (companyMismatch) {
-    sendEmailDisabledReasons.push('Select the company that owns this agreement.');
-  }
-  if (editing) {
-    sendEmailDisabledReasons.push('Save or cancel edit mode before sending.');
-  }
-  readinessItems
-    .filter((item) => !item.ready)
-    .forEach((item) => sendEmailDisabledReasons.push(`${item.title}: ${item.helper}`));
-  if (sending) {
-    sendEmailDisabledReasons.push('Email send is already in progress.');
-  }
-  if (currentStatusKey === normalizeStatus(SalesAgreementStatus.accepted)) {
-    sendEmailDisabledReasons.push('Accepted agreements cannot be sent again from this button.');
-  }
-  if (['canceled', 'rejected', 'expired', 'superseded'].includes(currentStatusKey)) {
-    sendEmailDisabledReasons.push(`Agreement status is ${labelize(agreement?.status || currentStatusKey)}.`);
-  }
-
-  const sendEmailButtonTitle = canSend
-    ? 'Send service agreement email'
-    : `Send Email is disabled:\n${sendEmailDisabledReasons.join('\n') || 'No send reason is available.'}`;
-  const canMarkAccepted = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    !markingAccepted &&
-    currentStatusKey !== normalizeStatus(SalesAgreementStatus.accepted) &&
-    !['canceled', 'rejected', 'expired', 'superseded'].includes(currentStatusKey)
-  );
-  const canCreateRenewal = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    !creatingRenewal
-  );
-  const hasBillingSubscription = Boolean(agreement?.billingSubscriptionId || billingSubscription?.id);
-  const billingFlowStatus = billingSubscription?.stripeStatus || billingSubscription?.status || agreement?.billingFlowStatus || 'notStarted';
-  const billingFlowNextAction = billingSubscription?.nextAction || agreement?.billingFlowNextAction || 'acceptAgreement';
-  const missingStripePriceCount = billingSubscription?.stripeReadiness?.missingStripePriceItemIds?.length || 0;
-  const hasActiveStripeSubscription = ['active', 'trialing'].includes(normalizeStatus(billingSubscription?.stripeStatus || billingSubscription?.status));
-  const agreementBillingType = getAgreementBillingType(agreement || {});
-  const isRecurringAgreement = agreementBillingType === AgreementBillingType.recurring;
-  const agreementServiceLocationIds = Array.isArray(agreement?.serviceLocationIds)
-    ? agreement.serviceLocationIds.filter(Boolean)
-    : locations.map((location) => location.serviceLocationId || location.id).filter(Boolean);
-  const firstServiceLocationId = agreementServiceLocationIds[0] || '';
-  const recurringServiceStopId = agreement?.recurringServiceStopId
-    || billingSubscription?.recurringServiceStopId
-    || billingSubscription?.agreementSnapshot?.recurringServiceStopId
-    || '';
-  const recurringRouteId = agreement?.recurringRouteId
-    || billingSubscription?.recurringRouteId
-    || billingSubscription?.agreementSnapshot?.recurringRouteId
-    || '';
-  const recurringRouteName = agreement?.recurringRouteName
-    || billingSubscription?.recurringRouteName
-    || billingSubscription?.agreementSnapshot?.recurringRouteName
-    || '';
-  const recurringSetupStatus = agreement?.operationsSetupStatus
-    || billingSubscription?.operationsSetupStatus
-    || billingSubscription?.agreementSnapshot?.operationsSetupStatus
-    || 'needsRecurringServiceStop';
-  const hasRecurringRouteSetup = Boolean(
-    recurringServiceStopId ||
-    recurringRouteId
-  );
-  const recurringSetupQuery = new URLSearchParams({
-    agreementId: agreement?.id || agreementId || '',
-    billingSubscriptionId: billingSubscription?.id || agreement?.billingSubscriptionId || '',
-    serviceLocationId: firstServiceLocationId,
-    returnTo: `/company/sales/agreements/${agreement?.id || agreementId || ''}`,
-  });
-  const recurringSetupUrl = `/company/recurring-service-stops/create/${encodeURIComponent(agreement?.customerId || 'NA')}?${recurringSetupQuery.toString()}`;
-  const canScheduleRecurringRoute = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    isAccepted &&
-    isRecurringAgreement &&
-    !hasRecurringRouteSetup
-  );
-  const canCustomerStartPayment = Boolean(
-    billingSubscription?.customerCanPayImmediately ||
-    agreement?.customerCanPayImmediately
-  );
-  const canCreateBillingSubscription = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    !creatingBilling &&
-    isAccepted
-  );
-  const canStartStripeCheckout = Boolean(
-    agreement &&
-    user &&
-    !companyMismatch &&
-    isAccepted &&
-    !startingStripeCheckout &&
-    !hasActiveStripeSubscription &&
-    Number(totalAmountCents || 0) > 0 &&
-    stripeConnectedAccountId
-  );
-
-  const linkedJobIdForAgreement = (targetAgreement = agreement) => {
-    if (!targetAgreement) return '';
-    if (targetAgreement.jobId) return targetAgreement.jobId;
-    if (targetAgreement.workOrderId) return targetAgreement.workOrderId;
-    if (normalizeStatus(targetAgreement.sourceType) === 'oneoffjob' && targetAgreement.sourceId) {
-      return targetAgreement.sourceId;
-    }
-    return '';
-  };
-
-  const syncLinkedJobForAcceptedAgreement = async () => {
-    const linkedJobId = linkedJobIdForAgreement();
-    const companyId = agreement?.companyId || recentlySelectedCompany;
-    if (!companyId || !linkedJobId) return;
-
-    try {
-      const jobRef = doc(db, 'companies', companyId, 'workOrders', linkedJobId);
-      const jobSnap = await getDoc(jobRef);
-      const jobData = jobSnap.exists() ? jobSnap.data() : {};
-      const updatePayload = {
-        billingStatus: 'Accepted',
-        salesAgreementId: agreement.id,
-        salesAgreementStatus: SalesAgreementStatus.accepted,
-        salesAgreementAcceptedAt: serverTimestamp(),
-        salesAgreementStatusUpdatedAt: serverTimestamp(),
-        salesAgreementStatusUpdatedByUserId: user?.uid || '',
-        salesAgreementStatusUpdatedByUserName: actorName,
-        updatedAt: serverTimestamp(),
-      };
-
-      if (!jobData.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(jobData.operationStatus)) {
-        updatePayload.operationStatus = 'Unscheduled';
-      }
-
-      await updateDoc(jobRef, updatePayload);
-    } catch (syncError) {
-      console.warn('Unable to sync linked job after agreement acceptance', syncError);
-    }
-  };
-
-  const createRenewalAgreement = async () => {
-    if (!canCreateRenewal) return;
-
-    setCreatingRenewal(true);
-
-    try {
-      const historyGroupId = agreementHistoryGroupId(agreement);
-      const siblingSnap = await getDocs(query(
-        collection(db, salesCollectionNames.agreements),
-        where('agreementHistoryGroupId', '==', historyGroupId)
-      ));
-      const maxSiblingVersion = siblingSnap.docs.reduce((maxVersion, siblingDoc) => {
-        const sibling = siblingDoc.data() || {};
-        return Math.max(maxVersion, Number(sibling.agreementVersion || 1));
-      }, Number(agreement.agreementVersion || 1));
-      const nextVersion = maxSiblingVersion + 1;
-      const baseTitle = agreement.title || `${agreement.customerName || 'Customer'} Service Agreement`;
-      const renewal = new SalesAgreement({
-        companyId: agreement.companyId || recentlySelectedCompany,
-        companyName: agreement.companyName || recentlySelectedCompanyName || '',
-        customerId: agreement.customerId || '',
-        customerUserId: agreement.customerUserId || null,
-        relationshipId: agreement.relationshipId || agreement.customerCompanyRelationshipId || '',
-        customerCompanyRelationshipId: agreement.customerCompanyRelationshipId || agreement.relationshipId || '',
-        customerName: agreement.customerName || '',
-        email: agreement.email || '',
-        serviceLocationIds: Array.isArray(agreement.serviceLocationIds) ? agreement.serviceLocationIds : [],
-        serviceLocationSnapshots: Array.isArray(agreement.serviceLocationSnapshots)
-          ? agreement.serviceLocationSnapshots.map((location) => ({ ...location }))
-          : [],
-        sourceType: agreement.sourceType || '',
-        sourceId: agreement.sourceId || '',
-        previousAgreementId: agreement.id,
-        supersedesAgreementId: agreement.id,
-        agreementHistoryGroupId: historyGroupId,
-        agreementVersion: nextVersion,
-        renewalSourceAgreementId: agreement.id,
-        recurringServiceStopId: agreement.recurringServiceStopId || '',
-        recurringRouteId: agreement.recurringRouteId || '',
-        recurringRouteName: agreement.recurringRouteName || '',
-        operationsSetupStatus: agreement.operationsSetupStatus || '',
-        operationsSetupReason: agreement.operationsSetupReason || '',
-        title: `${baseTitle} Renewal`,
-        description: [
-          agreement.description || '',
-          `Renewal draft created from ${baseTitle}.`,
-        ].filter(Boolean).join('\n\n'),
-        terms: agreement.terms || '',
-        termsTemplateId: agreement.termsTemplateId || '',
-        termsTemplateName: agreement.termsTemplateName || '',
-        termsTemplateDescription: agreement.termsTemplateDescription || '',
-        termsList: Array.isArray(agreement.termsList) ? [...agreement.termsList] : [],
-        lineItems: Array.isArray(agreement.lineItems)
-          ? agreement.lineItems.map((item) => ({ ...item }))
-          : [],
-        status: SalesAgreementStatus.draft,
-        billingCollectionMethod: agreement.billingCollectionMethod,
-        autopayStatus: SalesAutopayStatus.unavailable,
-        manualBillingEnabled: true,
-        customerCanPayImmediately: false,
-        rateAmountCents: Number(agreement.rateAmountCents || 0),
-        subtotalAmountCents: Number(agreement.subtotalAmountCents || 0),
-        taxAmountCents: Number(agreement.taxAmountCents || 0),
-        totalAmountCents: Number(agreement.totalAmountCents || agreement.rateAmountCents || 0),
-        rateType: agreement.rateType || 'perMonth',
-        serviceCadence: agreement.serviceCadence || '',
-        serviceCadenceCount: Math.max(Number(agreement.serviceCadenceCount || 1), 1),
-        serviceDaysOfWeek: Array.isArray(agreement.serviceDaysOfWeek) ? [...agreement.serviceDaysOfWeek] : [],
-        serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
-        billingFrequency: billingFrequencyForAgreement(agreement),
-        billingFrequencyCount: Math.max(Number(agreement.billingFrequencyCount || 1), 1),
-        paymentTerms: agreement.paymentTerms || 'dueOnReceipt',
-        invoiceDeliveryMethod: agreement.invoiceDeliveryMethod,
-        receiptDeliveryMethod: agreement.receiptDeliveryMethod || agreement.invoiceDeliveryMethod,
-        receiptsEnabled: agreement.receiptsEnabled !== false,
-        pnlIncludeInReports: agreement.pnlIncludeInReports !== false,
-        pnlChemicalCostMode: agreement.pnlChemicalCostMode || SalesAgreementPnlChemicalCostMode.includeAll,
-        pnlExcludedChemicalKeywords: Array.isArray(agreement.pnlExcludedChemicalKeywords) ? [...agreement.pnlExcludedChemicalKeywords] : normalizeCommaList(agreement.pnlExcludedChemicalKeywords),
-        pnlExcludedChemicalIds: Array.isArray(agreement.pnlExcludedChemicalIds) ? [...agreement.pnlExcludedChemicalIds] : normalizeCommaList(agreement.pnlExcludedChemicalIds),
-        pnlExcludeCustomerPurchasedChemicals: agreement.pnlExcludeCustomerPurchasedChemicals !== false,
-        chemicalBillingMode: agreement.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll,
-        includedChemicalKeywords: Array.isArray(agreement.includedChemicalKeywords) ? [...agreement.includedChemicalKeywords] : normalizeCommaList(agreement.includedChemicalKeywords),
-        includedChemicalIds: Array.isArray(agreement.includedChemicalIds) ? [...agreement.includedChemicalIds] : normalizeCommaList(agreement.includedChemicalIds),
-        separatelyBilledChemicalKeywords: Array.isArray(agreement.separatelyBilledChemicalKeywords) ? [...agreement.separatelyBilledChemicalKeywords] : normalizeCommaList(agreement.separatelyBilledChemicalKeywords),
-        separatelyBilledChemicalIds: Array.isArray(agreement.separatelyBilledChemicalIds) ? [...agreement.separatelyBilledChemicalIds] : normalizeCommaList(agreement.separatelyBilledChemicalIds),
-        customerPurchasedChemicalKeywords: Array.isArray(agreement.customerPurchasedChemicalKeywords) ? [...agreement.customerPurchasedChemicalKeywords] : normalizeCommaList(agreement.customerPurchasedChemicalKeywords),
-        customerPurchasedChemicalIds: Array.isArray(agreement.customerPurchasedChemicalIds) ? [...agreement.customerPurchasedChemicalIds] : normalizeCommaList(agreement.customerPurchasedChemicalIds),
-        chemicalBillingNotes: agreement.chemicalBillingNotes || '',
-        includedServices: Array.isArray(agreement.includedServices) ? [...agreement.includedServices] : [],
-        excludedServices: Array.isArray(agreement.excludedServices) ? [...agreement.excludedServices] : [],
-        startDate: nextAgreementStartDate(agreement),
-        endDate: null,
-        expiresAt: null,
-        atWill: agreement.atWill,
-        createdByUserId: user?.uid || dataBaseUser?.id || '',
-        emailDelivery: {},
-      });
-
-      await saveSalesModel(db, 'agreements', renewal);
-      toast.success('Renewal agreement draft created.');
-      navigate(`/company/sales/agreements/${renewal.id}`);
-    } catch (renewalError) {
-      console.error('Unable to create renewal agreement', renewalError);
-      toast.error(renewalError.message || 'Failed to create renewal agreement.');
-    } finally {
-      setCreatingRenewal(false);
-    }
-  };
-
-  const sendAgreementEmail = async () => {
-    if (!canSend) return;
-
-    setSending(true);
-
-    try {
-      const sendCallable = httpsCallable(functions, 'sendServiceAgreementEmail');
-      const authPayload = await getCallableAuthPayload();
-      const result = await sendCallable({
-        companyId: agreement.companyId,
-        agreementId: agreement.id,
-        agreementBaseUrl: window.location.origin,
-        includeInspectionReport,
-        ...authPayload,
-      });
-
-      if (result.data?.testMode) {
-        toast.success(`Test email sent to ${result.data.to}. Customer email saved as ${result.data.intendedTo}.`);
-      } else if (includeInspectionReport && !result.data?.hasInspectionReport) {
-        toast.success('Service agreement sent. No linked inspection report was found yet.');
-      } else {
-        toast.success(result.data?.message || 'Service agreement email sent.');
-      }
-    } catch (sendError) {
-      console.error('Unable to send service agreement email', sendError);
-      toast.error(sendError.message || 'Failed to send service agreement email.');
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const openEditor = () => {
-    if (!agreement) return;
-    setEditDraft(createEditDraft(agreement));
-    setEditing(true);
-  };
 
   const closeEditor = () => {
-    setEditing(false);
-    setEditDraft(null);
-    setApplyingTermsTemplate(false);
-    setUpdatingTermsTemplate(false);
-    setShowCatalogItemSelector(false);
-    setShowCreateCatalogItem(false);
-    setCatalogItemDraft(initialCatalogItemDraft);
+    resetEditorState();
+    onClose?.();
   };
 
   const updateEditField = (field, value) => {
@@ -1426,7 +879,7 @@ const SalesAgreementDetail = () => {
 
   const updateSourceTermsTemplate = async () => {
     if (!editDraft?.termsTemplateId || !recentlySelectedCompany || updatingTermsTemplate) return;
-    if (!requirePermission("884", "update terms templates")) return;
+    if (!requirePermission('884', 'update terms templates')) return;
 
     const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
     const confirmed = await appConfirm({
@@ -1667,7 +1120,8 @@ const SalesAgreementDetail = () => {
       toast.success(deletedSubscriptionIds.length
         ? 'Service agreement and billing subscription deleted.'
         : 'Service agreement deleted.');
-      navigate('/company/sales/agreements');
+      onDeleted?.(agreement.id);
+      closeEditor();
     } catch (deleteError) {
       console.error('Unable to delete service agreement', {
         error: deleteError,
@@ -1684,815 +1138,17 @@ const SalesAgreementDetail = () => {
     }
   };
 
-  const markAgreementAccepted = async () => {
-    if (!canMarkAccepted) return;
-
-    setMarkingAccepted(true);
-
-    try {
-      const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
-        stripeConnectedAccountId,
-        agreementUpdates: {
-          status: SalesAgreementStatus.accepted,
-          acceptedAt: serverTimestamp(),
-          acceptedByUserId: user?.uid || '',
-          acceptedByUserName: actorName,
-          acceptedByEmail: user?.email || dataBaseUser?.email || '',
-          acceptedSource: acceptanceSource,
-          acceptedNote: acceptanceNote.trim(),
-          acceptedSnapshot: {
-            agreementId: agreement.id,
-            title: agreement.title || 'Service Agreement',
-            customerName: agreement.customerName || 'Customer',
-            customerId: agreement.customerId || '',
-            email: agreement.email || '',
-            totalAmountCents: String(totalAmountCents || 0),
-            serviceCadence: agreement.serviceCadence || '',
-            serviceCadenceCount: String(agreement.serviceCadenceCount || 1),
-            serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
-            billingFrequency: billingFrequencyForAgreement(agreement),
-            billingFrequencyCount: String(agreement.billingFrequencyCount || 1),
-            rateType: agreement.rateType || '',
-            termsTemplateId: agreement.termsTemplateId || '',
-            termsTemplateName: agreement.termsTemplateName || '',
-            revisionNumber: String(agreement.revisionNumber || 0),
-            previousAgreementId: agreement.previousAgreementId || agreement.supersedesAgreementId || '',
-            supersedesAgreementId: agreement.supersedesAgreementId || agreement.previousAgreementId || '',
-            agreementHistoryGroupId: agreementHistoryGroupId(agreement),
-            agreementVersion: String(agreement.agreementVersion || 1),
-          },
-          statusChangedAt: serverTimestamp(),
-          statusChangedByUserId: user?.uid || '',
-          statusChangedByUserName: actorName,
-          statusChangeReason: acceptanceSource === 'customerOffline'
-            ? 'Customer accepted outside the portal.'
-            : 'Agreement manually accepted internally.',
-        },
-      });
-
-      await syncLinkedJobForAcceptedAgreement();
-
-      toast.success(billingSubscriptionDraft.customerCanPayImmediately
-        ? 'Agreement accepted and billing subscription is ready for payment setup.'
-        : 'Agreement accepted and billing subscription was created.');
-      setConfirmingAcceptance(false);
-      setAcceptanceNote('');
-      setAcceptanceSource('customerOffline');
-    } catch (acceptError) {
-      console.error('Unable to mark service agreement accepted', acceptError);
-      toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
-    } finally {
-      setMarkingAccepted(false);
-    }
-  };
-
-  const createBillingSubscriptionForAcceptedAgreement = async () => {
-    if (!canCreateBillingSubscription) return;
-
-    setCreatingBilling(true);
-
-    try {
-      const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
-        stripeConnectedAccountId,
-      });
-
-      toast.success(billingSubscriptionDraft.customerCanPayImmediately
-        ? 'Billing subscription is ready for payment setup.'
-        : 'Billing subscription created.');
-    } catch (billingError) {
-      console.error('Unable to create billing subscription from agreement', billingError);
-      toast.error(billingError.message || 'Failed to create billing subscription.');
-    } finally {
-      setCreatingBilling(false);
-    }
-  };
-
-  const startStripeCheckout = async () => {
-    if (!canStartStripeCheckout) return;
-
-    setStartingStripeCheckout(true);
-
-    try {
-      const targetBillingSubscription = await ensureBillingSubscriptionForAgreement(db, agreement, {
-        stripeConnectedAccountId,
-      });
-
-      const billingSubscriptionId = targetBillingSubscription.id || agreement.billingSubscriptionId;
-      if (!billingSubscriptionId) throw new Error('Create the billing subscription before starting Stripe Checkout.');
-
-      const startCheckoutCallable = httpsCallable(functions, 'createSalesBillingSubscriptionCheckoutSession');
-      const authPayload = await getCallableAuthPayload();
-      const result = await startCheckoutCallable({
-        ...authPayload,
-        billingSubscriptionId,
-        agreementId: agreement.id,
-        companyId: agreement.companyId || recentlySelectedCompany,
-        successUrl: `${window.location.origin}/company/sales/subscriptions?stripeCheckout=success&billingSubscriptionId=${encodeURIComponent(billingSubscriptionId)}`,
-        cancelUrl: `${window.location.origin}/company/sales/agreements/${agreement.id}?stripeCheckout=canceled`,
-      });
-
-      if (result.data?.url) {
-        window.location.href = result.data.url;
-        return;
-      }
-
-      if (result.data?.status === 'already_active') {
-        toast.success('This billing subscription is already active in Stripe.');
-        return;
-      }
-
-      throw new Error(result.data?.message || 'Stripe did not return a Checkout URL.');
-    } catch (checkoutError) {
-      console.error('Unable to start Stripe Checkout', checkoutError);
-      toast.error(checkoutError.message || 'Failed to start Stripe Checkout.');
-      setStartingStripeCheckout(false);
-    }
-  };
+  if (!open || !agreement || !editDraft) return null;
 
   const editChemicalBillingMode = editDraft?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
   const editChemicalBillingMixedSelectionMode = editDraft?.chemicalBillingMixedSelectionMode
     || ChemicalBillingMixedSelectionMode.separatelyBilled;
 
   return (
-    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-      <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <Link
-                  to="/company/sales/agreements"
-                  className="app-back-link"
-                >
-                  &larr; Back to Service Agreements
-                </Link>
-                {agreement?.status && <StatusBadge status={agreement.status} />}
-              </div>
-              <div className="mt-3 flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-950">
-                  {agreement?.title || 'Service Agreement'}
-                </h1>
-                <FeatureInfoButton title="How Sending Works" align="left">
-                  <p>
-                    SendGrid emails use the saved agreement snapshot. The customer receives the pricing, service
-                    location, terms, and review link from the agreement record.
-                  </p>
-                  <p>
-                    Sending changes the status to sent and records delivery metadata. Billing should still wait for
-                    customer acceptance or a manual company acceptance.
-                  </p>
-                </FeatureInfoButton>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Review the snapshot before emailing the customer.
-              </p>
-            </div>
-
-            <div className="flex flex-col gap-3 lg:items-end">
-              <div className="flex flex-wrap gap-2 lg:justify-end">
-                <button
-                  type="button"
-                  onClick={createRenewalAgreement}
-                  disabled={!canCreateRenewal}
-                  className="inline-flex items-center gap-2 rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaCopy className="text-xs" />
-                  {creatingRenewal ? 'Creating...' : 'Offer New Agreement'}
-                </button>
-                <button
-                  type="button"
-                  onClick={openEditor}
-                  disabled={!agreement || companyMismatch || savingEdit}
-                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaEdit className="text-xs" />
-                  Edit Service Agreement
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setConfirmingAcceptance(true)}
-                  disabled={!canMarkAccepted}
-                  className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaUserCheck className="text-xs" />
-                  Mark Accepted
-                </button>
-                {isRecurringAgreement && !hasRecurringRouteSetup && (
-                  <Link
-                    to={recurringSetupUrl}
-                    aria-disabled={!canScheduleRecurringRoute}
-                    onClick={(event) => {
-                      if (!canScheduleRecurringRoute) event.preventDefault();
-                    }}
-                    className={`inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition ${
-                      canScheduleRecurringRoute
-                        ? 'bg-blue-600 text-white hover:bg-blue-700'
-                        : 'cursor-not-allowed border border-slate-400 bg-slate-200 text-slate-700'
-                    }`}
-                  >
-                    <FaRoute className="text-xs" />
-                    Schedule Route
-                  </Link>
-                )}
-                <span className="inline-flex" title={sendEmailButtonTitle}>
-                  <button
-                    type="button"
-                    onClick={sendAgreementEmail}
-                    disabled={!canSend}
-                    className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <FaEnvelope className="text-xs" />
-                    {sending ? 'Sending...' : 'Send Email'}
-                  </button>
-                </span>
-              </div>
-
-              <div className="w-full max-w-md space-y-2">
-                <label className="inline-flex w-full items-start gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={includeInspectionReport}
-                    onChange={(event) => setIncludeInspectionReport(event.target.checked)}
-                    disabled={sending}
-                    className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  />
-                  <span>
-                    Include inspection report
-                    <span className="mt-0.5 block text-xs font-normal text-slate-500">
-                      Adds the linked site inspection report to the service agreement email and public review page.
-                    </span>
-                  </span>
-                </label>
-
-                {includeInspectionReport && (
-                  <div
-                    className={`rounded-md border px-3 py-2 text-xs ${
-                      hasLinkedInspectionReport
-                        ? 'border-blue-200 bg-blue-50 text-blue-800'
-                        : 'border-amber-200 bg-amber-50 text-amber-800'
-                    }`}
-                  >
-                    <p className="font-semibold">
-                      {hasLinkedInspectionReport
-                        ? 'Inspection report will be included.'
-                        : 'No linked inspection report was found yet.'}
-                    </p>
-                    <p className="mt-1">
-                      {hasLinkedInspectionReport
-                        ? 'The email and public agreement page will show an Inspection Report section.'
-                        : 'The email can still send, but the customer will see that no linked report is available yet.'}
-                    </p>
-                    {hasLinkedInspectionReport && (
-                      inspectionReportUrl ? (
-                        <a
-                          href={inspectionReportUrl}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 inline-flex font-semibold text-blue-700 underline"
-                        >
-                          Open inspection report
-                        </a>
-                      ) : (
-                        <Link
-                          to={inspectionReportLink}
-                          className="mt-2 inline-flex font-semibold text-blue-700 underline"
-                        >
-                          Open linked service stop
-                        </Link>
-                      )
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {error && (
-          <div className="rounded-lg border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">
-            {error}
-          </div>
-        )}
-
-        {companyMismatch && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-            This agreement belongs to another company. Select the matching company before sending.
-          </div>
-        )}
-
-        {loading ? (
-          <div className="rounded-lg border border-slate-200 bg-white p-6 text-sm text-slate-500 shadow-sm">
-            Loading service agreement...
-          </div>
-        ) : agreement && !companyMismatch ? (
-          <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
-            <main className="space-y-6 lg:order-2">
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Customer Snapshot</h2>
-                <dl className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{agreement.customerName || 'Customer'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Email</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{agreement.email || 'Not set'}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Start Date</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.startDate)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Review By</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.expiresAt)}</dd>
-                  </div>
-                </dl>
-                {agreement.description && (
-                  <p className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-                    {agreement.description}
-                  </p>
-                )}
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <FaMapMarkerAlt className="text-slate-400" />
-                  <h2 className="text-lg font-bold text-slate-950">Service Locations</h2>
-                </div>
-                <div className="mt-4 grid gap-3">
-                  {locations.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
-                      No location snapshot saved.
-                    </div>
-                  ) : (
-                    locations.map((location) => (
-                      <div key={location.id || location.streetAddress} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <p className="font-semibold text-slate-900">{location.nickName || 'Service Location'}</p>
-                        <p className="mt-1 text-sm text-slate-500">{locationLine(location)}</p>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </section>
-
-              {isRecurringAgreement && (
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div className="flex items-center gap-2">
-                      <FaRoute className="text-slate-400" />
-                      <h2 className="text-lg font-bold text-slate-950">Operations Setup</h2>
-                    </div>
-                    {!hasRecurringRouteSetup && (
-                      <Link
-                        to={recurringSetupUrl}
-                        aria-disabled={!canScheduleRecurringRoute}
-                        onClick={(event) => {
-                          if (!canScheduleRecurringRoute) event.preventDefault();
-                        }}
-                        className={`inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2 text-sm font-semibold shadow-sm transition sm:w-auto ${
-                          canScheduleRecurringRoute
-                            ? 'bg-blue-600 text-white hover:bg-blue-700'
-                            : 'cursor-not-allowed border border-slate-400 bg-slate-200 text-slate-700'
-                        }`}
-                      >
-                        <FaRoute className="text-xs" />
-                        Schedule Route
-                      </Link>
-                    )}
-                  </div>
-
-                  <dl className="mt-4 grid gap-3 text-sm md:grid-cols-4">
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <dt className="text-slate-500">Setup Status</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">{labelize(recurringSetupStatus)}</dd>
-                    </div>
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <dt className="text-slate-500">Recurring Stop</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">
-                        {recurringServiceStopId ? (
-                          <Link
-                            to={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
-                            className="text-blue-700 hover:text-blue-900"
-                          >
-                            Open Recurring Stop
-                          </Link>
-                        ) : 'Not created'}
-                      </dd>
-                    </div>
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <dt className="text-slate-500">Route</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">
-                        {recurringRouteId ? (
-                          <Link to="/company/route-management" className="text-blue-700 hover:text-blue-900">
-                            {recurringRouteName || 'Open Route Management'}
-                          </Link>
-                        ) : 'Not assigned'}
-                      </dd>
-                    </div>
-                    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                      <dt className="text-slate-500">Service Location</dt>
-                      <dd className="mt-1 break-all font-semibold text-slate-900">{firstServiceLocationId || 'Not set'}</dd>
-                    </div>
-                  </dl>
-
-                  {!isAccepted && !hasRecurringRouteSetup && (
-                    <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                      Accept the recurring service agreement before scheduling its route.
-                    </div>
-                  )}
-                </section>
-              )}
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <FaReceipt className="text-slate-400" />
-                  <h2 className="text-lg font-bold text-slate-950">Pricing Snapshot</h2>
-                </div>
-                <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
-                  {lineItems.length === 0 ? (
-                    <div className="bg-slate-50 p-5 text-sm text-slate-500">No line items saved.</div>
-                  ) : (
-                    <table className="min-w-full divide-y divide-slate-200 text-sm">
-                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-                        <tr>
-                          <th className="px-4 py-3">Item</th>
-                          <th className="px-4 py-3">Qty</th>
-                          <th className="px-4 py-3">Unit</th>
-                          <th className="px-4 py-3">Total</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {lineItems.map((item) => (
-                          <tr key={item.id || item.catalogItemId}>
-                            <td className="px-4 py-3">
-                              <p className="font-semibold text-slate-900">{item.name || item.description}</p>
-                              {item.description && <p className="mt-1 text-xs text-slate-500">{item.description}</p>}
-                            </td>
-                            <td className="px-4 py-3 text-slate-600">{item.quantity || 1}</td>
-                            <td className="px-4 py-3 text-slate-600">{formatCurrency(item.unitAmountCents)}</td>
-                            <td className="px-4 py-3 font-semibold text-slate-900">{formatCurrency(item.totalAmountCents)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center gap-2">
-                  <FaFileSignature className="text-slate-400" />
-                  <h2 className="text-lg font-bold text-slate-950">Terms Snapshot</h2>
-                </div>
-                <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-                  {agreement.termsTemplateName && (
-                    <p className="mb-3 font-semibold text-slate-900">{agreement.termsTemplateName}</p>
-                  )}
-                  {agreementTermsIntro && (
-                    <p className="whitespace-pre-wrap">{agreementTermsIntro}</p>
-                  )}
-                  {agreementTermsList.length > 0 && (
-                    <div className={agreementTermsIntro ? 'mt-4 space-y-2 border-t border-slate-200 pt-4' : 'space-y-2'}>
-                      {agreementTermsList.map((term, index) => (
-                        <p key={`${term}_${index}`} className="flex gap-2">
-                          <span className="font-semibold text-slate-500">{index + 1}.</span>
-                          <span>{term}</span>
-                        </p>
-                      ))}
-                    </div>
-                  )}
-                  {!agreementTermsIntro && agreementTermsList.length === 0 && (
-                    <p className="text-slate-500">No terms snapshot saved.</p>
-                  )}
-                </div>
-              </section>
-            </main>
-
-            <aside className="space-y-6 lg:order-1">
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Send Readiness</h2>
-                <div className="mt-4 space-y-3">
-                  {readinessItems.map((item) => (
-                    <ReadinessRow key={item.title} {...item} />
-                  ))}
-                </div>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Service Summary</h2>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Service Frequency</dt>
-                    <dd className="font-semibold text-slate-900">{formatServiceFrequency(agreement)}</dd>
-                  </div>
-                </dl>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <h2 className="text-lg font-bold text-slate-950">Billing Summary</h2>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Billing Frequency</dt>
-                    <dd className="font-semibold text-slate-900">{formatBillingFrequency(agreement)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Rate Type</dt>
-                    <dd className="font-semibold text-slate-900">{labelize(agreement.rateType)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Payment Terms</dt>
-                    <dd className="font-semibold text-slate-900">{labelize(agreement.paymentTerms)}</dd>
-                  </div>
-                  <div className="space-y-2 border-t border-slate-200 pt-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Chemical Billing</dt>
-                      <dd className="text-right font-semibold text-slate-900">{chemicalBillingLabel(agreement)}</dd>
-                    </div>
-                    {separatelyBilledChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Billed Separately</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{separatelyBilledChemicalDisplay}</dd>
-                      </div>
-                    )}
-                    {includedChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Included Chemicals</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{includedChemicalDisplay}</dd>
-                      </div>
-                    )}
-                    {customerPurchasedChemicalDisplay && (
-                      <div>
-                        <dt className="text-slate-500">Customer Purchased</dt>
-                        <dd className="mt-1 break-words font-semibold text-slate-900">{customerPurchasedChemicalDisplay}</dd>
-                      </div>
-                    )}
-                    {agreement.chemicalBillingNotes && (
-                      <div>
-                        <dt className="text-slate-500">Chemical Notes</dt>
-                        <dd className="mt-1 whitespace-pre-wrap font-semibold text-slate-900">{agreement.chemicalBillingNotes}</dd>
-                      </div>
-                    )}
-                  </div>
-                  <div className="space-y-2 border-t border-slate-200 pt-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">PNL Revenue</dt>
-                      <dd className="font-semibold text-slate-900">{agreement.pnlIncludeInReports === false ? 'Excluded' : 'Included'}</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">PNL Chemicals</dt>
-                      <dd className="text-right font-semibold text-slate-900">Based on Billing</dd>
-                    </div>
-                    <div className="flex items-center justify-between gap-3">
-                      <dt className="text-slate-500">Customer Purchased</dt>
-                      <dd className="font-semibold text-slate-900">Ignored</dd>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-3 border-t border-slate-200 pt-3">
-                    <dt className="text-slate-500">Subtotal</dt>
-                    <dd className="font-semibold text-slate-900">{formatCurrency(subtotalAmountCents)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Total</dt>
-                    <dd className="text-lg font-bold text-slate-950">{formatCurrency(totalAmountCents)}</dd>
-                  </div>
-                  {(supersedesAgreementId || agreement.supersededByAgreementId || agreement.agreementHistoryGroupId) && (
-                    <div className="space-y-2 border-t border-slate-200 pt-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <dt className="text-slate-500">Agreement Version</dt>
-                        <dd className="font-semibold text-slate-900">v{agreement.agreementVersion || 1}</dd>
-                      </div>
-                      {supersedesAgreementId && (
-                        <div className="flex items-center justify-between gap-3">
-                          <dt className="text-slate-500">Replaces</dt>
-                          <dd className="font-semibold">
-                            <Link to={`/company/sales/agreements/${supersedesAgreementId}`} className="text-blue-700 hover:text-blue-900">
-                              Previous Agreement
-                            </Link>
-                          </dd>
-                        </div>
-                      )}
-                      {agreement.supersededByAgreementId && (
-                        <div className="flex items-center justify-between gap-3">
-                          <dt className="text-slate-500">Replaced By</dt>
-                          <dd className="font-semibold">
-                            <Link to={`/company/sales/agreements/${agreement.supersededByAgreementId}`} className="text-blue-700 hover:text-blue-900">
-                              {agreement.supersededByAgreementTitle || 'New Agreement'}
-                            </Link>
-                          </dd>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </dl>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Billing Flow</h2>
-                  <FaCreditCard className="text-slate-400" />
-                </div>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Subscription</dt>
-                    <dd className="font-semibold text-slate-900">
-                      {hasBillingSubscription ? (
-                        <Link
-                          to={`/company/sales/subscriptions/${billingSubscription?.id || agreement.billingSubscriptionId}`}
-                          className="text-blue-700 hover:text-blue-900"
-                        >
-                          Open Billing Subscription
-                        </Link>
-                      ) : 'Not created'}
-                    </dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Billing Status</dt>
-                    <dd className="font-semibold text-slate-900">{labelize(billingFlowStatus)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Next Action</dt>
-                    <dd className="font-semibold text-slate-900">{labelize(billingFlowNextAction)}</dd>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <dt className="text-slate-500">Customer Can Pay</dt>
-                    <dd className={canCustomerStartPayment ? 'font-semibold text-emerald-700' : 'font-semibold text-amber-700'}>
-                      {canCustomerStartPayment ? 'Ready' : 'Needs setup'}
-                    </dd>
-                  </div>
-                </dl>
-
-                {missingStripePriceCount > 0 && (
-                  <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
-                    {missingStripePriceCount} line item{missingStripePriceCount === 1 ? '' : 's'} do not have saved Stripe price ids yet. That is okay: Stripe Checkout will create inline pricing from the agreement line items.
-                  </div>
-                )}
-
-                {isAccepted && !stripeConnectedAccountId && (
-                  <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                    Connect and verify the company's Stripe account before collecting payment methods.
-                  </div>
-                )}
-
-                {!isAccepted && (
-                  <p className="mt-4 text-sm text-slate-500">
-                    A billing subscription is created automatically when this agreement is accepted.
-                  </p>
-                )}
-
-                {canCreateBillingSubscription && (
-                  <button
-                    type="button"
-                    onClick={createBillingSubscriptionForAcceptedAgreement}
-                    disabled={!canCreateBillingSubscription}
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <FaPlus className="text-xs" />
-                    {creatingBilling
-                      ? 'Preparing...'
-                      : hasBillingSubscription
-                        ? 'Refresh Billing Subscription'
-                        : 'Create Billing Subscription'}
-                  </button>
-                )}
-
-                {isAccepted && (
-                  <button
-                    type="button"
-                    onClick={startStripeCheckout}
-                    disabled={!canStartStripeCheckout}
-                    className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-950 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    <FaCreditCard className="text-xs" />
-                    {startingStripeCheckout
-                      ? 'Opening Stripe...'
-                      : hasActiveStripeSubscription
-                        ? 'Stripe Subscription Active'
-                        : 'Start Stripe Checkout'}
-                  </button>
-                )}
-
-                {hasBillingSubscription && (
-                  <Link
-                    to="/company/sales/subscriptions"
-                    className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                  >
-                    View Billing Subscriptions
-                  </Link>
-                )}
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Acceptance</h2>
-                  {acceptanceIsCurrent ? (
-                    <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">
-                      Current
-                    </span>
-                  ) : hasAcceptanceAudit ? (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                      Previous Version
-                    </span>
-                  ) : (
-                    <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">
-                      Not Accepted
-                    </span>
-                  )}
-                </div>
-
-                {hasAcceptanceAudit ? (
-                  <dl className="mt-4 space-y-3 text-sm">
-                    <div>
-                      <dt className="text-slate-500">Accepted At</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.acceptedAt)}</dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Marked By</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">
-                        {agreement.acceptedByUserName || agreement.acceptedByEmail || 'Unknown'}
-                      </dd>
-                    </div>
-                    <div>
-                      <dt className="text-slate-500">Source</dt>
-                      <dd className="mt-1 font-semibold text-slate-900">{acceptanceSourceLabel(agreement.acceptedSource)}</dd>
-                    </div>
-                    {agreement.acceptedNote && (
-                      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-slate-700">
-                        {agreement.acceptedNote}
-                      </div>
-                    )}
-                    {!acceptanceIsCurrent && (
-                      <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                        This agreement was edited after acceptance. Send the revised version or mark the new version accepted.
-                      </div>
-                    )}
-                  </dl>
-                ) : (
-                  <p className="mt-4 text-sm text-slate-500">
-                    Mark accepted when the homeowner approves outside the portal, or after the future customer portal acceptance flow records it directly.
-                  </p>
-                )}
-
-                <button
-                  type="button"
-                  onClick={() => setConfirmingAcceptance(true)}
-                  disabled={!canMarkAccepted}
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <FaUserCheck className="text-xs" />
-                  Mark Accepted
-                </button>
-              </section>
-
-              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between gap-3">
-                  <h2 className="text-lg font-bold text-slate-950">Email Delivery</h2>
-                  {emailTestMode && (
-                    <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700">
-                      Test Mode
-                    </span>
-                  )}
-                </div>
-                <dl className="mt-4 space-y-3 text-sm">
-                  <div>
-                    <dt className="text-slate-500">Sent At</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{formatDate(agreement.sentAt)}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">To</dt>
-                    <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.to || agreement.email || 'Not sent'}</dd>
-                  </div>
-                  {emailDelivery.intendedTo && emailDelivery.intendedTo !== emailDelivery.to && (
-                    <div>
-                      <dt className="text-slate-500">Customer Email</dt>
-                      <dd className="mt-1 break-all font-semibold text-slate-900">{emailDelivery.intendedTo}</dd>
-                    </div>
-                  )}
-                  {emailTestMode && (
-                    <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-amber-800">
-                      Real customer email is off until feature_flag_012 is enabled.
-                    </div>
-                  )}
-                  <div>
-                    <dt className="text-slate-500">Real Emails Flag</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">
-                      {emailDelivery.realEmailsEnabled === true || emailDelivery.realEmailsEnabled === 'true' ? 'Enabled' : 'Disabled'}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-slate-500">Email Message</dt>
-                    <dd className="mt-1 font-semibold text-slate-900">{emailDelivery.messageId ? 'Sent' : 'Not set'}</dd>
-                  </div>
-                </dl>
-              </section>
-            </aside>
-          </div>
-        ) : null}
-      </div>
-
-      {editing && editDraft && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-4">
-          <div className="mx-auto flex min-h-full w-full max-w-[1500px] flex-col gap-4 xl:flex-row xl:items-start xl:justify-center">
-            <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-2xl">
+    <>
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 p-4">
+        <div className="mx-auto flex min-h-full w-full max-w-[1500px] flex-col gap-4 xl:flex-row xl:items-start xl:justify-center">
+          <div className="max-h-[92vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white shadow-2xl">
             <div className="sticky top-0 z-10 flex items-start justify-between gap-4 border-b border-slate-200 bg-white p-5">
               <div>
                 <h2 className="text-xl font-bold text-slate-950">Edit Service Agreement</h2>
@@ -3040,7 +1696,7 @@ const SalesAgreementDetail = () => {
                   <button
                     type="button"
                     onClick={updateSourceTermsTemplate}
-                    disabled={!can("884") || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
+                    disabled={!can('884') || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
                     className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {updatingTermsTemplate ? 'Updating template...' : 'Update source template from these lines'}
@@ -3095,7 +1751,6 @@ const SalesAgreementDetail = () => {
               <button
                 type="button"
                 onClick={() => {
-                  closeEditor();
                   setConfirmingDelete(true);
                   setDeleteConfirmation('');
                 }}
@@ -3289,112 +1944,24 @@ const SalesAgreementDetail = () => {
             </div>
           )}
         </div>
-        </div>
-      )}
+      </div>
 
-      {confirmingAcceptance && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+      {confirmingDelete && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/70 p-4">
           <div className="w-full max-w-lg rounded-lg bg-white p-5 shadow-2xl">
             <div className="flex items-start gap-3">
-              <span className="rounded-md bg-emerald-50 p-2 text-emerald-700">
-                <FaUserCheck />
+              <span className="rounded-md bg-rose-50 p-2 text-rose-700">
+                <FaTrash />
               </span>
               <div>
-                <h2 className="text-xl font-bold text-slate-950">Mark Agreement Accepted</h2>
+                <h2 className="text-xl font-bold text-slate-950">Delete Service Agreement</h2>
                 <p className="mt-2 text-sm text-slate-600">
-                  Use this when the homeowner has accepted outside the portal, or when your team is recording an internal approval.
+                  This permanently removes the agreement and any linked billing subscription records.
                 </p>
               </div>
             </div>
 
-            <fieldset className="mt-5 space-y-3">
-              <legend className="text-sm font-semibold text-slate-700">Acceptance source</legend>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition hover:bg-slate-50">
-                <input
-                  type="radio"
-                  name="acceptanceSource"
-                  value="customerOffline"
-                  checked={acceptanceSource === 'customerOffline'}
-                  onChange={(event) => setAcceptanceSource(event.target.value)}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block font-semibold text-slate-900">Customer told us offline</span>
-                  <span className="mt-1 block text-sm text-slate-500">
-                    Phone call, text, email reply, or in-person approval.
-                  </span>
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-start gap-3 rounded-md border border-slate-200 p-3 transition hover:bg-slate-50">
-                <input
-                  type="radio"
-                  name="acceptanceSource"
-                  value="internalManual"
-                  checked={acceptanceSource === 'internalManual'}
-                  onChange={(event) => setAcceptanceSource(event.target.value)}
-                  className="mt-1"
-                />
-                <span>
-                  <span className="block font-semibold text-slate-900">Internal manual acceptance</span>
-                  <span className="mt-1 block text-sm text-slate-500">
-                    Your company is marking the agreement accepted for operations or billing.
-                  </span>
-                </span>
-              </label>
-            </fieldset>
-
-            <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="acceptanceNote">
-              Note
-            </label>
-            <textarea
-              id="acceptanceNote"
-              value={acceptanceNote}
-              onChange={(event) => setAcceptanceNote(event.target.value)}
-              placeholder="Example: Customer replied yes by email on June 3."
-              className="mt-1 min-h-[90px] w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-100"
-            />
-
-            <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
-              This will set the agreement status to accepted and record {actorName} as the person who marked it.
-              {supersedesAgreementId ? ' It will also end the previous agreement and mark it superseded.' : ''}
-            </div>
-
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmingAcceptance(false);
-                  setAcceptanceNote('');
-                  setAcceptanceSource('customerOffline');
-                }}
-                disabled={markingAccepted}
-                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={markAgreementAccepted}
-                disabled={!canMarkAccepted}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <FaUserCheck className="text-xs" />
-                {markingAccepted ? 'Marking...' : 'Mark Accepted'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {confirmingDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
-            <h2 className="text-xl font-bold text-slate-950">Delete Service Agreement</h2>
-            <p className="mt-2 text-sm text-slate-600">
-              This permanently removes the agreement snapshot and any linked billing subscription records.
-              Active Stripe subscriptions must be canceled before deleting.
-            </p>
-            <label className="mt-4 block text-sm font-semibold text-slate-700" htmlFor="deleteAgreementConfirmation">
+            <label className="mt-5 block text-sm font-semibold text-slate-700" htmlFor="deleteAgreementConfirmation">
               Type DELETE to confirm
             </label>
             <input
@@ -3403,6 +1970,7 @@ const SalesAgreementDetail = () => {
               onChange={(event) => setDeleteConfirmation(event.target.value)}
               className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-rose-500 focus:outline-none focus:ring-2 focus:ring-rose-100"
             />
+
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
               <button
                 type="button"
@@ -3418,7 +1986,7 @@ const SalesAgreementDetail = () => {
               <button
                 type="button"
                 onClick={deleteAgreement}
-                disabled={deleteConfirmation.trim().toUpperCase() !== 'DELETE' || deleting}
+                disabled={deleting || deleteConfirmation.trim().toUpperCase() !== 'DELETE'}
                 className="inline-flex items-center justify-center gap-2 rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <FaTrash className="text-xs" />
@@ -3428,8 +1996,8 @@ const SalesAgreementDetail = () => {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 };
 
-export default SalesAgreementDetail;
+export default SalesAgreementEditorModal;

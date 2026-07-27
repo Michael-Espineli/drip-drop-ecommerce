@@ -108,6 +108,10 @@ exports.respondToCustomerPartApproval = callableGeneral.respondToCustomerPartApp
 exports.createHomeOwnerCustomerBasedOnCompany = callableGeneral.createHomeOwnerCustomerBasedOnCompany;
 exports.makeUpdatesToRecurringRoutes = callableGeneral.makeUpdatesToRecurringRoutes;
 
+const testerStripProfiles = require('./testerStripProfiles');
+exports.analyzeTesterStripScan = testerStripProfiles.analyzeTesterStripScan;
+exports.seedAquaChekTesterStripProfile = testerStripProfiles.seedAquaChekTesterStripProfile;
+
 exports.deleteRecurringServiceStop = callableGeneral.deleteRecurringServiceStop;
 exports.endRecurringServiceStop = callableGeneral.endRecurringServiceStop;
 exports.updateRecurringServiceStop = callableGeneral.updateRecurringServiceStop;
@@ -174,6 +178,8 @@ exports.setUpConnectedAccountCustomer = connectedAcctFunc.setUpConnectedAccountC
 //send Grid
 const timeBasedGeneral = require('./timeBased/general');
 exports.weeklySundayRSSCreate = timeBasedGeneral.weeklySundayRSSCreate;
+exports.processRecurringServiceStopTask = timeBasedGeneral.processRecurringServiceStopTask;
+exports.catchUpRecurringServiceStops = timeBasedGeneral.catchUpRecurringServiceStops;
 exports.hourlySalesManualInvoiceSend = timeBasedGeneral.hourlySalesManualInvoiceSend;
 exports.onRssCreated = timeBasedGeneral.onRssCreated;
 exports.onRssUpdated = timeBasedGeneral.onRssUpdated;

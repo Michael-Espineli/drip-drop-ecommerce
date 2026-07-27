@@ -16,6 +16,7 @@ import {
 } from 'firebase/firestore';
 import { Context } from '../../../../context/AuthContext';
 import { toast } from 'react-hot-toast';
+import { appConfirm } from '../../../../utils/appDialog';
 
 const emptyReadingForm = {
     name: '',
@@ -724,9 +725,12 @@ const ReadingsAndDosages = () => {
     const deleteTemplate = async (template) => {
         if (!recentlySelectedCompany || !template) return;
 
-        const confirmed = window.confirm(
-            `Delete ${template.name || 'this template'}? Existing stop data can still reference this id, so only delete it if you are sure.`
-        );
+        const confirmed = await appConfirm({
+            title: 'Delete Template',
+            message: `Delete ${template.name || 'this template'}? Existing stop data can still reference this id, so only delete it if you are sure.`,
+            confirmLabel: 'Delete Template',
+            variant: 'danger',
+        });
         if (!confirmed) return;
 
         const toastId = toast.loading('Deleting template...');

@@ -22,6 +22,10 @@ import {
   formatBillingFrequency,
   formatServiceFrequency,
 } from '../../../utils/sales/agreementCadence';
+import {
+  getJobPlanDisplayName,
+  getJobPlanRecommendationDisplay,
+} from '../../../utils/models/JobPlan';
 import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
 import { SalesPaymentMethodType } from '../../../utils/sales/paymentMethodFees';
 
@@ -574,6 +578,7 @@ const ServiceAgreementDetail = () => {
                 {planOptions.map((option) => {
                   const optionId = option.planId || option.solutionId || option.id || '';
                   const active = optionId === (selectedPlanOption?.planId || selectedPlanOption?.solutionId || selectedPlanOption?.id || selectedPlanId);
+                  const recommendationRank = option.planTier || option.solutionTier || option.recommendationRank;
                   return (
                     <label
                       key={optionId || option.title}
@@ -592,8 +597,13 @@ const ServiceAgreementDetail = () => {
                           className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500"
                         />
                         <span className="min-w-0 flex-1">
+                          {recommendationRank && (
+                            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                              {getJobPlanRecommendationDisplay(recommendationRank)}
+                            </span>
+                          )}
                           <span className="block text-sm font-bold text-slate-950">
-                            {[(option.planTierLabel || option.solutionTierLabel), option.title || option.name].filter(Boolean).join(' - ') || 'Plan Option'}
+                            {getJobPlanDisplayName(option, 'Plan Option')}
                           </span>
                           {option.description && (
                             <span className="mt-1 block text-sm text-slate-600">{option.description}</span>

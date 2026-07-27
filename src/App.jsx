@@ -7,6 +7,7 @@ import { useLocation } from "react-router-dom";
 import { Context } from "./context/AuthContext";
 import AppErrorBoundary from "./components/AppErrorBoundary";
 import AppErrorReporter from "./components/AppErrorReporter";
+import AppDialogProvider from "./components/AppDialogProvider";
 import { firebaseEnvironment } from "./firebase";
 
 // export default function App() {
@@ -89,7 +90,9 @@ const AppShell = () => {
 export default function App() {
   return (
     <ThemeProvider>
-      <AppShell />
+      <AppDialogProvider>
+        <AppShell />
+      </AppDialogProvider>
     </ThemeProvider>
   );
 }

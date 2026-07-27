@@ -23,6 +23,7 @@ import {
     normalizeCustomerTag,
     normalizeCustomerTags,
 } from '../../../utils/customerTags';
+import { appConfirm } from '../../../utils/appDialog';
 
 const FREE_CUSTOMER_LIMIT = 5;
 const ACTIVE_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'pending_cancellation'];
@@ -382,9 +383,12 @@ export default function Customers() {
 
         const primaryName = getCustomerDuplicateDisplayName(selectedPrimaryCustomer);
         const duplicateName = getCustomerDuplicateDisplayName(selectedDuplicateCustomer);
-        const confirmed = window.confirm(
-            `Merge ${duplicateName} into ${primaryName}?\n\nService locations, bodies of water, equipment, history, billing, and other linked records from the duplicate will move to the customer you keep. The duplicate customer record will be removed after the move.`
-        );
+        const confirmed = await appConfirm({
+            title: 'Merge Customers',
+            message: `Merge ${duplicateName} into ${primaryName}?\n\nService locations, bodies of water, equipment, history, billing, and other linked records from the duplicate will move to the customer you keep. The duplicate customer record will be removed after the move.`,
+            confirmLabel: 'Merge Customers',
+            variant: 'danger',
+        });
         if (!confirmed) return;
 
         setMerging(true);

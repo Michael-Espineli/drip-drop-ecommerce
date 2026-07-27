@@ -30,10 +30,12 @@ import {
     JOB_PLAN_STATUS,
     JOB_PLAN_TIER_OPTIONS,
     getIssuePriorityLabel,
-    getJobPlanTierLabel,
+    getJobPlanRecommendationDisplay,
+    getJobPlanRecommendationLabel,
     normalizeIssuePriority,
     normalizeJobPlanTier,
 } from "../../../utils/models/JobPlan";
+import { appAlert, appConfirm } from "../../../utils/appDialog";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -109,6 +111,7 @@ const CreateNewJob = () => {
 
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+    const [showMissingJobInfoModal, setShowMissingJobInfoModal] = useState(false);
 
     const [jobId] = useState(() => `comp_wo_${uuidv4()}`);
     const [internalId, setInternalId] = useState("");
@@ -220,6 +223,28 @@ const CreateNewJob = () => {
         !!selectedAdmin?.id &&
         !!selectedCustomer?.id &&
         !!selectedServiceLocation?.id;
+
+    const missingJobInfo = useMemo(() => {
+        const missing = [];
+
+        if (!recentlySelectedCompany) {
+            missing.push("Company");
+        }
+
+        if (!selectedAdmin?.id) {
+            missing.push("Admin");
+        }
+
+        if (!selectedCustomer?.id) {
+            missing.push("Customer");
+        }
+
+        if (!selectedServiceLocation?.id) {
+            missing.push("Service Location");
+        }
+
+        return missing;
+    }, [recentlySelectedCompany, selectedAdmin, selectedCustomer, selectedServiceLocation]);
 
     const selectStyles = {
         control: (provided, state) => ({
@@ -482,6 +507,9 @@ const CreateNewJob = () => {
         const profitMarginPercent = totalAmountCents > 0
             ? Math.round((projectedProfitCents / totalAmountCents) * 1000) / 10
             : 0;
+        const starterPlanName = selectedTemplate?.name
+            ? `${selectedTemplate.name} Plan`
+            : "Starter Plan";
 
         return {
             id: planId,
@@ -501,14 +529,17 @@ const CreateNewJob = () => {
             sourceType: selectedTemplate?.id ? "template" : "initialJobPlan",
             sourceTemplateId: selectedTemplate?.id || "",
             sourceTemplateName: selectedTemplate?.name || "",
-            title: `${planTierValue} - ${planTierLabel}`,
-            name: planTierLabel,
+            title: starterPlanName,
+            name: starterPlanName,
+            planName: starterPlanName,
             description: description || "",
             status: JOB_PLAN_STATUS.DRAFT,
             planTier: planTierValue,
             planTierLabel,
             solutionTier: planTierValue,
             solutionTierLabel: planTierLabel,
+            recommendationRank: planTierValue,
+            recommendationRankLabel: planTierLabel,
             issuePriorityLevel: issuePriority,
             issuePriorityLabel,
             isActivePlan: true,
@@ -524,7 +555,7 @@ const CreateNewJob = () => {
             projectedProfitCents,
             profitMarginPercent,
             scopeOfWork: {
-                title: `${planTierValue} - ${planTierLabel}`,
+                title: starterPlanName,
                 customerDescription: description || "",
                 issueDescription: description || "",
                 taskSummaries: normalizedTasks.map((task, index) => ({
@@ -742,7 +773,7 @@ const CreateNewJob = () => {
                 }
             } catch (error) {
                 console.error("Error loading create job data:", error);
-                alert("Failed to load create job data.");
+                appAlert("Failed to load create job data.");
             } finally {
                 setLoading(false);
             }
@@ -1029,19 +1060,18 @@ const CreateNewJob = () => {
             setTemplateApplied(true);
         } catch (error) {
             console.error("Error applying job template:", error);
-            alert("Failed to apply job template.");
+            appAlert("Failed to apply job template.");
         } finally {
             setLoadingTemplate(false);
         }
     };
 
     const handleTemplateChange = async (template) => {
-        const shouldReplace =
-            !template ||
-            !templateApplied ||
-            window.confirm(
-                "Apply this template and replace current planned tasks, stops, and materials?"
-            );
+        const shouldReplace = !template || !templateApplied || await appConfirm({
+            title: "Apply Job Template",
+            message: "Apply this template and replace current planned tasks, stops, and materials?",
+            confirmLabel: "Apply Template",
+        });
 
         if (!shouldReplace) return;
 
@@ -1066,9 +1096,11 @@ const CreateNewJob = () => {
 
         if (!taskGroup || !recentlySelectedCompany) return;
 
-        const ok =
-            taskList.length === 0 ||
-            window.confirm("Replace current tasks with tasks from this task group?");
+        const ok = taskList.length === 0 || await appConfirm({
+            title: "Replace Tasks",
+            message: "Replace current tasks with tasks from this task group?",
+            confirmLabel: "Replace Tasks",
+        });
 
         if (!ok) return;
 
@@ -1110,13 +1142,19 @@ const CreateNewJob = () => {
             setTaskList(tasks);
         } catch (error) {
             console.error("Error loading task group:", error);
-            alert("Failed to load task group.");
+            appAlert("Failed to load task group.");
         }
     };
 
-    const handleAddTask = () => {
-        if (!taskDescription.trim()) return alert("Add a task description.");
-        if (!selectedTaskType?.value && !selectedTaskType?.name) return alert("Pick a task type.");
+    const handleAddTask = async () => {
+        if (!taskDescription.trim()) {
+            await appAlert("Add a task description.");
+            return;
+        }
+        if (!selectedTaskType?.value && !selectedTaskType?.name) {
+            await appAlert("Pick a task type.");
+            return;
+        }
 
         const newTask = normalizeJobTask(
             {
@@ -1177,7 +1215,7 @@ const CreateNewJob = () => {
         if (!requirePermission("22", "create jobs")) return;
 
         if (!canCreateJob) {
-            alert("Please fill all required fields: Admin, Customer, and Service Location.");
+            setShowMissingJobInfoModal(true);
             return;
         }
 
@@ -1206,7 +1244,7 @@ const CreateNewJob = () => {
             const normalizedIssuePriority = normalizeIssuePriority(issuePriorityLevel);
             const issuePriorityLabel = getIssuePriorityLabel(normalizedIssuePriority);
             const normalizedStarterPlanTier = normalizeJobPlanTier(starterPlanTier);
-            const starterPlanTierLabel = getJobPlanTierLabel(normalizedStarterPlanTier);
+            const starterPlanTierLabel = getJobPlanRecommendationLabel(normalizedStarterPlanTier);
             const starterPlanId = `comp_job_plan_${uuidv4()}`;
             const normalizedPlannedStops = plannedServiceStops.map((plannedStop) => ({
                 ...plannedStop,
@@ -1455,7 +1493,7 @@ const CreateNewJob = () => {
                         { field: "customerName", label: "Customer", before: "—", after: customerName || "—" },
                         { field: "serviceLocationName", label: "Service Location", before: "—", after: selectedServiceLocation.label || "—" },
                         { field: "issuePriority", label: "Issue Priority", before: "—", after: `${normalizedIssuePriority} - ${issuePriorityLabel}` },
-                        { field: "starterPlan", label: "Starter Plan", before: "—", after: `${normalizedStarterPlanTier} - ${starterPlanTierLabel}` },
+                        { field: "starterPlan", label: "Starter Plan Recommendation Rank", before: "—", after: getJobPlanRecommendationDisplay(normalizedStarterPlanTier) },
                         { field: "rate", label: "Calculated Customer Price", before: "—", after: `$${(Number(starterPlanRecord.totalAmountCents || 0) / 100).toFixed(2)}` },
                         { field: "tasks", label: "Tasks", before: "—", after: String(normalizedTasks.length) },
                         { field: "plannedServiceStops", label: "Planned Stops", before: "—", after: String(normalizedPlannedStops.length) },
@@ -1484,7 +1522,7 @@ const CreateNewJob = () => {
             navigate(`/company/jobs/detail/${jobId}`);
         } catch (error) {
             console.error("Error creating new job:", error);
-            alert("Failed to create job. Please try again.");
+            appAlert("Failed to create job. Please try again.");
         } finally {
             setCreating(false);
         }
@@ -1670,7 +1708,7 @@ const CreateNewJob = () => {
 
                             <SectionCard
                                 title="Priority & Plan"
-                                subtitle="Set the problem priority and the starter plan version."
+                                subtitle="Set the problem priority and the starter plan recommendation rank."
                             >
                                 <div className="grid gap-4 lg:grid-cols-2">
                                     <div>
@@ -1689,7 +1727,7 @@ const CreateNewJob = () => {
                                     </div>
 
                                     <div>
-                                        <label className={fieldLabelClasses}>Starter Plan</label>
+                                        <label className={fieldLabelClasses}>Starter Plan Recommendation Rank</label>
                                         <select
                                             value={starterPlanTier}
                                             onChange={(e) => setStarterPlanTier(normalizeJobPlanTier(e.target.value))}
@@ -1697,7 +1735,7 @@ const CreateNewJob = () => {
                                         >
                                             {JOB_PLAN_TIER_OPTIONS.map((option) => (
                                                 <option key={option.value} value={option.value}>
-                                                    {option.value} - {option.label}
+                                                    {getJobPlanRecommendationDisplay(option.value)}
                                                 </option>
                                             ))}
                                         </select>
@@ -2107,13 +2145,15 @@ const CreateNewJob = () => {
                         </div>
 
                         <button
+                            type="button"
                             onClick={createNewJob}
-                            disabled={!canCreateJob || creating}
+                            disabled={creating}
+                            aria-disabled={!canCreateJob || creating}
                             className={[
                                 "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
                                 canCreateJob && !creating
                                     ? "bg-blue-600 text-white hover:bg-blue-700"
-                                    : "bg-slate-200 text-slate-500 cursor-not-allowed",
+                                    : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
                             ].join(" ")}
                         >
                             {creating ? "Creating..." : "Create Job"}
@@ -2166,12 +2206,13 @@ const CreateNewJob = () => {
                             <button
                                 type="button"
                                 onClick={createNewJob}
-                                disabled={!canCreateJob || creating}
+                                disabled={creating}
+                                aria-disabled={!canCreateJob || creating}
                                 className={[
                                     "rounded-md px-4 py-2 text-sm font-bold shadow-sm transition",
                                     canCreateJob && !creating
                                         ? "bg-blue-600 text-white hover:bg-blue-700"
-                                        : "bg-slate-200 text-slate-500 cursor-not-allowed",
+                                        : "bg-slate-200 text-slate-500 hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-70",
                                 ].join(" ")}
                             >
                                 {creating ? "Creating..." : "Create Job"}
@@ -2188,6 +2229,46 @@ const CreateNewJob = () => {
                     </div>
                 </section>
             </div>
+
+            {showMissingJobInfoModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                    <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+                        <h2 className="text-xl font-bold text-slate-950">Missing Job Information</h2>
+                        <p className="mt-2 text-sm text-slate-600">
+                            This job cannot be saved yet because the following required information is missing.
+                        </p>
+                        <div className="mt-4 rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <ul className="space-y-2 text-sm font-semibold text-slate-800">
+                                {missingJobInfo.map((item) => (
+                                    <li key={item} className="flex items-center gap-2">
+                                        <span className="h-2 w-2 rounded-full bg-rose-500" />
+                                        {item}
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                        <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                            <button
+                                type="button"
+                                onClick={() => setShowMissingJobInfoModal(false)}
+                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setShowMissingJobInfoModal(false);
+                                    setActiveStep("Info");
+                                }}
+                                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                            >
+                                Review Info
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

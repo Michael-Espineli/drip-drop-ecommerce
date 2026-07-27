@@ -22,6 +22,7 @@ import { Description } from "@headlessui/react";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import { recurringFrequencyToAgreementService } from "../../../utils/sales/agreementCadence";
+import { appConfirm } from "../../../utils/appDialog";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
@@ -323,7 +324,12 @@ const RecurringServiceStopDetails = () => {
   const deleteRSS = async (e) => {
     e.preventDefault();
     try {
-      const ok = window.confirm("Delete this recurring service stop and all linked service stops? This cannot be undone.");
+      const ok = await appConfirm({
+        title: "Delete Recurring Service Stop",
+        message: "Delete this recurring service stop and all linked service stops? This cannot be undone.",
+        confirmLabel: "Delete Stop",
+        variant: "danger",
+      });
       if (!ok) return;
 
       const callable = httpsCallable(functions, "deleteRecurringServiceStop");

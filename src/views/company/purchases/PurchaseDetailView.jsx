@@ -18,6 +18,7 @@ import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
 import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
+import { appAlert, appConfirm } from "../../../utils/appDialog";
 
 const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
 const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
@@ -375,13 +376,16 @@ const PurchaseDetailView = () => {
 
     const deleteJob = async () => {
         if (purchase.receiptId) {
-            window.alert("This purchased item is attached to a receipt. Delete the whole receipt or mark the item as returned.");
+            await appAlert("This purchased item is attached to a receipt. Delete the whole receipt or mark the item as returned.");
             return;
         }
 
-        const confirmed = window.confirm(
-            "Are you sure you want to delete this purchased item?"
-        );
+        const confirmed = await appConfirm({
+            title: "Delete Purchased Item",
+            message: "Are you sure you want to delete this purchased item?",
+            confirmLabel: "Delete Item",
+            variant: "danger",
+        });
         if (!confirmed) return;
 
         try {
@@ -679,7 +683,7 @@ const PurchaseDetailView = () => {
             setJobsLoading(true);
             const { start, end } = dateRangeBounds(jobStartDate, jobEndDate);
             if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-                window.alert("Select a valid job date range.");
+                await appAlert("Select a valid job date range.");
                 return;
             }
 
@@ -700,7 +704,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Load Jobs For Purchase");
-            window.alert("Could not load jobs for that date range.");
+            appAlert("Could not load jobs for that date range.");
         } finally {
             setJobsLoading(false);
         }
@@ -758,7 +762,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Connect Job");
-            window.alert("Could not connect this purchased item to the selected job.");
+            appAlert("Could not connect this purchased item to the selected job.");
         } finally {
             setUpdating(false);
         }
@@ -801,7 +805,7 @@ const PurchaseDetailView = () => {
         } catch (error) {
             console.log(error);
             console.log("Clear Job Connection");
-            window.alert("Could not clear this job connection.");
+            appAlert("Could not clear this job connection.");
         } finally {
             setUpdating(false);
         }

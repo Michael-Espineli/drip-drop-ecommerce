@@ -4,11 +4,23 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
-import { ClipboardDocumentIcon, DocumentDuplicateIcon, EnvelopeIcon, PencilSquareIcon, PlusIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import {
+    ArrowsPointingInIcon,
+    ArrowsPointingOutIcon,
+    ClipboardDocumentIcon,
+    DocumentDuplicateIcon,
+    EnvelopeIcon,
+    ListBulletIcon,
+    PencilSquareIcon,
+    PlusIcon,
+    PresentationChartLineIcon,
+    WrenchScrewdriverIcon,
+    XMarkIcon,
+} from '@heroicons/react/24/outline';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
-import { format } from 'date-fns';
+import { addDays, addMonths, addWeeks, addYears, format } from 'date-fns';
 
 import { functions } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
@@ -20,6 +32,7 @@ import CustomerTimelineGraph from './CustomerTimelineGraph';
 import { salesCollectionNames } from '../../../utils/models/Sales';
 import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
+import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 import {
     customerMatchesRoleTagAccess,
     getRoleCustomerTagAccess,
@@ -38,6 +51,8 @@ import {
     isOpenSuggestedWorkStatus,
     normalizeSuggestedWorkTier,
 } from '../../../utils/models/SuggestedWork';
+import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from '../../../utils/models/Equipment';
+import { appConfirm } from '../../../utils/appDialog';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -125,6 +140,88 @@ const formatDateValue = (value) => {
     return millis ? format(new Date(millis), 'MMM d, yyyy') : 'Not set';
 };
 
+const toDateValue = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value;
+    if (typeof value.toDate === 'function') return value.toDate();
+    if (typeof value === 'number') return new Date(value);
+
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const toDateInputValue = (value) => {
+    const date = toDateValue(value);
+    return date ? format(date, 'yyyy-MM-dd') : '';
+};
+
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = value.split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
+const computeNextEquipmentServiceDate = (lastServiceDate, serviceFrequency, serviceFrequencyEvery) => {
+    const base = toDateValue(lastServiceDate);
+    if (!base) return null;
+
+    const amount = Number(serviceFrequency);
+    if (!Number.isFinite(amount) || amount <= 0) return null;
+
+    if (serviceFrequencyEvery === 'Day') return addDays(base, amount);
+    if (serviceFrequencyEvery === 'Week') return addWeeks(base, amount);
+    if (serviceFrequencyEvery === 'Month') return addMonths(base, amount);
+    if (serviceFrequencyEvery === 'Year') return addYears(base, amount);
+
+    return null;
+};
+
+const getEquipmentEditForm = (equipment = {}) => ({
+    name: equipment.name || '',
+    type: equipment.type || equipment.category || '',
+    typeId: equipment.typeId || '',
+    make: equipment.make || '',
+    makeId: equipment.makeId || '',
+    model: equipment.model || '',
+    modelId: equipment.modelId || '',
+    universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
+    manualPdfLink: equipment.manualPdfLink || '',
+    dateInstalled: toDateInputValue(equipment.dateInstalled),
+    cleanFilterPressure: equipment.cleanFilterPressure ?? '',
+    currentPressure: equipment.currentPressure ?? '',
+    lastServiceDate: toDateInputValue(equipment.lastServiceDate),
+    needsService: !!equipment.needsService,
+    isActive: equipment.isActive ?? equipment.active ?? true,
+    serviceFrequency: equipment.serviceFrequency !== undefined && equipment.serviceFrequency !== null
+        ? String(equipment.serviceFrequency)
+        : '',
+    serviceFrequencyEvery: equipment.serviceFrequencyEvery || '',
+    status: displayEquipmentStatus(equipment.status || '') || EQUIPMENT_STATUS.OPERATIONAL,
+    notes: equipment.notes || '',
+});
+
+const getDefaultEquipmentCreateForm = (bodyOfWaterId = '') => ({
+    name: '',
+    type: '',
+    category: '',
+    typeId: '',
+    make: '',
+    makeId: '',
+    model: '',
+    modelId: '',
+    universalEquipmentId: '',
+    manualPdfLink: '',
+    dateInstalled: format(new Date(), 'yyyy-MM-dd'),
+    cleanFilterPressure: '',
+    needsService: false,
+    serviceFrequency: '6',
+    serviceFrequencyEvery: 'Month',
+    notes: '',
+    bodyOfWaterId,
+});
+
 const formatDateTimeValue = (value) => {
     const millis = toMillis(value);
     return millis ? format(new Date(millis), 'MMM d, h:mm a') : 'Not set';
@@ -177,11 +274,23 @@ const StatusBadge = ({ children, tone = 'slate' }) => {
 
 const getNoteText = (note = {}) => note.note || note.comment || note.text || '';
 
-const CustomerNotesSection = ({ customer }) => {
+const customerNoteAudienceOptions = [
+    { value: 'all', label: 'All', tone: 'emerald' },
+    { value: 'office', label: 'Office', tone: 'slate' },
+    { value: 'field', label: 'Field', tone: 'blue' },
+];
+
+const getCustomerNoteAudience = (note = {}) => {
+    const normalized = String(note.audience || note.visibility || 'all').trim().toLowerCase();
+    return customerNoteAudienceOptions.find((option) => option.value === normalized) || customerNoteAudienceOptions[0];
+};
+
+const CustomerNotesSection = ({ customer, compact = false }) => {
     const [notes, setNotes] = useState([]);
     const [notesLoading, setNotesLoading] = useState(true);
     const [bodyOfWaterOptions, setBodyOfWaterOptions] = useState([]);
     const [selectedBodyOfWaterId, setSelectedBodyOfWaterId] = useState('');
+    const [selectedAudience, setSelectedAudience] = useState('all');
     const [newNote, setNewNote] = useState('');
     const [addingNote, setAddingNote] = useState(false);
     const authCtx = useContext(Context);
@@ -290,6 +399,8 @@ const CustomerNotesSection = ({ customer }) => {
                 authorName,
                 note: trimmedNote,
                 comment: trimmedNote,
+                audience: selectedAudience,
+                visibility: selectedAudience,
                 resolved: false,
                 date: serverTimestamp(),
                 dateMillis: nowMillis,
@@ -300,6 +411,7 @@ const CustomerNotesSection = ({ customer }) => {
             });
 
             setNewNote('');
+            setSelectedAudience('all');
             toast.success('Customer note added.');
         } catch (error) {
             console.error('Failed to add customer note:', error);
@@ -331,69 +443,84 @@ const CustomerNotesSection = ({ customer }) => {
 
     const openNotesCount = notes.filter((note) => !note.resolved).length;
 
-    return (
-        <InfoCard
-            title="Customer Notes"
-            actions={
-                <div className="flex flex-wrap gap-2">
-                    <StatusBadge tone={openNotesCount ? 'amber' : 'emerald'}>
-                        {openNotesCount} Open
-                    </StatusBadge>
-                    <StatusBadge>{notes.length} Total</StatusBadge>
-                </div>
-            }
-        >
-            <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
-                <textarea
-                    value={newNote}
-                    onChange={(event) => setNewNote(event.target.value)}
-                    rows="3"
-                    placeholder="Write a customer or pool note..."
-                    className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                />
-                <div className="space-y-2">
-                    <select
-                        value={selectedBodyOfWaterId}
-                        onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
-                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    >
-                        <option value="">All customer pools</option>
-                        {bodyOfWaterOptions.map((body) => (
-                            <option key={body.id} value={body.id}>
-                                {getBodyOfWaterLabel(body)}
-                            </option>
-                        ))}
-                    </select>
-                    <button
-                        type="button"
-                        onClick={addCustomerNote}
-                        disabled={addingNote || !newNote.trim()}
-                        className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
-                    >
-                        {addingNote ? 'Adding...' : 'Add Note'}
-                    </button>
-                </div>
-            </div>
+    const noteStats = (
+        <div className={compact ? "flex flex-wrap gap-1.5" : "flex flex-wrap gap-2"}>
+            <StatusBadge tone={openNotesCount ? 'amber' : 'emerald'}>
+                {openNotesCount} Open
+            </StatusBadge>
+            <StatusBadge>{notes.length} Total</StatusBadge>
+        </div>
+    );
 
-            <div className="max-h-96 space-y-3 overflow-y-auto pr-1">
-                {notesLoading ? (
-                    <div className="text-sm text-slate-500">Loading customer notes...</div>
-                ) : notes.length === 0 ? (
-                    <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                        No customer notes yet.
-                    </div>
-                ) : (
-                    notes.map((note) => (
-                        <div key={note.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                            <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                <div className="min-w-0">
-                                    <p className="text-sm font-semibold text-slate-900">{note.userName || note.authorName || 'Unknown'}</p>
-                                    <p className="mt-0.5 text-xs text-slate-500">
-                                        {formatDateTimeValue(note.date || note.createdAt || note.dateMillis || note.createdAtMillis)}
-                                        {note.bodyOfWaterName ? ` - ${note.bodyOfWaterName}` : ''}
-                                    </p>
-                                </div>
-                                <label className="inline-flex shrink-0 items-center gap-2 text-xs font-semibold text-slate-600">
+    const composer = (
+        <div className={compact ? "mt-3 space-y-2" : "grid gap-3 lg:grid-cols-[minmax(0,1fr)_240px]"}>
+            <textarea
+                value={newNote}
+                onChange={(event) => setNewNote(event.target.value)}
+                rows={compact ? 4 : 3}
+                placeholder="Write a customer or pool note..."
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+            />
+            <div className="space-y-2">
+                <select
+                    value={selectedBodyOfWaterId}
+                    onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                >
+                    <option value="">All customer pools</option>
+                    {bodyOfWaterOptions.map((body) => (
+                        <option key={body.id} value={body.id}>
+                            {getBodyOfWaterLabel(body)}
+                        </option>
+                    ))}
+                </select>
+                <select
+                    value={selectedAudience}
+                    onChange={(event) => setSelectedAudience(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                >
+                    {customerNoteAudienceOptions.map((option) => (
+                        <option key={option.value} value={option.value}>
+                            {option.label}
+                        </option>
+                    ))}
+                </select>
+                <button
+                    type="button"
+                    onClick={addCustomerNote}
+                    disabled={addingNote || !newNote.trim()}
+                    className="w-full rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-400"
+                >
+                    {addingNote ? 'Adding...' : 'Add Note'}
+                </button>
+            </div>
+        </div>
+    );
+
+    const notesList = (
+        <div className={compact ? "mt-4 max-h-80 space-y-2 overflow-y-auto pr-1" : "max-h-96 space-y-3 overflow-y-auto pr-1"}>
+            {notesLoading ? (
+                <div className="text-sm text-slate-500">Loading customer notes...</div>
+            ) : notes.length === 0 ? (
+                <div className="rounded-md border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                    No customer notes yet.
+                </div>
+            ) : (
+                notes.map((note) => (
+                    <div key={note.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                        <div className={compact ? "flex flex-col gap-2" : "flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between"}>
+                            <div className="min-w-0">
+                                <p className="text-sm font-semibold text-slate-900">{note.userName || note.authorName || 'Unknown'}</p>
+                                <p className="mt-0.5 text-xs text-slate-500">
+                                    {formatDateTimeValue(note.date || note.createdAt || note.dateMillis || note.createdAtMillis)}
+                                    {note.bodyOfWaterName ? ` - ${note.bodyOfWaterName}` : ''}
+                                </p>
+                            </div>
+                            <div className="flex shrink-0 flex-wrap items-center gap-2">
+                                <StatusBadge tone={getCustomerNoteAudience(note).tone}>
+                                    {getCustomerNoteAudience(note).label}
+                                </StatusBadge>
+                                <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600">
                                     <input
                                         type="checkbox"
                                         checked={!!note.resolved}
@@ -403,11 +530,35 @@ const CustomerNotesSection = ({ customer }) => {
                                     Resolved
                                 </label>
                             </div>
-                            <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{getNoteText(note)}</p>
                         </div>
-                    ))
-                )}
+                        <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{getNoteText(note)}</p>
+                    </div>
+                ))
+            )}
+        </div>
+    );
+
+    if (compact) {
+        return (
+            <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Customer Notes</h2>
+                    </div>
+                </div>
+                <div className="mt-2">
+                    {noteStats}
+                </div>
+                {composer}
+                {notesList}
             </div>
+        );
+    }
+
+    return (
+        <InfoCard title="Customer Notes" actions={noteStats}>
+            {composer}
+            {notesList}
         </InfoCard>
     );
 };
@@ -564,6 +715,177 @@ const timelineFilters = [
     { id: 'water', label: 'Water', types: ['waterFill', 'waterEmpty'] },
 ];
 
+const timelineViewOptions = [
+    { id: 'timeline', label: 'Timeline', Icon: PresentationChartLineIcon },
+    { id: 'list', label: 'List', Icon: ListBulletIcon },
+];
+
+const formatTimelineDate = (value) => {
+    const millis = toMillis(value);
+    return millis ? format(new Date(millis), 'PPP p') : 'Date unavailable';
+};
+
+const buildCustomerProfileNoteEvent = (customer = {}) => {
+    const detail = String(customer.notes || '').trim();
+    if (!detail) return null;
+
+    const dateMillis = toMillis(
+        customer.updatedAt ||
+        customer.updatedAtMillis ||
+        customer.createdAt ||
+        customer.createdAtMillis ||
+        customer.dateCreated ||
+        customer.dateCreatedMillis
+    ) || Date.now();
+
+    return {
+        id: `customer-profile-note-${customer.id || 'profile'}`,
+        type: 'note',
+        label: 'Customer Note',
+        title: 'Customer profile note',
+        subtitle: [getCustomerName(customer), 'Profile notes'].filter(Boolean).join(' • '),
+        detail,
+        date: new Date(dateMillis),
+        bodyOfWaterId: '',
+        serviceLocationId: '',
+    };
+};
+
+const timelineValueText = (...parts) => parts
+    .filter((part) => part !== undefined && part !== null && part !== '')
+    .join(' ');
+
+const formatTimelineMeasurement = (item = {}, fallbackLabel) => {
+    const label = item.name || item.label || item.templateName || item.title || fallbackLabel;
+    const amount = item.amount ?? item.value ?? item.reading ?? item.result ?? item.currentPressure ?? '';
+    const amountText = timelineValueText(amount, item.UOM || item.unit || item.unitOfMeasure);
+    return [label, amountText].filter(Boolean).join(': ');
+};
+
+const formatTimelineObservation = (item = {}) => {
+    if (!item) return '';
+    if (typeof item === 'string') return item;
+
+    const label = item.name || item.label || item.title || 'Observation';
+    const value = item.value || item.note || item.notes || item.description || item.comment || item.amount || '';
+    return [label, value].filter(Boolean).join(': ');
+};
+
+const buildTimelineDatapointGroups = (event = {}) => {
+    const groups = [];
+    const readings = Array.isArray(event.readings)
+        ? event.readings.map((item) => formatTimelineMeasurement(item, 'Reading')).filter(Boolean)
+        : [];
+    const dosages = Array.isArray(event.dosages)
+        ? event.dosages.map((item) => formatTimelineMeasurement(item, 'Dosage')).filter(Boolean)
+        : [];
+    const observations = Array.isArray(event.observations)
+        ? event.observations.map(formatTimelineObservation).filter(Boolean)
+        : [];
+
+    if (readings.length) groups.push({ label: 'Readings', items: readings });
+    if (dosages.length) groups.push({ label: 'Dosages', items: dosages });
+    if (observations.length) groups.push({ label: 'Observations', items: observations });
+
+    const equipmentItems = [
+        event.equipmentName ? `Equipment: ${event.equipmentName}` : '',
+        event.equipmentType ? `Type: ${event.equipmentType}` : '',
+        event.type === 'equipmentReading' && event.detail ? event.detail : '',
+    ].filter(Boolean);
+    if (equipmentItems.length) groups.push({ label: 'Equipment', items: equipmentItems });
+
+    if (event.gallons) {
+        groups.push({ label: 'Water', items: [`Gallons: ${event.gallons}`] });
+    }
+
+    return groups;
+};
+
+const TimelineDatapointGroups = ({ event }) => {
+    const groups = buildTimelineDatapointGroups(event);
+    if (!groups.length) return null;
+
+    return (
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+            {groups.map((group) => (
+                <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{group.label}</p>
+                    <ul className="mt-2 space-y-1">
+                        {group.items.map((item, index) => (
+                            <li key={`${group.label}-${index}`} className="text-sm text-slate-700">
+                                {item}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            ))}
+        </div>
+    );
+};
+
+const TimelineEventCard = ({ event, variant = 'timeline' }) => {
+    const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
+    const isList = variant === 'list';
+
+    const content = isList ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                        <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`} />
+                        <p className="min-w-0 text-sm font-semibold text-slate-900">{event.title}</p>
+                    </div>
+                    <p className="mt-1 text-xs font-medium text-slate-500">{formatTimelineDate(event.date)}</p>
+                </div>
+                <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                    {event.label}
+                </span>
+            </div>
+
+            {event.subtitle && (
+                <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
+            )}
+
+            {event.detail && (
+                <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{event.detail}</p>
+            )}
+
+            <TimelineDatapointGroups event={event} />
+        </div>
+    ) : (
+        <div className="relative flex gap-4">
+            <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
+            <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                        <p className="text-sm font-semibold text-slate-900">{event.title}</p>
+                        <p className="mt-1 text-xs font-medium text-slate-500">
+                            {formatTimelineDate(event.date)}
+                        </p>
+                    </div>
+                    <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                        {event.label}
+                    </span>
+                </div>
+
+                {event.subtitle && (
+                    <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
+                )}
+
+                {event.detail && (
+                    <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
+                )}
+            </div>
+        </div>
+    );
+
+    return event.target ? (
+        <Link to={event.target} className="block transition hover:opacity-95">
+            {content}
+        </Link>
+    ) : content;
+};
+
 // Profile Tab
 const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerInactiveCascade }) => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -697,7 +1019,6 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
                     <InfoCard title="Notes">
                         <textarea name="notes" value={isEditing ? formData.notes : customer.notes} onChange={handleInputChange} rows="6" className="w-full px-3 py-2 border rounded-md" readOnly={!isEditing}></textarea>
                     </InfoCard>
-                    <CustomerNotesSection customer={customer} />
                     <InfoCard title="Tags">
                         {isEditing ? (
                             <div className="space-y-3">
@@ -1134,7 +1455,13 @@ const ServiceLocationsTab = ({ customer }) => {
 
     const handleDeleteLocation = async () => {
         if (!selectedLocation?.id || !recentlySelectedCompany) return;
-        if (!window.confirm('Delete this service location and all linked bodies of water, equipment, recurring service stops, and service stops?')) return;
+        const confirmed = await appConfirm({
+            title: 'Delete Service Location',
+            message: 'Delete this service location and all linked bodies of water, equipment, recurring service stops, and service stops?',
+            confirmLabel: 'Delete Location',
+            variant: 'danger',
+        });
+        if (!confirmed) return;
 
         setSavingLocation(true);
         try {
@@ -1468,7 +1795,7 @@ const ServiceLocationsTab = ({ customer }) => {
 
             </div>
             <div className="space-y-6 lg:col-span-2">
-                {selectedLocation && <LocationDetails location={selectedLocation} customerId={customer.id} />}
+                {selectedLocation && <LocationDetails location={selectedLocation} customer={customer} customerId={customer.id} />}
             </div>
 
 
@@ -1548,7 +1875,7 @@ const RecentServiceHistoryCard = ({ location }) => {
     );
 };
 
-const LocationDetails = ({ location, customerId }) => {
+const LocationDetails = ({ location, customer = {}, customerId }) => {
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [customerServiceLocations, setCustomerServiceLocations] = useState([]);
     const [customerBodiesOfWater, setCustomerBodiesOfWater] = useState([]);
@@ -1557,7 +1884,14 @@ const LocationDetails = ({ location, customerId }) => {
     const [movingEquipmentId, setMovingEquipmentId] = useState('');
     const [equipmentMoveForm, setEquipmentMoveForm] = useState({ serviceLocationId: '', bodyOfWaterId: '' });
     const [movingEquipment, setMovingEquipment] = useState(false);
-    const { recentlySelectedCompany } = useContext(Context);
+    const [editingEquipmentId, setEditingEquipmentId] = useState('');
+    const [equipmentEditForm, setEquipmentEditForm] = useState(getEquipmentEditForm());
+    const [savingEquipmentEdit, setSavingEquipmentEdit] = useState(false);
+    const [showEquipmentCreate, setShowEquipmentCreate] = useState(false);
+    const [equipmentCreateForm, setEquipmentCreateForm] = useState(getDefaultEquipmentCreateForm());
+    const [savingEquipmentCreate, setSavingEquipmentCreate] = useState(false);
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
+    const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
     useEffect(() => {
@@ -1606,6 +1940,12 @@ const LocationDetails = ({ location, customerId }) => {
         setMovingEquipmentId('');
         setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
         setMovingEquipment(false);
+        setEditingEquipmentId('');
+        setEquipmentEditForm(getEquipmentEditForm());
+        setSavingEquipmentEdit(false);
+        setShowEquipmentCreate(false);
+        setEquipmentCreateForm(getDefaultEquipmentCreateForm());
+        setSavingEquipmentCreate(false);
     }, [location.id]);
 
     const bodyOfWaterNameById = useMemo(
@@ -1616,10 +1956,27 @@ const LocationDetails = ({ location, customerId }) => {
         () => equipment.find((item) => item.id === movingEquipmentId) || null,
         [equipment, movingEquipmentId]
     );
+    const selectedEditingEquipment = useMemo(
+        () => equipment.find((item) => item.id === editingEquipmentId) || null,
+        [equipment, editingEquipmentId]
+    );
     const targetBodiesOfWater = useMemo(
         () => customerBodiesOfWater.filter((bow) => bow.serviceLocationId === equipmentMoveForm.serviceLocationId),
         [customerBodiesOfWater, equipmentMoveForm.serviceLocationId]
     );
+    const locationBodiesOfWater = useMemo(
+        () => customerBodiesOfWater.filter((bow) => bow.serviceLocationId === location.id),
+        [customerBodiesOfWater, location.id]
+    );
+    const equipmentEditNextServiceDate = useMemo(() => {
+        if (!equipmentEditForm.needsService) return '';
+
+        return toDateInputValue(computeNextEquipmentServiceDate(
+            dateInputToLocalDate(equipmentEditForm.lastServiceDate),
+            equipmentEditForm.serviceFrequency,
+            equipmentEditForm.serviceFrequencyEvery
+        ));
+    }, [equipmentEditForm]);
     const standaloneServiceStopLinks = [
         {
             category: 'serviceAgreementEstimate',
@@ -1647,12 +2004,264 @@ const LocationDetails = ({ location, customerId }) => {
         return `/company/serviceStops/createNew?${params.toString()}`;
     };
 
+    const openEquipmentCreate = () => {
+        setMovingEquipmentId('');
+        setEditingEquipmentId('');
+        setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
+        setEquipmentCreateForm(getDefaultEquipmentCreateForm(locationBodiesOfWater[0]?.id || ''));
+        setShowEquipmentCreate(true);
+    };
+
+    const closeEquipmentCreate = () => {
+        if (savingEquipmentCreate) return;
+        setShowEquipmentCreate(false);
+        setEquipmentCreateForm(getDefaultEquipmentCreateForm());
+    };
+
+    const updateEquipmentCreateField = (field, value) => {
+        setEquipmentCreateForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const copyCatalogPartsToEquipment = async (equipmentId, catalogEquipmentId, equipmentData) => {
+        if (!catalogEquipmentId || !recentlySelectedCompany) return;
+
+        const partsSnapshot = await getDocs(
+            collection(db, 'universal', 'equipment', 'equipment', catalogEquipmentId, 'parts')
+        );
+
+        await Promise.all(partsSnapshot.docs.map((partDoc) => {
+            const part = partDoc.data();
+            const partId = 'com_equ_par_' + uuidv4();
+
+            return setDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId, 'parts', partId),
+                {
+                    id: partId,
+                    name: part.name || '',
+                    sku: part.sku || '',
+                    make: part.make || equipmentData.make || '',
+                    model: part.model || equipmentData.model || '',
+                    manualPdfLink: part.manualPdfLink || '',
+                    universalPartId: part.id || partDoc.id,
+                    universalEquipmentId: catalogEquipmentId,
+                    createdAt: new Date(),
+                }
+            );
+        }));
+    };
+
+    const createCustomEquipmentSuggestion = async (equipmentId, equipmentData, flags) => {
+        if (!flags?.isCustomMake && !flags?.isCustomModel) return;
+
+        const suggestionId = `unv_equ_sug_${equipmentId}`;
+
+        await setDoc(doc(db, 'universalEquipmentSuggestions', suggestionId), {
+            id: suggestionId,
+            status: 'New',
+            source: 'companyEquipmentCreate',
+            companyId: recentlySelectedCompany,
+            companyName: recentlySelectedCompanyName || '',
+            createdByUserId: user?.uid || '',
+            createdByUserEmail: user?.email || '',
+            createdAt: serverTimestamp(),
+            createdAtMillis: Date.now(),
+            equipmentId,
+            equipmentName: equipmentData.name || '',
+            customerId: equipmentData.customerId || '',
+            customerName: equipmentData.customerName || '',
+            serviceLocationId: equipmentData.serviceLocationId || '',
+            bodyOfWaterId: equipmentData.bodyOfWaterId || '',
+            type: equipmentData.type || '',
+            typeId: equipmentData.typeId || '',
+            make: equipmentData.make || '',
+            makeId: equipmentData.makeId || '',
+            model: equipmentData.model || '',
+            modelId: equipmentData.modelId || '',
+            customCategoryRequested: flags.isCustomType,
+            customMakeRequested: flags.isCustomMake,
+            customModelRequested: flags.isCustomModel,
+            notes: equipmentData.notes || '',
+        });
+    };
+
+    const handleCreateEquipment = async (event) => {
+        event.preventDefault();
+
+        if (!requirePermission("62", "create equipment")) return;
+        if (!recentlySelectedCompany || !customerId || !location.id) {
+            toast.error('Missing customer or service location.');
+            return;
+        }
+
+        const equipmentName = equipmentCreateForm.name.trim();
+        if (!equipmentName) {
+            toast.error('Add an equipment nickname.');
+            return;
+        }
+
+        const numericCleanFilterPressure = Number(equipmentCreateForm.cleanFilterPressure);
+        const numericServiceFrequency = Number(equipmentCreateForm.serviceFrequency);
+        const isCustomType = Boolean(equipmentCreateForm.type && !equipmentCreateForm.typeId);
+        const isCustomMake = Boolean(equipmentCreateForm.make && !equipmentCreateForm.makeId);
+        const catalogEquipmentId = equipmentCreateForm.universalEquipmentId || equipmentCreateForm.modelId || '';
+        const isCustomModel = Boolean(equipmentCreateForm.model && !catalogEquipmentId);
+        const selectedBodyOfWater = locationBodiesOfWater.find((bow) => bow.id === equipmentCreateForm.bodyOfWaterId) || null;
+        const dateInstalled = dateInputToLocalDate(equipmentCreateForm.dateInstalled) || new Date();
+        const customerName = getCustomerName(customer) || location.customerName || '';
+
+        const equipmentId = "com_equ_" + uuidv4();
+        const newEquipment = {
+            id: equipmentId,
+            name: equipmentName,
+            type: equipmentCreateForm.type || '',
+            typeId: isCustomType ? '' : equipmentCreateForm.typeId || '',
+            make: equipmentCreateForm.make || '',
+            makeId: isCustomMake ? '' : equipmentCreateForm.makeId || '',
+            model: equipmentCreateForm.model || '',
+            modelId: isCustomModel ? '' : catalogEquipmentId,
+            universalEquipmentId: isCustomModel ? '' : catalogEquipmentId,
+            manualPdfLink: isCustomModel ? '' : equipmentCreateForm.manualPdfLink || '',
+            dateInstalled,
+            cleanFilterPressure: equipmentCreateForm.cleanFilterPressure === '' || !Number.isFinite(numericCleanFilterPressure)
+                ? null
+                : numericCleanFilterPressure,
+            serviceFrequency: equipmentCreateForm.needsService && equipmentCreateForm.serviceFrequency !== '' && Number.isFinite(numericServiceFrequency)
+                ? numericServiceFrequency
+                : null,
+            serviceFrequencyEvery: equipmentCreateForm.needsService ? equipmentCreateForm.serviceFrequencyEvery || 'Month' : null,
+            notes: equipmentCreateForm.notes,
+            customerId,
+            customerName,
+            serviceLocationId: location.id,
+            bodyOfWaterId: selectedBodyOfWater?.id || '',
+            lastServiceDate: null,
+            nextServiceDate: null,
+            isActive: true,
+            active: true,
+            dateUninstalled: null,
+            needsService: equipmentCreateForm.needsService,
+            status: EQUIPMENT_STATUS.OPERATIONAL,
+            currentPressure: null,
+        };
+
+        setSavingEquipmentCreate(true);
+        try {
+            await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), newEquipment);
+            try {
+                await createCustomEquipmentSuggestion(equipmentId, newEquipment, { isCustomType, isCustomMake, isCustomModel });
+            } catch (suggestionError) {
+                console.error("Error creating custom equipment suggestion: ", suggestionError);
+            }
+            await copyCatalogPartsToEquipment(equipmentId, catalogEquipmentId, newEquipment);
+
+            setEquipment((currentEquipment) => [...currentEquipment, newEquipment]);
+            setShowEquipmentCreate(false);
+            setEquipmentCreateForm(getDefaultEquipmentCreateForm(locationBodiesOfWater[0]?.id || ''));
+            toast.success('Equipment created.');
+        } catch (error) {
+            console.error("Error creating new equipment: ", error);
+            toast.error('Failed to create equipment.');
+        } finally {
+            setSavingEquipmentCreate(false);
+        }
+    };
+
     const startEquipmentMove = (eq) => {
+        setEditingEquipmentId('');
         setMovingEquipmentId(eq.id);
         setEquipmentMoveForm({
             serviceLocationId: eq.serviceLocationId || location.id,
             bodyOfWaterId: eq.bodyOfWaterId || '',
         });
+    };
+
+    const startEquipmentEdit = (eq) => {
+        setMovingEquipmentId('');
+        setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
+        setEditingEquipmentId(eq.id);
+        setEquipmentEditForm(getEquipmentEditForm(eq));
+    };
+
+    const closeEquipmentEdit = () => {
+        if (savingEquipmentEdit) return;
+        setEditingEquipmentId('');
+        setEquipmentEditForm(getEquipmentEditForm());
+    };
+
+    const updateEquipmentEditField = (field, value) => {
+        setEquipmentEditForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const handleSaveEquipmentEdit = async (event) => {
+        event.preventDefault();
+
+        if (!requirePermission("64", "update equipment")) return;
+        if (!selectedEditingEquipment?.id || !recentlySelectedCompany) return;
+
+        const dateInstalled = dateInputToLocalDate(equipmentEditForm.dateInstalled);
+        const lastServiceDate = dateInputToLocalDate(equipmentEditForm.lastServiceDate);
+        const nextServiceDate = equipmentEditForm.needsService
+            ? computeNextEquipmentServiceDate(
+                lastServiceDate,
+                equipmentEditForm.serviceFrequency,
+                equipmentEditForm.serviceFrequencyEvery
+            )
+            : null;
+
+        const equipmentUpdates = {
+            type: equipmentEditForm.type,
+            typeId: equipmentEditForm.typeId,
+            cleanFilterPressure: equipmentEditForm.cleanFilterPressure,
+            currentPressure: equipmentEditForm.currentPressure,
+            dateInstalled,
+            lastServiceDate,
+            nextServiceDate,
+            make: equipmentEditForm.make,
+            makeId: equipmentEditForm.makeId,
+            model: equipmentEditForm.model,
+            modelId: equipmentEditForm.modelId,
+            universalEquipmentId: equipmentEditForm.universalEquipmentId,
+            manualPdfLink: equipmentEditForm.manualPdfLink,
+            name: equipmentEditForm.name,
+            isActive: equipmentEditForm.isActive,
+            active: equipmentEditForm.isActive,
+            needsService: equipmentEditForm.needsService,
+            serviceFrequency: equipmentEditForm.needsService && equipmentEditForm.serviceFrequency !== ''
+                ? Number(equipmentEditForm.serviceFrequency)
+                : null,
+            serviceFrequencyEvery: equipmentEditForm.needsService ? equipmentEditForm.serviceFrequencyEvery || '' : '',
+            status: equipmentEditForm.status,
+            notes: equipmentEditForm.notes,
+        };
+
+        setSavingEquipmentEdit(true);
+        try {
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'equipment', selectedEditingEquipment.id),
+                {
+                    ...equipmentUpdates,
+                    updatedAt: serverTimestamp(),
+                }
+            );
+
+            setEquipment((currentEquipment) => currentEquipment.map((item) => (
+                item.id === selectedEditingEquipment.id ? { ...item, ...equipmentUpdates } : item
+            )));
+            setEditingEquipmentId('');
+            setEquipmentEditForm(getEquipmentEditForm());
+            toast.success('Equipment updated.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to update equipment.');
+        } finally {
+            setSavingEquipmentEdit(false);
+        }
     };
 
     const handleMoveServiceLocationChange = (event) => {
@@ -1828,17 +2437,18 @@ const LocationDetails = ({ location, customerId }) => {
             )}
         </InfoCard>
 
-        <InfoCard
-            title="Equipment"
-            actions={
-                <Link
-                    to={`/company/equipment/createNew/${customerId}/${location.id}`}
-                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
-                >
-                    + Add
-                </Link>
-            }
-        >
+	        <InfoCard
+	            title="Equipment"
+	            actions={
+	                <button
+	                    type="button"
+	                    onClick={openEquipmentCreate}
+	                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+	                >
+	                    + Add
+	                </button>
+	            }
+	        >
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
@@ -1964,30 +2574,445 @@ const LocationDetails = ({ location, customerId }) => {
                                                 </button>
                                             </div>
                                         </form>
-                                    ) : (
-                                        <button
-                                            type="button"
-                                            onClick={() => startEquipmentMove(eq)}
-                                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                        >
-                                            Move Equipment
-                                        </button>
-                                    )}
+                                        ) : (
+                                            <div className="flex flex-wrap gap-2">
+                                                {can("64") && (
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => startEquipmentEdit(eq)}
+                                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                                                    >
+                                                        Edit
+                                                    </button>
+                                                )}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => startEquipmentMove(eq)}
+                                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                                >
+                                                    Move Equipment
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
-                            </div>
-                        </li>
-                    ))}
+                            </li>
+                        ))}
 
                     {equipment.length === 0 && (
                         <p className="text-sm text-slate-500">None found.</p>
                     )}
-                </ul>
-            )}
-        </InfoCard>
+                    </ul>
+	            )}
+	        </InfoCard>
 
-    </div>
-    );
-};
+	        {showEquipmentCreate && (
+	            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+	                <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
+	                    <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+	                        <div className="min-w-0">
+	                            <h3 className="text-lg font-bold text-slate-950">Add Equipment</h3>
+	                            <p className="mt-1 truncate text-sm text-slate-500">
+	                                {getLocationLabel(location)}
+	                            </p>
+	                        </div>
+	                        <button
+	                            type="button"
+	                            onClick={closeEquipmentCreate}
+	                            disabled={savingEquipmentCreate}
+	                            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+	                        >
+	                            Close
+	                        </button>
+	                    </div>
+
+	                    <form onSubmit={handleCreateEquipment} className="space-y-5">
+	                        <section className="space-y-3 border-b border-slate-200 pb-5">
+	                            <h4 className="text-sm font-bold text-slate-800">Owner Details</h4>
+	                            <div className="grid gap-4 md:grid-cols-3">
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Customer
+	                                    <input
+	                                        value={getCustomerName(customer) || location.customerName || ''}
+	                                        readOnly
+	                                        className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700"
+	                                    />
+	                                </label>
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Service Location
+	                                    <input
+	                                        value={getLocationLabel(location)}
+	                                        readOnly
+	                                        className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700"
+	                                    />
+	                                </label>
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Body of Water
+	                                    <select
+	                                        value={equipmentCreateForm.bodyOfWaterId}
+	                                        onChange={(event) => updateEquipmentCreateField('bodyOfWaterId', event.target.value)}
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    >
+	                                        <option value="">Unassigned</option>
+	                                        {locationBodiesOfWater.map((bow) => (
+	                                            <option key={bow.id} value={bow.id}>
+	                                                {getBodyOfWaterLabel(bow)}
+	                                            </option>
+	                                        ))}
+	                                    </select>
+	                                </label>
+	                            </div>
+	                        </section>
+
+	                        <section className="space-y-3 border-b border-slate-200 pb-5">
+	                            <h4 className="text-sm font-bold text-slate-800">Equipment Specifications</h4>
+	                            <EquipmentCatalogPicker
+	                                value={equipmentCreateForm}
+	                                onChange={(nextEquipment) => setEquipmentCreateForm((current) => ({
+	                                    ...current,
+	                                    ...nextEquipment,
+	                                }))}
+	                                onModelSelected={(selectedModel) => setEquipmentCreateForm((current) => ({
+	                                    ...current,
+	                                    name: current.name.trim() ? current.name : selectedModel?.name || selectedModel?.model || '',
+	                                }))}
+	                                inputClassName="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                labelClassName="block text-xs font-semibold text-slate-600 mb-1"
+	                            />
+	                        </section>
+
+	                        <section className="space-y-3">
+	                            <h4 className="text-sm font-bold text-slate-800">Service & Installation</h4>
+	                            <div className="grid gap-4 md:grid-cols-3">
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Equipment Nickname
+	                                    <input
+	                                        required
+	                                        value={equipmentCreateForm.name}
+	                                        onChange={(event) => updateEquipmentCreateField('name', event.target.value)}
+	                                        placeholder="e.g., Main Pool Pump"
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    />
+	                                </label>
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Date Installed
+	                                    <input
+	                                        type="date"
+	                                        value={equipmentCreateForm.dateInstalled}
+	                                        onChange={(event) => updateEquipmentCreateField('dateInstalled', event.target.value)}
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    />
+	                                </label>
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Clean Filter Pressure (PSI)
+	                                    <input
+	                                        value={equipmentCreateForm.cleanFilterPressure}
+	                                        onChange={(event) => updateEquipmentCreateField('cleanFilterPressure', event.target.value)}
+	                                        placeholder="e.g., 25"
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    />
+	                                </label>
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                    Will This Equipment Need Service?
+	                                    <select
+	                                        value={equipmentCreateForm.needsService ? 'yes' : 'no'}
+	                                        onChange={(event) => updateEquipmentCreateField('needsService', event.target.value === 'yes')}
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    >
+	                                        <option value="no">No</option>
+	                                        <option value="yes">Yes</option>
+	                                    </select>
+	                                </label>
+
+	                                {equipmentCreateForm.needsService && (
+	                                    <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-2">
+	                                        Service Frequency
+	                                        <div className="grid gap-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+	                                            <input
+	                                                type="number"
+	                                                min="1"
+	                                                value={equipmentCreateForm.serviceFrequency}
+	                                                onChange={(event) => updateEquipmentCreateField('serviceFrequency', event.target.value)}
+	                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                            />
+	                                            <select
+	                                                value={equipmentCreateForm.serviceFrequencyEvery}
+	                                                onChange={(event) => updateEquipmentCreateField('serviceFrequencyEvery', event.target.value)}
+	                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                            >
+	                                                <option value="Day">Days</option>
+	                                                <option value="Week">Weeks</option>
+	                                                <option value="Month">Months</option>
+	                                                <option value="Year">Years</option>
+	                                            </select>
+	                                        </div>
+	                                    </label>
+	                                )}
+
+	                                <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-3">
+	                                    Notes
+	                                    <textarea
+	                                        value={equipmentCreateForm.notes}
+	                                        onChange={(event) => updateEquipmentCreateField('notes', event.target.value)}
+	                                        rows={4}
+	                                        placeholder="Add any relevant notes here..."
+	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                    />
+	                                </label>
+	                            </div>
+	                        </section>
+
+	                        <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+	                            <button
+	                                type="button"
+	                                onClick={closeEquipmentCreate}
+	                                disabled={savingEquipmentCreate}
+	                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+	                            >
+	                                Cancel
+	                            </button>
+	                            <button
+	                                type="submit"
+	                                disabled={savingEquipmentCreate}
+	                                className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+	                            >
+	                                {savingEquipmentCreate ? 'Creating...' : 'Create Equipment'}
+	                            </button>
+	                        </div>
+	                    </form>
+	                </div>
+	            </div>
+	        )}
+
+	        {editingEquipmentId && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+                    <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
+                        <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                            <div className="min-w-0">
+                                <h3 className="text-lg font-bold text-slate-950">Edit Equipment</h3>
+                                <p className="mt-1 truncate text-sm text-slate-500">
+                                    {selectedEditingEquipment?.name || selectedEditingEquipment?.type || 'Equipment'}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={closeEquipmentEdit}
+                                disabled={savingEquipmentEdit}
+                                className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <form onSubmit={handleSaveEquipmentEdit} className="space-y-4">
+                            <div className="grid gap-4 md:grid-cols-2">
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Name
+                                    <input
+                                        value={equipmentEditForm.name}
+                                        onChange={(event) => updateEquipmentEditField('name', event.target.value)}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Category
+                                    <input
+                                        value={equipmentEditForm.type}
+                                        onChange={(event) => setEquipmentEditForm((current) => ({
+                                            ...current,
+                                            type: event.target.value,
+                                            typeId: '',
+                                        }))}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Make
+                                    <input
+                                        value={equipmentEditForm.make}
+                                        onChange={(event) => setEquipmentEditForm((current) => ({
+                                            ...current,
+                                            make: event.target.value,
+                                            makeId: '',
+                                        }))}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Model
+                                    <input
+                                        value={equipmentEditForm.model}
+                                        onChange={(event) => setEquipmentEditForm((current) => ({
+                                            ...current,
+                                            model: event.target.value,
+                                            modelId: '',
+                                            universalEquipmentId: '',
+                                            manualPdfLink: '',
+                                        }))}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Date Installed
+                                    <input
+                                        type="date"
+                                        value={equipmentEditForm.dateInstalled}
+                                        onChange={(event) => updateEquipmentEditField('dateInstalled', event.target.value)}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                    Status
+                                    <select
+                                        value={equipmentEditForm.status}
+                                        onChange={(event) => updateEquipmentEditField('status', event.target.value)}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        {equipmentEditForm.status === EQUIPMENT_STATUS.REPLACED && (
+                                            <option value={EQUIPMENT_STATUS.REPLACED}>{EQUIPMENT_STATUS.REPLACED}</option>
+                                        )}
+                                        {EQUIPMENT_STATUS_OPTIONS.map((statusOption) => (
+                                            <option key={statusOption} value={statusOption}>
+                                                {statusOption}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+
+                                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={equipmentEditForm.needsService}
+                                        onChange={(event) => updateEquipmentEditField('needsService', event.target.checked)}
+                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    Needs Service
+                                </label>
+
+                                <label className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700">
+                                    <input
+                                        type="checkbox"
+                                        checked={equipmentEditForm.isActive}
+                                        onChange={(event) => updateEquipmentEditField('isActive', event.target.checked)}
+                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                    />
+                                    Active
+                                </label>
+
+                                {equipmentEditForm.needsService && (
+                                    <>
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Clean Filter Pressure
+                                            <input
+                                                value={equipmentEditForm.cleanFilterPressure}
+                                                onChange={(event) => updateEquipmentEditField('cleanFilterPressure', event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Current Pressure
+                                            <input
+                                                value={equipmentEditForm.currentPressure}
+                                                onChange={(event) => updateEquipmentEditField('currentPressure', event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Last Service Date
+                                            <input
+                                                type="date"
+                                                value={equipmentEditForm.lastServiceDate}
+                                                onChange={(event) => updateEquipmentEditField('lastServiceDate', event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Next Service Date
+                                            <input
+                                                type="date"
+                                                value={equipmentEditNextServiceDate}
+                                                readOnly
+                                                className="w-full rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm font-normal text-slate-700"
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Service Frequency
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                value={equipmentEditForm.serviceFrequency}
+                                                onChange={(event) => updateEquipmentEditField('serviceFrequency', event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </label>
+
+                                        <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                            Frequency Unit
+                                            <select
+                                                value={equipmentEditForm.serviceFrequencyEvery}
+                                                onChange={(event) => updateEquipmentEditField('serviceFrequencyEvery', event.target.value)}
+                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <option value="">Select</option>
+                                                <option value="Day">Day</option>
+                                                <option value="Week">Week</option>
+                                                <option value="Month">Month</option>
+                                                <option value="Year">Year</option>
+                                            </select>
+                                        </label>
+                                    </>
+                                )}
+
+                                <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-2">
+                                    Notes
+                                    <textarea
+                                        value={equipmentEditForm.notes}
+                                        onChange={(event) => updateEquipmentEditField('notes', event.target.value)}
+                                        rows={4}
+                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </label>
+                            </div>
+
+                            <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+                                <button
+                                    type="button"
+                                    onClick={closeEquipmentEdit}
+                                    disabled={savingEquipmentEdit}
+                                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={savingEquipmentEdit}
+                                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+                                >
+                                    {savingEquipmentEdit ? 'Saving...' : 'Save'}
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+
+        </div>
+        );
+    };
 
 // Leads Tab
 const LeadsTab = ({ customer }) => {
@@ -2894,7 +3919,9 @@ const HistoryTab = ({ customer }) => {
     const [bodyOfWaterOptions, setBodyOfWaterOptions] = useState([]);
     const [activeBodyOfWaterId, setActiveBodyOfWaterId] = useState('all');
     const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
+    const [timelineViewMode, setTimelineViewMode] = useState('timeline');
     const [showAllTimelineEvents, setShowAllTimelineEvents] = useState(false);
+    const [timelineExpanded, setTimelineExpanded] = useState(false);
     const [timelineRange, setTimelineRange] = useState(defaultHistoryDateRange);
     const [loading, setLoading] = useState(true);
     const { recentlySelectedCompany } = useContext(Context);
@@ -2903,7 +3930,10 @@ const HistoryTab = ({ customer }) => {
     const selectedBodyOfWater = bodyOfWaterOptions.find((body) => body.id === activeBodyOfWaterId);
     const bodyOfWaterScopedTimeline = activeBodyOfWaterId === 'all'
         ? timeline
-        : timeline.filter((event) => event.bodyOfWaterId === activeBodyOfWaterId);
+        : timeline.filter((event) => (
+            event.bodyOfWaterId === activeBodyOfWaterId ||
+            (event.type === 'note' && !event.bodyOfWaterId)
+        ));
     const dateScopedTimeline = bodyOfWaterScopedTimeline.filter((event) => isWithinDateRange(event.date, timelineRange));
     const visibleTimeline = selectedFilter.id === 'all'
         ? dateScopedTimeline
@@ -2912,8 +3942,6 @@ const HistoryTab = ({ customer }) => {
     const dateScopedExpiredJobs = expiredJobs.filter((expiredJob) => (
         isWithinDateRange(expiredJob.expiredAt || expiredJob.updatedAt || expiredJob.expiredAtMillis, timelineRange)
     ));
-    const displayedTimeline = showAllTimelineEvents ? visibleTimeline : visibleTimeline.slice(0, 5);
-    const hiddenTimelineCount = visibleTimeline.length - displayedTimeline.length;
 
     useEffect(() => {
         const fetchTimeline = async () => {
@@ -2931,7 +3959,12 @@ const HistoryTab = ({ customer }) => {
                     )),
                     getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers', customer.id, 'expiredJobs')),
                 ]);
-                setTimeline(events);
+                const profileNoteEvent = buildCustomerProfileNoteEvent(customer);
+                setTimeline(
+                    [...events, profileNoteEvent]
+                        .filter(Boolean)
+                        .sort((left, right) => toMillis(right.date) - toMillis(left.date))
+                );
                 setBodyOfWaterOptions(bodyOfWaterSnapshot.docs.map((item) => ({ id: item.id, ...item.data() })));
                 setExpiredJobs(
                     expiredJobsSnapshot.docs
@@ -2959,6 +3992,151 @@ const HistoryTab = ({ customer }) => {
             setActiveBodyOfWaterId('all');
         }
     }, [activeBodyOfWaterId, bodyOfWaterOptions]);
+
+    useEffect(() => {
+        if (!timelineExpanded) return undefined;
+
+        const originalOverflow = document.body.style.overflow;
+        const closeOnEscape = (event) => {
+            if (event.key === 'Escape') setTimelineExpanded(false);
+        };
+
+        document.body.style.overflow = 'hidden';
+        window.addEventListener('keydown', closeOnEscape);
+
+        return () => {
+            document.body.style.overflow = originalOverflow;
+            window.removeEventListener('keydown', closeOnEscape);
+        };
+    }, [timelineExpanded]);
+
+    const renderTimelineControls = () => (
+        <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-slate-50 p-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex w-fit overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+                {timelineViewOptions.map(({ id, label, Icon }) => (
+                    <button
+                        key={id}
+                        type="button"
+                        onClick={() => setTimelineViewMode(id)}
+                        className={[
+                            "inline-flex items-center gap-2 rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                            timelineViewMode === id
+                                ? "bg-slate-900 text-white shadow-sm"
+                                : "text-slate-600 hover:bg-slate-100 hover:text-slate-900",
+                        ].join(" ")}
+                    >
+                        <Icon className="h-4 w-4" aria-hidden="true" />
+                        {label}
+                    </button>
+                ))}
+            </div>
+
+            <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-white p-1 shadow-sm ring-1 ring-slate-200">
+                {timelineFilters.map((filter) => (
+                    <button
+                        key={filter.id}
+                        type="button"
+                        onClick={() => setActiveTimelineFilter(filter.id)}
+                        className={[
+                            "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition",
+                            activeTimelineFilter === filter.id
+                                ? "bg-slate-100 text-slate-900 shadow-sm"
+                                : "text-slate-600 hover:text-slate-900",
+                        ].join(" ")}
+                    >
+                        {filter.label}
+                    </button>
+                ))}
+            </div>
+        </div>
+    );
+
+    const renderTimelineEvents = (isExpanded = false) => {
+        if (visibleTimeline.length === 0) {
+            return (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                    No {selectedFilter.label.toLowerCase()} timeline events found in this date range{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
+                </div>
+            );
+        }
+
+        if (timelineViewMode === 'list') {
+            return (
+                <div className={isExpanded ? "space-y-3 pb-6" : "max-h-[68vh] space-y-3 overflow-y-auto pr-1"}>
+                    {visibleTimeline.map((event) => (
+                        <TimelineEventCard key={event.id} event={event} variant="list" />
+                    ))}
+                </div>
+            );
+        }
+
+        const eventsToDisplay = isExpanded || showAllTimelineEvents ? visibleTimeline : visibleTimeline.slice(0, 5);
+        const hiddenCount = visibleTimeline.length - eventsToDisplay.length;
+
+        return (
+            <div className="space-y-4">
+                <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
+                    {eventsToDisplay.map((event) => (
+                        <li key={event.id}>
+                            <TimelineEventCard event={event} />
+                        </li>
+                    ))}
+                </ol>
+                {hiddenCount > 0 && (
+                    <div className="flex justify-center">
+                        <button
+                            type="button"
+                            onClick={() => setShowAllTimelineEvents(true)}
+                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                        >
+                            Show more
+                        </button>
+                    </div>
+                )}
+            </div>
+        );
+    };
+
+    const renderTimelineContent = (isExpanded = false) => {
+        if (loading) {
+            return (
+                <div className="flex justify-center py-8">
+                    <ClipLoader size={30} />
+                </div>
+            );
+        }
+
+        if (timeline.length === 0) {
+            return (
+                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                    No service, job, note, chemistry, equipment, or water history found yet.
+                </div>
+            );
+        }
+
+        return (
+            <div className="space-y-6">
+                {renderTimelineControls()}
+                <CustomerTimelineGraph
+                    timeline={bodyOfWaterScopedTimeline}
+                    defaultRange={defaultHistoryDateRange}
+                    onRangeChange={setTimelineRange}
+                />
+                {renderTimelineEvents(isExpanded)}
+            </div>
+        );
+    };
+
+    const timelineCardActions = !loading && timeline.length > 0 ? (
+        <button
+            type="button"
+            onClick={() => setTimelineExpanded(true)}
+            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+        >
+            <ArrowsPointingOutIcon className="h-4 w-4" aria-hidden="true" />
+            Expand Timeline
+        </button>
+    ) : null;
 
     return (
         <div className="space-y-8">
@@ -3007,108 +4185,42 @@ const HistoryTab = ({ customer }) => {
 
             <InfoCard
                 title="Customer Timeline"
-                actions={
-                    !loading && timeline.length > 0 ? (
-                        <div className="flex max-w-full gap-1 overflow-x-auto rounded-xl bg-slate-100 p-1">
-                            {timelineFilters.map((filter) => (
-                                <button
-                                    key={filter.id}
-                                    type="button"
-                                    onClick={() => setActiveTimelineFilter(filter.id)}
-                                    className={[
-                                        "whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold transition",
-                                        activeTimelineFilter === filter.id
-                                            ? "bg-white text-slate-900 shadow-sm"
-                                            : "text-slate-600 hover:text-slate-900",
-                                    ].join(" ")}
-                                >
-                                    {filter.label}
-                                </button>
-                            ))}
-                        </div>
-                    ) : null
-                }
+                actions={timelineCardActions}
             >
-                {loading ? (
-                    <div className="flex justify-center py-8">
-                        <ClipLoader size={30} />
-                    </div>
-                ) : timeline.length === 0 ? (
-                    <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                        No service, job, note, chemistry, equipment, or water history found yet.
-                    </div>
-                ) : (
-                    <div className="space-y-6">
-                        <CustomerTimelineGraph
-                            timeline={bodyOfWaterScopedTimeline}
-                            defaultRange={defaultHistoryDateRange}
-                            onRangeChange={setTimelineRange}
-                        />
-                        {visibleTimeline.length === 0 ? (
-                            <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                                No {selectedFilter.label.toLowerCase()} timeline events found in this date range{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
-                            </div>
-                        ) : (
-                            <div className="space-y-4">
-                                <ol className="relative space-y-5 before:absolute before:left-[13px] before:top-2 before:h-[calc(100%-1rem)] before:w-px before:bg-slate-200">
-                                    {displayedTimeline.map((event) => {
-                                        const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
-                                        const content = (
-                                            <div className="relative flex gap-4">
-                                                <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
-                                                <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-                                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                                                        <div className="min-w-0">
-                                                            <p className="text-sm font-semibold text-slate-900">{event.title}</p>
-                                                            <p className="mt-1 text-xs font-medium text-slate-500">
-                                                                {format(event.date, 'PPP p')}
-                                                            </p>
-                                                        </div>
-                                                        <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
-                                                            {event.label}
-                                                        </span>
-                                                    </div>
-
-                                                    {event.subtitle && (
-                                                        <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
-                                                    )}
-
-                                                    {event.detail && (
-                                                        <p className="mt-2 text-sm text-slate-500 line-clamp-2">{event.detail}</p>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        );
-
-                                        return (
-                                            <li key={event.id}>
-                                                {event.target ? (
-                                                    <Link to={event.target} className="block hover:opacity-95 transition">
-                                                        {content}
-                                                    </Link>
-                                                ) : (
-                                                    content
-                                                )}
-                                            </li>
-                                        );
-                                    })}
-                                </ol>
-                                {hiddenTimelineCount > 0 && (
-                                    <div className="flex justify-center">
-                                        <button
-                                            type="button"
-                                            onClick={() => setShowAllTimelineEvents(true)}
-                                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                                        >
-                                            Show more
-                                        </button>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
-                )}
+                {renderTimelineContent(false)}
             </InfoCard>
+
+            {timelineExpanded && (
+                <section className="fixed inset-0 z-50 flex flex-col overflow-hidden bg-white p-4">
+                    <div className="flex shrink-0 flex-col gap-3 border-b border-slate-200 pb-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div className="min-w-0">
+                            <h2 className="text-lg font-bold text-slate-950">Customer Timeline</h2>
+                            <p className="mt-1 truncate text-sm text-slate-500">{getCustomerName(customer) || 'Customer'}</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            <button
+                                type="button"
+                                onClick={() => setTimelineExpanded(false)}
+                                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                                <ArrowsPointingInIcon className="h-4 w-4" aria-hidden="true" />
+                                Exit Full Screen
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setTimelineExpanded(false)}
+                                aria-label="Close customer timeline"
+                                className="inline-flex h-10 w-10 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 transition hover:bg-slate-50 hover:text-slate-900"
+                            >
+                                <XMarkIcon className="h-5 w-5" aria-hidden="true" />
+                            </button>
+                        </div>
+                    </div>
+                    <div className="min-h-0 flex-1 overflow-y-auto py-5 pr-1">
+                        {renderTimelineContent(true)}
+                    </div>
+                </section>
+            )}
             <InfoCard title="Expired Jobs">
                 {loading ? (
                     <div className="flex justify-center py-6">
@@ -3636,6 +4748,8 @@ export default function CustomerDetails() {
                                 </div>
                             </dl>
                         </div>
+
+                        <CustomerNotesSection customer={customer} compact />
                     </aside>
 
                     <main className="min-w-0 space-y-6">

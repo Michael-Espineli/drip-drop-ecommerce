@@ -21,6 +21,7 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
+import { appAlert } from "../../../utils/appDialog";
 
 const SERVICE_STOP_CATEGORY_OPTIONS = [
     {
@@ -826,17 +827,17 @@ const CreateNewServiceStop = () => {
         const activeServiceLocation = serviceLocation;
 
         if (!selectedUser) {
-            alert("Please select a technician.");
+            await appAlert("Please select a technician.");
             return;
         }
 
         if (!activeCustomer?.id || !activeServiceLocation?.id) {
-            alert("Please select a customer and service location.");
+            await appAlert("Please select a customer and service location.");
             return;
         }
 
         if (jobId && selectedCategory.id === "jobVisit" && selectedTasks.length === 0) {
-            alert("Please select at least one task for the job stop.");
+            await appAlert("Please select at least one task for the job stop.");
             return;
         }
 

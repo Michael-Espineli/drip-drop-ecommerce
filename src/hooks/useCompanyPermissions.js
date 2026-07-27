@@ -1,5 +1,6 @@
 import { useContext, useCallback } from "react";
 import { Context } from "../context/AuthContext";
+import { appAlert } from "../utils/appDialog";
 
 export default function useCompanyPermissions() {
   const {
@@ -16,7 +17,10 @@ export default function useCompanyPermissions() {
 
   const requirePermission = useCallback((permissionId, action = "perform this action") => {
     if (can(permissionId)) return true;
-    alert(`You do not have permission to ${action}.`);
+    appAlert({
+      title: "Permission Required",
+      message: `You do not have permission to ${action}.`,
+    });
     return false;
   }, [can]);
 

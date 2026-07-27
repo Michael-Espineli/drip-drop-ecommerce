@@ -6,6 +6,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { PurchasedItem } from '../../../utils/models/PurchasedItem';
 import { format } from "date-fns";
 import * as XLSX from "xlsx";
+import { appAlert } from "../../../utils/appDialog";
 
 const MURDOCK_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
 
@@ -282,7 +283,7 @@ const PurchaseListView = () => {
       XLSX.writeFile(wb, fileName);
     } catch (e) {
       console.error("Excel export failed:", e);
-      alert("Excel export failed. Check console for details.");
+      appAlert("Excel export failed. Check console for details.");
     }
   };
   const shortDate = (date) => {

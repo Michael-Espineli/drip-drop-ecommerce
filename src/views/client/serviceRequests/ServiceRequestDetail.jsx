@@ -5,6 +5,7 @@ import { doc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import CompanySummaryCard, { getCompanySummary } from './CompanySummaryCard';
+import { appConfirm } from '../../../utils/appDialog';
 
 const dateFromFirestore = (value) => {
     if (!value) return null;
@@ -103,14 +104,20 @@ const ServiceRequestDetail = () => {
     }, [requestId, user, navigate]);
 
     const handleDelete = async () => {
-        if (window.confirm('Are you sure you want to delete this service request?')) {
-            try {
-                await deleteDoc(doc(db, 'homeownerServiceRequests', requestId));
-                navigate('/client/service-requests');
-            } catch (err) {
-                console.error("Error deleting document: ", err);
-                setError('Failed to delete the request.');
-            }
+        const confirmed = await appConfirm({
+            title: 'Delete Service Request',
+            message: 'Are you sure you want to delete this service request?',
+            confirmLabel: 'Delete Request',
+            variant: 'danger',
+        });
+        if (!confirmed) return;
+
+        try {
+            await deleteDoc(doc(db, 'homeownerServiceRequests', requestId));
+            navigate('/client/service-requests');
+        } catch (err) {
+            console.error("Error deleting document: ", err);
+            setError('Failed to delete the request.');
         }
     };
 

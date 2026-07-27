@@ -29,6 +29,7 @@ import {
   normalizeSuggestedWorkTier,
   suggestedWorkIdForSource,
 } from '../../../utils/models/SuggestedWork';
+import { appAlert, appConfirm } from '../../../utils/appDialog';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
@@ -243,11 +244,15 @@ const RepairRequestDetailView = () => {
     if (!requirePermission("34", "update repair requests")) return;
     if (!recentlySelectedCompany) return;
     if (!repairRequest.customerId) {
-      alert("Attach this request to a customer before converting it to suggested work.");
+      await appAlert("Attach this request to a customer before converting it to suggested work.");
       return;
     }
 
-    const ok = window.confirm("Move this repair request to Suggested Work? It will stay linked here and will be available from the company suggested work page.");
+    const ok = await appConfirm({
+      title: "Move Repair Request",
+      message: "Move this repair request to Suggested Work? It will stay linked here and will be available from the company suggested work page.",
+      confirmLabel: "Move Request",
+    });
     if (!ok) return;
 
     try {
@@ -327,10 +332,10 @@ const RepairRequestDetailView = () => {
         ...prev,
         status: REPAIR_REQUEST_STATUS.SUGGESTED_WORK,
       }));
-      alert("Repair request moved to Suggested Work.");
+      appAlert("Repair request moved to Suggested Work.");
     } catch (error) {
       console.error("Error converting repair request to suggested work:", error);
-      alert("Failed to convert this repair request to suggested work.");
+      appAlert("Failed to convert this repair request to suggested work.");
     } finally {
       setConvertingToSuggestedWork(false);
     }
@@ -367,7 +372,7 @@ const RepairRequestDetailView = () => {
           });
         } catch (equipmentError) {
           console.error("Error updating connected equipment status:", equipmentError);
-          alert("Repair request status was updated, but the connected equipment status could not be saved.");
+          appAlert("Repair request status was updated, but the connected equipment status could not be saved.");
         }
       }
 
@@ -377,7 +382,7 @@ const RepairRequestDetailView = () => {
       }));
     } catch (error) {
       console.error("Error updating repair request status:", error);
-      alert("Failed to update repair request status.");
+      appAlert("Failed to update repair request status.");
       setFormData((prev) => ({
         ...prev,
         status: previousStatus,
@@ -402,7 +407,7 @@ const RepairRequestDetailView = () => {
       });
     } catch (error) {
       console.error("Error updating connected equipment status:", error);
-      alert("Failed to update connected equipment status.");
+      appAlert("Failed to update connected equipment status.");
     } finally {
       setSavingEquipmentStatus(false);
     }
@@ -429,7 +434,7 @@ const RepairRequestDetailView = () => {
       }));
     } catch (error) {
       console.error("Error updating description:", error);
-      alert("Failed to save description.");
+      appAlert("Failed to save description.");
     } finally {
       setSavingDescription(false);
     }
@@ -470,7 +475,7 @@ const RepairRequestDetailView = () => {
       setPhotoFiles([]);
     } catch (error) {
       console.error("Error adding repair request photos:", error);
-      alert("Failed to add photos to this repair request.");
+      appAlert("Failed to add photos to this repair request.");
     } finally {
       setUploadingPhotos(false);
     }
@@ -519,7 +524,7 @@ const RepairRequestDetailView = () => {
       setSelectedJobId("");
     } catch (error) {
       console.error("Error connecting job to repair request:", error);
-      alert("Failed to connect the job to this repair request.");
+      appAlert("Failed to connect the job to this repair request.");
     } finally {
       setConnectingJob(false);
     }
@@ -528,7 +533,12 @@ const RepairRequestDetailView = () => {
   const handleDelete = async () => {
     if (!requirePermission("36", "delete repair requests")) return;
 
-    const confirmed = window.confirm('Are you sure you want to delete this repair request?');
+    const confirmed = await appConfirm({
+      title: 'Delete Repair Request',
+      message: 'Are you sure you want to delete this repair request?',
+      confirmLabel: 'Delete Request',
+      variant: 'danger',
+    });
     if (!confirmed) return;
 
     try {
@@ -537,7 +547,7 @@ const RepairRequestDetailView = () => {
       navigate('/company/repair-requests');
     } catch (error) {
       console.error('Error deleting repair request:', error);
-      alert('Failed to delete repair request.');
+      appAlert('Failed to delete repair request.');
     }
   };
 

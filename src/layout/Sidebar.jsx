@@ -20,6 +20,7 @@ import {
     isActionableOperationsJob,
     isFinishedOutstandingJob,
 } from '../utils/jobStatusFilters';
+import { isOpenWorkOffer } from '../utils/workOffers';
 
 const normalizeBookmarkPaths = (savedBookmarks) => (
     Array.isArray(savedBookmarks)
@@ -68,7 +69,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -138,11 +139,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0 });
+            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
             return;
         }
 
-        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0 }));
+        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 }));
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -173,6 +174,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         );
 
         const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+        const workOffersRef = collection(db, "companies", recentlySelectedCompany, "workOffers");
 
         const finishedJobsQuery = query(
             workOrdersRef,
@@ -182,6 +184,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         const draftOperationJobsQuery = query(
             workOrdersRef,
             where("operationStatus", "==", JOB_OPERATION_STATUS.draft)
+        );
+
+        const draftBillingJobsQuery = query(
+            workOrdersRef,
+            where("billingStatus", "==", JOB_BILLING_STATUS.draft)
         );
 
         const acceptedJobsQuery = query(
@@ -285,6 +292,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
         const actionableJobSources = {
             draftOperation: new Set(),
+            draftBilling: new Set(),
             acceptedNotScheduled: new Set(),
         };
 
@@ -298,6 +306,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
             const actionableJobIds = new Set([
                 ...actionableJobSources.draftOperation,
+                ...actionableJobSources.draftBilling,
                 ...actionableJobSources.acceptedNotScheduled,
             ]);
 
@@ -309,6 +318,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             actionableJobSources[source] = new Set();
             const actionableJobIds = new Set([
                 ...actionableJobSources.draftOperation,
+                ...actionableJobSources.draftBilling,
                 ...actionableJobSources.acceptedNotScheduled,
             ]);
             setCounts(prev => ({ ...prev, actionableJobs: actionableJobIds.size }));
@@ -336,10 +346,32 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             error => handleActionableJobError("draftOperation", error)
         );
 
+        const unsubscribeDraftBillingJobs = onSnapshot(
+            draftBillingJobsQuery,
+            snapshot => updateActionableJobCount("draftBilling", snapshot),
+            error => handleActionableJobError("draftBilling", error)
+        );
+
         const unsubscribeAcceptedJobs = onSnapshot(
             acceptedJobsQuery,
             snapshot => updateActionableJobCount("acceptedNotScheduled", snapshot),
             error => handleActionableJobError("acceptedNotScheduled", error)
+        );
+
+        const unsubscribeOfferedWork = onSnapshot(
+            workOffersRef,
+            snapshot => {
+                const offeredWork = snapshot.docs
+                    .map((offerDoc) => ({ id: offerDoc.id, ...offerDoc.data() }))
+                    .filter(isOpenWorkOffer)
+                    .length;
+
+                setCounts(prev => ({ ...prev, offeredWork }));
+            },
+            error => {
+                console.error("Error loading offered work count:", error);
+                setCounts(prev => ({ ...prev, offeredWork: 0 }));
+            }
         );
 
         return () => {
@@ -352,7 +384,9 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             unsubscribeExternalRepairRequests();
             unsubscribeFinishedJobs();
             unsubscribeDraftOperationJobs();
+            unsubscribeDraftBillingJobs();
             unsubscribeAcceptedJobs();
+            unsubscribeOfferedWork();
         };
     }, [recentlySelectedCompany, user, dataBaseUser, companyRoleLoaded, companyUserAccess, featureFlagsLoaded, isFeatureEnabled]);
 
@@ -451,6 +485,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                                     ? counts.finishedJobs
                                                                     : item.title === 'Jobs'
                                                                         ? counts.actionableJobs
+                                                                        : item.title === 'Offered Work'
+                                                                            ? counts.offeredWork
                                                                         : 0;
 
                                         return (

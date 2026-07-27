@@ -7,6 +7,7 @@ import { Context } from '../../../context/AuthContext';
 import { ArrowLeftIcon, TrashIcon, WrenchScrewdriverIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
 import { format } from 'date-fns';
 import { displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
+import { appConfirm } from '../../../utils/appDialog';
 
 const formatEquipmentDate = (value) => {
     if (!value) return 'N/A';
@@ -93,7 +94,13 @@ const EquipmentDetailView = () => {
     }, [equipmentId, user]);
 
     const handleDelete = async () => {
-        if (!window.confirm("Are you sure you want to delete this piece of equipment?")) return;
+        const confirmed = await appConfirm({
+            title: "Delete Equipment",
+            message: "Are you sure you want to delete this piece of equipment?",
+            confirmLabel: "Delete Equipment",
+            variant: "danger",
+        });
+        if (!confirmed) return;
 
         setIsDeleting(true);
         setError(null);

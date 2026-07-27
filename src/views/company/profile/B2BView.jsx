@@ -7,6 +7,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AssociatedBusiness } from '../../../utils/models/AssociatedBusiness';
 import { Link } from 'react-router-dom';
 import { MultiLocationMap } from '../../components/MultiLocationMap';
+import { appAlert } from '../../../utils/appDialog';
 
 const ReviewCard = lazy(() => import('../../components/ReviewCard'));
 
@@ -133,7 +134,7 @@ const B2BView = ({ companyData }) => {
 
     const handleSaveAssociatedBusiness = async () => {
         if (!recentlySelectedCompany || !companyData.id) {
-            alert("Cannot save associated business. A company must be selected and the viewed page must be a valid company.");
+            await appAlert("Cannot save associated business. A company must be selected and the viewed page must be a valid company.");
             return;
         }
 
@@ -146,28 +147,28 @@ const B2BView = ({ companyData }) => {
         try {
             const docRef = doc(db, 'companies', recentlySelectedCompany, 'business', companyData.id);
             await setDoc(docRef, associatedBusinessData);
-            alert('Successfully saved as an associated business!');
+            appAlert('Successfully saved as an associated business!');
             setBusinesses([AssociatedBusiness.fromFirestore({ data: () => associatedBusinessData })]);
         } catch (error) {
             console.error("Error saving associated business: ", error);
-            alert('Failed to save associated business.');
+            appAlert('Failed to save associated business.');
         }
     };
 
     const handleUnsaveAssociatedBusiness = async () => {
         if (!recentlySelectedCompany || businesses.length === 0) {
-            alert("Cannot unsave associated business. A company must be selected and the viewed page must be a valid company.");
+            await appAlert("Cannot unsave associated business. A company must be selected and the viewed page must be a valid company.");
             return;
         }
 
         try {
             const docRef = doc(db, 'companies', recentlySelectedCompany, 'business', companyData.id);
             await deleteDoc(docRef);
-            alert('Successfully unsaved as an associated business!');
+            appAlert('Successfully unsaved as an associated business!');
             setBusinesses([]);
         } catch (error) {
             console.error("Error unsaving associated business: ", error);
-            alert('Failed to unsave associated business.');
+            appAlert('Failed to unsave associated business.');
         }
     };
 

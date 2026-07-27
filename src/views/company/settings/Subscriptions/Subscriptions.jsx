@@ -6,6 +6,7 @@ import { db } from "../../../../utils/config";
 import { format } from 'date-fns';
 import { Context } from "../../../../context/AuthContext";
 import toast from 'react-hot-toast';
+import { appConfirm } from "../../../../utils/appDialog";
 
 const functions = getFunctions();
 
@@ -132,24 +133,30 @@ export default function Subscriptions() {
             return;
         }
 
-        if (window.confirm("Are you sure you want to cancel your subscription? This action will take effect at the end of your current billing period.")) {
-            const cancelStripeSubscription = httpsCallable(functions, 'cancelStripeSubscription');
-            const toastId = toast.loading('Canceling subscription...');
+        const confirmed = await appConfirm({
+            title: "Cancel Subscription",
+            message: "Are you sure you want to cancel your subscription? This action will take effect at the end of your current billing period.",
+            confirmLabel: "Cancel Subscription",
+            variant: "danger",
+        });
+        if (!confirmed) return;
 
-            try {
-                await cancelStripeSubscription({ subscriptionId: activeSubscription.stripeSubscriptionId });
-                toast.success('Subscription canceled. Your plan remains active until the end of the billing period.', { id: toastId, duration: 6000 });
-                // Refetch data to show the updated status
-                fetchActiveSubscription().then(subscription => {
-                    if(subscription) {
-                        // Clear upcoming invoice as there won't be one for a canceled plan.
-                        setUpcomingInvoice(null);
-                    }
-                });
-            } catch (error) {
-                console.error("Cancellation Error:", error);
-                toast.error(`Failed to cancel subscription: ${error.message}`, { id: toastId });
-            }
+        const cancelStripeSubscription = httpsCallable(functions, 'cancelStripeSubscription');
+        const toastId = toast.loading('Canceling subscription...');
+
+        try {
+            await cancelStripeSubscription({ subscriptionId: activeSubscription.stripeSubscriptionId });
+            toast.success('Subscription canceled. Your plan remains active until the end of the billing period.', { id: toastId, duration: 6000 });
+            // Refetch data to show the updated status
+            fetchActiveSubscription().then(subscription => {
+                if(subscription) {
+                    // Clear upcoming invoice as there won't be one for a canceled plan.
+                    setUpcomingInvoice(null);
+                }
+            });
+        } catch (error) {
+            console.error("Cancellation Error:", error);
+            toast.error(`Failed to cancel subscription: ${error.message}`, { id: toastId });
         }
     };
 

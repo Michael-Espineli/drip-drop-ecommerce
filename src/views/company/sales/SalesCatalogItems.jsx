@@ -25,6 +25,7 @@ import {
   saveSalesCatalogItem,
 } from '../../../utils/sales/salesFirestore';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import { appConfirm } from '../../../utils/appDialog';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -367,7 +368,12 @@ const SalesCatalogItems = () => {
   };
 
   const archiveItem = async (item) => {
-    if (!window.confirm(`Archive ${item.name}?`)) return;
+    const confirmed = await appConfirm({
+      title: 'Archive Catalog Item',
+      message: `Archive ${item.name}?`,
+      confirmLabel: 'Archive Item',
+    });
+    if (!confirmed) return;
 
     try {
       await saveSalesCatalogItem(

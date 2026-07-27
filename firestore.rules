@@ -519,7 +519,15 @@ service cloud.firestore {
 
     match /universal/{document=**} {
       allow read: if signedIn();
-      allow write: if false;
+      allow create, update, delete: if isDripDropAdmin();
+    }
+
+    match /universalEquipmentSuggestions/{suggestionId} {
+      allow create: if signedIn()
+        && request.resource.data.companyId is string
+        && hasCompanyAccess(request.resource.data.companyId)
+        && request.resource.data.status == "New";
+      allow read, update, delete: if isDripDropAdmin();
     }
 
     match /featureFlags/{flagId} {

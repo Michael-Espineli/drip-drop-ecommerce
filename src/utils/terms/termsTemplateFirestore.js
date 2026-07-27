@@ -9,6 +9,7 @@ import {
   setDoc,
   updateDoc,
   deleteDoc,
+  writeBatch,
 } from 'firebase/firestore';
 import { db } from '../config';
 import {
@@ -59,6 +60,59 @@ export const saveTermsTemplate = async (companyId, termsTemplate) => {
   const template = termsTemplate instanceof TermsTemplate ? termsTemplate : new TermsTemplate(termsTemplate);
   await setDoc(termsTemplateDoc(companyId, template.id), template.toFirestore(), { merge: true });
   return template;
+};
+
+export const getNextTermsTemplateDuplicateName = (sourceName, existingTemplates = []) => {
+  const baseName = String(sourceName || '').trim() || 'Terms Template';
+  const existingNames = new Set(
+    existingTemplates
+      .map((template) => String(template?.name || '').trim())
+      .filter(Boolean)
+  );
+
+  let duplicateIndex = 1;
+  let candidateName = `${baseName} ${duplicateIndex}`;
+
+  while (existingNames.has(candidateName)) {
+    duplicateIndex += 1;
+    candidateName = `${baseName} ${duplicateIndex}`;
+  }
+
+  return candidateName;
+};
+
+export const duplicateTermsTemplate = async (companyId, sourceTemplateId) => {
+  const [sourceTemplate, sourceTerms, existingTemplates] = await Promise.all([
+    getTermsTemplate(companyId, sourceTemplateId),
+    getTerms(companyId, sourceTemplateId),
+    getTermsTemplates(companyId),
+  ]);
+
+  if (!sourceTemplate) {
+    throw new Error('Terms template not found.');
+  }
+
+  const now = new Date();
+  const duplicatedTemplate = new TermsTemplate({
+    name: getNextTermsTemplateDuplicateName(sourceTemplate.name, existingTemplates),
+    description: sourceTemplate.description,
+    content: sourceTemplate.content,
+    category: sourceTemplate.category,
+    createdAt: now,
+    updatedAt: now,
+  });
+  const duplicatedTerms = sourceTerms.map((term) => new ContractTerm({
+    description: term.description,
+  }));
+
+  const batch = writeBatch(db);
+  batch.set(termsTemplateDoc(companyId, duplicatedTemplate.id), duplicatedTemplate.toFirestore());
+  duplicatedTerms.forEach((term) => {
+    batch.set(termDoc(companyId, duplicatedTemplate.id, term.id), term.toFirestore());
+  });
+
+  await batch.commit();
+  return duplicatedTemplate;
 };
 
 export const updateTermsTemplate = (companyId, templateId, fields) =>

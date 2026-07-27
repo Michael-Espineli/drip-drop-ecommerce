@@ -1,3 +1,5 @@
+import { appPrompt } from "./appDialog";
+
 const replacementTypes = new Set(["replace", "replacement"]);
 
 export const isReplacementTask = (task = {}) =>
@@ -17,24 +19,47 @@ export const hasReplacementInstallSource = (task = {}) =>
     task.installedEquipmentName
   );
 
-export const promptForReplacementInstallDetails = (task = {}) => {
+export const promptForReplacementInstallDetails = async (task = {}) => {
   if (!isReplacementTask(task) || hasReplacementInstallSource(task)) return {};
 
   const oldEquipmentLabel = task.equipmentName || task.name || "this equipment";
-  const installedEquipmentName = window.prompt(
-    `What equipment is being installed to replace ${oldEquipmentLabel}?`
-  );
+  const installedEquipmentName = await appPrompt({
+    title: "Replacement Equipment",
+    message: `What equipment is being installed to replace ${oldEquipmentLabel}?`,
+    inputLabel: "Installed equipment",
+    confirmLabel: "Continue",
+  });
 
   if (!installedEquipmentName || !installedEquipmentName.trim()) return null;
 
-  const installedEquipmentType =
-    window.prompt("Equipment type", task.installedEquipmentType || task.equipmentType || "Pump") || "";
-  const installedEquipmentMake =
-    window.prompt("Make", task.installedEquipmentMake || task.equipmentMake || "") || "";
-  const installedEquipmentModel =
-    window.prompt("Model", task.installedEquipmentModel || task.equipmentModel || "") || "";
-  const installedEquipmentNotes =
-    window.prompt("Install notes", task.installedEquipmentNotes || "") || "";
+  const installedEquipmentType = await appPrompt({
+    title: "Replacement Equipment",
+    inputLabel: "Equipment type",
+    defaultValue: task.installedEquipmentType || task.equipmentType || "Pump",
+    required: false,
+    confirmLabel: "Continue",
+  }) || "";
+  const installedEquipmentMake = await appPrompt({
+    title: "Replacement Equipment",
+    inputLabel: "Make",
+    defaultValue: task.installedEquipmentMake || task.equipmentMake || "",
+    required: false,
+    confirmLabel: "Continue",
+  }) || "";
+  const installedEquipmentModel = await appPrompt({
+    title: "Replacement Equipment",
+    inputLabel: "Model",
+    defaultValue: task.installedEquipmentModel || task.equipmentModel || "",
+    required: false,
+    confirmLabel: "Continue",
+  }) || "";
+  const installedEquipmentNotes = await appPrompt({
+    title: "Replacement Equipment",
+    inputLabel: "Install notes",
+    defaultValue: task.installedEquipmentNotes || "",
+    required: false,
+    confirmLabel: "Done",
+  }) || "";
 
   return {
     installedEquipmentName: installedEquipmentName.trim(),

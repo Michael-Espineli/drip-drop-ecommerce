@@ -17,6 +17,7 @@ import {
   serviceStopTypeMatchesUseCase,
   suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
+import { appConfirm } from '../../../utils/appDialog';
 
 const functions = getFunctions();
 // Reusable form components
@@ -903,9 +904,12 @@ const RouteBuilder = () => {
         ...(Array.isArray(editingTemplate.rssIds) ? editingTemplate.rssIds : []),
       ].filter(Boolean)),
     ];
-    const ok = window.confirm(
-      `Delete this route, ${rssIds.length} RSS record${rssIds.length === 1 ? "" : "s"}, and all linked service stops? This cannot be undone.`
-    );
+    const ok = await appConfirm({
+      title: "Delete Route",
+      message: `Delete this route, ${rssIds.length} RSS record${rssIds.length === 1 ? "" : "s"}, and all linked service stops? This cannot be undone.`,
+      confirmLabel: "Delete Route",
+      variant: "danger",
+    });
 
     if (!ok) return;
 

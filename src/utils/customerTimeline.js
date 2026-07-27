@@ -197,7 +197,7 @@ const buildCustomerNoteEvent = (note) => ({
   label: note.resolved ? "Resolved Note" : "Customer Note",
   title: note.bodyOfWaterName ? `Customer note - ${note.bodyOfWaterName}` : "Customer note",
   subtitle: compact([note.userName || note.authorName, note.resolved ? "Resolved" : "Open"]).join(" • "),
-  detail: note.note || note.comment || "",
+  detail: note.note || note.comment || note.text || "",
   date: validDate(note.date || note.createdAt || note.dateMillis || note.createdAtMillis),
   bodyOfWaterId: note.bodyOfWaterId || "",
   serviceLocationId: note.serviceLocationId || "",

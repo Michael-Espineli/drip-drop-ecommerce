@@ -3,17 +3,19 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { deleteDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
-import { ArrowLeftIcon, CheckIcon, PencilIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, CheckIcon, DocumentDuplicateIcon, PencilIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
 import {
     deleteContractTerm,
+    duplicateTermsTemplate,
     getTerms,
     getTermsTemplate,
     saveContractTerm,
     termsTemplateDoc,
     updateTermsTemplate,
 } from '../../../utils/terms/termsTemplateFirestore';
+import { appConfirm } from '../../../utils/appDialog';
 
 const templateForm = (template = {}) => ({
     name: template.name || '',
@@ -28,6 +30,14 @@ const clauseDrafts = (clauses = []) => clauses.map((clause) => ({
 
 const newClauseDraft = () => new ContractTerm({ description: '' });
 
+const DetailStatCard = ({ label, value, helper }) => (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-1 truncate text-sm text-slate-500" title={helper}>{helper}</p>
+    </div>
+);
+
 const TermsTemplateDetail = () => {
     const { templateId } = useParams();
     const navigate = useNavigate();
@@ -39,6 +49,7 @@ const TermsTemplateDetail = () => {
     const [isLoading, setIsLoading] = useState(true);
     const [isEditing, setIsEditing] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isDuplicating, setIsDuplicating] = useState(false);
     const [editedTemplate, setEditedTemplate] = useState(templateForm());
     const [editedClauses, setEditedClauses] = useState([]);
 
@@ -140,15 +151,43 @@ const TermsTemplateDetail = () => {
     const handleDelete = async () => {
         if (!isEditing || !requirePermission("886", "delete terms templates")) return;
 
-        if (window.confirm('Are you sure you want to delete this template and all its terms?')) {
-            try {
-                await deleteDoc(termsTemplateDoc(recentlySelectedCompany, templateId));
-                toast.success("Template deleted successfully!");
-                navigate("/company/settings/terms-templates");
-            } catch (error) {
-                console.error("Error deleting template: ", error);
-                toast.error("Failed to delete template.");
-            }
+        const confirmed = await appConfirm({
+            title: 'Delete Terms Template',
+            message: 'Are you sure you want to delete this template and all its terms?',
+            confirmLabel: 'Delete Template',
+            variant: 'danger',
+        });
+        if (!confirmed) return;
+
+        try {
+            await deleteDoc(termsTemplateDoc(recentlySelectedCompany, templateId));
+            toast.success("Template deleted successfully!");
+            navigate("/company/settings/terms-templates");
+        } catch (error) {
+            console.error("Error deleting template: ", error);
+            toast.error("Failed to delete template.");
+        }
+    };
+
+    const handleDuplicate = async () => {
+        if (!requirePermission("882", "create terms templates")) return;
+
+        if (!recentlySelectedCompany) {
+            toast.error("Select a company before duplicating a template.");
+            return;
+        }
+
+        setIsDuplicating(true);
+
+        try {
+            const duplicatedTemplate = await duplicateTermsTemplate(recentlySelectedCompany, templateId);
+            toast.success(`${duplicatedTemplate.name} created.`);
+            navigate(`/company/settings/terms-templates/${duplicatedTemplate.id}`);
+        } catch (error) {
+            console.error("Error duplicating template: ", error);
+            toast.error(error.message || "Failed to duplicate template.");
+        } finally {
+            setIsDuplicating(false);
         }
     };
 
@@ -169,8 +208,8 @@ const TermsTemplateDetail = () => {
 
     if (isLoading) {
         return (
-            <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-                <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
+            <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+                <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
                     Loading...
                 </div>
             </div>
@@ -182,22 +221,25 @@ const TermsTemplateDetail = () => {
     }
 
     return (
-        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-            <div className="w-full space-y-4">
+        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+            <div className="w-full space-y-6">
                 <Link
                     to="/company/settings/terms-templates"
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                    className="app-back-link"
                 >
-                    <ArrowLeftIcon className="h-5 w-5" />
+                    <ArrowLeftIcon className="h-4 w-4" />
                     Back to Templates
                 </Link>
 
                 {isEditing ? (
-                    <form onSubmit={handleUpdate} className="space-y-4">
+                    <form onSubmit={handleUpdate} className="space-y-6">
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                                 <div>
-                                    <h1 className="text-3xl font-bold text-slate-950">Edit Template</h1>
+                                    <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                                        Editing Terms Template
+                                    </span>
+                                    <h1 className="mt-3 text-3xl font-bold text-slate-950">Edit Template</h1>
                                     <p className="mt-1 text-sm text-slate-500">Update the saved default content and terms lines.</p>
                                 </div>
                             </div>
@@ -317,19 +359,41 @@ const TermsTemplateDetail = () => {
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                                 <div className="min-w-0">
-                                    <h1 className="text-3xl font-bold text-slate-950">{template.name}</h1>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                                            Terms Template
+                                        </span>
+                                        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                                            {clauses.length} term{clauses.length === 1 ? '' : 's'}
+                                        </span>
+                                    </div>
+                                    <h1 className="mt-3 text-3xl font-bold text-slate-950">{template.name}</h1>
                                     <p className="mt-2 max-w-3xl text-sm text-slate-500">{template.description || 'No description'}</p>
                                 </div>
-                                {can("884") && (
-                                    <button
-                                        type="button"
-                                        onClick={beginEditing}
-                                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                                    >
-                                        <PencilIcon className="h-5 w-5" />
-                                        Edit Template
-                                    </button>
-                                )}
+                                <div className="flex flex-wrap gap-2">
+                                    {can("882") && (
+                                        <button
+                                            type="button"
+                                            onClick={handleDuplicate}
+                                            disabled={isDuplicating}
+                                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <DocumentDuplicateIcon className="h-5 w-5" />
+                                            {isDuplicating ? 'Duplicating...' : 'Duplicate'}
+                                        </button>
+                                    )}
+                                    {can("884") && (
+                                        <button
+                                            type="button"
+                                            onClick={beginEditing}
+                                            disabled={isDuplicating}
+                                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <PencilIcon className="h-5 w-5" />
+                                            Edit Template
+                                        </button>
+                                    )}
+                                </div>
                             </div>
 
                             <div className="mt-5 border-t border-slate-200 pt-5">
@@ -340,8 +404,19 @@ const TermsTemplateDetail = () => {
                             </div>
                         </section>
 
+                        <section className="grid gap-4 sm:grid-cols-3">
+                            <DetailStatCard label="Terms" value={clauses.length} helper="Reusable term lines" />
+                            <DetailStatCard label="Default Copy" value={String(template.content || '').trim() ? 'Yes' : 'No'} helper="Seed agreement body text" />
+                            <DetailStatCard label="Template ID" value="Saved" helper={template.id} />
+                        </section>
+
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <h2 className="text-xl font-bold text-slate-950">Template Terms</h2>
+                            <div className="flex items-center justify-between gap-3">
+                                <div>
+                                    <h2 className="text-xl font-bold text-slate-950">Template Terms</h2>
+                                    <p className="mt-1 text-sm text-slate-500">These lines are copied into service agreements that use this template.</p>
+                                </div>
+                            </div>
 
                             {clauses.length > 0 ? (
                                 <div className="mt-4 space-y-3">

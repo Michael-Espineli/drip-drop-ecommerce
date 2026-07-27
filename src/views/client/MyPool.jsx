@@ -22,6 +22,7 @@ import {
 import { format } from 'date-fns';
 import { displayRepairRequestStatus } from '../../utils/models/RepairRequest';
 import { salesCollectionNames } from '../../utils/models/Sales';
+import { appConfirm } from '../../utils/appDialog';
 
 const toDate = (value) => {
     if (!value) return null;
@@ -283,7 +284,13 @@ const MyPool = () => {
 
     const handleDeleteLocation = async (location) => {
         const label = getLocationLabel(location);
-        if (!window.confirm(`Delete ${label}? This will also remove its pools, equipment, service stops, service requests, and repair requests.`)) return;
+        const confirmed = await appConfirm({
+            title: 'Delete Service Location',
+            message: `Delete ${label}? This will also remove its pools, equipment, service stops, service requests, and repair requests.`,
+            confirmLabel: 'Delete Location',
+            variant: 'danger',
+        });
+        if (!confirmed) return;
 
         setSavingLocation(true);
         setLocationActionError(null);

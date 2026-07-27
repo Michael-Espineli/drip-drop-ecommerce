@@ -32,7 +32,8 @@ export const jobStatusMatches = (value, status) => (
 );
 
 export const isDraftOperationJob = (job = {}) => (
-  jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.draft)
+  jobStatusMatches(getOperationStatus(job), JOB_OPERATION_STATUS.draft) ||
+  jobStatusMatches(getBillingStatus(job), JOB_BILLING_STATUS.draft)
 );
 
 export const isAcceptedNotScheduledJob = (job = {}) => (

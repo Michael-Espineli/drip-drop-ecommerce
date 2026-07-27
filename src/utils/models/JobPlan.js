@@ -135,6 +135,70 @@ export const getJobPlanTierLabel = (value) =>
 export const getJobPlanTierTone = (value) =>
   getJobPlanTierOption(value).tone;
 
+export const getJobPlanRecommendationLabel = (value) => {
+  const normalized = normalizeJobPlanTier(value);
+  switch (normalized) {
+    case JOB_PLAN_TIER.MINIMUM_REPAIR:
+      return "Most Recommended";
+    case JOB_PLAN_TIER.STANDARD_FIX:
+      return "Second Recommendation";
+    case JOB_PLAN_TIER.BETTER_FIX:
+      return "Third Recommendation";
+    case JOB_PLAN_TIER.BEST_UPGRADE:
+      return "Least Recommended";
+    default:
+      return "Recommendation";
+  }
+};
+
+export const getJobPlanRecommendationDisplay = (value) => {
+  const normalized = normalizeJobPlanTier(value);
+  return `#${normalized} ${getJobPlanRecommendationLabel(normalized)}`;
+};
+
+export const isGeneratedJobPlanName = (name, tier = DEFAULT_JOB_PLAN_TIER) => {
+  const normalizedName = String(name || "").trim().toLowerCase();
+  if (!normalizedName) return false;
+
+  const normalizedTier = normalizeJobPlanTier(tier);
+  const generatedNames = JOB_PLAN_TIER_OPTIONS.flatMap((option) => {
+    const optionTier = normalizeJobPlanTier(option.value);
+    const legacyLabel = getJobPlanTierLabel(optionTier);
+    const recommendationLabel = getJobPlanRecommendationLabel(optionTier);
+
+    return [
+      legacyLabel,
+      `${optionTier} - ${legacyLabel}`,
+      `#${optionTier} ${recommendationLabel}`,
+      `recommendation #${optionTier}`,
+      getJobPlanRecommendationDisplay(optionTier),
+    ];
+  });
+
+  const currentLegacyLabel = getJobPlanTierLabel(normalizedTier);
+  generatedNames.push(currentLegacyLabel, `${normalizedTier} - ${currentLegacyLabel}`);
+
+  return generatedNames.some((value) => value.toLowerCase() === normalizedName);
+};
+
+export const getJobPlanDisplayName = (plan = {}, fallback = "Untitled Plan") => {
+  if (!plan) return fallback;
+
+  const tier = normalizeJobPlanTier(plan.planTier || plan.solutionTier || plan.recommendationRank);
+  const candidates = [
+    plan.planName,
+    plan.title,
+    plan.name,
+  ];
+
+  const planName = candidates.find((value) => {
+    const normalized = String(value || "").trim();
+    return normalized && !isGeneratedJobPlanName(normalized, tier);
+  });
+
+  return planName ? String(planName).trim() : fallback;
+};
+
 export const normalizeJobPlanStatus = (status) => {
   const normalized = String(status || JOB_PLAN_STATUS.DRAFT).trim().toLowerCase();
   const option = JOB_PLAN_STATUS_OPTIONS.find(

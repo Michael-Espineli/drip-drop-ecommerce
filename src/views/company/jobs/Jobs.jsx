@@ -29,6 +29,7 @@ import {
     getIssuePriorityTone,
     normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
+import { appAlert, appConfirm } from "../../../utils/appDialog";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -304,7 +305,6 @@ const getOutlinedButtonClass = ({ tone = "blue", active = false, className = "" 
 const Jobs = () => {
     const { view } = useParams();
     const [jobs, setJobs] = useState([]);
-    const [allJobs, setAllJobs] = useState([]);
     const [jobQueueCounts, setJobQueueCounts] = useState({
         draftOperations: 0,
         acceptedNotScheduled: 0,
@@ -507,7 +507,6 @@ const Jobs = () => {
 
     const fetchAllJobs = useCallback(async () => {
         if (!recentlySelectedCompany) {
-            setAllJobs([]);
             setJobQueueCounts({
                 draftOperations: 0,
                 acceptedNotScheduled: 0,
@@ -526,17 +525,6 @@ const Jobs = () => {
                 acceptedNotScheduled: rawJobs.filter(isAcceptedNotScheduledJob).length,
                 finishedOutstanding: rawJobs.filter(isFinishedOutstandingJob).length,
             });
-
-            const jobsList = querySnapshot.docs.map((jobDoc) => {
-                try {
-                    return Job.fromFirestore(jobDoc);
-                } catch (error) {
-                    console.warn("Unable to normalize job summary record:", jobDoc.id, error);
-                    return { id: jobDoc.id, ...jobDoc.data() };
-                }
-            });
-
-            setAllJobs(jobsList);
         } catch (error) {
             console.error("Error fetching job summary data: ", error);
             setJobQueueCounts({
@@ -544,7 +532,6 @@ const Jobs = () => {
                 acceptedNotScheduled: 0,
                 finishedOutstanding: 0,
             });
-            setAllJobs([]);
         }
     }, [recentlySelectedCompany]);
 
@@ -625,7 +612,7 @@ const Jobs = () => {
             setJobTemplates(templates);
         } catch (error) {
             console.error("Error fetching job templates:", error);
-            alert("Failed to load job templates.");
+            appAlert("Failed to load job templates.");
         } finally {
             setLoadingTemplates(false);
         }
@@ -711,9 +698,11 @@ const Jobs = () => {
             bulkBillingStatus ? `billing status to ${bulkBillingStatus}` : null,
         ].filter(Boolean);
 
-        const ok = window.confirm(
-            `Update ${selectedJobs.length} selected job${selectedJobs.length === 1 ? "" : "s"}: ${selectedLabels.join(" and ")}?`
-        );
+        const ok = await appConfirm({
+            title: "Update Selected Jobs",
+            message: `Update ${selectedJobs.length} selected job${selectedJobs.length === 1 ? "" : "s"}: ${selectedLabels.join(" and ")}?`,
+            confirmLabel: "Update Jobs",
+        });
 
         if (!ok) return;
 
@@ -774,17 +763,13 @@ const Jobs = () => {
     }, [visibleJobs]);
 
     const jobSummary = useMemo(() => {
-        const summaryJobs = allJobs.length > 0 ? allJobs : visibleJobs;
-
         return {
-            totalRateCents: summaryJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
             visibleRateCents: visibleJobs.reduce((total, job) => total + Number(job.rate || 0), 0),
-            totalJobsCount: summaryJobs.length,
             draftOperationCount: jobQueueCounts.draftOperations,
             acceptedNotScheduledCount: jobQueueCounts.acceptedNotScheduled,
             finishedOutstandingCount: jobQueueCounts.finishedOutstanding,
         };
-    }, [allJobs, jobQueueCounts, visibleJobs]);
+    }, [jobQueueCounts, visibleJobs]);
 
     const primaryQueueMetric = useMemo(() => {
         if (currentJobListView === "billing") {
@@ -799,7 +784,7 @@ const Jobs = () => {
         return {
             label: "Draft Operations",
             value: jobSummary.draftOperationCount,
-            detail: "Operation status Draft",
+            detail: "Billing or operation status Draft",
             tone: "red",
         };
     }, [currentJobListView, jobSummary]);
@@ -1177,13 +1162,7 @@ const Jobs = () => {
                     )}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-6">
-                    <JobMetricCard
-                        label="Total Rate"
-                        value={moneyFromCents(jobSummary.totalRateCents)}
-                        detail={`${jobSummary.totalJobsCount} total jobs`}
-                    />
-
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 mb-6">
                     <JobMetricCard
                         label="Shown Rate"
                         value={moneyFromCents(jobSummary.visibleRateCents)}

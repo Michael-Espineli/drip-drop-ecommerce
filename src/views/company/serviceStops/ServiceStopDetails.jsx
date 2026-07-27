@@ -1301,7 +1301,7 @@ const ServiceStopDetails = () => {
         const tasksToFinish = unfinishedManualFinishTasks.filter((task) => selectedTaskIdSet.has(task.id));
         const taskPlans = [];
         for (const task of tasksToFinish) {
-            const installDetails = promptForReplacementInstallDetails(task);
+            const installDetails = await promptForReplacementInstallDetails(task);
             if (installDetails === null) {
                 toast.error("Replacement install details are required before finishing this service stop");
                 return;
@@ -1511,7 +1511,7 @@ const ServiceStopDetails = () => {
         try {
             setSavingTask(true);
             const replacementInstallDetails =
-                newTask.status === "Finished" ? promptForReplacementInstallDetails(newTask) : {};
+                newTask.status === "Finished" ? await promptForReplacementInstallDetails(newTask) : {};
 
             if (replacementInstallDetails === null) {
                 toast.error("Replacement install details are required before finishing this task");
@@ -1656,7 +1656,7 @@ const ServiceStopDetails = () => {
                 task.id
             );
 
-            const installDetails = promptForReplacementInstallDetails(task);
+            const installDetails = await promptForReplacementInstallDetails(task);
             if (installDetails === null) {
                 toast.error("Replacement install details are required before finishing this task");
                 return;

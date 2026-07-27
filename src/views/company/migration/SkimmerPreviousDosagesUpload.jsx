@@ -12,6 +12,7 @@ import {
   normalizeReadingForStopData,
   saveStopDataRecord,
 } from "../../../utils/stopData";
+import { appPrompt } from "../../../utils/appDialog";
 
 const SKIMMER_REQUIRED_COLUMNS = ["Customer", "Address", "Start Time", "Pool"];
 const MAX_WRITES_PER_BATCH = 450;
@@ -1593,9 +1594,13 @@ function SkimmerPreviousDosagesUpload() {
       return;
     }
 
-    const confirmation = window.prompt(
-      "Delete all Skimmer-imported service history records for this company?\n\nType DELETE SKIMMER HISTORY to confirm."
-    );
+    const confirmation = await appPrompt({
+      title: "Delete Skimmer History",
+      message: "Delete all Skimmer-imported service history records for this company?",
+      inputLabel: "Type DELETE SKIMMER HISTORY to confirm",
+      confirmLabel: "Delete History",
+      variant: "danger",
+    });
     if (confirmation !== "DELETE SKIMMER HISTORY") return;
 
     setDeletingHistory(true);

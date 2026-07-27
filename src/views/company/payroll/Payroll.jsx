@@ -1,9 +1,25 @@
-import React, { useContext, useEffect, useMemo, useState } from "react";
-import { collection, doc, getDoc, getDocs, query, runTransaction, setDoc, updateDoc, where, writeBatch } from "firebase/firestore";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
+import {
+  collection,
+  doc,
+  documentId,
+  getDoc,
+  getDocs,
+  limit as firestoreLimit,
+  orderBy,
+  query,
+  runTransaction,
+  setDoc,
+  startAfter,
+  updateDoc,
+  where,
+  writeBatch,
+} from "firebase/firestore";
 import { Link, useLocation } from "react-router-dom";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { estimateServiceStopPay } from "../../../utils/payroll/payEstimate";
+import { appConfirm } from "../../../utils/appDialog";
 import { v4 as uuidv4 } from "uuid";
 import {
   IoBriefcaseOutline,
@@ -44,6 +60,7 @@ import {
 const SERVICE_STOP_BACKFILL_COMPANY_ID = "com_b0a2fcda-6eb8-4024-8703-23aa6c53f78e";
 const BASE_TECHNICIAN_RATE_ID = "base_technician_default";
 const BASE_TECHNICIAN_RATE_PLAN_ID = "base_technician_rate_template";
+const LINE_ITEMS_PAGE_SIZE = 100;
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -192,6 +209,20 @@ const stackBehaviorOptions = ["stackable", "exclusive", "replacesBase", "modifie
 const commercialMultiBodyPayStyleOptions = ["singleCommercialRate", "sameRatePerBodyOfWater", "basePlusAdditionalBodyRate"];
 const rateStatusOptions = ["active", "scheduled", "draft", "expired", "archived"];
 const workCategoryOptions = ["route", "serviceCall", "repair", "installation", "cleaning", "commercial", "startup", "drainAndRefill", "estimate", "extra", "custom"];
+const lineItemStatusFilterOptions = [
+  { value: "active", label: "Active" },
+  { value: "all", label: "All Statuses" },
+  { value: "needsReview", label: "Needs Review" },
+  { value: "approved", label: "Approved" },
+  { value: "paid", label: "Paid" },
+  { value: "voided", label: "Voided" },
+];
+
+const defaultLineItemFilters = () => ({
+  technicianId: "",
+  status: "active",
+  search: "",
+});
 
 const defaultStopPayCategories = [
   {
@@ -579,6 +610,10 @@ const Payroll = ({ mode = "payroll" }) => {
   });
   const [endDate, setEndDate] = useState(() => isoDate(new Date()));
   const [lineItems, setLineItems] = useState([]);
+  const [lineItemPage, setLineItemPage] = useState(0);
+  const [lineItemHasNextPage, setLineItemHasNextPage] = useState(false);
+  const [lineItemFilters, setLineItemFilters] = useState(defaultLineItemFilters);
+  const lineItemPageCursorsRef = useRef([]);
   const [statements, setStatements] = useState([]);
   const [settingsForm, setSettingsForm] = useState(() => defaultPaySettings(""));
   const [companyStopPayBuckets, setCompanyStopPayBuckets] = useState([]);
@@ -595,8 +630,8 @@ const Payroll = ({ mode = "payroll" }) => {
   const [editingRateId, setEditingRateId] = useState("");
   const [activeTab, setActiveTab] = useState(() => {
     const requestedTab = new URLSearchParams(location.search).get("tab");
-    const payrollTabs = ["lineItems", "statements"];
-    return isSetupMode ? "overview" : payrollTabs.includes(requestedTab) ? requestedTab : "lineItems";
+    const payrollTabs = ["statements", "lineItems"];
+    return isSetupMode ? "overview" : payrollTabs.includes(requestedTab) ? requestedTab : "statements";
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -622,7 +657,7 @@ const Payroll = ({ mode = "payroll" }) => {
   useEffect(() => {
     setActiveTab((currentTab) => {
       const setupTabs = ["overview", "stopPay", "rates", "settings"];
-      const payrollTabs = ["lineItems", "statements"];
+      const payrollTabs = ["statements", "lineItems"];
       const allowedTabs = isSetupMode ? setupTabs : payrollTabs;
       const requestedTab = new URLSearchParams(location.search).get("tab");
       if (!isSetupMode && allowedTabs.includes(requestedTab)) return requestedTab;
@@ -633,6 +668,10 @@ const Payroll = ({ mode = "payroll" }) => {
   useEffect(() => {
     if (!recentlySelectedCompany) {
       setLineItems([]);
+      setLineItemPage(0);
+      setLineItemHasNextPage(false);
+      setLineItemFilters(defaultLineItemFilters());
+      lineItemPageCursorsRef.current = [];
       setStatements([]);
       setSettingsForm(defaultPaySettings(""));
       setCompanyStopPayBuckets([]);
@@ -670,11 +709,29 @@ const Payroll = ({ mode = "payroll" }) => {
         const end = new Date(`${endDate}T23:59:59`);
 
         const lineItemsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems");
-        const lineItemsQuery = query(
-          lineItemsRef,
+        const lineItemQueryConstraints = [
           where("completedDate", ">=", start),
-          where("completedDate", "<=", end)
-        );
+          where("completedDate", "<=", end),
+        ];
+
+        if (lineItemFilters.technicianId) {
+          lineItemQueryConstraints.push(where("technicianId", "==", lineItemFilters.technicianId));
+        }
+
+        if (!["", "active", "all"].includes(lineItemFilters.status)) {
+          lineItemQueryConstraints.push(where("calculationStatus", "==", lineItemFilters.status));
+        }
+
+        lineItemQueryConstraints.push(orderBy("completedDate", "desc"));
+
+        const lineItemPageCursor = lineItemPageCursorsRef.current[lineItemPage];
+        if (lineItemPageCursor) {
+          lineItemQueryConstraints.push(startAfter(lineItemPageCursor));
+        }
+
+        lineItemQueryConstraints.push(firestoreLimit(LINE_ITEMS_PAGE_SIZE + 1));
+
+        const lineItemsQuery = query(lineItemsRef, ...lineItemQueryConstraints);
 
         const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
         const settingsRef = doc(db, "companies", recentlySelectedCompany, "paySettings", "main");
@@ -707,9 +764,18 @@ const Payroll = ({ mode = "payroll" }) => {
           getDocs(technicianRatesRef),
         ]);
 
-        const nextLineItems = lineItemsSnap.docs
+        const visibleLineItemDocs = lineItemsSnap.docs.slice(0, LINE_ITEMS_PAGE_SIZE);
+        const hasNextLineItemPage = lineItemsSnap.docs.length > LINE_ITEMS_PAGE_SIZE;
+        const nextLineItems = visibleLineItemDocs
           .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
           .sort((a, b) => (dateFromValue(b.completedDate)?.getTime() || 0) - (dateFromValue(a.completedDate)?.getTime() || 0));
+
+        setLineItemHasNextPage(hasNextLineItemPage);
+        if (hasNextLineItemPage && visibleLineItemDocs.length > 0) {
+          lineItemPageCursorsRef.current[lineItemPage + 1] = visibleLineItemDocs[visibleLineItemDocs.length - 1];
+        } else {
+          lineItemPageCursorsRef.current = lineItemPageCursorsRef.current.slice(0, lineItemPage + 1);
+        }
 
         const nextStatements = statementsSnap.docs
           .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
@@ -765,7 +831,7 @@ const Payroll = ({ mode = "payroll" }) => {
     };
 
     loadPayroll();
-  }, [recentlySelectedCompany, startDate, endDate]);
+  }, [recentlySelectedCompany, startDate, endDate, lineItemPage, lineItemFilters.technicianId, lineItemFilters.status]);
 
   const summary = useMemo(() => {
     const activeItems = lineItems.filter((item) => !isLineItemVoided(item));
@@ -819,14 +885,84 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const currentUserId = user?.uid || user?.id || "";
 
+  const visibleLineItems = useMemo(() => {
+    const trimmedSearch = lineItemFilters.search.trim().toLowerCase();
+    const statusScopedItems = lineItems.filter((item) => {
+      if (lineItemFilters.status === "all") return true;
+      if (lineItemFilters.status === "voided") return isLineItemVoided(item);
+      return !isLineItemVoided(item);
+    });
+
+    if (!trimmedSearch) return statusScopedItems;
+
+    return statusScopedItems.filter((item) =>
+      [
+        item.technicianName,
+        item.customerName,
+        item.serviceLocationAddress,
+        displayWorkTitle(item),
+        item.paymentReference,
+        item.serviceStopId,
+        item.id,
+      ]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(trimmedSearch))
+    );
+  }, [lineItems, lineItemFilters.search, lineItemFilters.status]);
+
+  const resetLineItemPaging = () => {
+    lineItemPageCursorsRef.current = [];
+    setLineItemPage(0);
+    setLineItemHasNextPage(false);
+  };
+
+  const updateLineItemFilter = (key, value) => {
+    resetLineItemPaging();
+    setLineItemFilters((filters) => ({
+      ...filters,
+      [key]: value,
+    }));
+  };
+
+  const goToPreviousLineItemPage = () => {
+    setLineItemPage((page) => Math.max(0, page - 1));
+  };
+
+  const goToNextLineItemPage = () => {
+    if (!lineItemHasNextPage) return;
+    setLineItemPage((page) => page + 1);
+  };
+
   const lineItemsForStatement = (statement) => {
     const ids = new Set(Array.isArray(statement.lineItemIds) ? statement.lineItemIds : []);
     return lineItems.filter((item) => ids.has(item.id) || item.payStatementId === statement.id);
   };
 
+  const fetchLineItemsByIds = async (ids = []) => {
+    if (!recentlySelectedCompany || ids.length === 0) return [];
+
+    const cleanIds = [...new Set(ids.filter(Boolean))];
+    const lineItemsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems");
+    const chunks = [];
+
+    for (let index = 0; index < cleanIds.length; index += 10) {
+      chunks.push(cleanIds.slice(index, index + 10));
+    }
+
+    const snapshots = await Promise.all(
+      chunks.map((chunk) => getDocs(query(lineItemsRef, where(documentId(), "in", chunk))))
+    );
+
+    return snapshots
+      .flatMap((snapshot) => snapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })))
+      .sort((a, b) => (dateFromValue(a.completedDate)?.getTime() || 0) - (dateFromValue(b.completedDate)?.getTime() || 0));
+  };
+
   const lineItemsForStatementDetail = (detail) => {
     if (!detail) return [];
-    return detail.type === "candidate" ? detail.group?.lineItems || [] : lineItemsForStatement(detail.statement || {});
+    if (detail.type === "candidate") return detail.group?.lineItems || [];
+    if (Array.isArray(detail.lineItems)) return detail.lineItems;
+    return lineItemsForStatement(detail.statement || {});
   };
 
   const statementDetailSummary = (detail) => {
@@ -1214,7 +1350,13 @@ const Payroll = ({ mode = "payroll" }) => {
         ? `There are ${outstandingStops.length} unfinished service stop(s) using "${serviceStopType.name || "this type"}". Archiving keeps historical payroll references, but new setup screens will no longer show this stop type. Archive it anyway?`
         : `Archive "${serviceStopType.name || "this service stop type"}"? Historical payroll and service stop references will stay stored.`;
 
-      if (!window.confirm(warning)) {
+      const confirmed = await appConfirm({
+        title: "Archive Service Stop Type",
+        message: warning,
+        confirmLabel: "Archive Type",
+        variant: "danger",
+      });
+      if (!confirmed) {
         setSavingAction("");
         return;
       }
@@ -1267,7 +1409,13 @@ const Payroll = ({ mode = "payroll" }) => {
         ? `This work type is used by ${mappedServiceStopTypes.length} service stop type mapping(s). Archiving keeps historical payroll references, removes it from new setup choices, and removes it from those mappings. Archive it anyway?`
         : `Archive "${workType.name || "this payroll work type"}"? Historical payroll references will stay stored.`;
 
-      if (!window.confirm(warning)) {
+      const confirmed = await appConfirm({
+        title: "Archive Work Type",
+        message: warning,
+        confirmLabel: "Archive Work Type",
+        variant: "danger",
+      });
+      if (!confirmed) {
         setSavingAction("");
         return;
       }
@@ -2217,7 +2365,7 @@ const Payroll = ({ mode = "payroll" }) => {
 
   const createAllCandidateStatements = async () => {
     if (statementCandidateGroups.length === 0) {
-      setActionFailure("There are no approved line items ready for statements.");
+      setActionFailure("There are no approved line items ready for statements on this loaded page.");
       return;
     }
 
@@ -2230,7 +2378,7 @@ const Payroll = ({ mode = "payroll" }) => {
     if (!recentlySelectedCompany) return;
 
     if (approvableLineItems.length === 0) {
-      setActionFailure("There are no line items ready to approve.");
+      setActionFailure("There are no line items ready to approve on this page.");
       return;
     }
 
@@ -2255,7 +2403,7 @@ const Payroll = ({ mode = "payroll" }) => {
       setLineItems((items) =>
         items.map((item) => (approvedIds.has(item.id) ? { ...item, ...payload } : item))
       );
-      setActionNotice(`Approved ${approvableLineItems.length} payroll line item(s).`);
+      setActionNotice(`Approved ${approvableLineItems.length} payroll line item(s) on this page.`);
     } catch (err) {
       console.error("Error approving all payroll line items:", err);
       setActionFailure("Could not approve all payroll line items.");
@@ -2451,9 +2599,43 @@ const Payroll = ({ mode = "payroll" }) => {
     setDetailStatement({ type: "candidate", group });
   };
 
-  const openStatementDetail = (statement) => {
+  const openStatementDetail = async (statement) => {
     setShowZeroAmountStatementLines(false);
-    setDetailStatement({ type: "statement", statement });
+    const knownLines = lineItemsForStatement(statement);
+    const knownLineIds = new Set(knownLines.map((item) => item.id));
+    const statementLineIds = Array.isArray(statement.lineItemIds) ? statement.lineItemIds : [];
+    const missingLineIds = statementLineIds.filter((id) => id && !knownLineIds.has(id));
+
+    setDetailStatement({
+      type: "statement",
+      statement,
+      lineItems: knownLines,
+      loadingLineItems: missingLineIds.length > 0,
+    });
+
+    if (missingLineIds.length === 0) return;
+
+    try {
+      const fetchedLines = await fetchLineItemsByIds(missingLineIds);
+      const linesById = new Map([...knownLines, ...fetchedLines].map((item) => [item.id, item]));
+      const nextLines = [...linesById.values()].sort(
+        (a, b) => (dateFromValue(a.completedDate)?.getTime() || 0) - (dateFromValue(b.completedDate)?.getTime() || 0)
+      );
+
+      setDetailStatement((current) =>
+        current?.type === "statement" && current?.statement?.id === statement.id
+          ? { ...current, lineItems: nextLines, loadingLineItems: false }
+          : current
+      );
+    } catch (err) {
+      console.error("Error loading statement line items:", err);
+      setDetailStatement((current) =>
+        current?.type === "statement" && current?.statement?.id === statement.id
+          ? { ...current, loadingLineItems: false }
+          : current
+      );
+      setActionFailure("Could not load that statement's line items.");
+    }
   };
 
   const closeStatementDetail = () => {
@@ -2497,74 +2679,148 @@ const Payroll = ({ mode = "payroll" }) => {
   );
 
   const renderLineItems = () => {
-    if (summary.activeItems.length === 0) {
-      return <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll line items found for this date range.</div>;
-    }
-
     return (
-      <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
-        <table className="min-w-full divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-4 py-3">Date</th>
-              <th className="px-4 py-3">Worker</th>
-              <th className="px-4 py-3">Work</th>
-              <th className="px-4 py-3">Customer</th>
-              <th className="px-4 py-3">Status</th>
-              <th className="px-4 py-3 text-right">Amount</th>
-              <th className="px-4 py-3 text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {summary.activeItems.map((item) => {
-              const isPaid = Boolean(item.paidAt) || item.calculationStatus === "paid";
-              const isApproved = Boolean(item.approvedAt) || item.calculationStatus === "approved" || isPaid;
-              const isVoided = item.calculationStatus === "voided";
+      <div className="grid gap-4">
+        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 lg:grid-cols-[minmax(10rem,14rem)_minmax(10rem,14rem)_minmax(14rem,1fr)_auto] lg:items-end">
+            <label className="text-sm font-semibold text-slate-700">
+              Technician
+              <select
+                value={lineItemFilters.technicianId}
+                onChange={(event) => updateLineItemFilter("technicianId", event.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+              >
+                <option value="">All Technicians</option>
+                {companyUsers.map((worker) => {
+                  const workerId = worker.userId || worker.id || worker.docId || "";
+                  if (!workerId) return null;
+                  return (
+                    <option key={workerId} value={workerId}>
+                      {worker.userName || worker.name || worker.displayName || workerId}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Status
+              <select
+                value={lineItemFilters.status}
+                onChange={(event) => updateLineItemFilter("status", event.target.value)}
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+              >
+                {lineItemStatusFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="text-sm font-semibold text-slate-700">
+              Search
+              <input
+                type="search"
+                value={lineItemFilters.search}
+                onChange={(event) => setLineItemFilters((filters) => ({ ...filters, search: event.target.value }))}
+                placeholder="Worker, customer, work, reference"
+                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+              />
+            </label>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                Page {lineItemPage + 1}
+              </span>
+              <span className="rounded-md bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">
+                {visibleLineItems.length} / {LINE_ITEMS_PAGE_SIZE}
+              </span>
+              <button
+                type="button"
+                onClick={goToPreviousLineItemPage}
+                disabled={lineItemPage === 0}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <button
+                type="button"
+                onClick={goToNextLineItemPage}
+                disabled={!lineItemHasNextPage}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        </section>
 
-              return (
-                <tr key={item.id}>
-                  <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(item.completedDate)}</td>
-                  <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">{item.technicianName || "Worker"}</td>
-                  <td className="px-4 py-3 text-slate-700">
-                    <div className="font-medium">{displayWorkTitle(item)}</div>
-                    <div className="text-xs text-slate-500">{rateTypeLabel(item)} · {Number(item.quantity || 0)} {item.quantityUnit || "each"}</div>
-                    {item.paymentReference ? <div className="mt-1 text-xs text-slate-500">Ref: {item.paymentReference}</div> : null}
-                  </td>
-                  <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
-                  <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isPaid ? "paid" : item.calculationStatus} /></td>
-                  <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
-                  <td className="whitespace-nowrap px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setDetailLineItem(item)}
-                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
-                      >
-                        Inspect
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => approveLineItem(item)}
-                        disabled={isApproved || isVoided || savingAction === `approve-line-${item.id}`}
-                        className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {savingAction === `approve-line-${item.id}` ? "Saving" : "Approve"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => openPaymentModal("lineItem", item)}
-                        disabled={isPaid || isVoided}
-                        className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        Mark Paid
-                      </button>
-                    </div>
-                  </td>
+        {lineItems.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll line items found for this date range.</div>
+        ) : visibleLineItems.length === 0 ? (
+          <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500">No payroll line items match the current filters on this page.</div>
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+            <table className="min-w-full divide-y divide-slate-200 text-sm">
+              <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                <tr>
+                  <th className="px-4 py-3">Date</th>
+                  <th className="px-4 py-3">Worker</th>
+                  <th className="px-4 py-3">Work</th>
+                  <th className="px-4 py-3">Customer</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Amount</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
-              );
-            })}
-          </tbody>
-        </table>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {visibleLineItems.map((item) => {
+                  const isPaid = Boolean(item.paidAt) || item.calculationStatus === "paid";
+                  const isApproved = Boolean(item.approvedAt) || item.calculationStatus === "approved" || isPaid;
+                  const isVoided = isLineItemVoided(item);
+
+                  return (
+                    <tr key={item.id}>
+                      <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(item.completedDate)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-900">{item.technicianName || "Worker"}</td>
+                      <td className="px-4 py-3 text-slate-700">
+                        <div className="font-medium">{displayWorkTitle(item)}</div>
+                        <div className="text-xs text-slate-500">{rateTypeLabel(item)} · {Number(item.quantity || 0)} {item.quantityUnit || "each"}</div>
+                        {item.paymentReference ? <div className="mt-1 text-xs text-slate-500">Ref: {item.paymentReference}</div> : null}
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{item.customerName || item.serviceLocationAddress || "-"}</td>
+                      <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isPaid ? "paid" : item.calculationStatus} /></td>
+                      <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(item.totalAmountCents)}</td>
+                      <td className="whitespace-nowrap px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={() => setDetailLineItem(item)}
+                            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100"
+                          >
+                            Inspect
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => approveLineItem(item)}
+                            disabled={isApproved || isVoided || savingAction === `approve-line-${item.id}`}
+                            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {savingAction === `approve-line-${item.id}` ? "Saving" : "Approve"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openPaymentModal("lineItem", item)}
+                            disabled={isPaid || isVoided}
+                            className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            Mark Paid
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     );
   };
@@ -2576,7 +2832,7 @@ const Payroll = ({ mode = "payroll" }) => {
           <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-lg font-bold text-slate-900">Ready to Create</h2>
-              <p className="mt-1 text-sm text-slate-500">Approved, unpaid line items that are not already attached to a statement.</p>
+              <p className="mt-1 text-sm text-slate-500">Approved, unpaid line items on the loaded payroll page that are not already attached to a statement.</p>
             </div>
             <button
               type="button"
@@ -2584,7 +2840,7 @@ const Payroll = ({ mode = "payroll" }) => {
               disabled={statementCandidateGroups.length === 0 || Boolean(savingAction)}
               className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {savingAction.startsWith("create-statement") ? "Creating" : "Create All Statements"}
+              {savingAction.startsWith("create-statement") ? "Creating" : "Create Listed Statements"}
             </button>
           </div>
 
@@ -2668,6 +2924,9 @@ const Payroll = ({ mode = "payroll" }) => {
                     const isPaid = Boolean(statement.paidAt) || statement.status === "paid";
                     const isApproved = Boolean(statement.approvedAt) || statement.status === "approved" || isPaid;
                     const linkedLines = lineItemsForStatement(statement);
+                    const linkedLineCount = Array.isArray(statement.lineItemIds) && statement.lineItemIds.length > 0
+                      ? statement.lineItemIds.length
+                      : linkedLines.length;
 
                     return (
                       <tr key={statement.id}>
@@ -2678,7 +2937,7 @@ const Payroll = ({ mode = "payroll" }) => {
                         <td className="px-4 py-3 text-slate-600">{statement.technicianName || "Technician"}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-slate-600">{shortDate(statement.startDate)} - {shortDate(statement.endDate)}</td>
                         <td className="whitespace-nowrap px-4 py-3"><StatusPill status={isPaid ? "paid" : statement.status} /></td>
-                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{linkedLines.length || statement.lineItemIds?.length || 0}</td>
+                        <td className="whitespace-nowrap px-4 py-3 text-right text-slate-600">{linkedLineCount}</td>
                         <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-slate-900">{moneyFromCents(statement.totalCents)}</td>
                         <td className="whitespace-nowrap px-4 py-3">
                           <div className="flex justify-end gap-2">
@@ -2826,6 +3085,11 @@ const Payroll = ({ mode = "payroll" }) => {
                   </button>
                 ) : null}
               </div>
+              {detail.loadingLineItems ? (
+                <div className="mb-3 rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700">
+                  Loading statement line items...
+                </div>
+              ) : null}
               {renderStatementLineItemsTable(visibleStatementLines, lineItemsEmptyMessage)}
             </div>
 
@@ -3817,8 +4081,8 @@ const Payroll = ({ mode = "payroll" }) => {
       ["settings", "Pay Rules"],
     ]
     : [
-      ["lineItems", "Line Items"],
       ["statements", "Statements"],
+      ["lineItems", "Line Items"],
     ];
   const backfillProgressPercent = backfillProgress?.total
     ? Math.max(5, Math.round((backfillProgress.current / backfillProgress.total) * 100))
@@ -3849,8 +4113,24 @@ const Payroll = ({ mode = "payroll" }) => {
               </Link>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto_auto]">
-                <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm" />
-                <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => {
+                    resetLineItemPaging();
+                    setStartDate(event.target.value);
+                  }}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => {
+                    resetLineItemPaging();
+                    setEndDate(event.target.value);
+                  }}
+                  className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                />
                 <Link
                   to="/company/settings/payroll-setup"
                   className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-100"
@@ -3863,7 +4143,7 @@ const Payroll = ({ mode = "payroll" }) => {
                   disabled={approvableLineItems.length === 0 || Boolean(savingAction)}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  {savingAction === "approve-all-lines" ? "Approving" : "Approve All"}
+                  {savingAction === "approve-all-lines" ? "Approving" : "Approve Page"}
                 </button>
                 <button
                   type="button"
@@ -3889,8 +4169,24 @@ const Payroll = ({ mode = "payroll" }) => {
                 </p>
               </div>
               <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                <input type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)} className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm" />
-                <input type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)} className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm" />
+                <input
+                  type="date"
+                  value={startDate}
+                  onChange={(event) => {
+                    resetLineItemPaging();
+                    setStartDate(event.target.value);
+                  }}
+                  className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm"
+                />
+                <input
+                  type="date"
+                  value={endDate}
+                  onChange={(event) => {
+                    resetLineItemPaging();
+                    setEndDate(event.target.value);
+                  }}
+                  className="rounded-md border border-amber-300 bg-white px-3 py-2 text-sm shadow-sm"
+                />
                 <button
                   type="button"
                   onClick={finishUnfinishedServiceStopsForRange}

@@ -19,6 +19,7 @@ import {
   parseEquipmentImportRows,
   summarizeEquipmentImportRecords,
 } from "./equipmentImportUtils";
+import { appConfirm } from "../../../utils/appDialog";
 
 const MAX_WRITES_PER_BATCH = 450;
 const CREATE_NEW_TARGET_VALUE = "__create_new__";
@@ -544,9 +545,11 @@ function EquipmentImport() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Import ${importableRecords.length} confirmed equipment rows into this company? ${summary.updateRows} will update existing equipment and ${summary.createRows} will create new equipment. ${summary.skippedImportRows || 0} will be skipped.`
-    );
+    const confirmed = await appConfirm({
+      title: "Import Equipment",
+      message: `Import ${importableRecords.length} confirmed equipment rows into this company? ${summary.updateRows} will update existing equipment and ${summary.createRows} will create new equipment. ${summary.skippedImportRows || 0} will be skipped.`,
+      confirmLabel: "Import Equipment",
+    });
     if (!confirmed) return;
 
     setUploading(true);

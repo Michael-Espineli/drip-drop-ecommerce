@@ -12,12 +12,14 @@ import {
   where,
 } from "firebase/firestore";
 import toast from "react-hot-toast";
-import { FaBell, FaCheckCircle, FaEdit, FaPlus, FaRegCircle, FaSave, FaTasks, FaTimes, FaUserCheck, FaUsers } from "react-icons/fa";
-import { MdArchive, MdOutlineSchedule } from "react-icons/md";
+import { FaBell, FaCheckCircle, FaEdit, FaExclamationTriangle, FaPlus, FaRegCircle, FaSave, FaSearch, FaTasks, FaTimes, FaUserCheck, FaUsers } from "react-icons/fa";
+import { MdArchive, MdHistory, MdOutlineSchedule } from "react-icons/md";
+import { Link } from "react-router-dom";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import {
+  TODO_DONE_BOARD_LOOKBACK_DAYS,
   TODO_PRIORITY,
   TODO_PRIORITY_LABELS,
   TODO_RELATED_ENTITY_TYPES,
@@ -26,9 +28,11 @@ import {
   TODO_STATUS_LABELS,
   buildTodoAlertText,
   compareTodosByUrgency,
+  defaultTodoHistoryDateRange,
   dateTimeInputValue,
   formatShortDateTime,
   normalizeTodo,
+  todoCompletedInDateRange,
   todoDueState,
   todoIsOpen,
   todoNeedsAttention,
@@ -44,6 +48,30 @@ const filters = [
 
 const BOARD_FILTER_ALL = "all";
 const BOARD_FILTER_UNASSIGNED = "unassigned";
+
+const boardColumns = [
+  {
+    id: TODO_STATUS.open,
+    label: "To Do",
+    helper: "Ready to pick up",
+    accent: "bg-slate-500",
+    header: "bg-slate-100 text-slate-700",
+  },
+  {
+    id: TODO_STATUS.inProgress,
+    label: "In Progress",
+    helper: "Work in motion",
+    accent: "bg-blue-600",
+    header: "bg-blue-50 text-blue-700",
+  },
+  {
+    id: TODO_STATUS.done,
+    label: "Done",
+    helper: "Recently completed",
+    accent: "bg-emerald-600",
+    header: "bg-emerald-50 text-emerald-700",
+  },
+];
 
 const compact = (values) => values.map((value) => String(value || "").trim()).filter(Boolean);
 
@@ -169,6 +197,22 @@ const todoBoardName = (todo, boardById) => {
   return boardById.get(boardId)?.name || todo.boardName || "Unknown board";
 };
 
+const todoColumnId = (todo = {}) => {
+  if (todo.status === TODO_STATUS.done || todo.status === TODO_STATUS.archived) return TODO_STATUS.done;
+  if (todo.status === TODO_STATUS.inProgress) return TODO_STATUS.inProgress;
+  return TODO_STATUS.open;
+};
+
+const todoIssueKey = (todo = {}) => {
+  const compactId = String(todo.id || "")
+    .replace(/^todo[_-]?/i, "")
+    .replace(/[^a-z0-9]/gi, "")
+    .slice(-5)
+    .toUpperCase();
+
+  return `TODO-${compactId || "ITEM"}`;
+};
+
 const memberSummary = (board = {}) => {
   const names = Array.isArray(board.memberNames) ? board.memberNames.filter(Boolean) : [];
   if (names.length === 0) return "No users selected";
@@ -240,21 +284,21 @@ const priorityTone = (priority) => {
 
 const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
   const tones = {
-    slate: "bg-slate-100 text-slate-600",
-    blue: "bg-blue-50 text-blue-700",
-    amber: "bg-amber-50 text-amber-700",
-    rose: "bg-rose-50 text-rose-700",
-    emerald: "bg-emerald-50 text-emerald-700",
+    slate: "border-slate-300 bg-slate-50 text-slate-600",
+    blue: "border-blue-300 bg-blue-50 text-blue-700",
+    amber: "border-amber-300 bg-amber-50 text-amber-700",
+    rose: "border-rose-300 bg-rose-50 text-rose-700",
+    emerald: "border-emerald-300 bg-emerald-50 text-emerald-700",
   };
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+          <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
           <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
         </div>
-        <span className={`rounded-md p-2 ${tones[tone] || tones.slate}`}>
+        <span className={`rounded-md border p-2 ${tones[tone] || tones.slate}`}>
           <Icon className="h-5 w-5" />
         </span>
       </div>
@@ -429,6 +473,12 @@ const TodoList = () => {
     new Map(todoBoards.map((board) => [board.id, board]))
   ), [todoBoards]);
 
+  const recentDoneRange = useMemo(() => defaultTodoHistoryDateRange(), []);
+
+  const todoHistoryLink = useMemo(() => (
+    `/company/todo-history?start=${recentDoneRange.startInput}&end=${recentDoneRange.endInput}`
+  ), [recentDoneRange.endInput, recentDoneRange.startInput]);
+
   const boardScopedTodos = useMemo(() => (
     todoItems.filter((todo) => todoMatchesBoardFilter(todo, selectedBoardId))
   ), [selectedBoardId, todoItems]);
@@ -486,7 +536,7 @@ const TodoList = () => {
     return boardScopedTodos
       .filter((todo) => {
         if (filter === "open" && !todoIsOpen(todo)) return false;
-        if (filter === "done" && todo.status !== TODO_STATUS.done) return false;
+        if (filter === "done" && !todoCompletedInDateRange(todo, recentDoneRange.startDate, recentDoneRange.endDate)) return false;
         if (filter === "team" && (todo.scope !== TODO_SCOPE.team || !todoIsOpen(todo))) return false;
         if (filter === "mine") {
           const mine = todo.scope === TODO_SCOPE.me || todo.assignedToUserId === user?.uid || todo.createdByUserId === user?.uid;
@@ -506,7 +556,18 @@ const TodoList = () => {
         ].some((value) => String(value || "").toLowerCase().includes(search));
       })
       .sort(compareTodosByUrgency);
-  }, [boardById, boardScopedTodos, filter, searchTerm, user?.uid]);
+  }, [boardById, boardScopedTodos, filter, recentDoneRange.endDate, recentDoneRange.startDate, searchTerm, user?.uid]);
+
+  const selectedBoardLabel = useMemo(() => {
+    if (selectedBoardId === BOARD_FILTER_ALL) return "All boards";
+    if (selectedBoardId === BOARD_FILTER_UNASSIGNED) return "No board";
+    return boardById.get(selectedBoardId)?.name || "Board";
+  }, [boardById, selectedBoardId]);
+
+  const kanbanColumns = useMemo(() => boardColumns.map((column) => ({
+    ...column,
+    todos: filteredTodos.filter((todo) => todoColumnId(todo) === column.id),
+  })), [filteredTodos]);
 
   const visibleRelatedEntityOptions = useMemo(() => {
     const terms = relatedEntitySearch.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -893,16 +954,29 @@ const TodoList = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+    <div className="min-h-screen bg-[#F7F8F9] px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
       <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="rounded-md border border-[#0C66E4]/20 bg-[#0C66E4] p-5 text-white shadow-sm">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || "Selected company"}</p>
-              <h1 className="mt-2 text-3xl font-bold text-slate-950">Todo List</h1>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Team tasks, specific assignments, linked records, due dates, and reminders.
+            <div className="min-w-0">
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-100">{recentlySelectedCompanyName || "Selected company"}</p>
+              <h1 className="mt-2 break-words text-3xl font-bold">Todo Board</h1>
+              <p className="mt-2 max-w-3xl text-sm text-blue-50">
+                Track team tasks as issues with boards, owners, priorities, linked records, due dates, and reminders.
               </p>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <Link
+                to={todoHistoryLink}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-white/30 bg-white px-4 py-3 text-sm font-bold text-[#0C66E4] shadow-sm transition hover:bg-blue-50"
+              >
+                <MdHistory className="h-4 w-4" />
+                Todo History
+              </Link>
+              <div className="rounded-md border border-white/20 bg-white/10 px-4 py-3">
+                <p className="text-xs font-bold uppercase tracking-wide text-blue-100">Current board</p>
+                <p className="mt-1 max-w-[260px] truncate text-sm font-semibold">{selectedBoardLabel}</p>
+              </div>
             </div>
           </div>
         </section>
@@ -914,12 +988,13 @@ const TodoList = () => {
           <StatCard icon={FaBell} label="Needs Attention" value={stats.attention} helper="Due today, overdue, or alerting" tone={stats.attention ? "amber" : "emerald"} />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
-          <div className="space-y-6">
-            <form onSubmit={createTodo} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <section className="grid gap-6 xl:grid-cols-[390px_minmax(0,1fr)]">
+          <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
+            <form onSubmit={createTodo} className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-5">
-              <h2 className="text-lg font-bold text-slate-950">Create Todo</h2>
-              <p className="mt-1 text-sm text-slate-500">Add team work or assign a specific owner.</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Issue creator</p>
+              <h2 className="mt-1 text-lg font-bold text-slate-950">Create Todo</h2>
+              <p className="mt-1 text-sm text-slate-500">Add team work, assign an owner, and link the record it belongs to.</p>
             </div>
 
             <div className="space-y-4">
@@ -1144,17 +1219,18 @@ const TodoList = () => {
               <button
                 type="submit"
                 disabled={saving}
-                className="w-full rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-md bg-[#0C66E4] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC] disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {saving ? "Creating..." : "Create Todo"}
+                {saving ? "Creating..." : "Create Issue"}
               </button>
             </div>
             </form>
 
-            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-5 flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-950">Boards</h2>
+                  <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Project rail</p>
+                  <h2 className="mt-1 text-lg font-bold text-slate-950">Boards</h2>
                   <p className="mt-1 text-sm text-slate-500">Name each board and choose its users.</p>
                 </div>
                 {editingBoardId && (
@@ -1214,18 +1290,18 @@ const TodoList = () => {
               </form>
 
               {todoBoards.length > 0 && (
-                <div className="mt-5 divide-y divide-slate-100 rounded-md border border-slate-200">
+                <div className="mt-5 space-y-1 rounded-md border border-slate-200 bg-slate-50 p-1">
                   {todoBoards.map((board) => {
                     const selected = selectedBoardId === board.id;
 
                     return (
-                      <div key={board.id} className={`flex items-start justify-between gap-3 px-3 py-3 ${selected ? "bg-blue-50" : "bg-white"}`}>
+                      <div key={board.id} className={`flex items-start justify-between gap-3 rounded-md px-3 py-3 ${selected ? "bg-white shadow-sm ring-1 ring-[#0C66E4]/20" : "bg-transparent hover:bg-white"}`}>
                         <button
                           type="button"
                           onClick={() => setSelectedBoardId(board.id)}
                           className="min-w-0 flex-1 text-left"
                         >
-                          <span className={`block truncate text-sm font-bold ${selected ? "text-blue-950" : "text-slate-950"}`}>{board.name}</span>
+                          <span className={`block truncate text-sm font-bold ${selected ? "text-[#0C66E4]" : "text-slate-950"}`}>{board.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-slate-500">{memberSummary(board)}</span>
                         </button>
                         <button
@@ -1245,11 +1321,12 @@ const TodoList = () => {
           </div>
 
           <div className="space-y-6">
-            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+            <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <h2 className="text-lg font-bold text-slate-950">Board View</h2>
-                  <p className="mt-1 text-sm text-slate-500">Choose a board to focus this task list.</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Board filter</p>
+                  <h2 className="mt-1 text-lg font-bold text-slate-950">Focus Area</h2>
+                  <p className="mt-1 text-sm text-slate-500">Choose a board and view to focus this issue board.</p>
                 </div>
               </div>
 
@@ -1257,14 +1334,14 @@ const TodoList = () => {
                 <button
                   type="button"
                   onClick={() => setSelectedBoardId(BOARD_FILTER_ALL)}
-                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_ALL ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_ALL ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                 >
                   All Boards ({boardCounts.all})
                 </button>
                 <button
                   type="button"
                   onClick={() => setSelectedBoardId(BOARD_FILTER_UNASSIGNED)}
-                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_UNASSIGNED ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_UNASSIGNED ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                 >
                   No Board ({boardCounts.unassigned})
                 </button>
@@ -1273,7 +1350,7 @@ const TodoList = () => {
                     key={board.id}
                     type="button"
                     onClick={() => setSelectedBoardId(board.id)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === board.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === board.id ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     {board.name} ({boardCounts.byBoard[board.id] || 0})
                   </button>
@@ -1282,142 +1359,185 @@ const TodoList = () => {
             </section>
 
             <section className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_390px]">
-              <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <h2 className="text-lg font-bold text-slate-950">Task Board</h2>
-                  <p className="mt-1 text-sm text-slate-500">Review open work, owner-specific items, and completed todos.</p>
-                </div>
-                <input
-                  value={searchTerm}
-                  onChange={(event) => setSearchTerm(event.target.value)}
-                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 lg:w-64"
-                  placeholder="Search todos"
-                />
-              </div>
-
-              <div className="mt-4 flex flex-wrap gap-2">
-                {filters.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setFilter(item.id)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${filter === item.id ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="divide-y divide-slate-100">
-              {filteredTodos.length === 0 ? (
-                <div className="p-6 text-sm text-slate-500">No todos match this view.</div>
-              ) : filteredTodos.map((todo) => {
-                const state = todoDueState(todo);
-                const isOpen = todoIsOpen(todo);
-
-                return (
-                  <div key={todo.id} className="px-5 py-4 transition hover:bg-slate-50">
-                    <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${priorityTone(todo.priority)}`}>
-                            {TODO_PRIORITY_LABELS[todo.priority] || "Normal"}
-                          </span>
-                          <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${dueTone(state)}`}>
-                            {dueLabel(todo)}
-                          </span>
-                          {todo.reminderEnabled && (
-                            <span className="inline-flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2.5 py-1 text-xs font-semibold text-purple-700">
-                              <MdOutlineSchedule className="h-3.5 w-3.5" />
-                              {todo.reminderAt ? formatShortDateTime(todo.reminderAt) : "Alert"}
-                            </span>
-                          )}
-                        </div>
-
-                        <h3 className="mt-3 break-words text-base font-bold text-slate-950">{todo.title}</h3>
-                        {todo.description && <p className="mt-1 whitespace-pre-wrap break-words text-sm text-slate-600">{todo.description}</p>}
-
-                        <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                          <span>{TODO_STATUS_LABELS[todo.status] || "Open"}</span>
-                          <span>{todoBoardName(todo, boardById)}</span>
-                          <span>{assignmentLabel(todo)}</span>
-                          {todo.relatedEntity?.type && todo.relatedEntity?.id && (
-                            <span>{todo.relatedEntity.type}: {todo.relatedEntity.label || todo.relatedEntity.id}</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex shrink-0 flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => openTodoDetails(todo)}
-                          className={`inline-flex items-center gap-2 rounded-md border px-3 py-2 text-sm font-semibold transition ${selectedTodoId === todo.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"}`}
-                        >
-                          <FaEdit className="h-3.5 w-3.5" />
-                          Details
-                        </button>
-                        {isOpen && todo.status !== TODO_STATUS.inProgress && (
-                          <button
-                            type="button"
-                            onClick={() => updateTodoStatus(todo, TODO_STATUS.inProgress)}
-                            className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-                          >
-                            <FaRegCircle className="h-3.5 w-3.5" />
-                            Start
-                          </button>
-                        )}
-                        {isOpen && (
-                          <button
-                            type="button"
-                            onClick={() => updateTodoStatus(todo, TODO_STATUS.done)}
-                            className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                          >
-                            <FaCheckCircle className="h-3.5 w-3.5" />
-                            Done
-                          </button>
-                        )}
-                        {todo.status === TODO_STATUS.done && (
-                          <button
-                            type="button"
-                            onClick={() => updateTodoStatus(todo, TODO_STATUS.open)}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                          >
-                            Reopen
-                          </button>
-                        )}
-                        {todo.status !== TODO_STATUS.archived && (
-                          <button
-                            type="button"
-                            onClick={() => updateTodoStatus(todo, TODO_STATUS.archived)}
-                            className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                          >
-                            <MdArchive className="h-4 w-4" />
-                            Archive
-                          </button>
-                        )}
-                      </div>
+              <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+                <div className="border-b border-slate-200 px-5 py-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">{selectedBoardLabel}</p>
+                      <h2 className="mt-1 text-lg font-bold text-slate-950">Task Board</h2>
+                      <p className="mt-1 text-sm text-slate-500">Issues are grouped by workflow status and sorted by urgency. Done shows the last {TODO_DONE_BOARD_LOOKBACK_DAYS} days.</p>
+                    </div>
+                    <div className="relative w-full lg:w-72">
+                      <FaSearch className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                      <input
+                        value={searchTerm}
+                        onChange={(event) => setSearchTerm(event.target.value)}
+                        className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-[#0C66E4] focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        placeholder="Search todos"
+                      />
                     </div>
                   </div>
-                );
-              })}
-            </div>
-          </section>
 
-              <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {filters.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => setFilter(item.id)}
+                        className={`rounded-md px-3 py-2 text-sm font-semibold transition ${filter === item.id ? "bg-slate-900 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {filteredTodos.length === 0 ? (
+                  <div className="p-6 text-sm text-slate-500">No todos match this view.</div>
+                ) : (
+                  <div className="grid gap-3 bg-slate-50 p-3 xl:grid-cols-3">
+                    {kanbanColumns.map((column) => (
+                      <div key={column.id} className="min-h-[360px] rounded-md border border-slate-200 bg-slate-100/80">
+                        <div className="sticky top-0 z-10 rounded-t-md border-b border-slate-200 bg-slate-100 px-3 py-3">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`h-2 w-2 rounded-full ${column.accent}`} />
+                                <h3 className="truncate text-xs font-bold uppercase tracking-wide text-slate-700">{column.label}</h3>
+                              </div>
+                              <p className="mt-1 truncate text-xs text-slate-500">{column.helper}</p>
+                            </div>
+                            <span className="rounded-full bg-white px-2 py-1 text-xs font-bold text-slate-600 shadow-sm">{column.todos.length}</span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3 p-3">
+                          {column.todos.length === 0 ? (
+                            <div className="rounded-md border border-dashed border-slate-300 bg-white/70 p-4 text-center text-sm text-slate-500">
+                              No issues here.
+                            </div>
+                          ) : column.todos.map((todo) => {
+                            const state = todoDueState(todo);
+                            const isOpen = todoIsOpen(todo);
+
+                            return (
+                              <article
+                                key={todo.id}
+                                className={`rounded-md border bg-white p-3 shadow-sm transition hover:border-[#0C66E4]/40 hover:shadow-md ${selectedTodoId === todo.id ? "border-[#0C66E4] ring-2 ring-blue-100" : "border-slate-200"}`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => openTodoDetails(todo)}
+                                  className="block w-full text-left"
+                                >
+                                  <div className="flex items-start justify-between gap-3">
+                                    <span className="rounded bg-slate-100 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-slate-600">
+                                      {todoIssueKey(todo)}
+                                    </span>
+                                    {todoNeedsAttention(todo) && (
+                                      <FaExclamationTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                                    )}
+                                  </div>
+
+                                  <h3 className="mt-3 break-words text-sm font-bold leading-5 text-slate-950">{todo.title}</h3>
+                                  {todo.description && <p className="mt-1 line-clamp-2 whitespace-pre-wrap break-words text-xs leading-5 text-slate-500">{todo.description}</p>}
+
+                                  <div className="mt-3 flex flex-wrap gap-2">
+                                    <span className={`inline-flex rounded border px-2 py-1 text-[11px] font-bold ${priorityTone(todo.priority)}`}>
+                                      {TODO_PRIORITY_LABELS[todo.priority] || "Normal"}
+                                    </span>
+                                    <span className={`inline-flex rounded border px-2 py-1 text-[11px] font-bold ${dueTone(state)}`}>
+                                      {dueLabel(todo)}
+                                    </span>
+                                    {todo.reminderEnabled && (
+                                      <span className="inline-flex items-center gap-1 rounded border border-purple-200 bg-purple-50 px-2 py-1 text-[11px] font-bold text-purple-700">
+                                        <MdOutlineSchedule className="h-3 w-3" />
+                                        {todo.reminderAt ? formatShortDateTime(todo.reminderAt) : "Alert"}
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  <div className="mt-3 space-y-1 text-xs font-semibold text-slate-500">
+                                    <p className="truncate">{todoBoardName(todo, boardById)}</p>
+                                    <p className="truncate">{assignmentLabel(todo)}</p>
+                                    {todo.relatedEntity?.type && todo.relatedEntity?.id && (
+                                      <p className="truncate">{todo.relatedEntity.type}: {todo.relatedEntity.label || todo.relatedEntity.id}</p>
+                                    )}
+                                  </div>
+                                </button>
+
+                                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => openTodoDetails(todo)}
+                                    className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${selectedTodoId === todo.id ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-100"}`}
+                                  >
+                                    <FaEdit className="h-3 w-3" />
+                                    Details
+                                  </button>
+                                  {isOpen && todo.status !== TODO_STATUS.inProgress && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateTodoStatus(todo, TODO_STATUS.inProgress)}
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                                    >
+                                      <FaRegCircle className="h-3 w-3" />
+                                      Start
+                                    </button>
+                                  )}
+                                  {isOpen && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateTodoStatus(todo, TODO_STATUS.done)}
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                    >
+                                      <FaCheckCircle className="h-3 w-3" />
+                                      Done
+                                    </button>
+                                  )}
+                                  {todo.status === TODO_STATUS.done && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateTodoStatus(todo, TODO_STATUS.open)}
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                      Reopen
+                                    </button>
+                                  )}
+                                  {todo.status !== TODO_STATUS.archived && (
+                                    <button
+                                      type="button"
+                                      onClick={() => updateTodoStatus(todo, TODO_STATUS.archived)}
+                                      className="inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                                    >
+                                      <MdArchive className="h-3.5 w-3.5" />
+                                      Archive
+                                    </button>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+
+              <aside className="rounded-md border border-slate-200 bg-white p-5 shadow-sm 2xl:sticky 2xl:top-4 2xl:self-start">
                 {!selectedTodo || !editForm ? (
                   <div className="text-sm text-slate-500">
-                    <h2 className="text-lg font-bold text-slate-950">Todo Details</h2>
-                    <p className="mt-2">Select a todo to view details and make changes.</p>
+                    <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Inspector</p>
+                    <h2 className="mt-1 text-lg font-bold text-slate-950">Issue Details</h2>
+                    <p className="mt-2">Select an issue card to view details and make changes.</p>
                   </div>
                 ) : (
                   <div className="space-y-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{todoBoardName(selectedTodo, boardById)}</p>
-                        <h2 className="mt-1 break-words text-lg font-bold text-slate-950">Todo Details</h2>
+                        <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">{todoIssueKey(selectedTodo)} | {todoBoardName(selectedTodo, boardById)}</p>
+                        <h2 className="mt-1 break-words text-lg font-bold text-slate-950">Issue Details</h2>
                       </div>
                       <button
                         type="button"
@@ -1432,10 +1552,11 @@ const TodoList = () => {
                       </button>
                     </div>
 
-                    <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
-                      <div>Created by {selectedTodo.createdByName || "Company user"}</div>
-                      <div>Created {formatShortDateTime(selectedTodo.createdAt)}</div>
-                      <div>Updated {formatShortDateTime(selectedTodo.updatedAt)}</div>
+                      <div className="space-y-2 rounded-md border border-slate-200 bg-slate-50 p-3 text-xs font-semibold text-slate-600">
+                        <div>Status: {TODO_STATUS_LABELS[selectedTodo.status] || "Open"}</div>
+                        <div>Created by {selectedTodo.createdByName || "Company user"}</div>
+                        <div>Created {formatShortDateTime(selectedTodo.createdAt)}</div>
+                        <div>Updated {formatShortDateTime(selectedTodo.updatedAt)}</div>
                       {selectedTodo.relatedEntity?.type && selectedTodo.relatedEntity?.id && (
                         <div>{selectedTodo.relatedEntity.type}: {selectedTodo.relatedEntity.label || selectedTodo.relatedEntity.id}</div>
                       )}
@@ -1592,10 +1713,10 @@ const TodoList = () => {
                       <button
                         type="submit"
                         disabled={savingTodoEdit}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0C66E4] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC] disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <FaSave className="h-3.5 w-3.5" />
-                        {savingTodoEdit ? "Saving..." : "Save Todo"}
+                        {savingTodoEdit ? "Saving..." : "Save Issue"}
                       </button>
                     </form>
                   </div>

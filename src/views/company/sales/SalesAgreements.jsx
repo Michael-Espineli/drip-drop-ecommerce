@@ -1,9 +1,10 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
 import {
   FaArrowLeft,
   FaCheckCircle,
+  FaEdit,
   FaEnvelope,
   FaFileSignature,
   FaPlus,
@@ -25,6 +26,7 @@ import {
 } from '../../../utils/sales/agreementRouting';
 import { generateServiceAgreementsFromRoutes } from '../../../utils/sales/routeAgreementGeneration';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import SalesAgreementEditorModal from './SalesAgreementEditorModal';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -82,6 +84,24 @@ const agreementSortOptions = [
 const defaultSortDirectionForKey = (sortKey) => (
   ['agreement', 'customer', 'status'].includes(sortKey) ? 'asc' : 'desc'
 );
+
+const defaultAgreementFilters = {
+  searchTerm: '',
+  statusFilter: 'all',
+  sortKey: 'updated',
+};
+
+const agreementFilterParamAliases = {
+  searchTerm: ['q', 'search'],
+  statusFilter: ['status'],
+  billingTypeFilter: ['type', 'billingType'],
+  sortKey: ['sort', 'sortKey'],
+  sortDirection: ['direction', 'dir', 'sortDirection'],
+};
+
+const agreementFilterParamKeys = Object.values(agreementFilterParamAliases).flat();
+
+const agreementSortOptionValues = agreementSortOptions.map((option) => option.value);
 
 const agreementAmountCents = (agreement = {}) => (
   Number(agreement.totalAmountCents || agreement.rateAmountCents || 0) || 0
@@ -211,6 +231,120 @@ const firstAllowedBillingType = (allowedTypes = [], preferredType = AgreementBil
   return allowedTypes[0] || AgreementBillingType.recurring;
 };
 
+const firstParamValue = (searchParams, keys = []) => {
+  for (const key of keys) {
+    const value = searchParams.get(key);
+    if (value !== null && value !== undefined && value !== '') return value;
+  }
+
+  return '';
+};
+
+const normalizeAgreementSortKey = (value) => (
+  agreementSortOptionValues.find((optionValue) => normalizeStatus(optionValue) === normalizeStatus(value))
+    || defaultAgreementFilters.sortKey
+);
+
+const normalizeAgreementSortDirection = (value, sortKey) => {
+  const normalized = String(value || '').toLowerCase();
+  return normalized === 'asc' || normalized === 'desc' ? normalized : defaultSortDirectionForKey(sortKey);
+};
+
+const normalizeAgreementStatusFilter = (value) => {
+  const normalized = normalizeStatus(value);
+  if (!normalized || normalized === 'all') return defaultAgreementFilters.statusFilter;
+
+  return Object.values(SalesAgreementStatus).find((status) => normalizeStatus(status) === normalized)
+    || defaultAgreementFilters.statusFilter;
+};
+
+const normalizeAgreementBillingTypeValue = (value) => {
+  const normalized = normalizeStatus(value);
+  if (!normalized) return '';
+  if (normalized === 'all') return AgreementBillingType.all;
+  if (normalized === 'recurring' || normalized === 'recurringservice') return AgreementBillingType.recurring;
+  if (normalized === 'onetime' || normalized === 'oneoff' || normalized === 'oneoffjob') return AgreementBillingType.oneTime;
+
+  return '';
+};
+
+const normalizeAgreementBillingTypeFilter = (value, allowedTypes = [], fallbackType = AgreementBillingType.recurring) => {
+  const billingType = normalizeAgreementBillingTypeValue(value);
+  if (!billingType) return fallbackType;
+
+  if (billingType === AgreementBillingType.all) {
+    return allowedTypes.includes(AgreementBillingType.all) || allowedTypes.length > 1
+      ? AgreementBillingType.all
+      : fallbackType;
+  }
+
+  return allowedTypes.includes(AgreementBillingType.all) || allowedTypes.includes(billingType)
+    ? billingType
+    : fallbackType;
+};
+
+const normalizeAgreementFilters = (
+  filters = {},
+  {
+    allowedBillingTypes = [AgreementBillingType.recurring],
+    defaultBillingType = AgreementBillingType.recurring,
+    routingQueueOnly = false,
+  } = {}
+) => {
+  const sortKey = normalizeAgreementSortKey(filters.sortKey);
+  const fallbackBillingType = firstAllowedBillingType(allowedBillingTypes, defaultBillingType);
+
+  return {
+    searchTerm: String(filters.searchTerm || '').trim(),
+    statusFilter: routingQueueOnly
+      ? SalesAgreementStatus.accepted
+      : normalizeAgreementStatusFilter(filters.statusFilter),
+    billingTypeFilter: routingQueueOnly
+      ? AgreementBillingType.recurring
+      : normalizeAgreementBillingTypeFilter(filters.billingTypeFilter, allowedBillingTypes, fallbackBillingType),
+    sortKey,
+    sortDirection: normalizeAgreementSortDirection(filters.sortDirection, sortKey),
+  };
+};
+
+const agreementFiltersFromParams = (searchParams, options = {}) => normalizeAgreementFilters({
+  searchTerm: firstParamValue(searchParams, agreementFilterParamAliases.searchTerm),
+  statusFilter: firstParamValue(searchParams, agreementFilterParamAliases.statusFilter),
+  billingTypeFilter: firstParamValue(searchParams, agreementFilterParamAliases.billingTypeFilter),
+  sortKey: firstParamValue(searchParams, agreementFilterParamAliases.sortKey),
+  sortDirection: firstParamValue(searchParams, agreementFilterParamAliases.sortDirection),
+}, options);
+
+const agreementFilterParamsFromState = (baseParams, filters, options = {}) => {
+  const nextParams = new URLSearchParams(baseParams);
+  const normalizedFilters = normalizeAgreementFilters(filters, options);
+  const defaultBillingType = firstAllowedBillingType(options.allowedBillingTypes, options.defaultBillingType);
+
+  agreementFilterParamKeys.forEach((key) => nextParams.delete(key));
+
+  if (normalizedFilters.searchTerm) {
+    nextParams.set('q', normalizedFilters.searchTerm);
+  }
+
+  if (!options.routingQueueOnly && normalizedFilters.statusFilter !== defaultAgreementFilters.statusFilter) {
+    nextParams.set('status', normalizedFilters.statusFilter);
+  }
+
+  if (!options.routingQueueOnly && normalizedFilters.billingTypeFilter !== defaultBillingType) {
+    nextParams.set('type', normalizedFilters.billingTypeFilter);
+  }
+
+  if (normalizedFilters.sortKey !== defaultAgreementFilters.sortKey) {
+    nextParams.set('sort', normalizedFilters.sortKey);
+  }
+
+  if (normalizedFilters.sortDirection !== defaultSortDirectionForKey(normalizedFilters.sortKey)) {
+    nextParams.set('direction', normalizedFilters.sortDirection);
+  }
+
+  return nextParams;
+};
+
 const StatTile = ({ icon: Icon, label, value, helper }) => (
   <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
     <div className="flex items-start justify-between gap-3">
@@ -244,21 +378,82 @@ const SalesAgreements = ({
   const [agreements, setAgreements] = useState([]);
   const [recurringStops, setRecurringStops] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [sortKey, setSortKey] = useState('updated');
-  const [sortDirection, setSortDirection] = useState('desc');
   const [error, setError] = useState('');
   const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
+  const [editingAgreementId, setEditingAgreementId] = useState('');
 
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const allowedBillingTypes = useMemo(() => (
     routingQueueOnly ? [AgreementBillingType.recurring] : normalizeAgreementTypeOptions(agreementTypes)
   ), [agreementTypes, routingQueueOnly]);
   const initialBillingTypeFilter = useMemo(() => (
     firstAllowedBillingType(allowedBillingTypes, defaultAgreementType)
   ), [allowedBillingTypes, defaultAgreementType]);
-  const [billingTypeFilter, setBillingTypeFilter] = useState(initialBillingTypeFilter);
+  const filterOptions = useMemo(() => ({
+    allowedBillingTypes,
+    defaultBillingType: initialBillingTypeFilter,
+    routingQueueOnly,
+  }), [allowedBillingTypes, initialBillingTypeFilter, routingQueueOnly]);
+  const searchParamsString = searchParams.toString();
+  const {
+    searchTerm,
+    statusFilter,
+    billingTypeFilter,
+    sortKey,
+    sortDirection,
+  } = useMemo(() => (
+    agreementFiltersFromParams(new URLSearchParams(searchParamsString), filterOptions)
+  ), [filterOptions, searchParamsString]);
+
+  useEffect(() => {
+    const normalizedParams = agreementFilterParamsFromState(
+      new URLSearchParams(searchParamsString),
+      {
+        searchTerm,
+        statusFilter,
+        billingTypeFilter,
+        sortKey,
+        sortDirection,
+      },
+      filterOptions
+    );
+    const normalizedParamsString = normalizedParams.toString();
+
+    if (normalizedParamsString !== searchParamsString) {
+      setSearchParams(normalizedParams, { replace: true });
+    }
+  }, [
+    billingTypeFilter,
+    filterOptions,
+    searchParamsString,
+    searchTerm,
+    setSearchParams,
+    sortDirection,
+    sortKey,
+    statusFilter,
+  ]);
+
+  const setAgreementFilters = (nextFilters = {}) => {
+    const nextParams = agreementFilterParamsFromState(
+      new URLSearchParams(searchParamsString),
+      {
+        searchTerm,
+        statusFilter,
+        billingTypeFilter,
+        sortKey,
+        sortDirection,
+        ...nextFilters,
+      },
+      filterOptions
+    );
+
+    setSearchParams(nextParams, { replace: true });
+  };
+  const editingAgreement = useMemo(
+    () => agreements.find((agreement) => agreement.id === editingAgreementId) || null,
+    [agreements, editingAgreementId]
+  );
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -308,16 +503,6 @@ const SalesAgreements = ({
       unsubscribeRecurringStops();
     };
   }, [recentlySelectedCompany, routingQueueOnly]);
-
-  useEffect(() => {
-    setBillingTypeFilter(initialBillingTypeFilter);
-  }, [initialBillingTypeFilter]);
-
-  useEffect(() => {
-    if (!routingQueueOnly) return;
-    setStatusFilter(SalesAgreementStatus.accepted);
-    setBillingTypeFilter(AgreementBillingType.recurring);
-  }, [routingQueueOnly]);
 
   const recurringRoutingIndex = useMemo(
     () => buildRecurringRoutingIndex(recurringStops),
@@ -395,13 +580,18 @@ const SalesAgreements = ({
   }, [allowedBillingTypes]);
 
   const handleSortKeyChange = (nextSortKey) => {
-    setSortKey(nextSortKey);
-    setSortDirection(defaultSortDirectionForKey(nextSortKey));
+    const normalizedSortKey = normalizeAgreementSortKey(nextSortKey);
+    setAgreementFilters({
+      sortKey: normalizedSortKey,
+      sortDirection: defaultSortDirectionForKey(normalizedSortKey),
+    });
   };
 
   const handleHeaderSort = (nextSortKey) => {
     if (sortKey === nextSortKey) {
-      setSortDirection((currentDirection) => (currentDirection === 'asc' ? 'desc' : 'asc'));
+      setAgreementFilters({
+        sortDirection: sortDirection === 'asc' ? 'desc' : 'asc',
+      });
       return;
     }
 
@@ -438,9 +628,11 @@ const SalesAgreements = ({
           ? ` ${result.skippedExistingCount} stop(s) already had agreements.`
           : '';
         toast.success(`Created ${result.createdCount} route-based agreement draft(s).${skippedText}`);
-        setSearchTerm('');
-        setStatusFilter(SalesAgreementStatus.draft);
-        setBillingTypeFilter(AgreementBillingType.recurring);
+        setAgreementFilters({
+          searchTerm: '',
+          statusFilter: SalesAgreementStatus.draft,
+          billingTypeFilter: AgreementBillingType.recurring,
+        });
         return;
       }
 
@@ -577,14 +769,14 @@ const SalesAgreements = ({
               <input
                 type="search"
                 value={searchTerm}
-                onChange={(event) => setSearchTerm(event.target.value)}
+                onChange={(event) => setAgreementFilters({ searchTerm: event.target.value })}
                 className="w-full rounded-md border border-slate-300 py-2 pl-10 pr-3 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 placeholder="Search by customer, agreement, email, status, or template"
               />
             </div>
             <select
               value={statusFilter}
-              onChange={(event) => setStatusFilter(event.target.value)}
+              onChange={(event) => setAgreementFilters({ statusFilter: event.target.value })}
               disabled={routingQueueOnly}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
@@ -594,7 +786,7 @@ const SalesAgreements = ({
             </select>
             <select
               value={billingTypeFilter}
-              onChange={(event) => setBillingTypeFilter(event.target.value)}
+              onChange={(event) => setAgreementFilters({ billingTypeFilter: event.target.value })}
               disabled={routingQueueOnly || billingTypeOptions.length <= 1}
               className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
@@ -616,7 +808,7 @@ const SalesAgreements = ({
             </select>
             <button
               type="button"
-              onClick={() => setSortDirection((currentDirection) => (currentDirection === 'asc' ? 'desc' : 'asc'))}
+              onClick={() => setAgreementFilters({ sortDirection: sortDirection === 'asc' ? 'desc' : 'asc' })}
               className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               aria-label={`Current sort direction: ${sortDirectionLabels[sortDirection]}`}
             >
@@ -672,6 +864,7 @@ const SalesAgreements = ({
                         Updated
                       </SortHeaderButton>
                     </th>
+                    <th className="px-5 py-3 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 bg-white">
@@ -697,6 +890,20 @@ const SalesAgreements = ({
                       </td>
                       <td className="px-5 py-4 text-slate-500">{formatDate(agreement.sentAt)}</td>
                       <td className="px-5 py-4 text-slate-500">{formatDate(agreement.updatedAt || agreement.createdAt)}</td>
+                      <td className="px-5 py-4 text-right">
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setEditingAgreementId(agreement.id);
+                          }}
+                          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          aria-label={`Edit ${agreement.title || 'service agreement'}`}
+                        >
+                          <FaEdit className="text-xs" />
+                          Edit
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -705,6 +912,13 @@ const SalesAgreements = ({
           </div>
         </section>
       </div>
+
+      <SalesAgreementEditorModal
+        agreement={editingAgreement}
+        open={Boolean(editingAgreement)}
+        onClose={() => setEditingAgreementId('')}
+        onDeleted={() => setEditingAgreementId('')}
+      />
     </div>
   );
 };

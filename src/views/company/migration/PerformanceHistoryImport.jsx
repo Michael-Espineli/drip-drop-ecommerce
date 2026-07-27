@@ -25,6 +25,7 @@ import {
   parsePerformanceHistoryRows,
   summarizePerformanceHistoryRecords,
 } from "./performanceHistoryImportUtils";
+import { appConfirm } from "../../../utils/appDialog";
 
 const MAX_WRITES_PER_BATCH = 450;
 
@@ -312,9 +313,11 @@ function PerformanceHistoryImport() {
       return;
     }
 
-    const confirmed = window.confirm(
-      `Import ${importableRecords.length} performance history rows? ${skippedTechnicianRecords.length} enabled rows are mapped to skipped technicians and ${summary.disabledRows} rows are disabled in the workbook.`
-    );
+    const confirmed = await appConfirm({
+      title: "Import Performance History",
+      message: `Import ${importableRecords.length} performance history rows? ${skippedTechnicianRecords.length} enabled rows are mapped to skipped technicians and ${summary.disabledRows} rows are disabled in the workbook.`,
+      confirmLabel: "Import Rows",
+    });
     if (!confirmed) return;
 
     setUploading(true);

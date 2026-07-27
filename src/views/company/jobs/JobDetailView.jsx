@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState, useContext } from "react";
-import { Link, useParams, useNavigate } from "react-router-dom";
+import { Link, useParams, useNavigate, UNSAFE_NavigationContext } from "react-router-dom";
 import {
   doc,
   getDoc,
@@ -61,14 +61,17 @@ import {
   ISSUE_PRIORITY_OPTIONS,
   JOB_PLAN_STATUS,
   JOB_PLAN_TIER_OPTIONS,
+  getJobPlanDisplayName,
+  getJobPlanRecommendationDisplay,
+  getJobPlanRecommendationLabel,
   getIssuePriorityLabel,
   getIssuePriorityTone,
-  getJobPlanTierLabel,
   getJobPlanTierTone,
   normalizeIssuePriority,
   normalizeJobPlanTier,
   normalizeJobPlanStatus,
 } from "../../../utils/models/JobPlan";
+import { appConfirm, appPrompt } from "../../../utils/appDialog";
 
 /**
  * JobDetailView
@@ -101,6 +104,10 @@ const clearSectionLoadingState = () =>
   }, {});
 
 const TASK_STATUS_OPTIONS = ["Unassigned", "Scheduled", "In Progress", "Finished"];
+const PLAN_EDITOR_UNSAVED_WARNING =
+  "You have unsaved plan changes. Leave this page and discard those changes?";
+const PLAN_EDITOR_DISCARD_WARNING =
+  "You have unsaved plan changes. Load another plan and discard those changes?";
 
 const EMPTY_TASK_EDIT_FORM = {
   name: "",
@@ -113,6 +120,139 @@ const EMPTY_TASK_EDIT_FORM = {
   dataBaseItemId: "",
   quantity: "1",
   customerApproval: false,
+};
+
+const useUnsavedChangesWarning = (when, message) => {
+  const navigationContext = useContext(UNSAFE_NavigationContext);
+  const navigator = navigationContext?.navigator;
+
+  useEffect(() => {
+    if (!when || typeof window === "undefined") return undefined;
+
+    const handleBeforeUnload = (event) => {
+      event.preventDefault();
+      event.returnValue = message;
+      return message;
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [message, when]);
+
+  useEffect(() => {
+    if (!when || typeof navigator?.block !== "function") return undefined;
+
+    const unblock = navigator.block((transition) => {
+      appConfirm({
+        title: "Unsaved Changes",
+        message,
+        confirmLabel: "Discard Changes",
+        variant: "danger",
+      }).then((confirmed) => {
+        if (confirmed) {
+          unblock();
+          transition.retry();
+        }
+      });
+    });
+
+    return unblock;
+  }, [message, navigator, when]);
+};
+
+const planSnapshotCents = (value) => {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const planSnapshotNumber = (value) => {
+  const numeric = Number(value || 0);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const getPlanSnapshotMaterialCostCents = (item = {}) => {
+  if (item.plannedTotalCostCents !== undefined && item.plannedTotalCostCents !== null) {
+    return planSnapshotCents(item.plannedTotalCostCents);
+  }
+
+  return Math.round(planSnapshotCents(item.plannedUnitCostCents ?? item.cost) * planSnapshotNumber(item.quantity));
+};
+
+const getPlanSnapshotMaterialPriceCents = (item = {}) => {
+  if (item.plannedTotalPriceCents !== undefined && item.plannedTotalPriceCents !== null) {
+    return planSnapshotCents(item.plannedTotalPriceCents);
+  }
+
+  return Math.round(planSnapshotCents(item.plannedUnitPriceCents ?? item.price) * planSnapshotNumber(item.quantity));
+};
+
+const buildPlanEditorSnapshot = ({
+  planId = "",
+  title = "",
+  description = "",
+  tasks = [],
+  plannedStops = [],
+  materials = [],
+} = {}) => {
+  const cleanString = (value) => String(value || "").trim();
+  const sortEditableItems = (items = []) =>
+    (items || [])
+      .map((item, index) => ({ item: item || {}, index }))
+      .sort((a, b) => {
+        const orderDelta = planSnapshotNumber(a.item.sortOrder ?? a.index) - planSnapshotNumber(b.item.sortOrder ?? b.index);
+        if (orderDelta !== 0) return orderDelta;
+        return cleanString(a.item.id).localeCompare(cleanString(b.item.id));
+      });
+
+  return JSON.stringify({
+    planId: cleanString(planId),
+    title: cleanString(title),
+    description: cleanString(description),
+    tasks: sortEditableItems(tasks).map(({ item, index }) => ({
+      id: cleanString(item.id),
+      sortOrder: planSnapshotNumber(item.sortOrder ?? index),
+      name: cleanString(item.name),
+      description: cleanString(item.description),
+      type: cleanString(item.type),
+      status: cleanString(item.status || "Unassigned"),
+      contractedRate: planSnapshotCents(item.contractedRate),
+      estimatedTime: planSnapshotNumber(item.estimatedTime || item.estimatedMinutes),
+      bodyOfWaterId: cleanString(item.bodyOfWaterId),
+      equipmentId: cleanString(item.equipmentId),
+      dataBaseItemId: cleanString(item.dataBaseItemId || item.dbItemId),
+      quantity: planSnapshotNumber(item.quantity || 1),
+      customerApproval: Boolean(item.customerApproval || item.customerApprovalRequired),
+    })),
+    plannedStops: sortEditableItems(plannedStops).map(({ item, index }) => ({
+      id: cleanString(item.id),
+      sortOrder: planSnapshotNumber(item.sortOrder ?? index),
+      name: cleanString(item.name),
+      description: cleanString(item.description),
+      type: cleanString(item.type || item.serviceStopTypeName),
+      serviceStopTypeId: cleanString(item.serviceStopTypeId || item.typeId),
+      estimatedMinutes: planSnapshotNumber(item.estimatedMinutes || item.duration || item.estimatedDuration),
+      plannedLaborCostCents: planSnapshotCents(item.plannedLaborCostCents ?? item.estimatedLaborCostCents ?? item.laborCostCents),
+      plannedLaborNotes: cleanString(item.plannedLaborNotes),
+      taskIds: [...(Array.isArray(item.taskIds) ? item.taskIds : [])].map(cleanString).sort(),
+    })),
+    materials: sortEditableItems(materials).map(({ item, index }) => ({
+      id: cleanString(item.id),
+      sortOrder: planSnapshotNumber(item.sortOrder ?? index),
+      name: cleanString(item.name || item.dbItemName),
+      description: cleanString(item.description),
+      subCategory: cleanString(item.subCategory),
+      genericItemId: cleanString(item.genericItemId),
+      dbItemId: cleanString(item.dbItemId),
+      linkedTaskId: cleanString(item.linkedTaskId),
+      quantity: planSnapshotNumber(item.quantity || item.quantityString || 1),
+      plannedUnitCostCents: planSnapshotCents(item.plannedUnitCostCents ?? item.cost),
+      plannedUnitPriceCents: planSnapshotCents(item.plannedUnitPriceCents ?? item.price),
+      plannedTotalCostCents: getPlanSnapshotMaterialCostCents(item),
+      plannedTotalPriceCents: getPlanSnapshotMaterialPriceCents(item),
+      customerApprovalRequired: Boolean(item.customerApprovalRequired),
+      customerApprovalStatus: cleanString(item.customerApprovalStatus),
+    })),
+  });
 };
 
 const JobDetailView = () => {
@@ -169,11 +309,11 @@ const JobDetailView = () => {
     solutionTierLabel: getIssuePriorityLabel(DEFAULT_ISSUE_PRIORITY),
     activePlanId: "",
     activePlanTier: DEFAULT_JOB_PLAN_TIER,
-    activePlanTierLabel: getJobPlanTierLabel(DEFAULT_JOB_PLAN_TIER),
+    activePlanTierLabel: getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER),
     acceptedPlanId: "",
     activeSolutionId: "",
     activeSolutionTier: DEFAULT_JOB_PLAN_TIER,
-    activeSolutionTierLabel: getJobPlanTierLabel(DEFAULT_JOB_PLAN_TIER),
+    activeSolutionTierLabel: getJobPlanRecommendationLabel(DEFAULT_JOB_PLAN_TIER),
     acceptedSolutionId: "",
     planSelectionStatus: "",
     solutionSelectionStatus: "",
@@ -417,6 +557,10 @@ const JobDetailView = () => {
   const [selectedPlanEditorId, setSelectedPlanEditorId] = useState("");
   const [loadingPlanEditorId, setLoadingPlanEditorId] = useState("");
   const [savingPlanEditor, setSavingPlanEditor] = useState(false);
+  const [planEditorDraft, setPlanEditorDraft] = useState({
+    title: "",
+    description: "",
+  });
   const [planForm, setPlanForm] = useState({
     id: "",
     title: "",
@@ -652,6 +796,61 @@ const JobDetailView = () => {
     if (typeof value === "string") return value;
     if (typeof value === "number") return String(value);
     return value.id || value.value || value.docId || "";
+  };
+
+  const companyUserDisplayName = (user = {}) => (
+    user.displayName ||
+    `${user.firstName || ""} ${user.lastName || ""}`.trim() ||
+    user.userName ||
+    user.name ||
+    "Admin"
+  );
+
+  const companyUserRoleName = (user = {}) => user.roleName || user.role || "";
+
+  const buildAdminOption = (docSnap) => {
+    const data = docSnap.data();
+    const docId = docSnap.id;
+    const adminId = data.userId || data.id || docId;
+    const companyUserId = data.id || docId;
+    const name = companyUserDisplayName(data);
+    const roleName = companyUserRoleName(data);
+    const alternateIds = [...new Set([adminId, data.userId, data.id, docId].filter(Boolean))];
+
+    return {
+      ...data,
+      id: adminId,
+      userId: adminId,
+      companyUserId,
+      name,
+      userName: name,
+      label: `${name}${roleName ? ` — ${roleName}` : ""}`,
+      value: adminId,
+      alternateIds,
+    };
+  };
+
+  const adminMatchesJob = (admin, sourceJob = {}) => {
+    const jobAdminId = sourceJob.adminId || "";
+    const jobAdminName = sourceJob.adminName || "";
+
+    if (jobAdminId && admin.alternateIds?.includes(jobAdminId)) return true;
+    return Boolean(jobAdminName && (admin.name === jobAdminName || admin.userName === jobAdminName));
+  };
+
+  const currentAdminOption = (sourceJob = {}) => {
+    if (!sourceJob.adminId && !sourceJob.adminName) return null;
+
+    return {
+      id: sourceJob.adminId || "",
+      userId: sourceJob.adminId || "",
+      companyUserId: "",
+      name: sourceJob.adminName || "Current Admin",
+      userName: sourceJob.adminName || "Current Admin",
+      label: sourceJob.adminName || "Current Admin",
+      value: sourceJob.adminId || "",
+      alternateIds: [sourceJob.adminId].filter(Boolean),
+    };
   };
 
   const quantityNumber = (value) => {
@@ -1415,7 +1614,7 @@ const JobDetailView = () => {
 
     return (
       <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${solutionTierTone(normalizedTier)}`}>
-        {normalizedTier} - {getJobPlanTierLabel(normalizedTier)}
+        {getJobPlanRecommendationDisplay(normalizedTier)}
       </span>
     );
   };
@@ -1936,6 +2135,18 @@ const JobDetailView = () => {
     setSelectedPlanEditorId(jobPlans[0]?.id || "");
   }, [activePlan?.id, job.activePlanId, job.activeSolutionId, jobPlans, selectedPlanEditorId]);
 
+  useEffect(() => {
+    if (!selectedEditorPlan) {
+      setPlanEditorDraft({ title: "", description: "" });
+      return;
+    }
+
+    setPlanEditorDraft({
+      title: getJobPlanDisplayName(selectedEditorPlan, ""),
+      description: selectedEditorPlan.description || "",
+    });
+  }, [selectedEditorPlan]);
+
   const explicitPlanTotalCents = (solution = {}) =>
     cents(solution.billingSummary?.totalAmountCents ?? solution.totalAmountCents ?? solution.rateAmountCents ?? solution.rate ?? 0);
 
@@ -1979,7 +2190,7 @@ const JobDetailView = () => {
         salesItemType: SalesCatalogItemType.service,
         billingBehavior: SalesCatalogBillingBehavior.oneTime,
         type: "Plan",
-        name: solution.title || solution.name || getJobPlanTierLabel(solution.planTier || solution.solutionTier),
+        name: getJobPlanDisplayName(solution, "Plan Option"),
         description: solution.description || "",
         quantity: 1,
         unitAmountCents: total,
@@ -1997,6 +2208,59 @@ const JobDetailView = () => {
     return planLineItems(solution).reduce((total, item) => total + cents(item.totalAmountCents || item.amount || 0), 0);
   };
 
+  const selectedEditorPlanScope = selectedEditorPlan ? planScopeArrays(selectedEditorPlan) : null;
+  const savedPlanEditorSnapshot = useMemo(() => {
+    if (!selectedEditorPlan) {
+      return buildPlanEditorSnapshot();
+    }
+
+    return buildPlanEditorSnapshot({
+      planId: selectedEditorPlan.id,
+      title: getJobPlanDisplayName(selectedEditorPlan, ""),
+      description: selectedEditorPlan.description || "",
+      tasks: selectedEditorPlanScope.tasks,
+      plannedStops: selectedEditorPlanScope.plannedServiceStops,
+      materials: selectedEditorPlanScope.shoppingItems,
+    });
+  }, [
+    selectedEditorPlan,
+    selectedEditorPlanScope,
+  ]);
+  const currentPlanEditorSnapshot = useMemo(() => (
+    buildPlanEditorSnapshot({
+      planId: selectedEditorPlan?.id || selectedPlanEditorId || "",
+      title: planEditorDraft.title,
+      description: planEditorDraft.description,
+      tasks: taskList,
+      plannedStops: plannedServiceStops,
+      materials: shoppingList,
+    })
+  ), [
+    selectedEditorPlan?.id,
+    selectedPlanEditorId,
+    planEditorDraft.title,
+    planEditorDraft.description,
+    taskList,
+    plannedServiceStops,
+    shoppingList,
+  ]);
+  const hasPlanEditorContent = Boolean(
+    planEditorDraft.title.trim() ||
+    planEditorDraft.description.trim() ||
+    (taskList || []).length ||
+    (plannedServiceStops || []).length ||
+    (shoppingList || []).length
+  );
+  const hasUnsavedPlanEditorChanges = Boolean(
+    !loading &&
+    !plansLoading &&
+    !loadingPlanEditorId &&
+    hasPlanEditorContent &&
+    currentPlanEditorSnapshot !== savedPlanEditorSnapshot
+  );
+
+  useUnsavedChangesWarning(hasUnsavedPlanEditorChanges, PLAN_EDITOR_UNSAVED_WARNING);
+
   const currentIssuePriority = () =>
     normalizeIssuePriority(job.issuePriorityLevel || job.priorityLevel || job.solutionTier || DEFAULT_ISSUE_PRIORITY);
 
@@ -2008,11 +2272,11 @@ const JobDetailView = () => {
       : lineItems.reduce((total, item) => total + cents(item.totalAmountCents || item.amount || 0), 0);
     setPlanForm({
       id: solution?.id || "",
-      title: solution?.title || solution?.name || `${tier} - ${getJobPlanTierLabel(tier)}`,
+      title: solution ? getJobPlanDisplayName(solution, "") : "",
       planTier: tier,
       solutionTier: tier,
       status: normalizeJobPlanStatus(solution?.status || JOB_PLAN_STATUS.DRAFT),
-      description: solution?.description || job.description || "",
+      description: solution?.description || "",
       rate: dollarsFromCents(calculatedTotalCents || job.rate || 0),
       laborCost: dollarsFromCents(solution ? planOptionLaborCents(solution) : plannedTotalLaborCents),
     });
@@ -2041,6 +2305,7 @@ const JobDetailView = () => {
   }) => {
     const priority = currentIssuePriority();
     const priorityLabel = getIssuePriorityLabel(priority);
+    const planName = String(title || "").trim() || "Untitled Plan";
     const taskSnapshots = (taskList || []).map((task, index) => ({
       ...task,
       sortOrder: Number(task.sortOrder ?? index),
@@ -2080,7 +2345,7 @@ const JobDetailView = () => {
       ? Math.round((projectedProfitCents / calculatedTotalAmountCents) * 1000) / 10
       : 0;
     const scopeOfWork = {
-      title: title || `${solutionTier} - ${solutionTierLabel}`,
+      title: planName,
       customerDescription: description,
       issueDescription: job.description || "",
       taskSummaries: taskSnapshots.map((task, index) => ({
@@ -2138,14 +2403,17 @@ const JobDetailView = () => {
       equipmentId: job.equipmentId || "",
       equipmentName: job.equipmentName || "",
       sourceType: "currentJobPlan",
-      title: title || `${solutionTier} - ${solutionTierLabel}`,
-      name: title || solutionTierLabel,
+      title: planName,
+      name: planName,
+      planName,
       description,
       status,
       planTier: solutionTier,
       planTierLabel: solutionTierLabel,
       solutionTier,
       solutionTierLabel,
+      recommendationRank: solutionTier,
+      recommendationRankLabel: solutionTierLabel,
       issuePriorityLevel: priority,
       issuePriorityLabel: priorityLabel,
       isAccepted: false,
@@ -2226,7 +2494,7 @@ const JobDetailView = () => {
     title = "",
     planTier = "",
     status = "",
-    description = "",
+    description = undefined,
     makeActive = true,
     showToast = true,
     recordHistory = true,
@@ -2238,9 +2506,12 @@ const JobDetailView = () => {
     const existingSolution = (jobPlans || []).find((solution) => solution.id === planId);
     const solutionId = planId || `comp_job_plan_${uuidv4()}`;
     const solutionTier = normalizeJobPlanTier(planTier || existingSolution?.planTier || existingSolution?.solutionTier || DEFAULT_JOB_PLAN_TIER);
-    const solutionTierLabel = getJobPlanTierLabel(solutionTier);
-    const nextTitle = (title || existingSolution?.title || existingSolution?.name || "").trim() || `${solutionTier} - ${solutionTierLabel}`;
-    const nextDescription = (description || existingSolution?.description || job.description || "").trim();
+    const solutionTierLabel = getJobPlanRecommendationLabel(solutionTier);
+    const existingPlanName = existingSolution ? getJobPlanDisplayName(existingSolution, "") : "";
+    const nextTitle = (title || existingPlanName || "").trim() || "Untitled Plan";
+    const nextDescription = typeof description === "string"
+      ? description.trim()
+      : (existingSolution?.description || "").trim();
     const currentLineItems = buildSuggestedContractSnapshot();
     const totalAmountCents =
       currentLineItems.reduce((total, item) => total + cents(item.totalAmountCents || item.amount || 0), 0) ||
@@ -2283,6 +2554,8 @@ const JobDetailView = () => {
         activeSolutionId: solutionId,
         activeSolutionTier: solutionTier,
         activeSolutionTierLabel: solutionTierLabel,
+        activePlanRecommendationRank: solutionTier,
+        activePlanRecommendationRankLabel: solutionTierLabel,
         planSelectionStatus: nextStatus,
         solutionSelectionStatus: nextStatus,
         updatedAt: serverTimestamp(),
@@ -2323,7 +2596,12 @@ const JobDetailView = () => {
         title: historyTitle || (existingSolution ? `Plan updated: ${nextTitle}` : `Plan added: ${nextTitle}`),
         description: nextDescription,
         changes: [
-          buildHistoryChange("planTier", "Plan Version", existingSolution ? getJobPlanTierLabel(existingSolution.planTier || existingSolution.solutionTier) : "—", solutionTierLabel),
+          buildHistoryChange(
+            "recommendationRank",
+            "Recommendation Rank",
+            existingSolution ? getJobPlanRecommendationDisplay(existingSolution.planTier || existingSolution.solutionTier) : "—",
+            getJobPlanRecommendationDisplay(solutionTier)
+          ),
           buildHistoryChange("totalAmountCents", "Calculated Customer Price", existingSolution ? moneyFromCents(planOptionTotalCents(existingSolution)) : "—", moneyFromCents(payload.totalAmountCents)),
           buildHistoryChange("taskCount", "Tasks", existingSolution ? String(existingSolution.taskCount || 0) : "—", String(payload.taskCount || 0)),
           buildHistoryChange("plannedStopCount", "Planned Stops", existingSolution ? String(existingSolution.plannedStopCount || 0) : "—", String(payload.plannedStopCount || 0)),
@@ -2347,6 +2625,10 @@ const JobDetailView = () => {
 
   const savePlanOption = async () => {
     if (!requirePermission("24", "update jobs")) return;
+    if (!planForm.title.trim()) {
+      toast.error("Add a plan name");
+      return;
+    }
 
     try {
       setSavingPlan(true);
@@ -2464,14 +2746,20 @@ const JobDetailView = () => {
     return { tasksToWrite, plannedStopsToWrite, materialsToWrite };
   };
 
-  const loadPlanIntoEditor = async (solution) => {
+  const confirmDiscardUnsavedPlanChanges = async () => (
+    !hasUnsavedPlanEditorChanges || await appConfirm({
+      title: "Unsaved Plan Changes",
+      message: PLAN_EDITOR_DISCARD_WARNING,
+      confirmLabel: "Discard Changes",
+      variant: "danger",
+    })
+  );
+
+  const loadPlanIntoEditor = async (solution, { confirmUnsavedChanges = true } = {}) => {
     if (!requirePermission("24", "update jobs")) return;
     if (!solution?.id || !recentlySelectedCompany || !jobId) return;
 
-    const ok = window.confirm(
-      "Load this plan into the Planned editor? This replaces the current editable tasks, planned stops, and planned materials."
-    );
-    if (!ok) return;
+    if (confirmUnsavedChanges && !(await confirmDiscardUnsavedPlanChanges())) return false;
 
     try {
       setLoadingPlanEditorId(solution.id);
@@ -2479,7 +2767,7 @@ const JobDetailView = () => {
         accepted: false,
       });
       const solutionTier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-      const solutionTierLabel = getJobPlanTierLabel(solutionTier);
+      const solutionTierLabel = getJobPlanRecommendationLabel(solutionTier);
       const nextStatus = normalizeJobPlanStatus(solution.status || JOB_PLAN_STATUS.DRAFT);
       const nowMillis = Date.now();
       const jobUpdates = {
@@ -2489,6 +2777,8 @@ const JobDetailView = () => {
         activeSolutionId: solution.id,
         activeSolutionTier: solutionTier,
         activeSolutionTierLabel: solutionTierLabel,
+        activePlanRecommendationRank: solutionTier,
+        activePlanRecommendationRankLabel: solutionTierLabel,
         planSelectionStatus: nextStatus,
         solutionSelectionStatus: nextStatus,
         updatedAt: serverTimestamp(),
@@ -2520,7 +2810,7 @@ const JobDetailView = () => {
       resetPlanForm(solution);
       await recordJobHistory({
         eventType: "Plan",
-        title: `Plan loaded for editing: ${solution.title || solution.name || solutionTierLabel}`,
+        title: `Plan loaded for editing: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
         description: solution.description || "",
         changes: [
           buildHistoryChange("activePlanId", "Editing Plan", job.activePlanId || job.activeSolutionId || "—", solution.id),
@@ -2538,34 +2828,58 @@ const JobDetailView = () => {
 
       toast.success("Plan loaded into Planned");
       setActiveTab("Planned");
+      return true;
     } catch (err) {
       console.error(err);
       toast.error("Failed to load plan");
+      return false;
     } finally {
       setLoadingPlanEditorId("");
     }
+  };
+
+  const handlePlanEditorSelection = async (planId) => {
+    const nextPlan = (jobPlans || []).find((solution) => solution.id === planId) || null;
+
+    if (!nextPlan) {
+      setSelectedPlanEditorId("");
+      return;
+    }
+
+    if (nextPlan.id === selectedEditorPlan?.id && !hasUnsavedPlanEditorChanges) {
+      setSelectedPlanEditorId(nextPlan.id);
+      return;
+    }
+
+    await loadPlanIntoEditor(nextPlan);
   };
 
   const saveSelectedEditorPlan = async () => {
     if (!requirePermission("24", "update jobs")) return;
 
     if (!selectedEditorPlan?.id) {
-      await createPlanFromEditor();
+      createPlanFromEditor();
       return;
     }
 
     try {
       setSavingPlanEditor(true);
+      const editorTitle = planEditorDraft.title.trim();
+      const editorDescription = planEditorDraft.description.trim();
+      if (!editorTitle && !getJobPlanDisplayName(selectedEditorPlan, "")) {
+        toast.error("Add a plan name");
+        return;
+      }
       await saveCurrentEditorToPlan({
         planId: selectedEditorPlan.id,
-        title: selectedEditorPlan.title || selectedEditorPlan.name || "",
+        title: editorTitle || getJobPlanDisplayName(selectedEditorPlan, ""),
         planTier: selectedEditorPlan.planTier || selectedEditorPlan.solutionTier,
         status: selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT,
-        description: selectedEditorPlan.description || job.description || "",
+        description: editorDescription,
         makeActive: true,
         showToast: true,
         recordHistory: true,
-        historyTitle: `Plan saved from Planned editor: ${selectedEditorPlan.title || selectedEditorPlan.name || getJobPlanTierLabel(selectedEditorPlan.planTier || selectedEditorPlan.solutionTier)}`,
+        historyTitle: `Plan saved from Planned editor: ${editorTitle || getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan")}`,
       });
     } catch (err) {
       console.error(err);
@@ -2575,34 +2889,26 @@ const JobDetailView = () => {
     }
   };
 
-  const createPlanFromEditor = async () => {
+  const createPlanFromEditor = () => {
     if (!requirePermission("24", "update jobs")) return;
 
     const tier = normalizeJobPlanTier(selectedEditorPlan?.planTier || selectedEditorPlan?.solutionTier || DEFAULT_JOB_PLAN_TIER);
-    const defaultTitle = `${tier} - ${getJobPlanTierLabel(tier)}`;
-    const titleInput = window.prompt("Plan name", defaultTitle);
-    if (titleInput === null) return;
+    const lineItems = buildSuggestedContractSnapshot();
+    const calculatedTotalCents =
+      lineItems.reduce((total, item) => total + cents(item.totalAmountCents || item.amount || 0), 0) ||
+      cents(job.rate);
 
-    try {
-      setSavingPlanEditor(true);
-      const payload = await saveCurrentEditorToPlan({
-        planId: `comp_job_plan_${uuidv4()}`,
-        title: titleInput.trim() || defaultTitle,
-        planTier: tier,
-        status: JOB_PLAN_STATUS.DRAFT,
-        description: selectedEditorPlan?.description || job.description || "",
-        makeActive: true,
-        showToast: true,
-        recordHistory: true,
-        historyTitle: `Plan created from Planned editor: ${titleInput.trim() || defaultTitle}`,
-      });
-      setSelectedPlanEditorId(payload.id);
-    } catch (err) {
-      console.error(err);
-      toast.error("Failed to create plan");
-    } finally {
-      setSavingPlanEditor(false);
-    }
+    setPlanForm({
+      id: "",
+      title: planEditorDraft.title.trim(),
+      planTier: tier,
+      solutionTier: tier,
+      status: JOB_PLAN_STATUS.DRAFT,
+      description: planEditorDraft.description,
+      rate: dollarsFromCents(calculatedTotalCents),
+      laborCost: dollarsFromCents(plannedTotalLaborCents),
+    });
+    setShowPlanModal(true);
   };
 
   const refreshEditorPlanBeforeEstimate = async () => {
@@ -2616,14 +2922,16 @@ const JobDetailView = () => {
 
     const targetPlan = selectedEditorPlan || activePlan || (jobPlans || [])[0] || null;
     const tier = normalizeJobPlanTier(targetPlan?.planTier || targetPlan?.solutionTier || DEFAULT_JOB_PLAN_TIER);
-    const fallbackTitle = `${tier} - ${getJobPlanTierLabel(tier)}`;
+    const fallbackTitle = "Untitled Plan";
+    const editorTitle = planEditorDraft.title.trim();
+    const editorDescription = planEditorDraft.description.trim();
 
     return saveCurrentEditorToPlan({
       planId: targetPlan?.id || `comp_job_plan_${uuidv4()}`,
-      title: targetPlan?.title || targetPlan?.name || fallbackTitle,
+      title: editorTitle || targetPlan?.title || targetPlan?.name || fallbackTitle,
       planTier: tier,
       status: targetPlan?.status || JOB_PLAN_STATUS.DRAFT,
-      description: targetPlan?.description || job.description || "",
+      description: targetPlan ? editorDescription : editorDescription || targetPlan?.description || "",
       makeActive: true,
       showToast: false,
       recordHistory: false,
@@ -2699,7 +3007,7 @@ const JobDetailView = () => {
     await Promise.all(writes);
 
     const solutionTier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
-    const solutionTierLabel = getJobPlanTierLabel(solutionTier);
+    const solutionTierLabel = getJobPlanRecommendationLabel(solutionTier);
     const nextOperationStatus =
       !job.operationStatus || job.operationStatus === "Estimate Pending"
         ? "Unscheduled"
@@ -2717,6 +3025,10 @@ const JobDetailView = () => {
       activeSolutionTierLabel: solutionTierLabel,
       acceptedSolutionTier: solutionTier,
       acceptedSolutionTierLabel: solutionTierLabel,
+      activePlanRecommendationRank: solutionTier,
+      activePlanRecommendationRankLabel: solutionTierLabel,
+      acceptedPlanRecommendationRank: solutionTier,
+      acceptedPlanRecommendationRankLabel: solutionTierLabel,
       solutionSelectionStatus: JOB_PLAN_STATUS.ACCEPTED,
       planSelectionStatus: JOB_PLAN_STATUS.ACCEPTED,
       rate: planOptionTotalCents(solution),
@@ -2741,7 +3053,9 @@ const JobDetailView = () => {
           isActivePlan: isSelected,
           isAccepted: isSelected,
           planTier: normalizeJobPlanTier(option.planTier || option.solutionTier),
-          planTierLabel: getJobPlanTierLabel(option.planTier || option.solutionTier),
+          planTierLabel: getJobPlanRecommendationLabel(option.planTier || option.solutionTier),
+          recommendationRank: normalizeJobPlanTier(option.planTier || option.solutionTier),
+          recommendationRankLabel: getJobPlanRecommendationLabel(option.planTier || option.solutionTier),
           updatedAt: serverTimestamp(),
           updatedAtMillis: Date.now(),
         };
@@ -2782,11 +3096,11 @@ const JobDetailView = () => {
 
     await recordJobHistory({
       eventType: "Plan",
-      title: historyTitle || `Plan accepted: ${solution.title || solution.name || solutionTierLabel}`,
+      title: historyTitle || `Plan accepted: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
       description: solution.description || "",
       changes: [
         buildHistoryChange("acceptedPlanId", "Accepted Plan", job.acceptedPlanId || job.acceptedSolutionId || "—", solution.id),
-        buildHistoryChange("planTier", "Plan Version", "—", `${solutionTier} - ${solutionTierLabel}`),
+        buildHistoryChange("recommendationRank", "Recommendation Rank", "—", getJobPlanRecommendationDisplay(solutionTier)),
         buildHistoryChange("rate", "Customer Price", moneyFromCents(job.rate), moneyFromCents(planOptionTotalCents(solution))),
         buildHistoryChange("tasks", "Tasks", String(taskList.length), String(tasksToWrite.length)),
         buildHistoryChange("plannedServiceStops", "Planned Stops", String(plannedServiceStops.length), String(plannedStopsToWrite.length)),
@@ -2813,7 +3127,11 @@ const JobDetailView = () => {
     if (!requirePermission("24", "update jobs")) return;
     if (!solution?.id) return;
 
-    const ok = window.confirm("Accept this plan and replace the active job work with its saved scope?");
+    const ok = await appConfirm({
+      title: "Accept Plan",
+      message: "Accept this plan and replace the active job work with its saved scope?",
+      confirmLabel: "Accept Plan",
+    });
     if (!ok) return;
 
     try {
@@ -3217,13 +3535,16 @@ const JobDetailView = () => {
         id: solution.id,
         planId: solution.id,
         solutionId: solution.id,
-        title: solution.title || solution.name || getJobPlanTierLabel(tier),
+        title: getJobPlanDisplayName(solution, "Untitled Plan"),
+        planName: getJobPlanDisplayName(solution, "Untitled Plan"),
         description: solution.description || "",
         status: solution.status || JOB_PLAN_STATUS.DRAFT,
         planTier: tier,
-        planTierLabel: getJobPlanTierLabel(tier),
+        planTierLabel: getJobPlanRecommendationLabel(tier),
         solutionTier: tier,
-        solutionTierLabel: getJobPlanTierLabel(tier),
+        solutionTierLabel: getJobPlanRecommendationLabel(tier),
+        recommendationRank: tier,
+        recommendationRankLabel: getJobPlanRecommendationLabel(tier),
         totalAmountCents,
         rateAmountCents: totalAmountCents,
         laborCostCents: planOptionLaborCents(solution),
@@ -3687,7 +4008,7 @@ const JobDetailView = () => {
       for (const task of taskList || []) {
         if (!task?.id) continue;
 
-        const installDetails = promptForReplacementInstallDetails(task);
+        const installDetails = await promptForReplacementInstallDetails(task);
         if (installDetails === null) {
           toast.error("Replacement install details are required before finishing the job");
           return;
@@ -4249,7 +4570,12 @@ const JobDetailView = () => {
     try {
       if (!contractForm.id) return toast.error("Missing contract id");
 
-      const ok = window.confirm("Delete this contract? This cannot be undone.");
+      const ok = await appConfirm({
+        title: "Delete Contract",
+        message: "Delete this contract? This cannot be undone.",
+        confirmLabel: "Delete Contract",
+        variant: "danger",
+      });
       if (!ok) return;
 
       setDeletingContract(true);
@@ -4314,7 +4640,7 @@ const JobDetailView = () => {
           solutionTier: loadedIssuePriority,
           solutionTierLabel: j.solutionTierLabel || j.priorityLabel || getIssuePriorityLabel(loadedIssuePriority),
           activePlanTier: loadedActiveSolutionTier,
-          activePlanTierLabel: j.activePlanTierLabel || j.activeSolutionTierLabel || getJobPlanTierLabel(loadedActiveSolutionTier),
+          activePlanTierLabel: j.activePlanRecommendationRankLabel || getJobPlanRecommendationLabel(loadedActiveSolutionTier),
           activePlanId: j.activePlanId || j.activeSolutionId || "",
           acceptedPlanId: j.acceptedPlanId || j.acceptedSolutionId || "",
           activeSolutionId: j.activeSolutionId || j.activePlanId || "",
@@ -4827,8 +5153,10 @@ const JobDetailView = () => {
           id: data.id || data.planId || data.solutionId || d.id,
           planId: data.planId || data.id || d.id,
           solutionId: data.solutionId || data.id || d.id,
-          planTier: normalizeJobPlanTier(data.planTier || data.solutionTier || DEFAULT_JOB_PLAN_TIER),
-          planTierLabel: data.planTierLabel || data.solutionTierLabel || getJobPlanTierLabel(data.planTier || data.solutionTier),
+          planTier: normalizeJobPlanTier(data.planTier || data.solutionTier || data.recommendationRank || DEFAULT_JOB_PLAN_TIER),
+          planTierLabel: getJobPlanRecommendationLabel(data.planTier || data.solutionTier || data.recommendationRank),
+          recommendationRank: normalizeJobPlanTier(data.planTier || data.solutionTier || data.recommendationRank || DEFAULT_JOB_PLAN_TIER),
+          recommendationRankLabel: getJobPlanRecommendationLabel(data.planTier || data.solutionTier || data.recommendationRank),
           _sourceCollection: sourceCollection,
         };
       });
@@ -4981,18 +5309,10 @@ const JobDetailView = () => {
 
       const userQuery = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
       const userSnap = await getDocs(userQuery);
-      const admins = userSnap.docs.map((d) => {
-        const u = d.data();
-        return {
-          value: u.id,
-          label: `${u.userName}${u.roleName ? ` — ${u.roleName}` : ""}`,
-          id: u.id,
-          name: u.userName,
-        };
-      });
+      const admins = userSnap.docs.map(buildAdminOption);
       setAdminList(admins);
 
-      const current = admins.find((a) => a.id === job.adminId) || null;
+      const current = admins.find((a) => adminMatchesJob(a, job)) || currentAdminOption(job);
       setSelectedAdmin(current);
       setCustomerPriceInput(((Number(job.rate || 0) / 100) || 0).toFixed(2));
       setSelectedBillingStatus({
@@ -5183,7 +5503,12 @@ const JobDetailView = () => {
 
       const ok = isJobExpired
         ? true
-        : window.confirm("Cancel this job? The job will not be deleted. Billing status will be set to Expired and the scope will be copied to Suggested Work.");
+        : await appConfirm({
+          title: "Cancel Job",
+          message: "Cancel this job? The job will not be deleted. Billing status will be set to Expired and the scope will be copied to Suggested Work.",
+          confirmLabel: "Cancel Job",
+          variant: "danger",
+        });
       if (!ok) return;
 
       setExpiringJob(true);
@@ -5266,18 +5591,27 @@ const JobDetailView = () => {
     }
     if (!recentlySelectedCompany || !jobId) return;
 
-    const ok = window.confirm(
-      [
+    const ok = await appConfirm({
+      title: "Delete Job",
+      message: [
         "Delete this job permanently?",
         "",
         "Cancel or Rejected keeps the job in history because the work may still need to be reviewed, revised, or done later.",
         "Delete removes the job record and job-owned notes, tasks, planned stops, change orders, and planned material rows. Use delete only for accidental or duplicate jobs.",
-      ].join("\n")
-    );
+      ].join("\n"),
+      confirmLabel: "Continue",
+      variant: "danger",
+    });
 
     if (!ok) return;
 
-    const confirmation = window.prompt('Type "DELETE" to permanently delete this job.');
+    const confirmation = await appPrompt({
+      title: "Delete Job",
+      message: 'Type "DELETE" to permanently delete this job.',
+      inputLabel: 'Type DELETE to confirm',
+      confirmLabel: "Delete Job",
+      variant: "danger",
+    });
     if (confirmation !== "DELETE") {
       toast.error("Job delete canceled");
       return;
@@ -6083,9 +6417,12 @@ const JobDetailView = () => {
     try {
       if (!recentlySelectedCompany || !jobId || !plannedStopId) return;
 
-      const ok = window.confirm(
-        "Delete this planned stop? This only removes the planned visit. It does not delete scheduled service stops or tasks."
-      );
+      const ok = await appConfirm({
+        title: "Delete Planned Stop",
+        message: "Delete this planned stop? This only removes the planned visit. It does not delete scheduled service stops or tasks.",
+        confirmLabel: "Delete Planned Stop",
+        variant: "danger",
+      });
 
       if (!ok) return;
 
@@ -7452,7 +7789,7 @@ const JobDetailView = () => {
 
     const result = await promotePlanToActiveWork(solution, {
       updateBillingStatus: false,
-      historyTitle: `Accepted plan promoted: ${solution.title || solution.name || getJobPlanTierLabel(solution.planTier || solution.solutionTier)}`,
+      historyTitle: `Accepted plan promoted: ${getJobPlanDisplayName(solution, "Untitled Plan")}`,
     });
 
     return result.readyShoppingItemCount || 0;
@@ -8526,7 +8863,7 @@ const JobDetailView = () => {
               )}
             </div>
             <h4 className="mt-3 text-base font-bold text-slate-950">
-              {solution.title || solution.name || getJobPlanTierLabel(tier)}
+              {getJobPlanDisplayName(solution, "Untitled Plan")}
             </h4>
             {solution.description && (
               <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">{solution.description}</p>
@@ -8800,6 +9137,18 @@ const JobDetailView = () => {
                             onChange={handleSelectedOperationStatus}
                             isSearchable
                             placeholder="Operations status"
+                            theme={selectTheme}
+                            styles={selectStyles}
+                          />
+                        </div>
+                        <div className="min-w-[220px]">
+                          <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500">Admin</p>
+                          <Select
+                            value={selectedAdmin}
+                            options={adminList}
+                            onChange={setSelectedAdmin}
+                            isSearchable
+                            placeholder="Select admin"
                             theme={selectTheme}
                             styles={selectStyles}
                           />
@@ -9164,14 +9513,14 @@ const JobDetailView = () => {
                     <StatCard title="Options" value={String(jobPlans.length)} subtitle="Saved plans" />
                     <StatCard
                       title="Accepted"
-                      value={acceptedPlan ? getJobPlanTierLabel(acceptedPlan.planTier || acceptedPlan.solutionTier) : "None"}
-                      subtitle={acceptedPlan?.title || "No customer choice yet"}
+                      value={acceptedPlan ? getJobPlanDisplayName(acceptedPlan, "Untitled Plan") : "None"}
+                      subtitle={acceptedPlan ? getJobPlanRecommendationDisplay(acceptedPlan.planTier || acceptedPlan.solutionTier) : "No customer choice yet"}
                       tone={acceptedPlan ? "green" : "gray"}
                     />
                     <StatCard
                       title="Active Plan"
-                      value={activePlan ? getJobPlanTierLabel(activePlan.planTier || activePlan.solutionTier) : "Current"}
-                      subtitle={activePlan?.title || "Using job plan"}
+                      value={activePlan ? getJobPlanDisplayName(activePlan, "Untitled Plan") : "Current"}
+                      subtitle={activePlan ? getJobPlanRecommendationDisplay(activePlan.planTier || activePlan.solutionTier) : "Using job plan"}
                       tone="blue"
                     />
                     <StatCard
@@ -9219,6 +9568,11 @@ const JobDetailView = () => {
                         <>
                           <PlanTierBadge tier={selectedEditorTier} />
                           <StatusBadge status={selectedEditorPlan.status || JOB_PLAN_STATUS.DRAFT} />
+                          {hasUnsavedPlanEditorChanges && (
+                            <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-bold text-amber-700">
+                              Unsaved Changes
+                            </span>
+                          )}
                         </>
                       ) : (
                         <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
@@ -9227,8 +9581,10 @@ const JobDetailView = () => {
                       )}
                     </div>
                     <p className="mt-1 text-xs text-slate-500">
-                      {selectedEditorPlan
-                        ? selectedEditorPlan.title || selectedEditorPlan.name || getJobPlanTierLabel(selectedEditorTier)
+                      {planEditorDraft.title.trim()
+                        ? planEditorDraft.title.trim()
+                        : selectedEditorPlan
+                          ? getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan")
                         : "Current planned work has not been saved as a plan yet."}
                     </p>
                   </div>
@@ -9236,7 +9592,7 @@ const JobDetailView = () => {
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
                     <select
                       value={selectedPlanEditorId}
-                      onChange={(event) => setSelectedPlanEditorId(event.target.value)}
+                      onChange={(event) => handlePlanEditorSelection(event.target.value)}
                       disabled={!jobPlans.length || savingPlanEditor || Boolean(loadingPlanEditorId)}
                       className="min-w-[220px] rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
                     >
@@ -9245,7 +9601,7 @@ const JobDetailView = () => {
                         const tier = normalizeJobPlanTier(solution.planTier || solution.solutionTier);
                         return (
                           <option key={solution.id} value={solution.id}>
-                            {solution.title || solution.name || getJobPlanTierLabel(tier)}
+                            {getJobPlanRecommendationDisplay(tier)} - {getJobPlanDisplayName(solution, "Untitled Plan")}
                           </option>
                         );
                       })}
@@ -9254,19 +9610,21 @@ const JobDetailView = () => {
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => selectedEditorPlan && loadPlanIntoEditor(selectedEditorPlan)}
-                        disabled={!selectedEditorPlan || savingPlanEditor || Boolean(loadingPlanEditorId)}
-                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                      >
-                        {loadingPlanEditorId ? "Loading..." : "Load Plan"}
-                      </button>
-                      <button
-                        type="button"
                         onClick={saveSelectedEditorPlan}
-                        disabled={savingPlanEditor || Boolean(loadingPlanEditorId)}
+                        disabled={
+                          savingPlanEditor ||
+                          Boolean(loadingPlanEditorId) ||
+                          (Boolean(selectedEditorPlan) && !hasUnsavedPlanEditorChanges)
+                        }
                         className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
                       >
-                        {savingPlanEditor ? "Saving..." : "Save Plan"}
+                        {savingPlanEditor
+                          ? "Saving..."
+                          : hasUnsavedPlanEditorChanges
+                            ? "Save Changes"
+                            : selectedEditorPlan
+                              ? "Saved"
+                              : "Save Plan"}
                       </button>
                       <button
                         type="button"
@@ -9286,6 +9644,31 @@ const JobDetailView = () => {
                       </button>
                     </div>
                   </div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Plan Name
+                    <input
+                      type="text"
+                      value={planEditorDraft.title}
+                      onChange={(event) => setPlanEditorDraft((prev) => ({ ...prev, title: event.target.value }))}
+                      disabled={savingPlanEditor || Boolean(loadingPlanEditorId)}
+                      className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                      placeholder="Repair existing pump"
+                    />
+                  </label>
+
+                  <label className="block text-sm font-semibold text-slate-700">
+                    Plan Description
+                    <textarea
+                      value={planEditorDraft.description}
+                      onChange={(event) => setPlanEditorDraft((prev) => ({ ...prev, description: event.target.value }))}
+                      disabled={savingPlanEditor || Boolean(loadingPlanEditorId)}
+                      className="mt-1 min-h-[86px] w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 disabled:bg-slate-100 disabled:text-slate-400"
+                      placeholder="Describe what this plan includes for the customer."
+                    />
+                  </label>
                 </div>
 
                 <div className="mt-4 grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -9322,7 +9705,7 @@ const JobDetailView = () => {
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                       <div>
                         <p className="text-sm font-bold text-emerald-900">
-                          Accepted Plan: {acceptedPlan?.title || acceptedPlan?.name || getJobPlanTierLabel(acceptedPlan?.planTier || acceptedPlan?.solutionTier || selectedEditorTier)}
+                          Accepted Plan: {getJobPlanDisplayName(acceptedPlan, "Untitled Plan")}
                         </p>
                         <p className="mt-0.5 text-xs text-emerald-800">
                           Use the sections below to schedule visits and move accepted materials into purchasing.
@@ -11371,7 +11754,7 @@ const JobDetailView = () => {
             <div className="space-y-4 p-5">
               <div className="grid gap-4 md:grid-cols-2">
                 <label className="block text-sm font-semibold text-slate-700">
-                  Plan Version
+                  Recommendation Rank
                   <select
                     value={planForm.planTier || planForm.solutionTier}
                     onChange={(event) => {
@@ -11382,7 +11765,7 @@ const JobDetailView = () => {
                   >
                     {JOB_PLAN_TIER_OPTIONS.map((option) => (
                       <option key={option.value} value={option.value}>
-                        {option.value} - {option.label}
+                        {getJobPlanRecommendationDisplay(option.value)}
                       </option>
                     ))}
                   </select>
@@ -11404,7 +11787,7 @@ const JobDetailView = () => {
                 </label>
 
                 <label className="block text-sm font-semibold text-slate-700 md:col-span-2">
-                  Title
+                  Plan Name
                   <input
                     value={planForm.title}
                     onChange={(event) => setPlanForm((prev) => ({ ...prev, title: event.target.value }))}

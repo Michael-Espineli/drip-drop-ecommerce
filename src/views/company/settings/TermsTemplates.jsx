@@ -1,12 +1,83 @@
-import React, { useState, useEffect, useContext } from 'react';
-import { Context } from '../../../context/AuthContext';
-import toast from 'react-hot-toast';
-import { PlusIcon, ChevronRightIcon } from '@heroicons/react/24/outline';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import toast from 'react-hot-toast';
+import {
+    ArrowLeftIcon,
+    ChevronRightIcon,
+    DocumentDuplicateIcon,
+    MagnifyingGlassIcon,
+    PlusIcon,
+} from '@heroicons/react/24/outline';
+import { Context } from '../../../context/AuthContext';
+import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { TermsTemplate } from '../../../utils/models/TermsTemplate';
-import { listenTermsTemplates, saveTermsTemplate } from '../../../utils/terms/termsTemplateFirestore';
-import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import {
+    duplicateTermsTemplate,
+    listenTermsTemplates,
+    saveTermsTemplate,
+} from '../../../utils/terms/termsTemplateFirestore';
+
+const emptyTemplate = { name: '', description: '', content: '' };
+
+const templatePreview = (template) => {
+    const content = String(template?.content || '').trim();
+    if (content) return content;
+
+    return 'No default content saved yet.';
+};
+
+const StatCard = ({ label, value, helper }) => (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-1 text-sm text-slate-500">{helper}</p>
+    </div>
+);
+
+const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) => (
+    <article className="flex min-h-[220px] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200">
+        <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0">
+                <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Terms Template'}</h2>
+                <p className="mt-1 line-clamp-2 text-sm text-slate-600">
+                    {template.description || 'No description added.'}
+                </p>
+            </div>
+            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                Template
+            </span>
+        </div>
+
+        <div className="mt-4 flex-1 rounded-lg border border-slate-100 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Default Content</p>
+            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-700">{templatePreview(template)}</p>
+        </div>
+
+        <p className="mt-3 truncate text-xs text-slate-400">{template.id}</p>
+
+        <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+            {canDuplicate && (
+                <button
+                    type="button"
+                    onClick={() => onDuplicate(template)}
+                    disabled={isDuplicating}
+                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                    <DocumentDuplicateIcon className="h-4 w-4" />
+                    {isDuplicating ? 'Duplicating...' : 'Duplicate'}
+                </button>
+            )}
+            <Link
+                to={`/company/settings/terms-templates/${template.id}`}
+                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            >
+                Open
+                <ChevronRightIcon className="h-4 w-4" />
+            </Link>
+        </div>
+    </article>
+);
 
 const TermsTemplates = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -15,7 +86,10 @@ const TermsTemplates = () => {
     const [templates, setTemplates] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
-    const [currentTemplate, setCurrentTemplate] = useState({ name: '', description: '', content: '' });
+    const [currentTemplate, setCurrentTemplate] = useState(emptyTemplate);
+    const [search, setSearch] = useState('');
+    const [isSaving, setIsSaving] = useState(false);
+    const [duplicatingTemplateId, setDuplicatingTemplateId] = useState('');
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -32,67 +106,132 @@ const TermsTemplates = () => {
                 setIsLoading(false);
             },
             (error) => {
-                console.error("Error fetching templates: ", error);
-                toast.error("Failed to load terms templates.");
+                console.error('Error fetching templates: ', error);
+                toast.error('Failed to load terms templates.');
                 setIsLoading(false);
             }
         );
     }, [recentlySelectedCompany]);
 
-    const handleOpenModal = () => {
-        if (!requirePermission("882", "create terms templates")) return;
+    const filteredTemplates = useMemo(() => {
+        const query = search.trim().toLowerCase();
+        if (!query) return templates;
 
-        setCurrentTemplate({ name: '', description: '', content: '' });
+        return templates.filter((template) => [
+            template.name,
+            template.description,
+            template.content,
+            template.id,
+        ].some((value) => String(value || '').toLowerCase().includes(query)));
+    }, [search, templates]);
+
+    const summary = useMemo(() => ({
+        total: templates.length,
+        withContent: templates.filter((template) => String(template.content || '').trim()).length,
+        withDescription: templates.filter((template) => String(template.description || '').trim()).length,
+    }), [templates]);
+
+    const handleOpenModal = () => {
+        if (!requirePermission('882', 'create terms templates')) return;
+
+        setCurrentTemplate(emptyTemplate);
         setIsModalOpen(true);
     };
 
     const handleCloseModal = () => {
         setIsModalOpen(false);
-        setCurrentTemplate({ name: '', description: '', content: '' });
+        setCurrentTemplate(emptyTemplate);
     };
 
     const handleSave = async (e) => {
         e.preventDefault();
-        if (!requirePermission("882", "create terms templates")) return;
+        if (!requirePermission('882', 'create terms templates')) return;
 
-        if (!currentTemplate.name) {
+        if (!recentlySelectedCompany) {
+            toast.error('Select a company before creating a template.');
+            return;
+        }
+
+        if (!currentTemplate.name.trim()) {
             toast.error('Template name is required.');
             return;
         }
 
+        setIsSaving(true);
+
         try {
-            const newTemplate = new TermsTemplate(currentTemplate);
+            const newTemplate = new TermsTemplate({
+                ...currentTemplate,
+                name: currentTemplate.name.trim(),
+                description: currentTemplate.description.trim(),
+                content: currentTemplate.content.trim(),
+            });
             await saveTermsTemplate(recentlySelectedCompany, newTemplate);
-            toast.success(`Template created successfully!`);
+            toast.success('Template created successfully!');
             handleCloseModal();
             navigate(`/company/settings/terms-templates/${newTemplate.id}`);
         } catch (error) {
-            console.error("Error saving template: ", error);
+            console.error('Error saving template: ', error);
             toast.error('Failed to save template.');
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
+    const handleDuplicate = async (template) => {
+        if (!requirePermission('882', 'create terms templates')) return;
+
+        if (!recentlySelectedCompany) {
+            toast.error('Select a company before duplicating a template.');
+            return;
+        }
+
+        setDuplicatingTemplateId(template.id);
+
+        try {
+            const duplicatedTemplate = await duplicateTermsTemplate(recentlySelectedCompany, template.id);
+            toast.success(`${duplicatedTemplate.name} created.`);
+            navigate(`/company/settings/terms-templates/${duplicatedTemplate.id}`);
+        } catch (error) {
+            console.error('Error duplicating template: ', error);
+            toast.error(error.message || 'Failed to duplicate template.');
+        } finally {
+            setDuplicatingTemplateId('');
         }
     };
 
     return (
-        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-            <div className="w-full space-y-4">
+        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
+            <div className="w-full space-y-6">
                 <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-                        <div className="flex items-center gap-2">
-                            <h1 className="text-3xl font-bold text-slate-950">Terms Templates</h1>
-                            <FeatureInfoButton title="How Terms Templates Work" align="left">
-                                <p>
-                                    Terms templates are saved under this company at
-                                    {' '}<span className="font-semibold">companies/{'{companyId}'}/termsTemplates</span>.
-                                    Each pool company can keep its own residential, commercial, weekly, twice-weekly, or custom service terms.
-                                </p>
-                                <p>
-                                    When a service agreement or estimate is drafted, the selected template can seed the agreement terms,
-                                    then the company can adjust the final wording for that customer.
-                                </p>
-                            </FeatureInfoButton>
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                        <div>
+                            <Link to="/company/settings" className="app-back-link">
+                                <ArrowLeftIcon className="h-4 w-4" />
+                                Back to Settings
+                            </Link>
+                            <div className="mt-3 flex items-center gap-2">
+                                <h1 className="text-3xl font-bold text-slate-950">Terms Templates</h1>
+                                <FeatureInfoButton title="How Terms Templates Work" align="left">
+                                    <p>
+                                        Terms templates are saved under this company at
+                                        {' '}<span className="font-semibold">companies/{'{companyId}'}/termsTemplates</span>.
+                                        Each pool company can keep its own residential, commercial, weekly, twice-weekly, or custom service terms.
+                                    </p>
+                                    <p>
+                                        When a service agreement or estimate is drafted, the selected template can seed the agreement terms,
+                                        then the company can adjust the final wording for that customer.
+                                    </p>
+                                </FeatureInfoButton>
+                            </div>
+                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
+                                Reusable agreement language for estimates, service agreements, and company-specific terms.
+                            </p>
                         </div>
-                        {can("882") && (
+
+                        {can('882') && (
                             <button
+                                type="button"
                                 onClick={handleOpenModal}
                                 className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
                             >
@@ -103,60 +242,110 @@ const TermsTemplates = () => {
                     </div>
                 </section>
 
+                <section className="grid gap-4 sm:grid-cols-3">
+                    <StatCard label="Templates" value={summary.total} helper="Saved terms records" />
+                    <StatCard label="Default Copy" value={summary.withContent} helper="Templates with content" />
+                    <StatCard label="Documented" value={summary.withDescription} helper="Templates with descriptions" />
+                </section>
+
+                <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                    <div className="relative">
+                        <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" />
+                        <input
+                            type="search"
+                            value={search}
+                            onChange={(event) => setSearch(event.target.value)}
+                            placeholder="Search name, description, content, or template ID"
+                            className="w-full rounded-lg border border-slate-300 py-2 pl-10 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
+                    </div>
+                </section>
+
                 {isLoading ? (
-                    <div className="rounded-lg border border-slate-200 bg-white p-5 text-sm text-slate-500 shadow-sm">
+                    <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
                         Loading templates...
                     </div>
                 ) : templates.length === 0 ? (
-                    <div className="rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
-                        <h3 className="text-lg font-semibold text-slate-950">No templates found</h3>
-                        <p className="mt-1 text-sm text-slate-500">Get started by creating a new template.</p>
+                    <div className="rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                        <h3 className="text-xl font-bold text-slate-950">No templates found</h3>
+                        <p className="mt-2 text-sm text-slate-500">Create a template to seed new service agreement terms.</p>
+                    </div>
+                ) : filteredTemplates.length === 0 ? (
+                    <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-slate-500 shadow-sm">
+                        No templates match that search.
                     </div>
                 ) : (
-                    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-                        <ul className="divide-y divide-slate-200">
-                            {templates.map(template => (
-                                <li key={template.id}>
-                                    <Link to={`/company/settings/terms-templates/${template.id}`} className="block transition hover:bg-slate-50">
-                                        <div className="flex items-center justify-between gap-4 px-5 py-4">
-                                            <div className="min-w-0">
-                                                <p className="truncate font-semibold text-blue-700">{template.name}</p>
-                                                <p className="mt-1 truncate text-sm text-slate-500">{template.description || 'No description'}</p>
-                                            </div>
-                                            <ChevronRightIcon className="h-5 w-5 shrink-0 text-slate-400" />
-                                        </div>
-                                    </Link>
-                                </li>
-                            ))}
-                        </ul>
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                        {filteredTemplates.map((template) => (
+                            <TemplateCard
+                                key={template.id}
+                                template={template}
+                                canDuplicate={can('882')}
+                                isDuplicating={duplicatingTemplateId === template.id}
+                                onDuplicate={handleDuplicate}
+                            />
+                        ))}
                     </div>
                 )}
             </div>
 
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                    <div className="w-full max-w-2xl rounded-lg bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                    <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
                         <form onSubmit={handleSave}>
                             <div className="border-b border-slate-200 p-5">
                                 <h2 className="text-xl font-bold text-slate-950">New Template</h2>
+                                <p className="mt-1 text-sm text-slate-500">Start with default content now, then add reusable term lines after saving.</p>
                             </div>
                             <div className="space-y-4 p-5">
                                 <div>
                                     <label htmlFor="name" className="block text-sm font-semibold text-slate-700">Template Name</label>
-                                    <input type="text" id="name" value={currentTemplate.name} onChange={(e) => setCurrentTemplate({...currentTemplate, name: e.target.value})} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" required/>
+                                    <input
+                                        type="text"
+                                        id="name"
+                                        value={currentTemplate.name}
+                                        onChange={(e) => setCurrentTemplate({ ...currentTemplate, name: e.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        required
+                                    />
                                 </div>
                                 <div>
                                     <label htmlFor="description" className="block text-sm font-semibold text-slate-700">Description</label>
-                                    <textarea id="description" value={currentTemplate.description} onChange={(e) => setCurrentTemplate({...currentTemplate, description: e.target.value})} rows={3} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"></textarea>
+                                    <textarea
+                                        id="description"
+                                        value={currentTemplate.description}
+                                        onChange={(e) => setCurrentTemplate({ ...currentTemplate, description: e.target.value })}
+                                        rows={3}
+                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
                                 </div>
                                 <div>
                                     <label htmlFor="content" className="block text-sm font-semibold text-slate-700">Default Content</label>
-                                    <textarea id="content" value={currentTemplate.content} onChange={(e) => setCurrentTemplate({...currentTemplate, content: e.target.value})} rows={8} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"></textarea>
+                                    <textarea
+                                        id="content"
+                                        value={currentTemplate.content}
+                                        onChange={(e) => setCurrentTemplate({ ...currentTemplate, content: e.target.value })}
+                                        rows={8}
+                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
                                 </div>
                             </div>
                             <div className="flex justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">
-                                <button type="button" onClick={handleCloseModal} className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50">Cancel</button>
-                                <button type="submit" className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700">Save</button>
+                                <button
+                                    type="button"
+                                    onClick={handleCloseModal}
+                                    disabled={isSaving}
+                                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    type="submit"
+                                    disabled={isSaving}
+                                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                    {isSaving ? 'Saving...' : 'Create Template'}
+                                </button>
                             </div>
                         </form>
                     </div>

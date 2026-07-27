@@ -15,6 +15,7 @@ import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
+import { appAlert } from "../../../utils/appDialog";
 import {
   AdjustmentsHorizontalIcon,
   BriefcaseIcon,
@@ -1026,7 +1027,7 @@ export default function EquipmentList() {
       XLSX.writeFile(wb, fileName);
     } catch (e) {
       console.error("Excel export failed:", e);
-      alert("Excel export failed. Check console for details.");
+      appAlert("Excel export failed. Check console for details.");
     }
   };
 
