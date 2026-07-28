@@ -411,6 +411,38 @@ const missingTaskLine = ({ task, notes }) => ({
   notes,
 });
 
+const hasManualPayOverride = (serviceStop) =>
+  serviceStop &&
+  Object.prototype.hasOwnProperty.call(serviceStop, "manualPayOverrideCents") &&
+  serviceStop.manualPayOverrideCents !== null &&
+  serviceStop.manualPayOverrideCents !== undefined;
+
+const manualPayOverrideLine = ({ serviceStop, workTypesById }) => {
+  const workTypeId = serviceStop?.payWorkTypeId || serviceStop?.workTypeId || "";
+  const resolvedWorkTypeName =
+    serviceStop?.payWorkTypeName ||
+    serviceStop?.workTypeName ||
+    workTypeName(workTypesById, workTypeId);
+  const amountCents = Math.max(0, cents(serviceStop?.manualPayOverrideCents));
+
+  return {
+    id: `estimate_manual_override_${serviceStop?.id || "stop"}`,
+    source: "manualAdjustment",
+    sourceTaskId: null,
+    workTypeId,
+    workTypeName: resolvedWorkTypeName,
+    title: serviceStop?.type || serviceStop?.serviceStopTypeName || "Manual Pay Amount",
+    rateAmountCents: amountCents,
+    rateType: "manual",
+    payBasis: "manualAdjustment",
+    quantity: 1,
+    quantityUnit: "each",
+    totalAmountCents: amountCents,
+    calculationStatus: "calculated",
+    notes: serviceStop?.manualPayOverrideNotes || "Manual payroll amount set while scheduling this service stop.",
+  };
+};
+
 export const totalPayCents = (lines = []) =>
   lines.reduce((total, line) => total + cents(line.totalAmountCents), 0);
 
@@ -431,6 +463,10 @@ export const estimateServiceStopPay = ({
   const effectiveSettings = normalizeSettings(settings);
   const workTypesById = Object.fromEntries((workTypes || []).map((type) => [type.id, type]));
   const lines = [];
+
+  if (hasManualPayOverride(serviceStop)) {
+    return [manualPayOverrideLine({ serviceStop, workTypesById })];
+  }
 
   if (effectiveSettings.payMode === "hourlyOnly") {
     return [];

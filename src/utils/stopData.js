@@ -59,7 +59,13 @@ export const normalizeDosageForStopData = (template = {}, amount = "", bodyOfWat
     name: template.name || "",
     amount: amount === null || amount === undefined ? "" : String(amount),
     UOM: template.UOM || template.uom || "",
-    rate: template.rate || "",
+    rate: template.rate || template.cost || "",
+    cost: template.cost || template.rate || "",
+    price: template.price || "",
+    costCents: template.costCents || template.unitCostCents || 0,
+    unitCostCents: template.unitCostCents || template.costCents || 0,
+    priceCents: template.priceCents || template.unitPriceCents || 0,
+    unitPriceCents: template.unitPriceCents || template.priceCents || 0,
     linkedItem: linkedItemIds[0] || "",
     linkedItemIds,
     bodyOfWaterId,
@@ -102,6 +108,9 @@ export const buildStopDataRecord = ({
       equipmentMeasurements ||
       existingStopData?.equipmentMeasurements ||
       [],
+    testerStripScans: Array.isArray(existingStopData?.testerStripScans)
+      ? existingStopData.testerStripScans
+      : [],
   };
 };
 
@@ -118,9 +127,12 @@ export const saveStopDataRecord = async ({
   await setDoc(doc(db, "companies", companyId, "stopData", stopData.id), stopData, { merge: true });
 
   if (writeHomeownerCopies) {
+    const customerVisibleStopData = { ...stopData };
+    delete customerVisibleStopData.testerStripScans;
+
     await Promise.allSettled([
-      setDoc(doc(db, "homeownerStopData", stopData.id), stopData, { merge: true }),
-      setDoc(doc(db, "stopData", stopData.id), stopData, { merge: true }),
+      setDoc(doc(db, "homeownerStopData", stopData.id), customerVisibleStopData, { merge: true }),
+      setDoc(doc(db, "stopData", stopData.id), customerVisibleStopData, { merge: true }),
     ]);
   }
 

@@ -36,6 +36,7 @@ import {
     normalizeJobPlanTier,
 } from "../../../utils/models/JobPlan";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
+import { itemPhotoFieldsFromSource } from "../../../utils/itemPhotos";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -72,6 +73,22 @@ const SectionCard = ({ title, subtitle, children, action }) => (
         <div className="mt-6">{children}</div>
     </section>
 );
+
+const getTaskBillingLaborPriceCents = (task = {}) => {
+    const explicitBillingValue =
+        task.billingLaborPriceCents ??
+        task.customerLaborPriceCents ??
+        task.billingLaborRateCents ??
+        task.laborBillingRateCents ??
+        task.billableLaborCents;
+
+    if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
+        const amount = Number(explicitBillingValue || 0);
+        return Number.isFinite(amount) ? amount : 0;
+    }
+
+    return Number(task.contractedRate || 0);
+};
 
 const CreateNewJob = () => {
     const navigate = useNavigate();
@@ -152,6 +169,7 @@ const CreateNewJob = () => {
     const [selectedTaskType, setSelectedTaskType] = useState(null);
     const [taskDescription, setTaskDescription] = useState("");
     const [taskLaborCost, setTaskLaborCost] = useState("");
+    const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("");
     const [estimatedTime, setEstimatedTime] = useState("");
 
     const [activeStep, setActiveStep] = useState("Info");
@@ -187,6 +205,13 @@ const CreateNewJob = () => {
         );
     }, [taskList]);
 
+    const plannedTaskBillingLaborCents = useMemo(() => {
+        return taskList.reduce(
+            (total, task) => total + getTaskBillingLaborPriceCents(task),
+            0
+        );
+    }, [taskList]);
+
     const plannedTotalLaborCents = useMemo(() => {
         return plannedStopLaborCents + plannedTaskLaborCents;
     }, [plannedStopLaborCents, plannedTaskLaborCents]);
@@ -206,9 +231,9 @@ const CreateNewJob = () => {
     }, [shoppingList]);
 
     const calculatedPlanPriceCents = useMemo(() => {
-        const calculated = plannedTotalLaborCents + plannedMaterialPriceCents;
+        const calculated = plannedStopLaborCents + plannedTaskBillingLaborCents + plannedMaterialPriceCents;
         return calculated || rateCents;
-    }, [plannedTotalLaborCents, plannedMaterialPriceCents, rateCents]);
+    }, [plannedStopLaborCents, plannedTaskBillingLaborCents, plannedMaterialPriceCents, rateCents]);
 
     const calculatedPlanInternalCostCents = useMemo(() => {
         return plannedTotalLaborCents + plannedMaterialCostCents;
@@ -289,6 +314,7 @@ const CreateNewJob = () => {
             name: task.name || task.description || "",
             type: task.type || "",
             contractedRate: Number(task.contractedRate || 0),
+            billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
             status: task.status || "Draft",
 
@@ -317,6 +343,8 @@ const CreateNewJob = () => {
     };
 
     const normalizeShoppingItemForJob = (item, overrides = {}) => {
+        const photoFields = itemPhotoFieldsFromSource(item, item.name || item.dbItemName || "Shopping item photo");
+
         return {
             id: item.id || `comp_shop_${uuidv4()}`,
 
@@ -353,6 +381,7 @@ const CreateNewJob = () => {
             price: item.plannedUnitPriceCents ?? item.price ?? 0,
             itemId: item.dbItemId || item.itemId || "",
             itemType: item.subCategory || item.itemType || "Custom",
+            ...photoFields,
 
             ...overrides,
         };
@@ -437,7 +466,8 @@ const CreateNewJob = () => {
             };
         }),
         ...normalizedTasks.map((task) => {
-            const amount = Number(task.contractedRate || 0);
+            const amount = getTaskBillingLaborPriceCents(task);
+            const internalLaborCostCents = Number(task.contractedRate || 0);
             return {
                 id: `${planId}_${task.id || "task"}`,
                 sourceType: "task",
@@ -451,6 +481,8 @@ const CreateNewJob = () => {
                 unitAmountCents: amount,
                 totalAmountCents: amount,
                 amount,
+                billingLaborPriceCents: amount,
+                internalLaborCostCents,
                 taxable: false,
                 displayAmount: moneyFromCents(amount),
             };
@@ -565,6 +597,7 @@ const CreateNewJob = () => {
                     type: task.type || "",
                     estimatedMinutes: Number(task.estimatedTime || 0),
                     plannedLaborCostCents: Number(task.contractedRate || 0),
+                    billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
                 })),
                 plannedStopSummaries: normalizedPlannedStops.map((stop, index) => ({
                     id: stop.id || "",
@@ -595,6 +628,7 @@ const CreateNewJob = () => {
             costSummary: {
                 plannedLaborCostCents: plannedTotalLaborCents,
                 plannedTaskLaborCents,
+                plannedTaskBillingLaborCents,
                 plannedServiceStopLaborCostCents: plannedStopLaborCents,
                 plannedMaterialCostCents: materialCostCents,
                 plannedMaterialPriceCents: materialPriceCents,
@@ -605,6 +639,7 @@ const CreateNewJob = () => {
                 lineItemCount: lineItems.length,
                 subtotalAmountCents,
                 totalAmountCents,
+                plannedTaskBillingLaborCents,
                 projectedProfitCents,
                 profitMarginPercent,
             },
@@ -1155,13 +1190,27 @@ const CreateNewJob = () => {
             await appAlert("Pick a task type.");
             return;
         }
+        if (!Number.isFinite(Number(taskLaborCost || 0)) || Number(taskLaborCost || 0) < 0) {
+            await appAlert("Tech labor cost cannot be negative.");
+            return;
+        }
+        if (!Number.isFinite(Number(taskBillingLaborPrice || 0)) || Number(taskBillingLaborPrice || 0) < 0) {
+            await appAlert("Billing labor price cannot be negative.");
+            return;
+        }
+
+        const techLaborCents = dollarsToCents(taskLaborCost);
+        const billingLaborPriceCents = taskBillingLaborPrice === ""
+            ? techLaborCents
+            : dollarsToCents(taskBillingLaborPrice);
 
         const newTask = normalizeJobTask(
             {
                 id: `comp_job_task_${uuidv4()}`,
                 name: taskDescription.trim(),
                 type: selectedTaskType.value || selectedTaskType.name,
-                contractedRate: dollarsToCents(taskLaborCost),
+                contractedRate: techLaborCents,
+                billingLaborPriceCents,
                 estimatedTime: Number(estimatedTime || 0),
                 status: "Draft",
             },
@@ -1187,6 +1236,7 @@ const CreateNewJob = () => {
         setTaskDescription("");
         setSelectedTaskType(null);
         setTaskLaborCost("");
+        setTaskBillingLaborPrice("");
         setEstimatedTime("");
     };
 
@@ -1891,8 +1941,11 @@ const CreateNewJob = () => {
                                         </div>
 
                                         <div className="text-right">
-                                            <p className="font-medium">
-                                                {moneyFromCents(task.contractedRate)}
+                                            <p className="text-sm font-semibold text-slate-800">
+                                                Tech: {moneyFromCents(task.contractedRate)}
+                                            </p>
+                                            <p className="text-sm font-semibold text-blue-700">
+                                                Billing: {moneyFromCents(getTaskBillingLaborPriceCents(task))}
                                             </p>
                                             <button
                                                 onClick={() => removeTask(task.id)}
@@ -1910,7 +1963,7 @@ const CreateNewJob = () => {
                             </div>
                         )}
 
-                        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 border-t pt-4">
+                        <div className="grid grid-cols-1 gap-4 border-t pt-4 md:grid-cols-5">
                             <input
                                 value={taskDescription}
                                 onChange={(e) => setTaskDescription(e.target.value)}
@@ -1929,7 +1982,17 @@ const CreateNewJob = () => {
                             <input
                                 value={taskLaborCost}
                                 onChange={(e) => setTaskLaborCost(e.target.value)}
-                                placeholder="Labor Cost"
+                                placeholder="Tech Labor Cost"
+                                type="number"
+                                min="0"
+                                step="0.01"
+                                className="w-full p-3 border border-gray-300 rounded-lg"
+                            />
+
+                            <input
+                                value={taskBillingLaborPrice}
+                                onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
+                                placeholder="Billing Labor Price"
                                 type="number"
                                 min="0"
                                 step="0.01"
@@ -2051,7 +2114,7 @@ const CreateNewJob = () => {
                             <StatCard
                                 title="Planned Total Labor"
                                 value={moneyFromCents(plannedTotalLaborCents)}
-                                subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tasks`}
+                                subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tech tasks • ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
                                 tone="amber"
                             />
 

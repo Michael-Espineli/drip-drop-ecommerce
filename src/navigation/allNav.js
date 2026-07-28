@@ -79,6 +79,7 @@ export const allNav = [
 
     // Finance
     { id: 62, title: 'Sales Dashboard', icon: <FaFileInvoiceDollar />, role: 'Company', path: '/company/sales', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
+    { id: 124, title: 'PNL Viewer', icon: <MdOutlineCalculate />, role: 'Company', path: '/company/sales/pnl-viewer', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },
     { id: 63, title: 'Finished Jobs', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/jobs/billing', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 66, title: 'Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/estimates', category: 'Finance', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 69, title: 'Service Agreements', icon: <FaFileContract />, role: 'Company', path: '/company/sales/agreements', category: 'Finance', permissionId: '400', featureFlagId: 'feature_flag_004' },

@@ -1,16 +1,39 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { deleteDoc, doc, getDoc, updateDoc, Timestamp } from "firebase/firestore";
-import { db } from "../../../utils/config";
+import { collection, deleteDoc, doc, getDoc, getDocs, updateDoc, Timestamp } from "firebase/firestore";
+import Select from "react-select";
+import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import { linkedReferenceText } from "../../../utils/displayReferences";
 import { appConfirm } from "../../../utils/appDialog";
+import {
+    getItemPhotoUrl,
+    itemPhotoFieldsFromSource,
+    itemPhotoFieldsFromUrl,
+    uploadItemPhoto,
+    validateItemPhotoFile,
+} from "../../../utils/itemPhotos";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
-const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Installed"];
+const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed"];
 const shoppingListCollectionNames = ["shoppingList", "shoppingListItems"];
+
+const selectStyles = {
+    control: (provided) => ({
+        ...provided,
+        backgroundColor: "white",
+        border: "1px solid #cbd5e1",
+        borderRadius: "0.375rem",
+        minHeight: "46px",
+        boxShadow: "none",
+    }),
+    menu: (provided) => ({
+        ...provided,
+        zIndex: 50,
+    }),
+};
 
 const formatAddress = (source = {}) => {
     if (!source) return "";
@@ -26,6 +49,23 @@ const formatAddress = (source = {}) => {
     ].filter(Boolean).join(" ");
 };
 
+const compactString = (value) => String(value || "").trim();
+
+const companyUserName = (user = {}) => (
+    user.userName ||
+    user.displayName ||
+    [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+    user.name ||
+    user.email ||
+    ""
+);
+
+const timestampToDate = (value) => {
+    if (value?.toDate) return value.toDate();
+    if (value instanceof Date) return value;
+    return null;
+};
+
 const ShoppingListDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
     const { shoppingItemId } = useParams();
@@ -38,6 +78,12 @@ const ShoppingListDetailView = () => {
     const [jobDetails, setJobDetails] = useState(null);
     const [serviceLocationDetails, setServiceLocationDetails] = useState(null);
     const [loadingJobDetails, setLoadingJobDetails] = useState(false);
+    const [loadingSelectors, setLoadingSelectors] = useState(false);
+    const [companyUserOptions, setCompanyUserOptions] = useState([]);
+    const [purchasedItemOptions, setPurchasedItemOptions] = useState([]);
+    const [photoFile, setPhotoFile] = useState(null);
+    const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
+    const [photoError, setPhotoError] = useState("");
 
     const [item, setItem] = useState({
         id: "",
@@ -59,6 +105,10 @@ const ShoppingListDetailView = () => {
         userName: "",
         dbItemId: "",
         dbItemName: "",
+        photoUrl: "",
+        imageUrl: "",
+        primaryPhotoUrl: "",
+        photoUrls: [],
         purchasedItem: "",
         invoiced: false,
         serviceLocationId: "",
@@ -92,6 +142,10 @@ const ShoppingListDetailView = () => {
         userName: "",
         dbItemId: "",
         dbItemName: "",
+        photoUrl: "",
+        imageUrl: "",
+        primaryPhotoUrl: "",
+        photoUrls: [],
         purchasedItem: "",
         invoiced: false,
         serviceLocationId: "",
@@ -107,10 +161,99 @@ const ShoppingListDetailView = () => {
     });
 
     useEffect(() => {
-        fetchItem();
-    }, [recentlySelectedCompany, shoppingItemId]);
+        const fetchSelectorData = async () => {
+            if (!recentlySelectedCompany) {
+                setCompanyUserOptions([]);
+                setPurchasedItemOptions([]);
+                return;
+            }
 
-    const fetchItem = async () => {
+            try {
+                setLoadingSelectors(true);
+
+                const [companyUsersSnap, purchasedItemsSnap] = await Promise.all([
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "companyUsers")),
+                    getDocs(collection(db, "companies", recentlySelectedCompany, "purchasedItems")),
+                ]);
+
+                const userOptions = companyUsersSnap.docs
+                    .map((docSnap) => {
+                        const data = docSnap.data();
+                        const id = data.userId || data.id || docSnap.id;
+                        const name = companyUserName(data) || "Unnamed Technician";
+
+                        return {
+                            ...data,
+                            id,
+                            userId: id,
+                            name,
+                            label: name,
+                            value: id,
+                        };
+                    })
+                    .sort((left, right) => left.label.localeCompare(right.label));
+
+                const purchaseOptions = purchasedItemsSnap.docs
+                    .map((docSnap) => {
+                        const data = docSnap.data();
+                        const id = data.id || docSnap.id;
+                        const date = timestampToDate(data.date);
+                        const dateLabel = date ? format(date, "MM/dd/yyyy") : "";
+                        const name = data.name || data.dbItemName || "Purchased Item";
+                        const techName = data.techName || data.userName || "";
+                        const label = [
+                            name,
+                            dateLabel,
+                            techName,
+                            data.invoiceNum ? `Invoice ${data.invoiceNum}` : "",
+                        ].filter(Boolean).join(" - ");
+
+                        return {
+                            ...data,
+                            id,
+                            name,
+                            date,
+                            dateLabel,
+                            techName,
+                            label,
+                            value: id,
+                            shoppingListItemId: data.shoppingListItemId || "",
+                        };
+                    })
+                    .sort((left, right) => {
+                        const leftTime = left.date?.getTime?.() || 0;
+                        const rightTime = right.date?.getTime?.() || 0;
+                        if (leftTime !== rightTime) return rightTime - leftTime;
+                        return left.label.localeCompare(right.label);
+                    });
+
+                setCompanyUserOptions(userOptions);
+                setPurchasedItemOptions(purchaseOptions);
+            } catch (error) {
+                console.log("Error loading shopping list selectors");
+                console.log(error);
+            } finally {
+                setLoadingSelectors(false);
+            }
+        };
+
+        fetchSelectorData();
+    }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        return () => {
+            if (photoPreviewUrl?.startsWith("blob:")) {
+                URL.revokeObjectURL(photoPreviewUrl);
+            }
+        };
+    }, [photoPreviewUrl]);
+
+    const fetchItem = useCallback(async () => {
+        if (!recentlySelectedCompany || !shoppingItemId) {
+            setIsLoading(false);
+            return;
+        }
+
         try {
             setIsLoading(true);
 
@@ -161,6 +304,10 @@ const ShoppingListDetailView = () => {
                     userName: data.userName || "",
                     dbItemId: data.dbItemId || data.itemId || "",
                     dbItemName: data.dbItemName || data.itemName || "",
+                    photoUrl: getItemPhotoUrl(data),
+                    imageUrl: data.imageUrl || data.imageURL || "",
+                    primaryPhotoUrl: data.primaryPhotoUrl || "",
+                    photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
                     purchasedItem: data.purchasedItem || "",
                     invoiced: !!data.invoiced,
                     serviceLocationId: data.serviceLocationId || "",
@@ -175,8 +322,36 @@ const ShoppingListDetailView = () => {
                     partApprovalRequestId: data.partApprovalRequestId || data.approvalRequestId || "",
                 };
 
-                setItem(loadedItem);
-                setEditForm(loadedItem);
+                let databasePhotoFields = {};
+                if (!loadedItem.photoUrl && loadedItem.dbItemId) {
+                    const dbItemSnap = await getDoc(doc(
+                        db,
+                        "companies",
+                        recentlySelectedCompany,
+                        "settings",
+                        "dataBase",
+                        "dataBase",
+                        loadedItem.dbItemId
+                    ));
+
+                    if (dbItemSnap.exists()) {
+                        databasePhotoFields = itemPhotoFieldsFromSource(
+                            dbItemSnap.data(),
+                            loadedItem.name || "Shopping item photo"
+                        );
+                    }
+                }
+
+                const itemWithPhoto = {
+                    ...loadedItem,
+                    photoUrl: loadedItem.photoUrl || databasePhotoFields.photoUrl || "",
+                    imageUrl: loadedItem.imageUrl || databasePhotoFields.imageUrl || "",
+                    primaryPhotoUrl: loadedItem.primaryPhotoUrl || databasePhotoFields.primaryPhotoUrl || "",
+                    photoUrls: loadedItem.photoUrls.length ? loadedItem.photoUrls : databasePhotoFields.photoUrls || [],
+                };
+
+                setItem(itemWithPhoto);
+                setEditForm(itemWithPhoto);
             } else {
                 console.log("No such shopping list item!");
             }
@@ -186,7 +361,11 @@ const ShoppingListDetailView = () => {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [recentlySelectedCompany, shoppingItemId]);
+
+    useEffect(() => {
+        fetchItem();
+    }, [fetchItem]);
 
     useEffect(() => {
         const fetchConnectedJobDetails = async () => {
@@ -259,13 +438,118 @@ const ShoppingListDetailView = () => {
         }));
     };
 
+    const handlePhotoFileChange = (event) => {
+        const file = event.target.files?.[0] || null;
+        const validationMessage = validateItemPhotoFile(file);
+
+        if (validationMessage) {
+            setPhotoError(validationMessage);
+            setPhotoFile(null);
+            setPhotoPreviewUrl("");
+            return;
+        }
+
+        setPhotoError("");
+        setPhotoFile(file);
+        setPhotoPreviewUrl(file ? URL.createObjectURL(file) : "");
+    };
+
+    const selectedPurchaserOption = useMemo(() => {
+        const purchaserId = compactString(editForm.purchaserId);
+        const purchaserName = compactString(editForm.purchaserName);
+        const matchedOption = companyUserOptions.find((option) => (
+            option.value === purchaserId ||
+            option.id === purchaserId ||
+            option.userId === purchaserId ||
+            (purchaserName && option.label === purchaserName)
+        ));
+
+        if (matchedOption) return matchedOption;
+        if (!purchaserId && !purchaserName) return null;
+
+        return {
+            id: purchaserId,
+            userId: purchaserId,
+            value: purchaserId,
+            name: purchaserName,
+            label: purchaserName || purchaserId,
+        };
+    }, [companyUserOptions, editForm.purchaserId, editForm.purchaserName]);
+
+    const availablePurchasedItemOptions = useMemo(() => {
+        const selectedPurchasedItemId = compactString(editForm.purchasedItem);
+
+        return purchasedItemOptions.filter((option) => {
+            const linkedShoppingListItemId = compactString(option.shoppingListItemId);
+            return (
+                !linkedShoppingListItemId ||
+                linkedShoppingListItemId === shoppingItemId ||
+                option.id === selectedPurchasedItemId
+            );
+        });
+    }, [editForm.purchasedItem, purchasedItemOptions, shoppingItemId]);
+
+    const selectedPurchasedItemOption = useMemo(() => {
+        const purchasedItemId = compactString(editForm.purchasedItem);
+        const matchedOption = availablePurchasedItemOptions.find((option) => option.id === purchasedItemId);
+
+        if (matchedOption) return matchedOption;
+        if (!purchasedItemId) return null;
+
+        return {
+            id: purchasedItemId,
+            value: purchasedItemId,
+            label: purchasedItemId,
+        };
+    }, [availablePurchasedItemOptions, editForm.purchasedItem]);
+
+    const handlePurchaserChange = (option) => {
+        setEditForm((prev) => ({
+            ...prev,
+            purchaserId: option?.userId || option?.id || option?.value || "",
+            purchaserName: option?.name || option?.label || "",
+        }));
+    };
+
+    const handlePurchasedItemChange = (option) => {
+        setEditForm((prev) => ({
+            ...prev,
+            purchasedItem: option?.id || option?.value || "",
+        }));
+    };
+
+    const updatePurchasedItemConnection = async (purchasedItemId, shoppingListItemId) => {
+        const cleanPurchasedItemId = compactString(purchasedItemId);
+        if (!cleanPurchasedItemId) return;
+
+        const purchaseRef = doc(
+            db,
+            "companies",
+            recentlySelectedCompany,
+            "purchasedItems",
+            cleanPurchasedItemId
+        );
+        const purchaseSnap = await getDoc(purchaseRef);
+        if (!purchaseSnap.exists()) return;
+
+        await updateDoc(purchaseRef, {
+            shoppingListItemId,
+        });
+    };
+
     const editJob = () => {
         setEditForm(item);
+        setPhotoFile(null);
+        setPhotoPreviewUrl("");
+        setPhotoError("");
         setEdit(true);
     };
 
     const cancelEditJob = () => {
         setEditForm(item);
+        setPhotoFile(null);
+        setPhotoPreviewUrl("");
+        setPhotoError("");
         setEdit(false);
     };
 
@@ -281,6 +565,26 @@ const ShoppingListDetailView = () => {
                 shoppingItemId
             );
 
+            const isJobItem = editForm.category === "Job";
+            const isPersonalItem = editForm.category === "Personal";
+            let uploadedPhoto = {
+                photoUrl: editForm.photoUrl || "",
+                storagePath: "",
+            };
+
+            if (photoFile) {
+                uploadedPhoto = await uploadItemPhoto({
+                    storage,
+                    companyId: recentlySelectedCompany,
+                    file: photoFile,
+                    itemType: "shoppingItems",
+                    itemId: shoppingItemId,
+                });
+            }
+
+            const photoFields = photoFile
+                ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, editForm.name || item.name || "Shopping item photo", uploadedPhoto.storagePath)
+                : itemPhotoFieldsFromUrl(editForm.photoUrl, editForm.name || item.name || "Shopping item photo");
             const payload = {
                 category: editForm.category || "",
                 subCategory: editForm.subCategory || "",
@@ -294,19 +598,20 @@ const ShoppingListDetailView = () => {
                     ? Timestamp.fromDate(new Date(editForm.datePurchased))
                     : null,
                 quantity: editForm.quantity || "",
-                jobId: editForm.category === "Job" ? editForm.jobId || "" : "",
-                jobName: editForm.category === "Job" ? editForm.jobName || "" : "",
-                customerId: editForm.category === "Personal" ? "" : editForm.customerId || "",
-                customerName: editForm.category === "Personal" ? "" : editForm.customerName || "",
-                userId: editForm.category === "Personal" ? editForm.userId || "" : "",
+                jobId: isJobItem ? item.jobId || "" : "",
+                jobName: isJobItem ? item.jobName || "" : "",
+                customerId: isPersonalItem ? "" : isJobItem ? item.customerId || "" : editForm.customerId || "",
+                customerName: isPersonalItem ? "" : isJobItem ? item.customerName || "" : editForm.customerName || "",
+                userId: isPersonalItem ? editForm.userId || "" : "",
                 userName:
-                    editForm.category === "Personal" ? editForm.userName || "" : "",
+                    isPersonalItem ? editForm.userName || "" : "",
                 dbItemId: editForm.dbItemId || "",
                 dbItemName: editForm.dbItemName || "",
+                ...photoFields,
                 purchasedItem: editForm.purchasedItem || "",
                 invoiced: !!editForm.invoiced,
-                serviceLocationId: editForm.serviceLocationId || "",
-                serviceLocationName: editForm.serviceLocationName || "",
+                serviceLocationId: isJobItem ? item.serviceLocationId || "" : editForm.serviceLocationId || "",
+                serviceLocationName: isJobItem ? item.serviceLocationName || "" : editForm.serviceLocationName || "",
                 plannedUnitCostCents: editForm.plannedUnitCostCents ?? null,
                 plannedUnitPriceCents: editForm.plannedUnitPriceCents ?? null,
                 plannedTotalCostCents: editForm.plannedTotalCostCents ?? null,
@@ -314,14 +619,49 @@ const ShoppingListDetailView = () => {
                 customerApprovalRequired: !!editForm.customerApprovalRequired,
                 customerApprovalStatus: editForm.customerApprovalStatus || "",
                 partApprovalRequestId: editForm.partApprovalRequestId || "",
+                needsAction: !["Delivered", "Installed"].includes(editForm.status),
             };
 
             await updateDoc(docRef, payload);
 
+            const previousPurchasedItemId = compactString(item.purchasedItem);
+            const nextPurchasedItemId = compactString(editForm.purchasedItem);
+
+            if (previousPurchasedItemId && previousPurchasedItemId !== nextPurchasedItemId) {
+                await updatePurchasedItemConnection(previousPurchasedItemId, "");
+            }
+
+            if (nextPurchasedItemId) {
+                await updatePurchasedItemConnection(nextPurchasedItemId, shoppingItemId);
+            }
+
             setItem({
                 ...editForm,
+                jobId: payload.jobId,
+                jobName: payload.jobName,
+                customerId: payload.customerId,
+                customerName: payload.customerName,
+                userId: payload.userId,
+                userName: payload.userName,
+                serviceLocationId: payload.serviceLocationId,
+                serviceLocationName: payload.serviceLocationName,
+                ...photoFields,
                 invoiced: !!editForm.invoiced,
             });
+            setPhotoFile(null);
+            setPhotoPreviewUrl("");
+            setPhotoError("");
+            setPurchasedItemOptions((prev) => prev.map((option) => {
+                if (option.id === previousPurchasedItemId && previousPurchasedItemId !== nextPurchasedItemId) {
+                    return { ...option, shoppingListItemId: "" };
+                }
+
+                if (option.id === nextPurchasedItemId) {
+                    return { ...option, shoppingListItemId: shoppingItemId };
+                }
+
+                return option;
+            }));
             setEdit(false);
         } catch (error) {
             console.log("Error saving shopping list item");
@@ -365,11 +705,15 @@ const ShoppingListDetailView = () => {
         ? format(new Date(item.datePurchased), "MM / d / yyyy")
         : "—";
     const displayName = item.name || item.dbItemName || "—";
+    const displayPhotoUrl = edit ? photoPreviewUrl || editForm.photoUrl : item.photoUrl;
+    const connectedPurchasedItemOption = purchasedItemOptions.find((option) => option.id === item.purchasedItem);
+    const purchasedItemDisplayName = connectedPurchasedItemOption?.label || item.purchasedItem;
     const jobCustomerId = item.customerId || jobDetails?.customerId || "";
     const jobCustomerName = item.customerName || jobDetails?.customerName || "—";
     const jobServiceLocationId = item.serviceLocationId || jobDetails?.serviceLocationId || "";
     const jobServiceLocationName = item.serviceLocationName || jobDetails?.serviceLocationName || serviceLocationDetails?.nickName || serviceLocationDetails?.name || "";
     const jobServiceLocationAddress = formatAddress(serviceLocationDetails) || formatAddress(item.serviceLocationAddress) || formatAddress(jobDetails?.serviceLocationAddress) || formatAddress(jobDetails) || "—";
+    const jobDetailLink = item.jobId ? `/company/jobs/detail/${item.jobId}` : "";
     const moneyFromCents = (value) => {
         if (value === null || value === undefined || value === "") return "—";
         const amount = Number(value);
@@ -430,6 +774,58 @@ const ShoppingListDetailView = () => {
                     <div className="lg:col-span-2 space-y-6">
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Item Information</h3>
+
+                            <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                    <div className="h-28 w-28 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white">
+                                        {displayPhotoUrl ? (
+                                            <img src={displayPhotoUrl} alt="" className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-400">
+                                                Photo
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {edit ? (
+                                        <div className="min-w-0 flex-1 space-y-3">
+                                            <div>
+                                                <p className="text-sm font-semibold text-gray-500 mb-1">Shopping Item Photo</p>
+                                                <input
+                                                    type="file"
+                                                    accept="image/*"
+                                                    onChange={handlePhotoFileChange}
+                                                    className="block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+                                                />
+                                                {photoFile ? (
+                                                    <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you save.</p>
+                                                ) : null}
+                                                {photoError ? (
+                                                    <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
+                                                ) : null}
+                                            </div>
+
+                                            <div>
+                                                <p className="text-sm font-semibold text-gray-500 mb-1">Photo URL</p>
+                                                <input
+                                                    type="url"
+                                                    value={editForm.photoUrl}
+                                                    onChange={(e) => handleEditFieldChange("photoUrl", e.target.value)}
+                                                    className="w-full rounded-md border border-slate-300 p-3"
+                                                    placeholder="https://..."
+                                                />
+                                            </div>
+                                        </div>
+                                    ) : (
+                                        <div className="min-w-0 flex-1">
+                                            <p className="text-sm font-semibold text-gray-500">Photo</p>
+                                            <p className="mt-1 break-all text-sm text-slate-600">
+                                                {item.photoUrl || "No photo attached"}
+                                            </p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
 
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <div>
@@ -629,62 +1025,68 @@ const ShoppingListDetailView = () => {
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Purchaser</h3>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-4">
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Purchaser ID</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Technician</p>
                                     {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.purchaserId}
-                                            onChange={(e) => handleEditFieldChange("purchaserId", e.target.value)}
-                                            className="w-full rounded-md border border-slate-300 p-3"
+                                        <Select
+                                            value={selectedPurchaserOption}
+                                            options={companyUserOptions}
+                                            onChange={handlePurchaserChange}
+                                            isSearchable
+                                            isClearable
+                                            isLoading={loadingSelectors}
+                                            placeholder="Select a technician"
+                                            styles={selectStyles}
                                         />
                                     ) : (
-                                        <p>{item.purchaserId || "—"}</p>
+                                        <p>{item.purchaserName || (item.purchaserId ? "Assigned technician" : "—")}</p>
                                     )}
                                 </div>
 
-                                <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Purchaser Name</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.purchaserName}
-                                            onChange={(e) => handleEditFieldChange("purchaserName", e.target.value)}
-                                            className="w-full rounded-md border border-slate-300 p-3"
-                                        />
-                                    ) : (
-                                        <p>{item.purchaserName || "—"}</p>
-                                    )}
-                                </div>
+                                {(edit ? editForm.purchaserId : item.purchaserId) ? (
+                                    <p className="text-xs text-gray-500">
+                                        ID: {edit ? editForm.purchaserId : item.purchaserId}
+                                    </p>
+                                ) : null}
                             </div>
                         </div>
 
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Purchased Item Connection</h3>
 
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="space-y-4">
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Purchased Item ID</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Purchased Item</p>
                                     {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.purchasedItem}
-                                            onChange={(e) => handleEditFieldChange("purchasedItem", e.target.value)}
-                                            className="w-full rounded-md border border-slate-300 p-3"
-                                            placeholder="Purchased item document id"
+                                        <Select
+                                            value={selectedPurchasedItemOption}
+                                            options={availablePurchasedItemOptions}
+                                            onChange={handlePurchasedItemChange}
+                                            isSearchable
+                                            isClearable
+                                            isLoading={loadingSelectors}
+                                            placeholder="Select a purchased item"
+                                            styles={selectStyles}
+                                            noOptionsMessage={() => "No unconnected purchased items found"}
                                         />
                                     ) : item.purchasedItem ? (
                                         <Link
                                             to={`/company/purchased-items/detail/${item.purchasedItem}`}
                                             className="text-blue-600 hover:text-blue-800 font-medium break-all"
                                         >
-                                            {item.purchasedItem}
+                                            {purchasedItemDisplayName}
                                         </Link>
                                     ) : (
                                         <p>—</p>
                                     )}
                                 </div>
+
+                                {(edit ? editForm.purchasedItem : item.purchasedItem) ? (
+                                    <p className="text-xs text-gray-500">
+                                        ID: {edit ? editForm.purchasedItem : item.purchasedItem}
+                                    </p>
+                                ) : null}
 
                                 <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">Invoiced</p>
@@ -712,15 +1114,8 @@ const ShoppingListDetailView = () => {
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Job</p>
-                                        {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.jobId}
-                                                onChange={(e) => handleEditFieldChange("jobId", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
-                                        ) : item.jobId ? (
-                                            <Link to={`/company/jobs/detail/${item.jobId}`} className="font-semibold text-blue-600 hover:underline">
+                                        {item.jobId ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
                                                 {linkedReferenceText("Job", item.jobId, item.jobName)}
                                             </Link>
                                         ) : (
@@ -730,13 +1125,10 @@ const ShoppingListDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Job Name</p>
-                                        {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.jobName}
-                                                onChange={(e) => handleEditFieldChange("jobName", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                        {item.jobId ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                                {item.jobName || linkedReferenceText("Job", item.jobId)}
+                                            </Link>
                                         ) : (
                                             <p>{item.jobName || "—"}</p>
                                         )}
@@ -744,13 +1136,10 @@ const ShoppingListDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Service Location</p>
-                                        {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.serviceLocationId}
-                                                onChange={(e) => handleEditFieldChange("serviceLocationId", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                        {jobDetailLink ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                                {linkedReferenceText("Service Location", jobServiceLocationId, jobServiceLocationName)}
+                                            </Link>
                                         ) : jobServiceLocationId ? (
                                             <Link to={`/company/serviceLocations/detail/${jobServiceLocationId}`} className="font-semibold text-blue-600 hover:underline">
                                                 {linkedReferenceText("Service Location", jobServiceLocationId, jobServiceLocationName)}
@@ -762,13 +1151,14 @@ const ShoppingListDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Service Location Name</p>
-                                        {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.serviceLocationName}
-                                                onChange={(e) => handleEditFieldChange("serviceLocationName", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                        {jobDetailLink ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                                {jobServiceLocationName || linkedReferenceText("Service Location", jobServiceLocationId)}
+                                            </Link>
+                                        ) : jobServiceLocationId ? (
+                                            <Link to={`/company/serviceLocations/detail/${jobServiceLocationId}`} className="font-semibold text-blue-600 hover:underline">
+                                                {jobServiceLocationName || linkedReferenceText("Service Location", jobServiceLocationId)}
+                                            </Link>
                                         ) : (
                                             <p>{jobServiceLocationName || "—"}</p>
                                         )}
@@ -776,13 +1166,10 @@ const ShoppingListDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Customer Name</p>
-                                        {edit ? (
-                                            <input
-                                                type="text"
-                                                value={editForm.customerName}
-                                                onChange={(e) => handleEditFieldChange("customerName", e.target.value)}
-                                                className="w-full rounded-md border border-slate-300 p-3"
-                                            />
+                                        {jobDetailLink ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                                {linkedReferenceText("Customer", jobCustomerId, jobCustomerName)}
+                                            </Link>
                                         ) : jobCustomerId ? (
                                             <Link to={`/company/customers/details/${jobCustomerId}`} className="font-semibold text-blue-600 hover:underline">
                                                 {linkedReferenceText("Customer", jobCustomerId, jobCustomerName)}
@@ -794,7 +1181,13 @@ const ShoppingListDetailView = () => {
 
                                     <div>
                                         <p className="text-sm font-semibold text-gray-500 mb-1">Service Location Address</p>
-                                        <p>{loadingJobDetails ? "Loading..." : jobServiceLocationAddress}</p>
+                                        {jobDetailLink && !loadingJobDetails ? (
+                                            <Link to={jobDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                                {jobServiceLocationAddress}
+                                            </Link>
+                                        ) : (
+                                            <p>{loadingJobDetails ? "Loading..." : jobServiceLocationAddress}</p>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -935,7 +1328,7 @@ const ShoppingListDetailView = () => {
                                             to={`/company/purchased-items/detail/${item.purchasedItem}`}
                                             className="text-blue-600 hover:text-blue-800 font-medium text-right break-all"
                                         >
-                                            {item.purchasedItem}
+                                            {purchasedItemDisplayName}
                                         </Link>
                                     ) : (
                                         <span>—</span>

@@ -93,6 +93,93 @@ const categoryOptionForParam = (value, hasJob = false) => {
     return hasJob ? SERVICE_STOP_CATEGORY_OPTIONS[0] : SERVICE_STOP_CATEGORY_OPTIONS[2];
 };
 
+const compactString = (value) => String(value || "").trim();
+
+const idValue = (value) => {
+    if (!value) return "";
+    if (typeof value === "string") return value.trim();
+    if (typeof value === "number") return String(value);
+    if (typeof value === "object") {
+        return compactString(value.id || value.value || value.docId || "");
+    }
+
+    return compactString(value);
+};
+
+const shoppingItemTaskIds = (item = {}) => {
+    const taskIds = [
+        item.linkedTaskId,
+        item.linkedJobTaskId,
+        item.jobTaskId,
+        item.sourceTaskId,
+        item.taskId,
+    ].map(idValue).filter(Boolean);
+
+    (Array.isArray(item.prepKeys) ? item.prepKeys : []).forEach((key) => {
+        const rawKey = compactString(key);
+        if (rawKey.startsWith("jobTask:")) {
+            taskIds.push(rawKey.replace("jobTask:", ""));
+        }
+    });
+
+    return Array.from(new Set(taskIds));
+};
+
+const shoppingItemPlanIds = (item = {}) => (
+    [
+        item.planId,
+        item.sourcePlanId,
+        item.solutionId,
+        item.sourceSolutionId,
+    ].map(idValue).filter(Boolean)
+);
+
+const buildScheduledShoppingPrepKeys = ({
+    userId = "",
+    jobId = "",
+    customerId = "",
+    serviceLocationId = "",
+    serviceStopId = "",
+    taskIds = [],
+} = {}) => Array.from(
+    new Set(
+        [
+            userId ? `user:${userId}` : "",
+            jobId ? `job:${jobId}` : "",
+            customerId ? `customer:${customerId}` : "",
+            serviceLocationId ? `serviceLocation:${serviceLocationId}` : "",
+            serviceStopId ? `serviceStop:${serviceStopId}` : "",
+            ...(taskIds || []).map((taskId) => idValue(taskId)).filter(Boolean).map((taskId) => `jobTask:${taskId}`),
+        ].filter(Boolean)
+    )
+);
+
+const itemNeedsShoppingAction = (item = {}) =>
+    !compactString(item.status).toLowerCase().includes("installed");
+
+const shoppingItemMatchesScheduledTasks = ({
+    item = {},
+    selectedTaskIds,
+    linkedShoppingItemIds,
+    selectedPlannedStopId = "",
+    selectedPlanId = "",
+} = {}) => {
+    const itemId = idValue(item.id || item.docId);
+    if (itemId && linkedShoppingItemIds.has(itemId)) return true;
+
+    const taskIds = shoppingItemTaskIds(item);
+    if (taskIds.some((taskId) => selectedTaskIds.has(taskId))) return true;
+
+    const itemPlannedStopId = idValue(item.plannedServiceStopId || item.plannedStopId || item.sourcePlannedStopId);
+    if (selectedPlannedStopId && itemPlannedStopId === selectedPlannedStopId) return true;
+
+    const hasAnyTaskContext = taskIds.length > 0;
+    const planIds = shoppingItemPlanIds(item);
+    if (selectedPlanId && !hasAnyTaskContext && planIds.includes(selectedPlanId)) return true;
+
+    return false;
+};
+
 const stopPayBucketIdForCategory = (categoryOption = {}) => (
     categoryOption.id === "jobVisit" ? "job" : categoryOption.id
 );
@@ -212,6 +299,9 @@ const CreateNewServiceStop = () => {
     const [selectedCategory, setSelectedCategory] = useState(() => categoryOptionForParam(queryCategory, Boolean(jobId)));
     const [selectedManualServiceStopType, setSelectedManualServiceStopType] = useState(null);
     const [selectedPayWorkType, setSelectedPayWorkType] = useState(null);
+    const [manualPayOverrideEnabled, setManualPayOverrideEnabled] = useState(false);
+    const [manualPayOverrideAmount, setManualPayOverrideAmount] = useState("");
+    const [manualPayOverrideNotes, setManualPayOverrideNotes] = useState("");
 
     const moneyFromCents = (value) =>
         new Intl.NumberFormat("en-US", {
@@ -312,6 +402,44 @@ const CreateNewServiceStop = () => {
         workTypeMappings,
         technicianRates,
         serviceDate,
+    ]);
+
+    const manualPayOverrideCents = useMemo(() => {
+        const amount = Number(manualPayOverrideAmount || 0);
+        if (!Number.isFinite(amount) || amount < 0) return 0;
+        return Math.round(amount * 100);
+    }, [manualPayOverrideAmount]);
+
+    const effectivePaySummary = useMemo(() => {
+        if (!manualPayOverrideEnabled) return selectedPaySummary;
+
+        return {
+            lines: [
+                {
+                    id: "manual_pay_override",
+                    source: "Manual Adjustment",
+                    sourceTaskId: null,
+                    workTypeId: selectedPayWorkType?.id || "",
+                    workTypeName: selectedPayWorkType?.label || selectedPayWorkType?.name || "",
+                    title: "Manual Pay Amount",
+                    rateAmountCents: manualPayOverrideCents,
+                    rateType: "Manual",
+                    quantity: 1,
+                    quantityUnit: "Each",
+                    totalAmountCents: manualPayOverrideCents,
+                    calculationStatus: "Calculated",
+                    notes: manualPayOverrideNotes?.trim() || "Manual payroll amount set while scheduling this service stop.",
+                },
+            ],
+            totalAmountCents: manualPayOverrideCents,
+            needsReview: false,
+        };
+    }, [
+        manualPayOverrideCents,
+        manualPayOverrideEnabled,
+        manualPayOverrideNotes,
+        selectedPaySummary,
+        selectedPayWorkType,
     ]);
 
     const selectedPlannedStopPayRange = useMemo(() => {
@@ -815,6 +943,102 @@ const CreateNewServiceStop = () => {
         }
     };
 
+    const syncShoppingItemsForScheduledJobTasks = async ({
+        serviceStopId,
+        internalId,
+        activeCustomer,
+        activeServiceLocation,
+    }) => {
+        if (!recentlySelectedCompany || !jobId || !selectedUser?.userId || !selectedTasks.length) return;
+
+        const selectedTaskIds = new Set(selectedTasks.map((task) => idValue(task.id)).filter(Boolean));
+        const linkedShoppingItemIds = new Set(
+            selectedTasks.flatMap((task) => [
+                idValue(task.shoppingListItemId),
+                ...(Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds.map(idValue) : []),
+            ]).filter(Boolean)
+        );
+
+        if (!selectedTaskIds.size && !linkedShoppingItemIds.size) return;
+
+        const selectedPlannedStopId = idValue(selectedPlannedStop?.id);
+        const selectedPlanId = idValue(
+            selectedPlannedStop?.planId ||
+            selectedPlannedStop?.sourcePlanId ||
+            selectedPlannedStop?.solutionId ||
+            selectedPlannedStop?.sourceSolutionId
+        );
+        const shoppingSnap = await getDocs(query(
+            collection(db, "companies", recentlySelectedCompany, "shoppingList"),
+            where("jobId", "==", jobId)
+        ));
+        const scheduledDate = Timestamp.fromDate(serviceDate);
+        const basePrepKeys = buildScheduledShoppingPrepKeys({
+            userId: selectedUser.userId,
+            jobId,
+            customerId: activeCustomer?.id || job?.customerId || "",
+            serviceLocationId: activeServiceLocation?.id || job?.serviceLocationId || "",
+            serviceStopId,
+            taskIds: Array.from(selectedTaskIds),
+        });
+        const matchedDocs = shoppingSnap.docs.filter((docSnap) => {
+            const item = { id: docSnap.id, ...(docSnap.data() || {}) };
+            return shoppingItemMatchesScheduledTasks({
+                item,
+                selectedTaskIds,
+                linkedShoppingItemIds,
+                selectedPlannedStopId,
+                selectedPlanId,
+            });
+        });
+
+        if (!matchedDocs.length) return;
+
+        await Promise.all(
+            matchedDocs.map((docSnap) => {
+                const item = { id: docSnap.id, ...(docSnap.data() || {}) };
+                const itemTaskIds = shoppingItemTaskIds(item).filter((taskId) => selectedTaskIds.has(taskId));
+                const itemPrepKeys = buildScheduledShoppingPrepKeys({
+                    userId: selectedUser.userId,
+                    jobId,
+                    customerId: activeCustomer?.id || item.customerId || job?.customerId || "",
+                    serviceLocationId: activeServiceLocation?.id || item.serviceLocationId || job?.serviceLocationId || "",
+                    serviceStopId,
+                    taskIds: itemTaskIds.length ? itemTaskIds : Array.from(selectedTaskIds),
+                });
+                const prepKeys = itemPrepKeys.length ? itemPrepKeys : basePrepKeys;
+                const updates = {
+                    serviceStopId,
+                    serviceStopInternalId: internalId,
+                    scheduledServiceStopId: serviceStopId,
+                    scheduledServiceStopInternalId: internalId,
+                    scheduledDate,
+                    actionDate: scheduledDate,
+                    needsAction: itemNeedsShoppingAction(item),
+                    updatedAt: Timestamp.now(),
+                };
+
+                if (prepKeys.length) {
+                    updates.prepKeys = arrayUnion(...prepKeys);
+                }
+
+                if (selectedUser.userId) {
+                    updates.assignedTechIds = arrayUnion(selectedUser.userId);
+                    updates.assignedTechId = selectedUser.userId;
+                    updates.assignedToUserId = selectedUser.userId;
+                }
+
+                if (selectedUser.userName) {
+                    updates.assignedTechNames = arrayUnion(selectedUser.userName);
+                    updates.assignedTechName = selectedUser.userName;
+                    updates.assignedToUserName = selectedUser.userName;
+                }
+
+                return updateDoc(docSnap.ref, updates);
+            })
+        );
+    };
+
     const createServiceStop = async () => {
         if (!requirePermission("242", "create service stops")) return;
 
@@ -879,7 +1103,7 @@ const CreateNewServiceStop = () => {
             context: "CreateNewServiceStop.createServiceStop",
         });
 
-        if (selectedPaySummary.needsReview) {
+        if (effectivePaySummary.needsReview) {
             console.warn("[CreateNewServiceStop][payEstimateNeedsReview]", {
                 jobId,
                 selectedUserId: selectedUser.userId,
@@ -888,8 +1112,8 @@ const CreateNewServiceStop = () => {
                 selectedServiceStopTypeName: resolvedTypeFields.type,
                 selectedPayWorkTypeId: payWorkTypeId,
                 selectedPayWorkTypeName: payWorkTypeName,
-                totalAmountCents: selectedPaySummary.totalAmountCents,
-                lines: selectedPaySummary.lines,
+                totalAmountCents: effectivePaySummary.totalAmountCents,
+                lines: effectivePaySummary.lines,
             });
         }
 
@@ -922,12 +1146,16 @@ const CreateNewServiceStop = () => {
             startTime: null,
             includeDosages: selectedCategory.id === "serviceAgreementEstimate" || selectedCategory.id === "jobVisit",
             includeReadings: selectedCategory.id === "serviceAgreementEstimate" || selectedCategory.id === "jobVisit",
-            estimatedPayCents: selectedPaySummary.totalAmountCents,
-            estimatedPayLines: selectedPaySummary.lines,
+            estimatedPayCents: effectivePaySummary.totalAmountCents,
+            estimatedPayLines: effectivePaySummary.lines,
             payWorkTypeId,
             payWorkTypeName,
             workTypeId: payWorkTypeId,
             workTypeName: payWorkTypeName,
+            manualPayOverrideCents: manualPayOverrideEnabled ? manualPayOverrideCents : null,
+            manualPayOverrideNotes: manualPayOverrideEnabled
+                ? (manualPayOverrideNotes.trim() || "Manual payroll amount set while scheduling this service stop.")
+                : "",
             defaultWorkTypeIds: resolvedTypeFields.defaultWorkTypeIds,
             plannedServiceStopId: selectedPlannedStop?.id || "",
             rate: rate ?? 0,
@@ -992,6 +1220,12 @@ const CreateNewServiceStop = () => {
                 });
             }
         }
+        await syncShoppingItemsForScheduledJobTasks({
+            serviceStopId,
+            internalId,
+            activeCustomer,
+            activeServiceLocation,
+        });
         await updateDoc(serviceStopRef, { rate: rate });
 
         //Update Job to have ids
@@ -1102,7 +1336,14 @@ const CreateNewServiceStop = () => {
                     workTypeOptions={workTypeOptions}
                     selectedPayWorkType={selectedPayWorkType}
                     setSelectedPayWorkType={setSelectedPayWorkType}
-                    selectedPaySummary={selectedPaySummary}
+                    selectedPaySummary={effectivePaySummary}
+                    automaticPaySummary={selectedPaySummary}
+                    manualPayOverrideEnabled={manualPayOverrideEnabled}
+                    setManualPayOverrideEnabled={setManualPayOverrideEnabled}
+                    manualPayOverrideAmount={manualPayOverrideAmount}
+                    setManualPayOverrideAmount={setManualPayOverrideAmount}
+                    manualPayOverrideNotes={manualPayOverrideNotes}
+                    setManualPayOverrideNotes={setManualPayOverrideNotes}
                     moneyFromCents={moneyFromCents}
                 />
             );
@@ -1145,7 +1386,8 @@ const CreateNewServiceStop = () => {
                     duration={estimatedDuration}
                     selectedServiceStopType={selectedServiceStopType}
                     selectedPayWorkType={selectedPayWorkType}
-                    selectedPaySummary={selectedPaySummary}
+                    selectedPaySummary={effectivePaySummary}
+                    manualPayOverrideEnabled={manualPayOverrideEnabled}
                     moneyFromCents={moneyFromCents}
                 />
             );
@@ -1481,6 +1723,13 @@ const AssignTechTab = ({
     selectedPayWorkType,
     setSelectedPayWorkType,
     selectedPaySummary,
+    automaticPaySummary,
+    manualPayOverrideEnabled,
+    setManualPayOverrideEnabled,
+    manualPayOverrideAmount,
+    setManualPayOverrideAmount,
+    manualPayOverrideNotes,
+    setManualPayOverrideNotes,
     moneyFromCents,
 }) => (
     <div className="grid md:grid-cols-4 gap-6">
@@ -1515,8 +1764,53 @@ const AssignTechTab = ({
                 styles={{ control: (p) => ({ ...p, padding: '0.3rem' }) }}
             />
             <p className="mt-1 text-xs text-gray-500">
-                Overrides service stop pay for this scheduled stop.
+                Overrides which payroll work type is used for the automatic preview.
             </p>
+        </div>
+        <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 md:col-span-full">
+            <label className="flex items-start gap-3">
+                <input
+                    type="checkbox"
+                    checked={manualPayOverrideEnabled}
+                    onChange={(event) => setManualPayOverrideEnabled(event.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                    <span className="block text-sm font-semibold text-gray-800">Manual pay amount</span>
+                    <span className="mt-1 block text-sm text-gray-600">
+                        Use one fixed payroll amount for this scheduled stop instead of automatic stop or task rates.
+                    </span>
+                </span>
+            </label>
+
+            {manualPayOverrideEnabled && (
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Amount</label>
+                        <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={manualPayOverrideAmount}
+                            onChange={(event) => setManualPayOverrideAmount(event.target.value)}
+                            className="w-full rounded-lg border border-gray-300 p-2"
+                        />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Payroll Note</label>
+                        <input
+                            type="text"
+                            value={manualPayOverrideNotes}
+                            onChange={(event) => setManualPayOverrideNotes(event.target.value)}
+                            placeholder="Optional"
+                            className="w-full rounded-lg border border-gray-300 p-2"
+                        />
+                    </div>
+                    <p className="text-xs text-gray-500 md:col-span-full">
+                        Automatic preview before override: {moneyFromCents(automaticPaySummary?.totalAmountCents || 0)}
+                    </p>
+                </div>
+            )}
         </div>
         <PaySummaryCard selectedPaySummary={selectedPaySummary} moneyFromCents={moneyFromCents} />
     </div>
@@ -1746,6 +2040,7 @@ const ReviewTab = ({
     selectedServiceStopType,
     selectedPayWorkType,
     selectedPaySummary,
+    manualPayOverrideEnabled,
     moneyFromCents,
 }) => {
     const locationAddress = addressLine(location?.address || {});
@@ -1764,7 +2059,7 @@ const ReviewTab = ({
                 <p><strong>Service Stop Type:</strong> {selectedServiceStopType?.label || selectedServiceStopType?.name || selectedCategory?.fallbackType || "Service Stop"}</p>
                 <p><strong>Pay Work Type Override:</strong> {selectedPayWorkType?.label || "Using service stop type defaults"}</p>
                 <p><strong>Total Duration:</strong> {duration} minutes</p>
-                <p><strong>Expected Pay:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
+                <p><strong>{manualPayOverrideEnabled ? "Manual Pay" : "Expected Pay"}:</strong> {moneyFromCents(selectedPaySummary.totalAmountCents)}</p>
                 {description && <p><strong>Planned Work:</strong> {description}</p>}
                 <div>
                     <h4 className="font-bold mt-2">Selected Tasks:</h4>

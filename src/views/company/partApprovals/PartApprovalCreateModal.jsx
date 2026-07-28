@@ -9,11 +9,14 @@ import {
   query,
   serverTimestamp,
   setDoc,
+  writeBatch,
   where,
 } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
+import { itemPhotoFieldsFromSource } from '../../../utils/itemPhotos';
+import { buildPartApprovalShoppingItemPayload } from '../../../utils/partApprovalShopping';
 
 const selectStyles = {
   control: (provided) => ({
@@ -167,6 +170,7 @@ const normalizeDbItemOption = (docId, data = {}) => {
   const name = data.name || 'Unnamed Item';
   const unitCostCents = Number(data.rate || data.cost || 0);
   const unitPriceCents = Number(data.sellPrice || data.rate || data.cost || 0);
+  const photoFields = itemPhotoFieldsFromSource(data, name);
 
   return {
     ...data,
@@ -177,6 +181,7 @@ const normalizeDbItemOption = (docId, data = {}) => {
     dbItemId: id,
     unitCostCents,
     unitPriceCents,
+    ...photoFields,
     label: `${name} (${formatCurrency(unitPriceCents)})`,
     value: id,
   };
@@ -191,7 +196,25 @@ const initialForm = {
   unitPrice: '',
 };
 
-const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreated }) => {
+const timestampFromValue = (value) => {
+  if (!value) return null;
+  if (typeof value.toDate === 'function') return value;
+  if (value instanceof Date) return value;
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const PartApprovalCreateModal = ({
+  open,
+  onClose,
+  fixedCustomer = null,
+  fixedServiceLocation = null,
+  workflowContext = {},
+  hideCost = false,
+  allowInPersonApproval = false,
+  onCreated,
+}) => {
   const { recentlySelectedCompany, recentlySelectedCompanyName, user, dataBaseUser } = useContext(Context);
   const [customers, setCustomers] = useState([]);
   const [dbItems, setDbItems] = useState([]);
@@ -206,15 +229,18 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
   const fixedCustomerOption = useMemo(() => (
     fixedCustomer ? normalizeCustomerOption(fixedCustomer.id, fixedCustomer) : null
   ), [fixedCustomer]);
+  const fixedServiceLocationOption = useMemo(() => (
+    fixedServiceLocation ? normalizeServiceLocationOption(fixedServiceLocation.id, fixedServiceLocation) : null
+  ), [fixedServiceLocation]);
 
   useEffect(() => {
     if (!open) return;
 
     setForm(initialForm);
     setSelectedDbItem(null);
-    setSelectedServiceLocation(null);
+    setSelectedServiceLocation(fixedServiceLocationOption);
     setSelectedCustomer(fixedCustomerOption);
-  }, [open, fixedCustomerOption]);
+  }, [fixedCustomerOption, fixedServiceLocationOption, open]);
 
   useEffect(() => {
     if (!open || !recentlySelectedCompany) return undefined;
@@ -271,6 +297,12 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
       return undefined;
     }
 
+    if (fixedServiceLocationOption) {
+      setServiceLocations([fixedServiceLocationOption]);
+      setSelectedServiceLocation(fixedServiceLocationOption);
+      return undefined;
+    }
+
     let active = true;
 
     const loadServiceLocations = async () => {
@@ -300,7 +332,7 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
     return () => {
       active = false;
     };
-  }, [open, recentlySelectedCompany, selectedCustomer?.id]);
+  }, [fixedServiceLocationOption, open, recentlySelectedCompany, selectedCustomer?.id]);
 
   const quantity = Number.parseFloat(form.quantity || '0') || 0;
   const unitCostCents = form.mode === 'database'
@@ -353,9 +385,11 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
     }));
   };
 
-  const handleSubmit = async (event) => {
-    event.preventDefault();
+  const createApproval = async (approvalMode = 'pending') => {
     if (!canSave || saving) return;
+
+    const approvedInPerson = approvalMode === 'approved';
+    if (approvedInPerson && !allowInPersonApproval) return;
 
     setSaving(true);
 
@@ -363,6 +397,7 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
       const customerUserId = await findLinkedCustomerUserId(selectedCustomer);
       const customerEmail = getCustomerEmail(selectedCustomer);
       const approvalId = `cpa_${uuidv4()}`;
+      const shoppingListItemId = approvedInPerson ? `comp_shop_${uuidv4()}` : '';
       const serviceLocationSnapshot = selectedServiceLocation
         ? {
           id: selectedServiceLocation.id,
@@ -374,11 +409,30 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
           zip: selectedServiceLocation.zip || '',
         }
         : {};
+      const scheduledDate = timestampFromValue(workflowContext?.scheduledDate || workflowContext?.serviceDate);
+      const techId =
+        workflowContext?.techId ||
+        workflowContext?.assignedTechId ||
+        workflowContext?.assignedToUserId ||
+        workflowContext?.userId ||
+        '';
+      const techName =
+        workflowContext?.techName ||
+        workflowContext?.technicianName ||
+        workflowContext?.assignedTechName ||
+        workflowContext?.assignedToUserName ||
+        workflowContext?.userName ||
+        '';
+      const photoFields = form.mode === 'database'
+        ? itemPhotoFieldsFromSource(selectedDbItem, itemName || 'Part photo')
+        : {};
+      const now = serverTimestamp();
 
       const payload = {
         id: approvalId,
         companyId: recentlySelectedCompany,
         companyName: recentlySelectedCompanyName || '',
+        customerApprovalUrl: `${window.location.origin}/customer/part-approvals/${approvalId}`,
         customerId: selectedCustomer.id,
         customerUserId: customerUserId || null,
         customerName: selectedCustomer.name || getCustomerName(selectedCustomer),
@@ -387,9 +441,12 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
         billingEmail: selectedCustomer.billingEmail || customerEmail,
         serviceLocationId: selectedServiceLocation?.id || '',
         serviceLocationName: selectedServiceLocation?.name || '',
+        serviceLocationAddress: workflowContext?.serviceLocationAddress || '',
         serviceLocationSnapshot,
-        shoppingListItemId: '',
-        shoppingListPath: '',
+        shoppingListItemId,
+        shoppingListPath: shoppingListItemId
+          ? `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`
+          : '',
         itemName,
         name: itemName,
         description: itemDescription,
@@ -402,13 +459,13 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
         plannedUnitPriceCents: unitPriceCents,
         plannedTotalCostCents: totalCostCents,
         plannedTotalPriceCents: totalPriceCents,
-        status: 'pending',
-        approvalStatus: 'pending',
-        fulfillmentStatus: 'awaitingCustomerApproval',
+        status: approvedInPerson ? 'approved' : 'pending',
+        approvalStatus: approvedInPerson ? 'approved' : 'pending',
+        fulfillmentStatus: approvedInPerson ? 'approvedAwaitingPurchase' : 'awaitingCustomerApproval',
         sourceType: 'partApprovalRequest',
-        requestedAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
+        requestedAt: now,
+        createdAt: now,
+        updatedAt: now,
         requestedByUserId: user?.uid || dataBaseUser?.id || '',
         requestedByUserName:
           `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
@@ -416,13 +473,79 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
           user?.displayName ||
           user?.email ||
           '',
+        jobId: workflowContext?.jobId || '',
+        jobName: workflowContext?.jobName || workflowContext?.jobInternalId || '',
+        jobInternalId: workflowContext?.jobInternalId || '',
+        linkedTaskId: workflowContext?.linkedTaskId || '',
+        linkedTaskName: workflowContext?.linkedTaskName || '',
+        linkedTaskType: workflowContext?.linkedTaskType || '',
+        serviceStopId: workflowContext?.serviceStopId || '',
+        serviceStopInternalId: workflowContext?.serviceStopInternalId || '',
+        scheduledServiceStopId: workflowContext?.serviceStopId || '',
+        scheduledServiceStopInternalId: workflowContext?.serviceStopInternalId || '',
+        scheduledDate,
+        techId,
+        techName,
+        assignedTechId: techId,
+        assignedTechName: techName,
+        assignedToUserId: techId,
+        assignedToUserName: techName,
+        assignedTechIds: techId ? [techId] : [],
+        assignedTechNames: techName ? [techName] : [],
+        purchaserId: techId,
+        purchaserName: techName,
+        prepKeys: [
+          workflowContext?.jobId ? `job:${workflowContext.jobId}` : '',
+          selectedCustomer?.id ? `customer:${selectedCustomer.id}` : '',
+          selectedServiceLocation?.id ? `serviceLocation:${selectedServiceLocation.id}` : '',
+          workflowContext?.serviceStopId ? `serviceStop:${workflowContext.serviceStopId}` : '',
+          workflowContext?.linkedTaskId ? `jobTask:${workflowContext.linkedTaskId}` : '',
+          techId ? `user:${techId}` : '',
+        ].filter(Boolean),
+        ...photoFields,
+        ...(approvedInPerson
+          ? {
+            response: 'approved',
+            responseNote: 'Approved in person',
+            respondedAt: now,
+            respondedByUserId: user?.uid || '',
+            respondedByUserName:
+              `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
+              dataBaseUser?.userName ||
+              user?.displayName ||
+              user?.email ||
+              '',
+            respondedByEmail: user?.email || '',
+            approvedInPerson: true,
+            inPersonApprovedByUserId: user?.uid || '',
+            shoppingListGeneratedAt: now,
+          }
+          : {}),
       };
 
-      await setDoc(doc(db, 'customerPartApprovals', approvalId), payload);
+      if (approvedInPerson) {
+        const batch = writeBatch(db);
+        batch.set(doc(db, 'customerPartApprovals', approvalId), payload);
+        batch.set(
+          doc(db, 'companies', recentlySelectedCompany, 'shoppingList', shoppingListItemId),
+          buildPartApprovalShoppingItemPayload({
+            approval: payload,
+            shoppingListItemId,
+            now,
+            generated: true,
+          }),
+          { merge: true }
+        );
+        await batch.commit();
+      } else {
+        await setDoc(doc(db, 'customerPartApprovals', approvalId), payload);
+      }
 
-      toast.success(customerUserId
-        ? 'Part approval created.'
-        : 'Part approval created. Link the customer account so it appears in their portal.');
+      toast.success(approvedInPerson
+        ? 'Part approved and added to the shopping list.'
+        : customerUserId
+          ? 'Part approval created.'
+          : 'Part approval created. Link the customer account so it appears in their portal.');
       onCreated?.(payload);
       onClose?.();
     } catch (saveError) {
@@ -431,6 +554,11 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleSubmit = async (event) => {
+    event.preventDefault();
+    await createApproval('pending');
   };
 
   if (!open) return null;
@@ -480,7 +608,7 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
                 options={serviceLocations}
                 onChange={setSelectedServiceLocation}
                 isClearable
-                isDisabled={!selectedCustomer}
+                isDisabled={!selectedCustomer || Boolean(fixedServiceLocationOption)}
                 placeholder="Optional location"
                 styles={selectStyles}
               />
@@ -541,7 +669,7 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
               </>
             )}
 
-            {form.mode === 'manual' && (
+            {form.mode === 'manual' && !hideCost && (
               <div>
                 <label className="mb-2 block text-sm font-semibold text-slate-700">Unit Cost</label>
                 <input
@@ -609,8 +737,18 @@ const PartApprovalCreateModal = ({ open, onClose, fixedCustomer = null, onCreate
               disabled={!canSave || saving}
               className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {saving ? 'Creating...' : 'Create Approval'}
+              {saving ? 'Creating...' : 'Create Customer Approval'}
             </button>
+            {allowInPersonApproval && (
+              <button
+                type="button"
+                onClick={() => createApproval('approved')}
+                disabled={!canSave || saving}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? 'Saving...' : 'Approved In Person'}
+              </button>
+            )}
           </div>
         </form>
       </div>

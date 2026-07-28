@@ -23,6 +23,7 @@ import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
 import { GoHistory } from "react-icons/go";
+import { PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
 import {
@@ -72,6 +73,19 @@ import {
   normalizeJobPlanStatus,
 } from "../../../utils/models/JobPlan";
 import { appConfirm, appPrompt } from "../../../utils/appDialog";
+import { fetchCompanyVendors } from "../../../utils/vendors";
+import {
+  CATEGORY_OPTIONS,
+  DEFAULT_CATEGORY,
+  DEFAULT_SUBCATEGORY,
+  DEFAULT_UOM,
+  SUBCATEGORY_OPTIONS,
+  UOM_OPTIONS,
+} from "../databaseItems/databaseItemOptions";
+import {
+  getItemPhotoUrl,
+  itemPhotoFieldsFromSource,
+} from "../../../utils/itemPhotos";
 
 /**
  * JobDetailView
@@ -114,12 +128,66 @@ const EMPTY_TASK_EDIT_FORM = {
   type: "",
   status: "Unassigned",
   laborCost: "",
+  billingLaborPrice: "",
   estimatedTime: "",
   bodyOfWaterId: "",
   equipmentId: "",
   dataBaseItemId: "",
   quantity: "1",
   customerApproval: false,
+};
+
+const createEmptyShoppingDbItemForm = (vendor = null) => ({
+  name: "",
+  rate: "",
+  sellPrice: "",
+  billable: false,
+  sku: "",
+  vendor,
+  uom: DEFAULT_UOM,
+  category: DEFAULT_CATEGORY,
+  subcategory: DEFAULT_SUBCATEGORY,
+  color: "",
+  size: "",
+  description: "",
+  tracking: "",
+});
+
+const buildShoppingDbItemOption = (data = {}, docId = "") => {
+  const id = data.id || docId;
+  const name = data.name || "Unnamed Item";
+  const sku = data.sku || "";
+  const rate = Number(data.rate || 0);
+  const sellPrice = Number(data.sellPrice ?? data.billingRate ?? data.rate ?? 0);
+
+  return {
+    id,
+    name,
+    description: data.description || "",
+    genericItemId: data.genericItemId || "",
+    dbItemId: id,
+    rate,
+    sellPrice,
+    billingRate: Number(data.billingRate ?? sellPrice),
+    cost: Number(data.cost || data.rate || 0),
+    category: data.category || "",
+    subCategory: data.subCategory || "",
+    UOM: data.UOM || "",
+    sku,
+    size: data.size || "",
+    color: data.color || "",
+    storeName: data.storeName || "",
+    venderId: data.venderId || data.vendorId || "",
+    vendorId: data.vendorId || data.venderId || "",
+    billable: Boolean(data.billable),
+    tracking: data.tracking || "",
+    photoUrl: getItemPhotoUrl(data),
+    imageUrl: data.imageUrl || data.imageURL || "",
+    primaryPhotoUrl: data.primaryPhotoUrl || "",
+    photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
+    label: [name, sku].filter(Boolean).join(" - "),
+    value: id,
+  };
 };
 
 const useUnsavedChangesWarning = (when, message) => {
@@ -186,6 +254,21 @@ const getPlanSnapshotMaterialPriceCents = (item = {}) => {
   return Math.round(planSnapshotCents(item.plannedUnitPriceCents ?? item.price) * planSnapshotNumber(item.quantity));
 };
 
+const getPlanSnapshotTaskBillingLaborCents = (task = {}) => {
+  const explicitBillingValue =
+    task.billingLaborPriceCents ??
+    task.customerLaborPriceCents ??
+    task.billingLaborRateCents ??
+    task.laborBillingRateCents ??
+    task.billableLaborCents;
+
+  if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
+    return planSnapshotCents(explicitBillingValue);
+  }
+
+  return planSnapshotCents(task.contractedRate);
+};
+
 const buildPlanEditorSnapshot = ({
   planId = "",
   title = "",
@@ -216,6 +299,7 @@ const buildPlanEditorSnapshot = ({
       type: cleanString(item.type),
       status: cleanString(item.status || "Unassigned"),
       contractedRate: planSnapshotCents(item.contractedRate),
+      billingLaborPriceCents: getPlanSnapshotTaskBillingLaborCents(item),
       estimatedTime: planSnapshotNumber(item.estimatedTime || item.estimatedMinutes),
       bodyOfWaterId: cleanString(item.bodyOfWaterId),
       equipmentId: cleanString(item.equipmentId),
@@ -437,6 +521,7 @@ const JobDetailView = () => {
   const [selectedTaskType, setSelectedTaskType] = useState(null);
   const [taskDescription, setTaskDescription] = useState("");
   const [taskLaborCost, setTaskLaborCost] = useState("");
+  const [taskBillingLaborPrice, setTaskBillingLaborPrice] = useState("");
   const [estimatedTime, setEstimatedTime] = useState("");
   const [taskBodyOfWaterList, setTaskBodyOfWaterList] = useState([]);
   const [taskEquipmentList, setTaskEquipmentList] = useState([]);
@@ -465,6 +550,10 @@ const JobDetailView = () => {
   const [shoppingDbItemList, setShoppingDbItemList] = useState([]);
   const [selectedPurchaser, setSelectedPurchaser] = useState(null);
   const [selectedShoppingDbItem, setSelectedShoppingDbItem] = useState(null);
+  const [shoppingDbItemVendorList, setShoppingDbItemVendorList] = useState([]);
+  const [showShoppingDbItemCreator, setShowShoppingDbItemCreator] = useState(false);
+  const [savingShoppingDbItem, setSavingShoppingDbItem] = useState(false);
+  const [shoppingDbItemForm, setShoppingDbItemForm] = useState(() => createEmptyShoppingDbItemForm());
 
   const [shoppingFormData, setShoppingFormData] = useState({
     category: "Job",
@@ -485,6 +574,27 @@ const JobDetailView = () => {
     linkedTaskId: "",
     customerApprovalRequired: false,
   });
+
+  useEffect(() => {
+    (async () => {
+      if (!recentlySelectedCompany) {
+        setShoppingDbItemVendorList([]);
+        setShoppingDbItemForm(createEmptyShoppingDbItemForm());
+        return;
+      }
+
+      try {
+        const vendors = await fetchCompanyVendors(db, recentlySelectedCompany);
+        setShoppingDbItemVendorList(vendors);
+        setShoppingDbItemForm((prev) => ({
+          ...prev,
+          vendor: prev.vendor || vendors[0] || null,
+        }));
+      } catch (error) {
+        console.warn("Unable to load vendors for planned material database item form.", error);
+      }
+    })();
+  }, [recentlySelectedCompany]);
 
   useEffect(() => {
     setTaskEquipmentStatusDrafts((prev) => {
@@ -784,6 +894,15 @@ const JobDetailView = () => {
 
     return hasQuantity && hasName;
   }, [shoppingFormData, requiresShoppingDbItem]);
+
+  const canCreateShoppingDbItem = useMemo(() => {
+    const hasName = shoppingDbItemForm.name.trim() !== "";
+    const validRate = shoppingDbItemForm.rate === "" || Number(shoppingDbItemForm.rate) >= 0;
+    const validSellPrice = shoppingDbItemForm.sellPrice === "" || Number(shoppingDbItemForm.sellPrice) >= 0;
+
+    return hasName && validRate && validSellPrice && !savingShoppingDbItem;
+  }, [savingShoppingDbItem, shoppingDbItemForm]);
+
   const cents = (value) => {
     const n = Number(value || 0);
     return Number.isFinite(n) ? n : 0;
@@ -859,6 +978,21 @@ const JobDetailView = () => {
   };
 
   const moneyFromCents = (value) => formatCurrency(cents(value) / 100);
+
+  const getTaskBillingLaborPriceCents = (task = {}) => {
+    const explicitBillingValue =
+      task.billingLaborPriceCents ??
+      task.customerLaborPriceCents ??
+      task.billingLaborRateCents ??
+      task.laborBillingRateCents ??
+      task.billableLaborCents;
+
+    if (explicitBillingValue !== undefined && explicitBillingValue !== null && explicitBillingValue !== "") {
+      return cents(explicitBillingValue);
+    }
+
+    return cents(task.contractedRate);
+  };
 
   const getShoppingPlannedTotalCostCents = (item) => {
     if (item?.plannedTotalCostCents !== undefined && item?.plannedTotalCostCents !== null) {
@@ -1430,7 +1564,17 @@ const JobDetailView = () => {
   };
 
   const getScheduledStopEstimatedLaborCents = (stop) => {
+    if (
+      stop &&
+      Object.prototype.hasOwnProperty.call(stop, "manualPayOverrideCents") &&
+      stop.manualPayOverrideCents !== null &&
+      stop.manualPayOverrideCents !== undefined
+    ) {
+      return Math.max(0, cents(stop.manualPayOverrideCents));
+    }
+
     const explicitAmount = Math.max(
+      cents(stop?.manualPayOverrideCents),
       cents(stop?.actualLaborCostCents),
       cents(stop?.laborCostCents),
       cents(stop?.estimatedLaborCostCents),
@@ -1704,6 +1848,10 @@ const JobDetailView = () => {
     }),
   };
 
+  const fieldLabelClass = "block text-xs font-bold uppercase tracking-wide text-slate-600";
+  const fieldInputClass =
+    "mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
+
   const selectedTaskTypeValue = selectedTaskType?.value || "";
   const taskNeedsBodyOfWater = BODY_OF_WATER_JOB_TASK_TYPES.has(selectedTaskTypeValue);
   const taskNeedsEquipment = EQUIPMENT_JOB_TASK_TYPES.has(selectedTaskTypeValue);
@@ -1941,25 +2089,32 @@ const JobDetailView = () => {
       displayAmount: moneyFromCents(getPlannedStopCostCents(stop)),
     }));
 
-    const laborItems = (tasks || []).map((task) => ({
-      id: task.id,
-      catalogItemId: task.salesCatalogItemId || "",
-      sourceType: SalesCatalogSourceType.task,
-      sourceId: task.id,
-      salesItemType: SalesCatalogItemType.labor,
-      billingBehavior: SalesCatalogBillingBehavior.oneTime,
-      type: "Task",
-      name: task.name || task.type || "Task",
-      description: task.type || "",
-      quantity: 1,
-      unitAmountCents: cents(task.contractedRate),
-      totalAmountCents: cents(task.contractedRate),
-      amount: cents(task.contractedRate),
-      taxable: false,
-      stripeProductId: task.stripeProductId || "",
-      stripePriceId: task.stripePriceId || "",
-      displayAmount: moneyFromCents(task.contractedRate),
-    }));
+    const laborItems = (tasks || []).map((task) => {
+      const billingLaborPriceCents = getTaskBillingLaborPriceCents(task);
+      const internalLaborCostCents = cents(task.contractedRate);
+
+      return {
+        id: task.id,
+        catalogItemId: task.salesCatalogItemId || "",
+        sourceType: SalesCatalogSourceType.task,
+        sourceId: task.id,
+        salesItemType: SalesCatalogItemType.labor,
+        billingBehavior: SalesCatalogBillingBehavior.oneTime,
+        type: "Task",
+        name: task.name || task.type || "Task",
+        description: task.type || "",
+        quantity: 1,
+        unitAmountCents: billingLaborPriceCents,
+        totalAmountCents: billingLaborPriceCents,
+        amount: billingLaborPriceCents,
+        billingLaborPriceCents,
+        internalLaborCostCents,
+        taxable: false,
+        stripeProductId: task.stripeProductId || "",
+        stripePriceId: task.stripePriceId || "",
+        displayAmount: moneyFromCents(billingLaborPriceCents),
+      };
+    });
 
     const materialItems = (materials || []).map((item) => {
       const amount = getShoppingPlannedTotalPriceCents(item);
@@ -2065,6 +2220,11 @@ const JobDetailView = () => {
     );
   }, [taskList]);
 
+  const plannedTaskBillingLaborCents = (taskList || []).reduce(
+    (total, task) => total + getTaskBillingLaborPriceCents(task),
+    0
+  );
+
   const plannedTotalLaborCents = useMemo(() => {
     return plannedStopLaborCents + plannedTaskLaborCents;
   }, [plannedStopLaborCents, plannedTaskLaborCents]);
@@ -2161,6 +2321,62 @@ const JobDetailView = () => {
     plannedServiceStops: Array.isArray(solution.plannedServiceStops) ? solution.plannedServiceStops : [],
     shoppingItems: Array.isArray(solution.shoppingItems) ? solution.shoppingItems : [],
   });
+
+  const linkedTaskIdForPlanMaterial = (item = {}) => (
+    idValue(
+      item.linkedTaskId ||
+      item.linkedJobTaskId ||
+      item.jobTaskId ||
+      item.sourceTaskId ||
+      item.taskId ||
+      ""
+    )
+  );
+
+  const buildPlanMaterialPrepKeys = (item = {}, linkedTaskId = "", overrides = {}) => Array.from(
+    new Set(
+      [
+        ...(Array.isArray(item.prepKeys) ? item.prepKeys : []),
+        jobId ? `job:${jobId}` : "",
+        overrides.customerId || item.customerId ? `customer:${overrides.customerId || item.customerId}` : "",
+        overrides.serviceLocationId || item.serviceLocationId ? `serviceLocation:${overrides.serviceLocationId || item.serviceLocationId}` : "",
+        linkedTaskId ? `jobTask:${linkedTaskId}` : "",
+      ].filter(Boolean)
+    )
+  );
+
+  const attachPlanMaterialsToTasks = (tasks = [], materials = []) => {
+    const materialIdsByTaskId = new Map();
+
+    materials.forEach((item) => {
+      const linkedTaskId = linkedTaskIdForPlanMaterial(item);
+      if (!linkedTaskId || !item?.id) return;
+
+      const currentIds = materialIdsByTaskId.get(linkedTaskId) || [];
+      materialIdsByTaskId.set(linkedTaskId, [...currentIds, item.id]);
+    });
+
+    return tasks.map((task) => {
+      const materialIds = materialIdsByTaskId.get(task.id) || [];
+      if (!materialIds.length) return task;
+
+      const shoppingListItemIds = Array.from(
+        new Set(
+          [
+            task.shoppingListItemId,
+            ...(Array.isArray(task.shoppingListItemIds) ? task.shoppingListItemIds : []),
+            ...materialIds,
+          ].filter(Boolean)
+        )
+      );
+
+      return {
+        ...task,
+        shoppingListItemId: task.shoppingListItemId || shoppingListItemIds[0] || "",
+        shoppingListItemIds,
+      };
+    });
+  };
 
   const planLineItems = (solution = {}) => {
     if (Array.isArray(solution.estimateLineItems) && solution.estimateLineItems.length) {
@@ -2355,6 +2571,7 @@ const JobDetailView = () => {
         type: task.type || "",
         estimatedMinutes: Number(task.estimatedTime || 0),
         plannedLaborCostCents: cents(task.contractedRate),
+        billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
         bodyOfWaterId: task.bodyOfWaterId || "",
         equipmentId: task.equipmentId || "",
         dataBaseItemId: task.dataBaseItemId || "",
@@ -2432,6 +2649,7 @@ const JobDetailView = () => {
       costSummary: {
         plannedLaborCostCents: calculatedLaborCostCents,
         plannedTaskLaborCents,
+        plannedTaskBillingLaborCents,
         plannedServiceStopLaborCostCents: plannedStopLaborCents,
         plannedMaterialCostCents,
         plannedMaterialPriceCents,
@@ -2442,6 +2660,7 @@ const JobDetailView = () => {
         lineItemCount: lineItems.length,
         subtotalAmountCents,
         totalAmountCents: calculatedTotalAmountCents,
+        plannedTaskBillingLaborCents,
         projectedProfitCents,
         profitMarginPercent,
       },
@@ -2655,7 +2874,7 @@ const JobDetailView = () => {
 
   const planWorkspaceScope = (solution, { accepted = false } = {}) => {
     const scope = planScopeArrays(solution);
-    const tasksToWrite = scope.tasks.map((task, index) => ({
+    const baseTasksToWrite = scope.tasks.map((task, index) => ({
       ...task,
       id: task.id || `comp_job_task_${uuidv4()}`,
       companyId: recentlySelectedCompany,
@@ -2665,7 +2884,7 @@ const JobDetailView = () => {
       sourcePlanId: solution.id,
       sourceSolutionId: solution.id,
     }));
-    const taskIds = new Set(tasksToWrite.map((task) => task.id));
+    const taskIds = new Set(baseTasksToWrite.map((task) => task.id));
     const plannedStopsToWrite = scope.plannedServiceStops.map((stop, index) => ({
       ...stop,
       id: stop.id || `comp_job_plan_stop_${uuidv4()}`,
@@ -2681,6 +2900,9 @@ const JobDetailView = () => {
     const materialsToWrite = scope.shoppingItems.map((item, index) => {
       const customerApprovalRequired = Boolean(item.customerApprovalRequired);
       const customerApprovalApproved = item.customerApprovalStatus === "approved";
+      const linkedTaskId = linkedTaskIdForPlanMaterial(item);
+      const customerId = job.customerId || customer?.id || item.customerId || "";
+      const serviceLocationId = job.serviceLocationId || serviceLocation?.id || item.serviceLocationId || "";
 
       return {
         ...item,
@@ -2688,8 +2910,10 @@ const JobDetailView = () => {
         companyId: recentlySelectedCompany,
         category: "Job",
         jobId,
-        customerId: job.customerId || customer.id || item.customerId || "",
+        customerId,
         customerName: job.customerName || getCustomerDisplayName() || item.customerName || "",
+        serviceLocationId,
+        linkedTaskId,
         status: accepted
           ? customerApprovalRequired && !customerApprovalApproved
             ? "Needs Customer Approval"
@@ -2704,9 +2928,11 @@ const JobDetailView = () => {
         sourcePlanId: solution.id,
         solutionId: solution.id,
         sourceSolutionId: solution.id,
+        prepKeys: buildPlanMaterialPrepKeys(item, linkedTaskId, { customerId, serviceLocationId }),
         sortOrder: Number(item.sortOrder ?? index),
       };
     });
+    const tasksToWrite = attachPlanMaterialsToTasks(baseTasksToWrite, materialsToWrite);
 
     return { tasksToWrite, plannedStopsToWrite, materialsToWrite };
   };
@@ -2942,7 +3168,7 @@ const JobDetailView = () => {
     if (!solution?.id || !recentlySelectedCompany || !jobId) return { readyShoppingItemCount: 0 };
 
     const scope = planScopeArrays(solution);
-    const tasksToWrite = scope.tasks.map((task, index) => ({
+    const baseTasksToWrite = scope.tasks.map((task, index) => ({
       ...task,
       id: task.id || `comp_job_task_${uuidv4()}`,
       companyId: recentlySelectedCompany,
@@ -2952,7 +3178,7 @@ const JobDetailView = () => {
       sourcePlanId: solution.id,
       sourceSolutionId: solution.id,
     }));
-    const taskIds = new Set(tasksToWrite.map((task) => task.id));
+    const taskIds = new Set(baseTasksToWrite.map((task) => task.id));
     const plannedStopsToWrite = scope.plannedServiceStops.map((stop, index) => ({
       ...stop,
       id: stop.id || `comp_job_plan_stop_${uuidv4()}`,
@@ -2965,26 +3191,38 @@ const JobDetailView = () => {
       sourcePlanId: solution.id,
       sourceSolutionId: solution.id,
     }));
-    const materialsToWrite = scope.shoppingItems.map((item, index) => ({
-      ...item,
-      id: item.id || `comp_shop_${uuidv4()}`,
-      companyId: recentlySelectedCompany,
-      category: "Job",
-      jobId,
-      customerId: job.customerId || customer.id || item.customerId || "",
-      customerName: job.customerName || getCustomerDisplayName() || item.customerName || "",
-      status: item.customerApprovalRequired && item.customerApprovalStatus !== "approved"
-        ? "Needs Customer Approval"
-        : "Ready to Purchase",
-      estimateAccepted: true,
-      estimateAcceptedAt: serverTimestamp(),
-      jobBillingStatus: "accepted",
-      planId: solution.id,
-      sourcePlanId: solution.id,
-      solutionId: solution.id,
-      sourceSolutionId: solution.id,
-      sortOrder: Number(item.sortOrder ?? index),
-    }));
+    const materialsToWrite = scope.shoppingItems.map((item, index) => {
+      const linkedTaskId = linkedTaskIdForPlanMaterial(item);
+      const customerId = job.customerId || customer?.id || item.customerId || "";
+      const serviceLocationId = job.serviceLocationId || serviceLocation?.id || item.serviceLocationId || "";
+
+      return {
+        ...item,
+        id: item.id || `comp_shop_${uuidv4()}`,
+        companyId: recentlySelectedCompany,
+        category: "Job",
+        jobId,
+        customerId,
+        customerName: job.customerName || getCustomerDisplayName() || item.customerName || "",
+        serviceLocationId,
+        linkedTaskId,
+        status: item.customerApprovalRequired && item.customerApprovalStatus !== "approved"
+          ? "Needs Customer Approval"
+          : "Ready to Purchase",
+        estimateAccepted: true,
+        estimateAcceptedAt: serverTimestamp(),
+        jobBillingStatus: "accepted",
+        needsAction: true,
+        planWorkspaceOnly: false,
+        planId: solution.id,
+        sourcePlanId: solution.id,
+        solutionId: solution.id,
+        sourceSolutionId: solution.id,
+        prepKeys: buildPlanMaterialPrepKeys(item, linkedTaskId, { customerId, serviceLocationId }),
+        sortOrder: Number(item.sortOrder ?? index),
+      };
+    });
+    const tasksToWrite = attachPlanMaterialsToTasks(baseTasksToWrite, materialsToWrite);
 
     await Promise.all([
       deleteQueryDocs(collection(db, "companies", recentlySelectedCompany, "workOrders", jobId, "tasks")),
@@ -4347,7 +4585,11 @@ const JobDetailView = () => {
           ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100)
           : 0;
       const payTotal =
-        workOfferForm.paySource === "Offered Amount" ? offeredAmountCents : selectedWorkOfferLaborCents;
+        workOfferForm.paySource === "Offered Amount"
+          ? offeredAmountCents
+          : workOfferForm.paySource === "Unpaid"
+            ? 0
+            : selectedWorkOfferLaborCents;
       const offerTitle =
         workOfferForm.title?.trim() ||
         `${job.internalId || "Job"} - ${job.customerName || "Work Offer"}`.trim();
@@ -4416,6 +4658,18 @@ const JobDetailView = () => {
         estimatedLaborCents: selectedWorkOfferLaborCents,
         estimatedPayCents: payTotal,
         estimatedPayTotalCents: payTotal,
+        manualPayOverrideCents:
+          workOfferForm.paySource === "Offered Amount"
+            ? offeredAmountCents
+            : workOfferForm.paySource === "Unpaid"
+              ? 0
+              : null,
+        manualPayOverrideNotes:
+          workOfferForm.paySource === "Offered Amount"
+            ? "Manual payroll amount from work offer."
+            : workOfferForm.paySource === "Unpaid"
+              ? "Work offer marked unpaid."
+              : "",
         estimatedPayLines:
           workOfferForm.paySource === "Offered Amount"
             ? [
@@ -4435,7 +4689,25 @@ const JobDetailView = () => {
                 notes: "Fixed amount offered for this work.",
               },
             ]
-            : estimatedPayLines,
+            : workOfferForm.paySource === "Unpaid"
+              ? [
+                {
+                  id: "offer_estimate_unpaid",
+                  sourceTaskId: null,
+                  source: "Manual Adjustment",
+                  workTypeId: "",
+                  workTypeName: "",
+                  title: "Unpaid Work",
+                  rateAmountCents: 0,
+                  rateType: "Manual",
+                  quantity: 0,
+                  quantityUnit: "Each",
+                  totalAmountCents: 0,
+                  calculationStatus: "Calculated",
+                  notes: "This offer is marked unpaid.",
+                },
+              ]
+              : estimatedPayLines,
         estimatedPayNotes: "Estimate only. Final payroll is generated from completed service stop work.",
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -4896,25 +5168,7 @@ const JobDetailView = () => {
           orderBy("name")
         );
         const dbItemsSnap = await getDocs(dbItemsQ);
-        const dbItems = dbItemsSnap.docs.map((docSnap) => {
-          const data = docSnap.data();
-          const name = data.name || "Unnamed Item";
-
-          return {
-            id: data.id || docSnap.id,
-            name,
-            description: data.description || "",
-            genericItemId: data.genericItemId || "",
-            dbItemId: data.id || docSnap.id,
-            rate: Number(data.rate || 0),
-            sellPrice: Number(data.sellPrice || 0),
-            cost: Number(data.cost || data.rate || 0),
-            category: data.category || "",
-            subCategory: data.subCategory || "",
-            label: name,
-            value: data.id || docSnap.id,
-          };
-        });
+        const dbItems = dbItemsSnap.docs.map((docSnap) => buildShoppingDbItemOption(docSnap.data(), docSnap.id));
         setShoppingDbItemList(dbItems);
         setSectionLoading((prev) => ({
           ...prev,
@@ -5722,6 +5976,7 @@ const JobDetailView = () => {
             type: task.type || "",
             description: task.description || "",
             contractedRate: cents(task.contractedRate),
+            billingLaborPriceCents: getTaskBillingLaborPriceCents(task),
             estimatedTime: Number(task.estimatedTime || 0),
             customerApproval: Boolean(task.customerApproval),
             equipmentId: task.equipmentId || "",
@@ -5956,6 +6211,7 @@ const JobDetailView = () => {
     setSelectedTaskType(null);
     setTaskDescription("");
     setTaskLaborCost("");
+    setTaskBillingLaborPrice("");
     setEstimatedTime("");
     setSelectedTaskBodyOfWater(null);
     setSelectedTaskEquipment(null);
@@ -5973,6 +6229,7 @@ const JobDetailView = () => {
       type: task?.type || "",
       status: task?.status || "Unassigned",
       laborCost: dollarsFromCents(task?.contractedRate),
+      billingLaborPrice: dollarsFromCents(getTaskBillingLaborPriceCents(task)),
       estimatedTime: String(Number(task?.estimatedTime || 0)),
       bodyOfWaterId: task?.bodyOfWaterId || "",
       equipmentId: task?.equipmentId || "",
@@ -6105,6 +6362,7 @@ const JobDetailView = () => {
     const nextType = taskEditForm.type.trim();
     const nextStatus = taskEditForm.status.trim() || "Unassigned";
     const nextLaborCents = centsFromCurrencyInput(taskEditForm.laborCost);
+    const nextBillingLaborPriceCents = centsFromCurrencyInput(taskEditForm.billingLaborPrice);
     const nextEstimatedMinutes = Number(taskEditForm.estimatedTime || 0);
     const nextQuantity = Number(taskEditForm.quantity || 0);
     const selectedDbItem = shoppingDbItemById.get(taskEditForm.dataBaseItemId);
@@ -6113,6 +6371,9 @@ const JobDetailView = () => {
     if (!nextType) return toast.error("Pick a task type.");
     if (!Number.isFinite(nextLaborCents) || nextLaborCents < 0) {
       return toast.error("Labor cost cannot be negative.");
+    }
+    if (!Number.isFinite(Number(taskEditForm.billingLaborPrice || 0)) || nextBillingLaborPriceCents < 0) {
+      return toast.error("Billing labor price cannot be negative.");
     }
     if (!Number.isFinite(nextEstimatedMinutes) || nextEstimatedMinutes < 0) {
       return toast.error("Estimated time cannot be negative.");
@@ -6136,6 +6397,7 @@ const JobDetailView = () => {
       type: nextType,
       status: nextStatus,
       contractedRate: nextLaborCents,
+      billingLaborPriceCents: nextBillingLaborPriceCents,
       estimatedTime: nextEstimatedMinutes,
       customerApproval: Boolean(taskEditForm.customerApproval),
       bodyOfWaterId: editingTaskNeedsBodyOfWater ? taskEditForm.bodyOfWaterId : "",
@@ -6174,7 +6436,8 @@ const JobDetailView = () => {
           buildHistoryChange("name", "Name", originalTask.name || originalTask.description || "—", nextName),
           buildHistoryChange("type", "Task Type", originalTask.type || "—", nextType),
           buildHistoryChange("status", "Status", originalTask.status || "—", nextStatus),
-          buildHistoryChange("contractedRate", "Labor Cost", moneyFromCents(originalTask.contractedRate), moneyFromCents(nextLaborCents)),
+          buildHistoryChange("contractedRate", "Tech Labor Cost", moneyFromCents(originalTask.contractedRate), moneyFromCents(nextLaborCents)),
+          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", moneyFromCents(getTaskBillingLaborPriceCents(originalTask)), moneyFromCents(nextBillingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", `${Number(originalTask.estimatedTime || 0)} minutes`, `${nextEstimatedMinutes} minutes`),
           buildHistoryChange("customerApproval", "Customer Approval", Boolean(originalTask.customerApproval), Boolean(taskEditForm.customerApproval)),
           buildHistoryChange("bodyOfWaterId", "Body Of Water", originalTask.bodyOfWaterId || "—", taskUpdates.bodyOfWaterId || "—"),
@@ -6236,6 +6499,14 @@ const JobDetailView = () => {
       if (!taskDescription) return toast.error("Add a description");
       if (!taskLaborCost) return toast.error("Add labor cost");
       if (!estimatedTime) return toast.error("Add estimated time (minutes)");
+      const laborCostNumber = Number(taskLaborCost);
+      const billingLaborPriceNumber = taskBillingLaborPrice === "" ? laborCostNumber : Number(taskBillingLaborPrice);
+      if (!Number.isFinite(laborCostNumber) || laborCostNumber < 0) {
+        return toast.error("Labor cost cannot be negative.");
+      }
+      if (!Number.isFinite(billingLaborPriceNumber) || billingLaborPriceNumber < 0) {
+        return toast.error("Billing labor price cannot be negative.");
+      }
       if (taskNeedsBodyOfWater && !selectedTaskBodyOfWater?.id) {
         return toast.error("Select a body of water");
       }
@@ -6251,7 +6522,10 @@ const JobDetailView = () => {
       }
 
       const id = "comp_wo_tas_" + uuidv4();
-      const costCents = Math.round(parseFloat(taskLaborCost) * 100);
+      const costCents = centsFromCurrencyInput(taskLaborCost);
+      const billingLaborPriceCents = taskBillingLaborPrice === ""
+        ? costCents
+        : centsFromCurrencyInput(taskBillingLaborPrice);
       const estMin = parseFloat(estimatedTime);
       const linkedShoppingListItemId = taskNeedsInstallItem ? "comp_shop_" + uuidv4() : "";
       const quantity = taskNeedsInstallItem ? parseFloat(taskQuantity) : 0;
@@ -6261,6 +6535,7 @@ const JobDetailView = () => {
         name: taskDescription,
         type: selectedTaskType.value,
         contractedRate: costCents,
+        billingLaborPriceCents,
         estimatedTime: estMin,
         status: "Unassigned",
 
@@ -6303,6 +6578,7 @@ const JobDetailView = () => {
 
         const materialName = selectedTaskDbItem?.name || "";
         const materialDescription = selectedTaskDbItem?.description || "";
+        const materialPhotoFields = itemPhotoFieldsFromSource(selectedTaskDbItem, materialName || "Shopping item photo");
         const materialStatus = initialJobMaterialStatus();
 
         await setDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId), {
@@ -6345,6 +6621,7 @@ const JobDetailView = () => {
           assignedTechIds: [],
           dbItemId: selectedTaskDbItem?.id || "",
           dbItemName: selectedTaskDbItem?.name || "",
+          ...materialPhotoFields,
           purchasedItem: "",
           invoiced: false,
           customerApprovalRequired: false,
@@ -6371,7 +6648,8 @@ const JobDetailView = () => {
         title: `Task added: ${taskDescription}`,
         changes: [
           buildHistoryChange("type", "Task Type", "—", selectedTaskType.value),
-          buildHistoryChange("contractedRate", "Labor Cost", "—", moneyFromCents(costCents)),
+          buildHistoryChange("contractedRate", "Tech Labor Cost", "—", moneyFromCents(costCents)),
+          buildHistoryChange("billingLaborPriceCents", "Billing Labor Price", "—", moneyFromCents(billingLaborPriceCents)),
           buildHistoryChange("estimatedTime", "Estimated Time", "—", `${estMin} minutes`),
           ...(taskNeedsBodyOfWater
             ? [buildHistoryChange("bodyOfWaterId", "Body Of Water", "—", selectedTaskBodyOfWater?.label || selectedTaskBodyOfWater?.name || "—")]
@@ -6510,10 +6788,28 @@ const JobDetailView = () => {
     }
   };
 
-  const showNewShoppingListItem = () => setNewShoppingList(true);
+  const resetShoppingDbItemCreator = () => {
+    setShowShoppingDbItemCreator(false);
+    setSavingShoppingDbItem(false);
+    setShoppingDbItemForm(createEmptyShoppingDbItemForm(shoppingDbItemVendorList[0] || null));
+  };
+
+  const showNewShoppingListItem = () => {
+    setNewShoppingList(true);
+    if (!shoppingFormData.subCategory) {
+      handleShoppingSubCategoryChange("Data Base");
+    }
+  };
 
   const handleShoppingFormChange = (field, value) => {
     setShoppingFormData((prev) => ({
+      ...prev,
+      [field]: value,
+    }));
+  };
+
+  const handleShoppingDbItemFormChange = (field, value) => {
+    setShoppingDbItemForm((prev) => ({
       ...prev,
       [field]: value,
     }));
@@ -6534,6 +6830,7 @@ const JobDetailView = () => {
       nextData.dbItemId = "";
       nextData.genericItemId = "";
       setSelectedShoppingDbItem(null);
+      resetShoppingDbItemCreator();
     }
 
     setShoppingFormData(nextData);
@@ -6550,13 +6847,88 @@ const JobDetailView = () => {
 
   const handleShoppingDbItemChange = (option) => {
     setSelectedShoppingDbItem(option);
+    const photoFields = option ? itemPhotoFieldsFromSource(option, option.name || "Shopping item photo") : {};
     setShoppingFormData((prev) => ({
       ...prev,
       dbItemId: option?.id || "",
       genericItemId: option?.genericItemId || "",
       name: option?.name || "",
       description: option?.description || "",
+      ...photoFields,
     }));
+  };
+
+  const handleCreateShoppingDatabaseItem = async (e) => {
+    e.preventDefault();
+    if (!requirePermission("852", "create database items")) return;
+    if (!recentlySelectedCompany) return toast.error("Select a company first");
+
+    const nextName = shoppingDbItemForm.name.trim();
+    if (!nextName) return toast.error("Enter item name");
+
+    const rateValue = Number(shoppingDbItemForm.rate || 0);
+    const sellPriceValue = Number(shoppingDbItemForm.sellPrice || 0);
+    if (!Number.isFinite(rateValue) || rateValue < 0) return toast.error("Unit cost cannot be negative");
+    if (!Number.isFinite(sellPriceValue) || sellPriceValue < 0) return toast.error("Sell price cannot be negative");
+
+    try {
+      setSavingShoppingDbItem(true);
+
+      const id = "com_sett_db_" + uuidv4();
+      const selectedVendor = shoppingDbItemForm.vendor || {};
+      const selectedVendorId = selectedVendor.id || "";
+      const selectedVendorName = selectedVendor.label || selectedVendor.name || "";
+      const rateCents = centsFromCurrencyInput(shoppingDbItemForm.rate);
+      const sellPriceCents = shoppingDbItemForm.billable
+        ? centsFromCurrencyInput(shoppingDbItemForm.sellPrice)
+        : 0;
+      const item = {
+        UOM: shoppingDbItemForm.uom?.label || "Unit",
+        id,
+        billable: Boolean(shoppingDbItemForm.billable),
+        category: shoppingDbItemForm.category?.label || "Misc",
+        color: shoppingDbItemForm.color,
+        dateUpdated: new Date(),
+        description: shoppingDbItemForm.description,
+        name: nextName,
+        rate: rateCents,
+        size: shoppingDbItemForm.size,
+        sku: shoppingDbItemForm.sku,
+        storeName: selectedVendorName,
+        subCategory: shoppingDbItemForm.subcategory?.label || "Misc",
+        timesPurchased: 0,
+        venderId: selectedVendorId,
+        vendorId: selectedVendorId,
+        sellPrice: sellPriceCents,
+        billingRate: sellPriceCents,
+        tracking: shoppingDbItemForm.tracking,
+      };
+
+      await setDoc(doc(db, "companies", recentlySelectedCompany, "settings", "dataBase", "dataBase", id), item);
+
+      const option = buildShoppingDbItemOption(item, id);
+      setShoppingDbItemList((prev) =>
+        [...(prev || []).filter((existing) => existing.id !== id), option].sort((left, right) =>
+          String(left.name || "").localeCompare(String(right.name || ""))
+        )
+      );
+      handleShoppingDbItemChange(option);
+      setShoppingFormData((prev) => ({
+        ...prev,
+        subCategory: "Data Base",
+        dbItemId: id,
+        genericItemId: "",
+        name: option.name,
+        description: option.description,
+      }));
+      resetShoppingDbItemCreator();
+      toast.success("Database item created");
+    } catch (err) {
+      console.error(err);
+      toast.error("Failed to create database item");
+    } finally {
+      setSavingShoppingDbItem(false);
+    }
   };
 
   const clearNewShoppingListItem = (e) => {
@@ -6564,9 +6936,10 @@ const JobDetailView = () => {
     setNewShoppingList(false);
     setSelectedPurchaser(null);
     setSelectedShoppingDbItem(null);
+    resetShoppingDbItemCreator();
     setShoppingFormData({
       category: "Job",
-      subCategory: "Custom",
+      subCategory: "Data Base",
       status: initialJobMaterialStatus(),
       purchaserId: "",
       purchaserName: "",
@@ -6643,6 +7016,9 @@ const JobDetailView = () => {
       const materialDescription = requiresShoppingDbItem
         ? selectedShoppingDbItem?.description || shoppingFormData.description || ""
         : shoppingFormData.description || "";
+      const materialPhotoFields = requiresShoppingDbItem
+        ? itemPhotoFieldsFromSource(selectedShoppingDbItem, materialName || "Shopping item photo")
+        : {};
       const linkedTask =
         (taskList || []).find((task) => task.id === shoppingFormData.linkedTaskId) || null;
       const customerApprovalRequired = Boolean(shoppingFormData.customerApprovalRequired);
@@ -6709,6 +7085,7 @@ const JobDetailView = () => {
         // DataBaseItem
         dbItemId: requiresShoppingDbItem ? shoppingFormData.dbItemId || "" : "",
         dbItemName: requiresShoppingDbItem ? materialName : "",
+        ...materialPhotoFields,
         purchasedItem: "",
         invoiced: false,
         customerApprovalRequired,
@@ -6941,6 +7318,8 @@ const JobDetailView = () => {
     switch (status) {
       case "Installed":
       case "installed":
+      case "Delivered":
+      case "delivered":
         return "bg-green-100 text-green-800 border-green-200";
       case "Purchased":
       case "purchased":
@@ -7075,143 +7454,116 @@ const JobDetailView = () => {
     const isMarkingPurchased = markingPurchasedShoppingItemId === item.id;
 
     return (
-      <div
-        key={item.id}
-        className="rounded-xl border border-gray-200 bg-gray-50 p-4"
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Planned Material
-            </p>
+      <div key={item.id} className="rounded-md border border-slate-200 bg-white px-3 py-2 shadow-sm">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(340px,auto)_auto] lg:items-center">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`rounded-full border px-2 py-0.5 text-[11px] font-bold ${getMaterialStatusClass(item.status)}`}>
+                {item.status || "Need to Purchase"}
+              </span>
+
+              {item.dbItemId && (
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
+                  Database
+                </span>
+              )}
+
+              {item.invoiced && (
+                <span className="rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-semibold text-green-700">
+                  Invoiced
+                </span>
+              )}
+
+              {item.customerApprovalRequired && (
+                <Link
+                  to="/company/part-approvals"
+                  className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 hover:bg-amber-100"
+                >
+                  Approval: {formatStatusLabel(item.customerApprovalStatus || "pending")}
+                </Link>
+              )}
+            </div>
 
             <button
               type="button"
               onClick={() => navigate(`/company/shopping-list/detail/${item.id}`)}
-              className="mt-1 text-left text-base font-bold text-gray-800 hover:text-blue-700 transition"
+              className="mt-1 block max-w-full truncate text-left text-sm font-bold text-slate-900 transition hover:text-blue-700"
             >
               {getMaterialName(item)}
             </button>
 
-            <p className="mt-1 text-sm text-gray-600">
+            <p className="mt-0.5 truncate text-xs text-slate-500">
               {item.subCategory || "Material"} • Qty: {getMaterialQuantity(item)}
+              {(linkedTask || item.linkedTaskName) ? ` • Task: ${linkedTask?.name || item.linkedTaskName}` : ""}
             </p>
+
+            {item.description && (
+              <p className="mt-1 max-h-8 overflow-hidden text-xs text-slate-600">
+                {item.description}
+              </p>
+            )}
           </div>
 
-          <span
-            className={`px-3 py-1 text-xs font-bold rounded-full border ${getMaterialStatusClass(
-              item.status
-            )}`}
-          >
-            {item.status || "Need to Purchase"}
-          </span>
-        </div>
+          <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 lg:min-w-[340px]">
+            <div className="rounded bg-slate-50 px-2 py-1.5">
+              <p className="font-semibold uppercase tracking-wide text-slate-500">Unit Cost</p>
+              <p className="mt-0.5 font-bold text-slate-900">{moneyFromCents(item.plannedUnitCostCents ?? item.cost)}</p>
+            </div>
 
-        {item.description && (
-          <p className="mt-4 text-sm text-gray-700 whitespace-pre-wrap">
-            {item.description}
-          </p>
-        )}
+            <div className="rounded bg-slate-50 px-2 py-1.5">
+              <p className="font-semibold uppercase tracking-wide text-slate-500">Total Cost</p>
+              <p className="mt-0.5 font-bold text-slate-900">{moneyFromCents(totalCostCents)}</p>
+            </div>
 
-        <div className="mt-4 grid grid-cols-1 sm:grid-cols-4 gap-3 text-sm">
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Unit Cost
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {moneyFromCents(item.plannedUnitCostCents ?? item.cost)}
-            </p>
+            <div className="rounded bg-blue-50 px-2 py-1.5">
+              <p className="font-semibold uppercase tracking-wide text-blue-600">Unit Bill</p>
+              <p className="mt-0.5 font-bold text-blue-900">{moneyFromCents(item.plannedUnitPriceCents ?? item.price)}</p>
+            </div>
+
+            <div className="rounded bg-blue-50 px-2 py-1.5">
+              <p className="font-semibold uppercase tracking-wide text-blue-600">Total Bill</p>
+              <p className="mt-0.5 font-bold text-blue-900">{moneyFromCents(totalPriceCents)}</p>
+            </div>
           </div>
 
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Total Cost
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {moneyFromCents(totalCostCents)}
-            </p>
-          </div>
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {!materialPurchased && (
+              <button
+                type="button"
+                onClick={(e) => markShoppingListItemPurchased(e, item)}
+                disabled={isMarkingPurchased}
+                className="rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isMarkingPurchased ? "Marking..." : "Purchased"}
+              </button>
+            )}
 
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Unit Billable
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {moneyFromCents(item.plannedUnitPriceCents ?? item.price)}
-            </p>
-          </div>
-
-          <div className="rounded-lg bg-white border border-gray-200 p-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
-              Total Billable
-            </p>
-            <p className="mt-1 font-semibold text-gray-800">
-              {moneyFromCents(totalPriceCents)}
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-4 flex flex-wrap gap-2">
-          {item.dbItemId && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
-              Database Item
-            </span>
-          )}
-
-          {item.invoiced && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200">
-              Invoiced
-            </span>
-          )}
-
-          {item.purchaserName && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700 border border-gray-200">
-              Purchaser: {item.purchaserName}
-            </span>
-          )}
-
-          {materialPurchased && item.datePurchased && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
-              Purchased: {formatDateValue(item.datePurchased)}
-            </span>
-          )}
-
-          {(linkedTask || item.linkedTaskName) && (
-            <span className="px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
-              Task: {linkedTask?.name || item.linkedTaskName}
-            </span>
-          )}
-
-          {item.customerApprovalRequired && (
-            <Link
-              to="/company/part-approvals"
-              className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 hover:bg-amber-100"
-            >
-              Approval: {formatStatusLabel(item.customerApprovalStatus || "pending")}
-            </Link>
-          )}
-        </div>
-
-        <div className="mt-4 flex flex-wrap justify-end gap-2">
-          {!materialPurchased && (
             <button
               type="button"
-              onClick={(e) => markShoppingListItemPurchased(e, item)}
-              disabled={isMarkingPurchased}
-              className="px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg hover:bg-emerald-100 transition disabled:cursor-not-allowed disabled:opacity-60"
+              onClick={(e) => deleteShoppingListItem(e, item.id)}
+              className="rounded-md border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-100"
             >
-              {isMarkingPurchased ? "Marking..." : "Mark Purchased"}
+              Delete
             </button>
-          )}
-
-          <button
-            type="button"
-            onClick={(e) => deleteShoppingListItem(e, item.id)}
-            className="px-3 py-2 text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition"
-          >
-            Delete Material
-          </button>
+          </div>
         </div>
+
+        {(item.purchaserName || (materialPurchased && item.datePurchased)) && (
+          <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-100 pt-2">
+            {item.purchaserName && (
+              <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                Purchaser: {item.purchaserName}
+              </span>
+            )}
+
+            {materialPurchased && item.datePurchased && (
+              <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700">
+                Purchased: {formatDateValue(item.datePurchased)}
+              </span>
+            )}
+          </div>
+        )}
+
       </div>
     );
   };
@@ -7989,6 +8341,213 @@ const JobDetailView = () => {
             </div>
           ))}
         </div>
+      </div>
+    </div>
+  );
+
+  const renderShoppingDatabaseItemCreator = () => (
+    <div className="rounded-lg border border-blue-100 bg-blue-50/60 p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <h5 className="text-sm font-bold text-slate-950">New Database Item</h5>
+          <p className="mt-1 text-xs text-slate-600">
+            Create a catalog item, then use it for this planned material.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={resetShoppingDbItemCreator}
+          disabled={savingShoppingDbItem}
+          className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel New Item
+        </button>
+      </div>
+
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+        <label className={fieldLabelClass}>
+          Item Name
+          <input
+            className={fieldInputClass}
+            type="text"
+            value={shoppingDbItemForm.name}
+            onChange={(e) => handleShoppingDbItemFormChange("name", e.target.value)}
+            placeholder="Chlorine tabs"
+          />
+        </label>
+
+        <label className={fieldLabelClass}>
+          SKU
+          <input
+            className={fieldInputClass}
+            type="text"
+            value={shoppingDbItemForm.sku}
+            onChange={(e) => handleShoppingDbItemFormChange("sku", e.target.value)}
+            placeholder="SKU-1234"
+          />
+        </label>
+
+        <label className={fieldLabelClass}>
+          Unit Cost
+          <input
+            className={fieldInputClass}
+            type="number"
+            min="0"
+            step="0.01"
+            value={shoppingDbItemForm.rate}
+            onChange={(e) => handleShoppingDbItemFormChange("rate", e.target.value)}
+            placeholder="0.00"
+          />
+        </label>
+
+        <label className="flex items-center gap-3 self-end rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold normal-case tracking-normal text-slate-700">
+          <input
+            type="checkbox"
+            checked={Boolean(shoppingDbItemForm.billable)}
+            onChange={(e) => handleShoppingDbItemFormChange("billable", e.target.checked)}
+            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          Billable to customer
+        </label>
+
+        {shoppingDbItemForm.billable && (
+          <label className={fieldLabelClass}>
+            Sell Price
+            <input
+              className={fieldInputClass}
+              type="number"
+              min="0"
+              step="0.01"
+              value={shoppingDbItemForm.sellPrice}
+              onChange={(e) => handleShoppingDbItemFormChange("sellPrice", e.target.value)}
+              placeholder="0.00"
+            />
+          </label>
+        )}
+
+        <label className={fieldLabelClass}>
+          Vendor
+          <div className="mt-1 normal-case tracking-normal">
+            <Select
+              value={shoppingDbItemForm.vendor}
+              options={shoppingDbItemVendorList}
+              onChange={(option) => handleShoppingDbItemFormChange("vendor", option)}
+              isSearchable
+              isClearable
+              placeholder="Select vendor"
+              theme={selectTheme}
+              styles={selectStyles}
+            />
+          </div>
+        </label>
+
+        <label className={fieldLabelClass}>
+          U.O.M.
+          <div className="mt-1 normal-case tracking-normal">
+            <Select
+              value={shoppingDbItemForm.uom}
+              options={UOM_OPTIONS}
+              onChange={(option) => handleShoppingDbItemFormChange("uom", option || DEFAULT_UOM)}
+              isSearchable
+              placeholder="Select UOM"
+              theme={selectTheme}
+              styles={selectStyles}
+            />
+          </div>
+        </label>
+
+        <label className={fieldLabelClass}>
+          Category
+          <div className="mt-1 normal-case tracking-normal">
+            <Select
+              value={shoppingDbItemForm.category}
+              options={CATEGORY_OPTIONS}
+              onChange={(option) => handleShoppingDbItemFormChange("category", option || DEFAULT_CATEGORY)}
+              isSearchable
+              placeholder="Select category"
+              theme={selectTheme}
+              styles={selectStyles}
+            />
+          </div>
+        </label>
+
+        <label className={fieldLabelClass}>
+          Sub-category
+          <div className="mt-1 normal-case tracking-normal">
+            <Select
+              value={shoppingDbItemForm.subcategory}
+              options={SUBCATEGORY_OPTIONS}
+              onChange={(option) => handleShoppingDbItemFormChange("subcategory", option || DEFAULT_SUBCATEGORY)}
+              isSearchable
+              placeholder="Select sub-category"
+              theme={selectTheme}
+              styles={selectStyles}
+            />
+          </div>
+        </label>
+
+        <label className={fieldLabelClass}>
+          Color
+          <input
+            className={fieldInputClass}
+            type="text"
+            value={shoppingDbItemForm.color}
+            onChange={(e) => handleShoppingDbItemFormChange("color", e.target.value)}
+            placeholder="White"
+          />
+        </label>
+
+        <label className={fieldLabelClass}>
+          Size
+          <input
+            className={fieldInputClass}
+            type="text"
+            value={shoppingDbItemForm.size}
+            onChange={(e) => handleShoppingDbItemFormChange("size", e.target.value)}
+            placeholder="25 lb"
+          />
+        </label>
+
+        <label className={fieldLabelClass}>
+          Tracking
+          <input
+            className={fieldInputClass}
+            type="text"
+            value={shoppingDbItemForm.tracking}
+            onChange={(e) => handleShoppingDbItemFormChange("tracking", e.target.value)}
+            placeholder="Optional tracking/template ID"
+          />
+        </label>
+
+        <label className={`${fieldLabelClass} md:col-span-2`}>
+          Description
+          <textarea
+            className={`${fieldInputClass} min-h-[88px]`}
+            value={shoppingDbItemForm.description}
+            onChange={(e) => handleShoppingDbItemFormChange("description", e.target.value)}
+            placeholder="Short description"
+          />
+        </label>
+      </div>
+
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+        <button
+          type="button"
+          onClick={resetShoppingDbItemCreator}
+          disabled={savingShoppingDbItem}
+          className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={handleCreateShoppingDatabaseItem}
+          disabled={!canCreateShoppingDbItem}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <PlusIcon className="h-4 w-4" aria-hidden="true" />
+          {savingShoppingDbItem ? "Creating..." : "Create Database Item"}
+        </button>
       </div>
     </div>
   );
@@ -9010,13 +9569,13 @@ const JobDetailView = () => {
   const selectedSection = tabs.find((tab) => tab === activeTab) || "Planned";
   const sectionMeta = {
     Plans: {
-      label: "Plans",
+      label: "Over view",
       helper: "Customer options for solving this job",
       count: String(jobPlans?.length || 0),
     },
     Planned: {
-      label: "Planned",
-      helper: "Accepted plan work, materials, and offers",
+      label: "Create Plans",
+      helper: "Create Estimates based on materials and labor",
       count: String(
         (taskList?.length || 0) +
         (plannedServiceStops?.length || 0) +
@@ -9409,7 +9968,7 @@ const JobDetailView = () => {
                       <StatCard
                         title="Labor"
                         value={moneyFromCents(plannedTotalLaborCents)}
-                        subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tasks`}
+                        subtitle={`${moneyFromCents(plannedStopLaborCents)} stops • ${moneyFromCents(plannedTaskLaborCents)} tech tasks • ${moneyFromCents(plannedTaskBillingLaborCents)} billable tasks`}
                       />
 
                       <StatCard
@@ -9585,7 +10144,7 @@ const JobDetailView = () => {
                         ? planEditorDraft.title.trim()
                         : selectedEditorPlan
                           ? getJobPlanDisplayName(selectedEditorPlan, "Untitled Plan")
-                        : "Current planned work has not been saved as a plan yet."}
+                          : "Current planned work has not been saved as a plan yet."}
                     </p>
                   </div>
 
@@ -9791,7 +10350,8 @@ const JobDetailView = () => {
                           <th className="hidden p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 lg:table-cell">
                             Customer Approval
                           </th>
-                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Labor</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Tech Labor</th>
+                          <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Billing Labor</th>
                           <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Time (Hr)</th>
                           <th className="p-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"></th>
                         </tr>
@@ -9799,6 +10359,7 @@ const JobDetailView = () => {
                       <tbody className="divide-y divide-gray-200">
                         {taskList?.map((task) => {
                           const isEditingTask = editingTaskId === task.id;
+                          const taskBillingLaborPriceCents = getTaskBillingLaborPriceCents(task);
 
                           return (
                             <React.Fragment key={task.id}>
@@ -9843,6 +10404,9 @@ const JobDetailView = () => {
                                 <td className="whitespace-nowrap p-3 text-slate-800">
                                   {formatCurrency((Number(task.contractedRate || 0) / 100) || 0)}
                                 </td>
+                                <td className="whitespace-nowrap p-3 text-slate-800">
+                                  {moneyFromCents(taskBillingLaborPriceCents)}
+                                </td>
                                 <td className="whitespace-nowrap p-3 text-slate-700">
                                   {((Number(task.estimatedTime || 0) / 60) || 0).toFixed(2)}
                                 </td>
@@ -9872,7 +10436,7 @@ const JobDetailView = () => {
 
                               {isEditingTask && (
                                 <tr>
-                                  <td colSpan={10} className="bg-blue-50/60 p-3">
+                                  <td colSpan={11} className="bg-blue-50/60 p-3">
                                     <form
                                       onSubmit={saveTaskEdit}
                                       className="rounded-md border border-blue-200 bg-white p-3 shadow-sm"
@@ -9920,7 +10484,7 @@ const JobDetailView = () => {
                                         </label>
 
                                         <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
-                                          Labor Cost (USD)
+                                          Tech Labor Cost (USD)
                                           <input
                                             className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
                                             type="number"
@@ -9928,6 +10492,18 @@ const JobDetailView = () => {
                                             step="0.01"
                                             value={taskEditForm.laborCost}
                                             onChange={(e) => updateTaskEditForm("laborCost", e.target.value)}
+                                          />
+                                        </label>
+
+                                        <label className="block text-xs font-bold uppercase tracking-wide text-slate-600">
+                                          Billing Labor Price (USD)
+                                          <input
+                                            className="mt-1 w-full rounded-md border border-slate-300 p-2 text-sm font-medium normal-case tracking-normal text-slate-800 focus:border-blue-500 focus:ring-blue-500"
+                                            type="number"
+                                            min="0"
+                                            step="0.01"
+                                            value={taskEditForm.billingLaborPrice}
+                                            onChange={(e) => updateTaskEditForm("billingLaborPrice", e.target.value)}
                                           />
                                         </label>
 
@@ -10048,7 +10624,7 @@ const JobDetailView = () => {
                         })}
                         {!taskList?.length && (
                           <tr>
-                            <td className="p-4 text-slate-500" colSpan={10}>
+                            <td className="p-4 text-slate-500" colSpan={11}>
                               No tasks yet.
                             </td>
                           </tr>
@@ -10144,15 +10720,29 @@ const JobDetailView = () => {
 
                         <input
                           className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                          type="text"
-                          placeholder="Labor Cost (USD)"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Tech Labor Cost (USD)"
                           value={taskLaborCost}
                           onChange={(e) => setTaskLaborCost(e.target.value)}
                         />
 
                         <input
                           className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
-                          type="text"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Billing Labor Price (USD)"
+                          value={taskBillingLaborPrice}
+                          onChange={(e) => setTaskBillingLaborPrice(e.target.value)}
+                        />
+
+                        <input
+                          className="w-full rounded-md border border-slate-300 p-2 text-sm focus:border-blue-500 focus:ring-blue-500"
+                          type="number"
+                          min="0"
+                          step="1"
                           placeholder="Estimated Time (Min)"
                           value={estimatedTime}
                           onChange={(e) => setEstimatedTime(e.target.value)}
@@ -10210,9 +10800,10 @@ const JobDetailView = () => {
                         {!newShoppingList && (
                           <button
                             onClick={showNewShoppingListItem}
-                            className="rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
+                            className="inline-flex items-center justify-center gap-1.5 rounded-md bg-blue-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-blue-700"
                           >
-                            + Add Planned Material
+                            <PlusIcon className="h-4 w-4" aria-hidden="true" />
+                            Add Planned Material
                           </button>
                         )}
                       </div>
@@ -10264,231 +10855,252 @@ const JobDetailView = () => {
                   </div>
 
                   {newShoppingList && (
-                    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-                      <div className="flex items-start justify-between gap-3">
-                        <div>
-                          <h4 className="text-sm font-bold text-slate-900">
-                            Add Planned Material
-                          </h4>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            Add a reusable planned material snapshot for this job.
-                          </p>
-                        </div>
-
-                        <button
-                          onClick={clearNewShoppingListItem}
-                          className="rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
-                        >
-                          Cancel
-                        </button>
-                      </div>
-
-                      <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
-                        <div className="space-y-3 lg:col-span-2">
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+                      <div className="flex max-h-[90vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl">
+                        <div className="flex items-start justify-between gap-3 border-b border-slate-200 p-5">
                           <div>
-                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              Sub Category
-                            </label>
-                            <select
-                              value={shoppingFormData.subCategory}
-                              onChange={(e) => handleShoppingSubCategoryChange(e.target.value)}
-                              className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-                            >
-                              {shoppingSubCategoryOptions.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          {requiresShoppingDbItem && (
-                            <div>
-                              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                Database Item
-                              </label>
-                              <Select
-                                value={selectedShoppingDbItem}
-                                options={shoppingDbItemList}
-                                onChange={handleShoppingDbItemChange}
-                                isSearchable
-                                isClearable
-                                placeholder="Select a database item"
-                                theme={selectTheme}
-                                styles={selectStyles}
-                              />
-                            </div>
-                          )}
-
-                          {requiresShoppingManualDetails && (
-                            <>
-                              <div>
-                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  Name
-                                </label>
-                                <input
-                                  type="text"
-                                  value={shoppingFormData.name}
-                                  onChange={(e) => handleShoppingFormChange("name", e.target.value)}
-                                  className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                                  placeholder="Enter custom material name"
-                                />
-                              </div>
-
-                              <div>
-                                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                  Description
-                                </label>
-                                <textarea
-                                  value={shoppingFormData.description}
-                                  onChange={(e) => handleShoppingFormChange("description", e.target.value)}
-                                  className="w-full min-h-[88px] rounded-md border border-slate-300 p-2 text-sm"
-                                  placeholder="Enter custom material description"
-                                />
-                              </div>
-
-                              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                                <div>
-                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                    Unit Cost
-                                  </label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={shoppingFormData.plannedUnitCost}
-                                    onChange={(e) => handleShoppingFormChange("plannedUnitCost", e.target.value)}
-                                    className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                                    placeholder="0.00"
-                                  />
-                                </div>
-
-                                <div>
-                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                                    Unit Price
-                                  </label>
-                                  <input
-                                    type="number"
-                                    step="0.01"
-                                    min="0"
-                                    value={shoppingFormData.plannedUnitPrice}
-                                    onChange={(e) => handleShoppingFormChange("plannedUnitPrice", e.target.value)}
-                                    className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                                    placeholder="0.00"
-                                  />
-                                </div>
-                              </div>
-                            </>
-                          )}
-
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              Quantity
-                            </label>
-                            <input
-                              type="text"
-                              value={shoppingFormData.quantity}
-                              onChange={(e) => handleShoppingFormChange("quantity", e.target.value)}
-                              className="w-full rounded-md border border-slate-300 p-2 text-sm"
-                              placeholder="Quantity"
-                            />
-                          </div>
-
-                          <div>
-                            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              Linked Task
-                            </label>
-                            <select
-                              value={shoppingFormData.linkedTaskId}
-                              onChange={(e) => handleShoppingFormChange("linkedTaskId", e.target.value)}
-                              className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
-                            >
-                              <option value="">No linked task</option>
-                              {(taskList || []).map((task) => (
-                                <option key={task.id} value={task.id}>
-                                  {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-
-                          <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs">
-                            <input
-                              type="checkbox"
-                              checked={Boolean(shoppingFormData.customerApprovalRequired)}
-                              onChange={(e) => handleShoppingFormChange("customerApprovalRequired", e.target.checked)}
-                              className="mt-1"
-                            />
-                            <span>
-                              <span className="block font-bold text-amber-900">Require customer approval</span>
-                              <span className="mt-1 block text-amber-800">
-                                Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
-                              </span>
-                            </span>
-                          </label>
-
-                        </div>
-
-                        <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                          <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            Unit pricing is stored as cents and copied into this material.
-                          </p>
-
-                          <div className="mt-3 space-y-2">
-                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Unit Cost
-                              </p>
-                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(shoppingPreviewUnitCostCents)}
-                              </p>
-                            </div>
-
-                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Unit Price
-                              </p>
-                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(shoppingPreviewUnitPriceCents)}
-                              </p>
-                            </div>
-
-                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Quantity
-                              </p>
-                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {shoppingFormData.quantity || "—"}
-                              </p>
-                            </div>
-
-                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Total Cost
-                              </p>
-                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(shoppingPreviewTotalCostCents)}
-                              </p>
-                            </div>
-
-                            <div className="rounded-md border border-slate-200 bg-white p-2.5">
-                              <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-                                Total Price
-                              </p>
-                              <p className="mt-0.5 text-sm font-semibold text-slate-800">
-                                {moneyFromCents(shoppingPreviewTotalPriceCents)}
-                              </p>
-                            </div>
+                            <h4 className="text-lg font-bold text-slate-950">
+                              Add Planned Material
+                            </h4>
+                            <p className="mt-1 text-sm text-slate-600">
+                              Add a reusable planned material snapshot for this job.
+                            </p>
                           </div>
 
                           <button
-                            onClick={handleAddShoppingListItem}
-                            disabled={!canSaveShoppingItem}
-                            className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                            type="button"
+                            onClick={clearNewShoppingListItem}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white p-2 text-slate-600 transition hover:bg-slate-50"
+                            aria-label="Close add planned material"
                           >
-                            Add Material
+                            <XMarkIcon className="h-5 w-5" aria-hidden="true" />
                           </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 gap-4 overflow-y-auto p-5 lg:grid-cols-3">
+                          <div className="space-y-3 lg:col-span-2">
+                            <div>
+                              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Sub Category
+                              </label>
+                              <select
+                                value={shoppingFormData.subCategory}
+                                onChange={(e) => handleShoppingSubCategoryChange(e.target.value)}
+                                className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                              >
+                                {shoppingSubCategoryOptions.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {requiresShoppingDbItem && (
+                              <div>
+                                <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
+                                  <label className="block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Database Item
+                                  </label>
+                                  {!showShoppingDbItemCreator && (
+                                    <button
+                                      type="button"
+                                      onClick={() => setShowShoppingDbItemCreator(true)}
+                                      className="inline-flex items-center justify-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                                    >
+                                      <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                                      New Database Item
+                                    </button>
+                                  )}
+                                </div>
+                                <Select
+                                  value={selectedShoppingDbItem}
+                                  options={shoppingDbItemList}
+                                  onChange={handleShoppingDbItemChange}
+                                  isSearchable
+                                  isClearable
+                                  placeholder="Select a database item"
+                                  theme={selectTheme}
+                                  styles={selectStyles}
+                                />
+                                {showShoppingDbItemCreator && (
+                                  <div className="mt-3">
+                                    {renderShoppingDatabaseItemCreator()}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {requiresShoppingManualDetails && (
+                              <>
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Name
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={shoppingFormData.name}
+                                    onChange={(e) => handleShoppingFormChange("name", e.target.value)}
+                                    className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                    placeholder="Enter custom material name"
+                                  />
+                                </div>
+
+                                <div>
+                                  <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Description
+                                  </label>
+                                  <textarea
+                                    value={shoppingFormData.description}
+                                    onChange={(e) => handleShoppingFormChange("description", e.target.value)}
+                                    className="w-full min-h-[88px] rounded-md border border-slate-300 p-2 text-sm"
+                                    placeholder="Enter custom material description"
+                                  />
+                                </div>
+
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                  <div>
+                                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                      Unit Cost
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={shoppingFormData.plannedUnitCost}
+                                      onChange={(e) => handleShoppingFormChange("plannedUnitCost", e.target.value)}
+                                      className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                      placeholder="0.00"
+                                    />
+                                  </div>
+
+                                  <div>
+                                    <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                      Unit Price
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      value={shoppingFormData.plannedUnitPrice}
+                                      onChange={(e) => handleShoppingFormChange("plannedUnitPrice", e.target.value)}
+                                      className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                      placeholder="0.00"
+                                    />
+                                  </div>
+                                </div>
+                              </>
+                            )}
+
+                            <div>
+                              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Quantity
+                              </label>
+                              <input
+                                type="text"
+                                value={shoppingFormData.quantity}
+                                onChange={(e) => handleShoppingFormChange("quantity", e.target.value)}
+                                className="w-full rounded-md border border-slate-300 p-2 text-sm"
+                                placeholder="Quantity"
+                              />
+                            </div>
+
+                            <div>
+                              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                Linked Task
+                              </label>
+                              <select
+                                value={shoppingFormData.linkedTaskId}
+                                onChange={(e) => handleShoppingFormChange("linkedTaskId", e.target.value)}
+                                className="w-full rounded-md border border-slate-300 bg-white p-2 text-sm"
+                              >
+                                <option value="">No linked task</option>
+                                {(taskList || []).map((task) => (
+                                  <option key={task.id} value={task.id}>
+                                    {[task.name || task.type || "Task", task.status || ""].filter(Boolean).join(" - ")}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <label className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={Boolean(shoppingFormData.customerApprovalRequired)}
+                                onChange={(e) => handleShoppingFormChange("customerApprovalRequired", e.target.checked)}
+                                className="mt-1"
+                              />
+                              <span>
+                                <span className="block font-bold text-amber-900">Require customer approval</span>
+                                <span className="mt-1 block text-amber-800">
+                                  Creates a client-visible approval request and keeps this material out of Ready to Purchase until approved.
+                                </span>
+                              </span>
+                            </label>
+
+                          </div>
+
+                          <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                            <h5 className="text-sm font-bold text-slate-900">Pricing Snapshot</h5>
+                            <p className="mt-0.5 text-xs text-slate-500">
+                              Unit pricing is stored as cents and copied into this material.
+                            </p>
+
+                            <div className="mt-3 space-y-2">
+                              <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  Unit Cost
+                                </p>
+                                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                  {moneyFromCents(shoppingPreviewUnitCostCents)}
+                                </p>
+                              </div>
+
+                              <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  Unit Price
+                                </p>
+                                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                  {moneyFromCents(shoppingPreviewUnitPriceCents)}
+                                </p>
+                              </div>
+
+                              <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  Quantity
+                                </p>
+                                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                  {shoppingFormData.quantity || "—"}
+                                </p>
+                              </div>
+
+                              <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  Total Cost
+                                </p>
+                                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                  {moneyFromCents(shoppingPreviewTotalCostCents)}
+                                </p>
+                              </div>
+
+                              <div className="rounded-md border border-slate-200 bg-white p-2.5">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                  Total Price
+                                </p>
+                                <p className="mt-0.5 text-sm font-semibold text-slate-800">
+                                  {moneyFromCents(shoppingPreviewTotalPriceCents)}
+                                </p>
+                              </div>
+                            </div>
+
+                            <button
+                              onClick={handleAddShoppingListItem}
+                              disabled={!canSaveShoppingItem}
+                              className="mt-3 block w-full rounded-md bg-blue-600 px-4 py-2 text-center text-xs font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
+                            >
+                              Add Material
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -10921,7 +11533,7 @@ const JobDetailView = () => {
                           {moneyFromCents(plannedTotalLaborCents)}
                         </p>
                         <p className="mt-1 text-sm text-gray-600">
-                          {moneyFromCents(plannedStopLaborCents)} stops • {moneyFromCents(plannedTaskLaborCents)} tasks
+                          {moneyFromCents(plannedStopLaborCents)} stops • {moneyFromCents(plannedTaskLaborCents)} tech tasks
                         </p>
                       </div>
 
@@ -11037,27 +11649,6 @@ const JobDetailView = () => {
                         </div>
                       ) : (
                         changeOrders.map((order) => renderChangeOrderCard(order))
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="xl:col-span-3 bg-white shadow-lg rounded-xl p-6">
-                    <div>
-                      <h4 className="text-lg font-bold text-gray-800">Job Timeline</h4>
-                      <p className="text-gray-600 mt-1 text-sm">
-                        Who changed what and when.
-                      </p>
-                    </div>
-
-                    <div className="mt-6 space-y-3">
-                      {jobHistoryLoading ? (
-                        <div className="text-gray-500">Loading history…</div>
-                      ) : !jobHistory.length ? (
-                        <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                          <p className="text-gray-700 font-medium">No history events recorded yet.</p>
-                        </div>
-                      ) : (
-                        jobHistory.map((event) => renderHistoryEventCard(event))
                       )}
                     </div>
                   </div>
@@ -12289,6 +12880,8 @@ const JobDetailView = () => {
                       {selectedWorkOfferTasks.length} selected • {formatDurationMinutes(selectedWorkOfferMinutes)} • {moneyFromCents(
                         workOfferForm.paySource === "Offered Amount"
                           ? Math.round(Number(workOfferForm.offeredAmount || 0) * 100)
+                          : workOfferForm.paySource === "Unpaid"
+                            ? 0
                           : selectedWorkOfferLaborCents
                       )}
                     </p>
@@ -12331,7 +12924,7 @@ const JobDetailView = () => {
                           <div className="flex-1">
                             <p className="font-bold text-gray-800">{task.name || task.type || "Task"}</p>
                             <p className="text-sm text-gray-600">
-                              {task.type || "Task"} • {Number(task.estimatedTime || 0)} min • {moneyFromCents(task.contractedRate)} planned labor
+                              {task.type || "Task"} • {Number(task.estimatedTime || 0)} min • {moneyFromCents(task.contractedRate)} tech labor
                             </p>
                           </div>
                         </label>

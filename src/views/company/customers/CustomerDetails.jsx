@@ -715,6 +715,8 @@ const timelineFilters = [
     { id: 'water', label: 'Water', types: ['waterFill', 'waterEmpty'] },
 ];
 
+const TIMELINE_LIST_PAGE_SIZE = 10;
+
 const timelineViewOptions = [
     { id: 'timeline', label: 'Timeline', Icon: PresentationChartLineIcon },
     { id: 'list', label: 'List', Icon: ListBulletIcon },
@@ -790,7 +792,6 @@ const buildTimelineDatapointGroups = (event = {}) => {
     const equipmentItems = [
         event.equipmentName ? `Equipment: ${event.equipmentName}` : '',
         event.equipmentType ? `Type: ${event.equipmentType}` : '',
-        event.type === 'equipmentReading' && event.detail ? event.detail : '',
     ].filter(Boolean);
     if (equipmentItems.length) groups.push({ label: 'Equipment', items: equipmentItems });
 
@@ -801,58 +802,15 @@ const buildTimelineDatapointGroups = (event = {}) => {
     return groups;
 };
 
-const TimelineDatapointGroups = ({ event }) => {
-    const groups = buildTimelineDatapointGroups(event);
-    if (!groups.length) return null;
+const getTimelineDatapointSummary = (event = {}) => (
+    buildTimelineDatapointGroups(event)
+        .flatMap((group) => group.items.map((item) => `${group.label}: ${item}`))
+        .join(' • ')
+);
 
-    return (
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-            {groups.map((group) => (
-                <div key={group.label} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{group.label}</p>
-                    <ul className="mt-2 space-y-1">
-                        {group.items.map((item, index) => (
-                            <li key={`${group.label}-${index}`} className="text-sm text-slate-700">
-                                {item}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            ))}
-        </div>
-    );
-};
-
-const TimelineEventCard = ({ event, variant = 'timeline' }) => {
+const TimelineEventCard = ({ event }) => {
     const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
-    const isList = variant === 'list';
-
-    const content = isList ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                        <span className={`h-2.5 w-2.5 rounded-full ${styles.dot}`} />
-                        <p className="min-w-0 text-sm font-semibold text-slate-900">{event.title}</p>
-                    </div>
-                    <p className="mt-1 text-xs font-medium text-slate-500">{formatTimelineDate(event.date)}</p>
-                </div>
-                <span className={`inline-flex w-fit rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
-                    {event.label}
-                </span>
-            </div>
-
-            {event.subtitle && (
-                <p className="mt-3 text-sm text-slate-600">{event.subtitle}</p>
-            )}
-
-            {event.detail && (
-                <p className="mt-3 whitespace-pre-wrap text-sm text-slate-700">{event.detail}</p>
-            )}
-
-            <TimelineDatapointGroups event={event} />
-        </div>
-    ) : (
+    const content = (
         <div className="relative flex gap-4">
             <span className={`mt-1 h-7 w-7 rounded-full border-4 border-white shadow-sm ${styles.dot}`} />
             <div className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -885,6 +843,55 @@ const TimelineEventCard = ({ event, variant = 'timeline' }) => {
         </Link>
     ) : content;
 };
+
+const TimelineEventTable = ({ events }) => (
+    <div className="overflow-x-auto rounded-lg border border-slate-200 bg-white">
+        <table className="min-w-full divide-y divide-slate-200 text-left text-sm">
+            <thead className="bg-slate-50 text-xs font-bold uppercase tracking-wide text-slate-500">
+                <tr>
+                    <th scope="col" className="w-44 px-4 py-3">Date</th>
+                    <th scope="col" className="w-36 px-4 py-3">Type</th>
+                    <th scope="col" className="min-w-[220px] px-4 py-3">Event</th>
+                    <th scope="col" className="min-w-[320px] px-4 py-3">Details</th>
+                </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+                {events.map((event) => {
+                    const styles = timelineTypeStyles[event.type] || timelineTypeStyles.serviceStop;
+                    const datapointSummary = getTimelineDatapointSummary(event);
+                    const detailText = [event.subtitle, datapointSummary || event.detail]
+                        .filter(Boolean)
+                        .join(' • ');
+
+                    return (
+                        <tr key={event.id} className="align-top transition hover:bg-slate-50">
+                            <td className="whitespace-nowrap px-4 py-3 text-xs font-semibold text-slate-500">
+                                {formatTimelineDate(event.date)}
+                            </td>
+                            <td className="px-4 py-3">
+                                <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.chip}`}>
+                                    {event.label}
+                                </span>
+                            </td>
+                            <td className="px-4 py-3">
+                                {event.target ? (
+                                    <Link to={event.target} className="font-semibold text-slate-900 hover:text-blue-700">
+                                        {event.title}
+                                    </Link>
+                                ) : (
+                                    <span className="font-semibold text-slate-900">{event.title}</span>
+                                )}
+                            </td>
+                            <td className="px-4 py-3 text-sm leading-6 text-slate-700">
+                                {detailText || <span className="text-slate-400">No details</span>}
+                            </td>
+                        </tr>
+                    );
+                })}
+            </tbody>
+        </table>
+    </div>
+);
 
 // Profile Tab
 const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerInactiveCascade }) => {
@@ -3921,6 +3928,7 @@ const HistoryTab = ({ customer }) => {
     const [activeTimelineFilter, setActiveTimelineFilter] = useState('all');
     const [timelineViewMode, setTimelineViewMode] = useState('timeline');
     const [showAllTimelineEvents, setShowAllTimelineEvents] = useState(false);
+    const [timelineListLimit, setTimelineListLimit] = useState(TIMELINE_LIST_PAGE_SIZE);
     const [timelineExpanded, setTimelineExpanded] = useState(false);
     const [timelineRange, setTimelineRange] = useState(defaultHistoryDateRange);
     const [loading, setLoading] = useState(true);
@@ -3935,9 +3943,10 @@ const HistoryTab = ({ customer }) => {
             (event.type === 'note' && !event.bodyOfWaterId)
         ));
     const dateScopedTimeline = bodyOfWaterScopedTimeline.filter((event) => isWithinDateRange(event.date, timelineRange));
+    const timelineEventsForView = timelineViewMode === 'list' ? bodyOfWaterScopedTimeline : dateScopedTimeline;
     const visibleTimeline = selectedFilter.id === 'all'
-        ? dateScopedTimeline
-        : dateScopedTimeline.filter((event) => selectedFilter.types.includes(event.type));
+        ? timelineEventsForView
+        : timelineEventsForView.filter((event) => selectedFilter.types.includes(event.type));
     const equipmentReadingTimeline = dateScopedTimeline.filter((event) => event.type === 'equipmentReading');
     const dateScopedExpiredJobs = expiredJobs.filter((expiredJob) => (
         isWithinDateRange(expiredJob.expiredAt || expiredJob.updatedAt || expiredJob.expiredAtMillis, timelineRange)
@@ -3985,7 +3994,16 @@ const HistoryTab = ({ customer }) => {
 
     useEffect(() => {
         setShowAllTimelineEvents(false);
-    }, [activeTimelineFilter, activeBodyOfWaterId, timeline.length]);
+        setTimelineListLimit(TIMELINE_LIST_PAGE_SIZE);
+    }, [
+        activeTimelineFilter,
+        activeBodyOfWaterId,
+        timeline.length,
+        timelineRange.end,
+        timelineRange.invalid,
+        timelineRange.start,
+        timelineViewMode,
+    ]);
 
     useEffect(() => {
         if (activeBodyOfWaterId !== 'all' && !bodyOfWaterOptions.some((body) => body.id === activeBodyOfWaterId)) {
@@ -4053,19 +4071,38 @@ const HistoryTab = ({ customer }) => {
 
     const renderTimelineEvents = (isExpanded = false) => {
         if (visibleTimeline.length === 0) {
+            const rangeText = timelineViewMode === 'timeline' ? ' in this date range' : '';
+
             return (
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-8 text-center text-sm text-slate-500">
-                    No {selectedFilter.label.toLowerCase()} timeline events found in this date range{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
+                    No {selectedFilter.label.toLowerCase()} timeline events found{rangeText}{selectedBodyOfWater ? ` for ${selectedBodyOfWater.name || "this body of water"}` : ""}.
                 </div>
             );
         }
 
         if (timelineViewMode === 'list') {
+            const eventsToDisplay = visibleTimeline.slice(0, timelineListLimit);
+            const hiddenCount = visibleTimeline.length - eventsToDisplay.length;
+
             return (
-                <div className={isExpanded ? "space-y-3 pb-6" : "max-h-[68vh] space-y-3 overflow-y-auto pr-1"}>
-                    {visibleTimeline.map((event) => (
-                        <TimelineEventCard key={event.id} event={event} variant="list" />
-                    ))}
+                <div className={isExpanded ? "space-y-3 pb-6" : "space-y-3"}>
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Showing {eventsToDisplay.length} of {visibleTimeline.length} events
+                        </p>
+                    </div>
+                    <TimelineEventTable events={eventsToDisplay} />
+                    {hiddenCount > 0 && (
+                        <div className="flex justify-center">
+                            <button
+                                type="button"
+                                onClick={() => setTimelineListLimit((current) => current + TIMELINE_LIST_PAGE_SIZE)}
+                                className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                            >
+                                Show more
+                            </button>
+                        </div>
+                    )}
                 </div>
             );
         }
@@ -4117,11 +4154,13 @@ const HistoryTab = ({ customer }) => {
         return (
             <div className="space-y-6">
                 {renderTimelineControls()}
-                <CustomerTimelineGraph
-                    timeline={bodyOfWaterScopedTimeline}
-                    defaultRange={defaultHistoryDateRange}
-                    onRangeChange={setTimelineRange}
-                />
+                {timelineViewMode === 'timeline' && (
+                    <CustomerTimelineGraph
+                        timeline={bodyOfWaterScopedTimeline}
+                        defaultRange={defaultHistoryDateRange}
+                        onRangeChange={setTimelineRange}
+                    />
+                )}
                 {renderTimelineEvents(isExpanded)}
             </div>
         );

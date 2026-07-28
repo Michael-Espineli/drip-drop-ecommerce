@@ -10,7 +10,7 @@ import {
 import Select from "react-select";
 import { format } from "date-fns";
 import { toast } from "react-hot-toast";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
@@ -29,6 +29,12 @@ import {
   SUBCATEGORY_OPTIONS,
   UOM_OPTIONS,
 } from "./databaseItemOptions";
+import {
+  getItemPhotoUrl,
+  itemPhotoFieldsFromUrl,
+  uploadItemPhoto,
+  validateItemPhotoFile,
+} from "../../../utils/itemPhotos";
 
 const formatCurrency = (number, locale = "en-US", currency = "USD") =>
   new Intl.NumberFormat(locale, {
@@ -58,6 +64,10 @@ const DataBaseItemDetailView = () => {
   const [color, setColor] = useState("");
   const [description, setDescription] = useState("");
   const [itemName, setItemName] = useState("");
+  const [photoUrl, setPhotoUrl] = useState("");
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
+  const [photoError, setPhotoError] = useState("");
   const [size, setSize] = useState("");
   const [sellPrice, setSellPrice] = useState("");
   const [sku, setSku] = useState("");
@@ -104,6 +114,10 @@ const DataBaseItemDetailView = () => {
             billingRate: formatCurrency(sellPriceDollars),
             billingRateRaw: sellPriceDollars,
             tracking: itemData.tracking || "",
+            photoUrl: getItemPhotoUrl(itemData),
+            imageUrl: itemData.imageUrl || itemData.imageURL || "",
+            primaryPhotoUrl: itemData.primaryPhotoUrl || "",
+            photoUrls: Array.isArray(itemData.photoUrls) ? itemData.photoUrls : [],
           });
         } else {
           console.log("No such document!");
@@ -114,6 +128,14 @@ const DataBaseItemDetailView = () => {
       }
     })();
   }, [id, recentlySelectedCompany]);
+
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(photoPreviewUrl);
+      }
+    };
+  }, [photoPreviewUrl]);
 
   useEffect(() => {
     (async () => {
@@ -168,6 +190,10 @@ const DataBaseItemDetailView = () => {
       setColor(purchase.color || "");
       setDescription(purchase.description || "");
       setItemName(purchase.name || "");
+      setPhotoUrl(purchase.photoUrl || "");
+      setPhotoFile(null);
+      setPhotoPreviewUrl("");
+      setPhotoError("");
       setSize(purchase.size || "");
       setSellPrice(purchase.sellPriceRaw ?? purchase.billingRateRaw ?? 0);
       setSku(purchase.sku || "");
@@ -204,8 +230,27 @@ const DataBaseItemDetailView = () => {
   async function cancelEdit(e) {
     e.preventDefault();
     setLinkedDosageIds(currentLinkedDosageIds);
+    setPhotoFile(null);
+    setPhotoPreviewUrl("");
+    setPhotoError("");
     setEdit(false);
   }
+
+  const handlePhotoFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    const validationMessage = validateItemPhotoFile(file);
+
+    if (validationMessage) {
+      setPhotoError(validationMessage);
+      setPhotoFile(null);
+      setPhotoPreviewUrl("");
+      return;
+    }
+
+    setPhotoError("");
+    setPhotoFile(file);
+    setPhotoPreviewUrl(file ? URL.createObjectURL(file) : "");
+  };
 
   async function saveEdit(e) {
     e.preventDefault();
@@ -214,6 +259,26 @@ const DataBaseItemDetailView = () => {
     try {
       const rateCents = Math.round(Number(rate || 0) * 100);
       const sellPriceCents = Math.round(Number(sellPrice || 0) * 100);
+      let uploadedPhoto = {
+        photoUrl: photoUrl.trim(),
+        storagePath: "",
+      };
+
+      if (photoFile) {
+        uploadedPhoto = await uploadItemPhoto({
+          storage,
+          companyId: recentlySelectedCompany,
+          file: photoFile,
+          itemType: "databaseItems",
+          itemId: id,
+        });
+      }
+
+      const photoFields = itemPhotoFieldsFromUrl(
+        uploadedPhoto.photoUrl,
+        itemName || purchase.name || "Database item photo",
+        uploadedPhoto.storagePath
+      );
       const updatedItem = {
         UOM: uom,
         billable: Boolean(billable),
@@ -229,6 +294,7 @@ const DataBaseItemDetailView = () => {
         sellPrice: sellPriceCents,
         billingRate: sellPriceCents,
         tracking,
+        ...photoFields,
       };
 
       const batch = writeBatch(db);
@@ -255,7 +321,11 @@ const DataBaseItemDetailView = () => {
         billingRate: formatCurrency(Number(sellPrice || 0)),
         billingRateRaw: Number(sellPrice || 0),
         dateUpdated: format(updatedItem.dateUpdated, "MM / d / yyyy"),
+        ...photoFields,
       }));
+      setPhotoFile(null);
+      setPhotoPreviewUrl("");
+      setPhotoUrl(photoFields.photoUrl || "");
       setEdit(false);
       toast.success("Database item updated.");
     } catch (error) {
@@ -283,6 +353,7 @@ const DataBaseItemDetailView = () => {
   const inputClass = "mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100";
   const labelClass = "block text-sm font-semibold text-slate-700";
   const currentBillable = edit ? billable : Boolean(purchase.billable);
+  const displayPhotoUrl = edit ? photoPreviewUrl || photoUrl : purchase.photoUrl;
   const billableBadgeClass = currentBillable
     ? "border-emerald-200 bg-emerald-50 text-emerald-700"
     : "border-slate-200 bg-slate-100 text-slate-600";
@@ -359,6 +430,49 @@ const DataBaseItemDetailView = () => {
               <div className="lg:col-span-2">
                 <label className={labelClass}>Item Name</label>
                 <input className={inputClass} onChange={(e) => setItemName(e.target.value)} type="text" placeholder="Item Name" value={itemName} />
+              </div>
+
+              <div className="lg:col-span-2 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                  <div className="h-28 w-28 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white">
+                    {displayPhotoUrl ? (
+                      <img src={displayPhotoUrl} alt="" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-400">
+                        Photo
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="min-w-0 flex-1 space-y-3">
+                    <div>
+                      <label className={labelClass}>Item Photo</label>
+                      <input
+                        className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+                        type="file"
+                        accept="image/*"
+                        onChange={handlePhotoFileChange}
+                      />
+                      {photoFile ? (
+                        <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you save.</p>
+                      ) : null}
+                      {photoError ? (
+                        <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
+                      ) : null}
+                    </div>
+
+                    <div>
+                      <label className={labelClass}>Photo URL</label>
+                      <input
+                        className={inputClass}
+                        onChange={(e) => setPhotoUrl(e.target.value)}
+                        type="url"
+                        placeholder="https://..."
+                        value={photoUrl}
+                      />
+                    </div>
+                  </div>
+                </div>
               </div>
 
               <div>
@@ -567,6 +681,15 @@ const DataBaseItemDetailView = () => {
             </div>
 
             <aside className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="mb-5 overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                {displayPhotoUrl ? (
+                  <img src={displayPhotoUrl} alt="" className="h-48 w-full object-cover" />
+                ) : (
+                  <div className="flex h-48 w-full items-center justify-center text-sm font-semibold text-slate-400">
+                    No photo
+                  </div>
+                )}
+              </div>
               <h2 className="text-lg font-bold text-slate-950">Item Summary</h2>
               <div className="mt-4 space-y-3 text-sm text-slate-700">
                 <div className="flex justify-between gap-4 border-b border-slate-100 pb-3">

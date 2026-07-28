@@ -22,6 +22,7 @@ import {
   FaEnvelope,
   FaExclamationTriangle,
   FaFileSignature,
+  FaHistory,
   FaMapMarkerAlt,
   FaPlus,
   FaReceipt,
@@ -176,6 +177,34 @@ const agreementHistoryGroupId = (agreement = {}) => (
   renewalPreviousAgreementId(agreement) ||
   agreement.id ||
   ''
+);
+
+const agreementHistoryAmountCents = (agreement = {}) => {
+  const directAmount = Number(
+    agreement.totalAmountCents ??
+    agreement.rateAmountCents ??
+    agreement.subtotalAmountCents ??
+    agreement.amountCents ??
+    0
+  );
+  if (directAmount) return directAmount;
+
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  return lineItems.reduce((total, item) => {
+    const quantity = Number(item.quantity || 1) || 1;
+    const lineTotal = Number(item.totalAmountCents || 0);
+    if (lineTotal) return total + lineTotal;
+    return total + (Number(item.unitAmountCents || 0) * quantity);
+  }, 0);
+};
+
+const agreementHistoryEffectiveDate = (agreement = {}) => (
+  agreement.startDate ||
+  agreement.acceptedAt ||
+  agreement.sentAt ||
+  agreement.createdAt ||
+  agreement.updatedAt ||
+  null
 );
 
 const nextAgreementStartDate = (agreement = {}) => {
@@ -554,6 +583,8 @@ const SalesAgreementDetail = () => {
   const [markingAccepted, setMarkingAccepted] = useState(false);
   const [creatingBilling, setCreatingBilling] = useState(false);
   const [creatingRenewal, setCreatingRenewal] = useState(false);
+  const [agreementHistoryRecords, setAgreementHistoryRecords] = useState([]);
+  const [agreementHistoryLoading, setAgreementHistoryLoading] = useState(false);
   const [startingStripeCheckout, setStartingStripeCheckout] = useState(false);
   const [termsTemplates, setTermsTemplates] = useState([]);
   const [loadingTermsTemplates, setLoadingTermsTemplates] = useState(false);
@@ -601,6 +632,70 @@ const SalesAgreementDetail = () => {
       }
     );
   }, [agreementId]);
+
+  useEffect(() => {
+    if (!agreement?.id) {
+      setAgreementHistoryRecords([]);
+      setAgreementHistoryLoading(false);
+      return undefined;
+    }
+
+    const historyGroupId = agreementHistoryGroupId(agreement);
+    if (!historyGroupId) {
+      setAgreementHistoryRecords([agreement]);
+      setAgreementHistoryLoading(false);
+      return undefined;
+    }
+
+    let isActive = true;
+    setAgreementHistoryLoading(true);
+
+    const mergeHistoryRows = async (snapshotRows = []) => {
+      const rowsById = new Map(snapshotRows.map((record) => [record.id, record]));
+      if (!rowsById.has(agreement.id)) rowsById.set(agreement.id, agreement);
+
+      if (historyGroupId && !rowsById.has(historyGroupId)) {
+        try {
+          const rootSnap = await getDoc(doc(db, salesCollectionNames.agreements, historyGroupId));
+          if (rootSnap.exists()) {
+            rowsById.set(rootSnap.id, { id: rootSnap.id, ...rootSnap.data() });
+          }
+        } catch (historyRootError) {
+          console.warn('Unable to load root agreement history record', historyRootError);
+        }
+      }
+
+      if (!isActive) return;
+      const agreementCompanyId = agreement.companyId || recentlySelectedCompany || '';
+      setAgreementHistoryRecords(
+        [...rowsById.values()].filter((record) => (
+          !agreementCompanyId || !record.companyId || record.companyId === agreementCompanyId
+        ))
+      );
+      setAgreementHistoryLoading(false);
+    };
+
+    const unsubscribe = onSnapshot(
+      query(
+        collection(db, salesCollectionNames.agreements),
+        where('agreementHistoryGroupId', '==', historyGroupId)
+      ),
+      (snapshot) => {
+        mergeHistoryRows(snapshot.docs.map((historyDoc) => ({ id: historyDoc.id, ...historyDoc.data() })));
+      },
+      (historyError) => {
+        console.error('Unable to load agreement history', historyError);
+        if (!isActive) return;
+        setAgreementHistoryRecords([agreement]);
+        setAgreementHistoryLoading(false);
+      }
+    );
+
+    return () => {
+      isActive = false;
+      unsubscribe();
+    };
+  }, [agreement, recentlySelectedCompany]);
 
   useEffect(() => {
     if (!agreement?.id) return;
@@ -816,6 +911,37 @@ const SalesAgreementDetail = () => {
   const customerPurchasedChemicalDisplay = chemicalSelectionDisplay(
     agreement?.customerPurchasedChemicalIds,
     agreement?.customerPurchasedChemicalKeywords
+  );
+  const agreementHistoryRows = useMemo(() => {
+    const rowsById = new Map();
+    agreementHistoryRecords.forEach((record) => {
+      if (record?.id) rowsById.set(record.id, record);
+    });
+    if (agreement?.id && !rowsById.has(agreement.id)) rowsById.set(agreement.id, agreement);
+
+    const sortedRows = [...rowsById.values()].sort((left, right) => {
+      const leftDate = toMillis(agreementHistoryEffectiveDate(left));
+      const rightDate = toMillis(agreementHistoryEffectiveDate(right));
+      if (leftDate !== rightDate) return leftDate - rightDate;
+      return Number(left.agreementVersion || 1) - Number(right.agreementVersion || 1);
+    });
+
+    return sortedRows.map((record, index) => {
+      const amountCents = agreementHistoryAmountCents(record);
+      const previousAmountCents = index > 0 ? agreementHistoryAmountCents(sortedRows[index - 1]) : null;
+
+      return {
+        ...record,
+        amountCents,
+        amountDeltaCents: previousAmountCents === null ? 0 : amountCents - previousAmountCents,
+        effectiveDate: agreementHistoryEffectiveDate(record),
+        isCurrentAgreement: record.id === agreement?.id,
+      };
+    });
+  }, [agreement, agreementHistoryRecords]);
+  const lastRaisedHistoryRow = useMemo(
+    () => [...agreementHistoryRows].reverse().find((record) => record.amountDeltaCents > 0) || null,
+    [agreementHistoryRows]
   );
 
   const readinessItems = [
@@ -2133,6 +2259,80 @@ const SalesAgreementDetail = () => {
                             <td className="px-4 py-3 font-semibold text-slate-900">{formatCurrency(item.totalAmountCents)}</td>
                           </tr>
                         ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </section>
+
+              <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-2">
+                    <FaHistory className="text-slate-400" />
+                    <h2 className="text-lg font-bold text-slate-950">Agreement History</h2>
+                  </div>
+                  <span className="text-sm font-semibold text-slate-500">
+                    {lastRaisedHistoryRow ? `Last raised ${formatDate(lastRaisedHistoryRow.effectiveDate)}` : 'No rate increase recorded'}
+                  </span>
+                </div>
+                <div className="mt-4 overflow-x-auto rounded-lg border border-slate-200">
+                  {agreementHistoryLoading ? (
+                    <div className="bg-slate-50 p-5 text-sm text-slate-500">Loading agreement history...</div>
+                  ) : agreementHistoryRows.length === 0 ? (
+                    <div className="bg-slate-50 p-5 text-sm text-slate-500">No agreement history saved.</div>
+                  ) : (
+                    <table className="min-w-full divide-y divide-slate-200 text-sm">
+                      <thead className="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <tr>
+                          <th className="px-4 py-3">Version</th>
+                          <th className="px-4 py-3">Effective</th>
+                          <th className="px-4 py-3">Status</th>
+                          <th className="px-4 py-3 text-right">Rate</th>
+                          <th className="px-4 py-3 text-right">Change</th>
+                          <th className="px-4 py-3">Agreement</th>
+                          <th className="min-w-[240px] px-4 py-3">Notes</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 bg-white">
+                        {agreementHistoryRows.map((historyRow, index) => {
+                          const deltaTone = historyRow.amountDeltaCents > 0
+                            ? 'text-emerald-700'
+                            : historyRow.amountDeltaCents < 0
+                              ? 'text-rose-700'
+                              : 'text-slate-500';
+                          const notes = [
+                            historyRow.chemicalBillingNotes,
+                            historyRow.acceptedNote ? `Accepted: ${historyRow.acceptedNote}` : '',
+                            historyRow.description,
+                          ].filter(Boolean).join(' | ');
+
+                          return (
+                            <tr key={historyRow.id} className={historyRow.isCurrentAgreement ? 'bg-blue-50/50' : ''}>
+                              <td className="px-4 py-3 font-semibold text-slate-900">
+                                v{historyRow.agreementVersion || index + 1}
+                              </td>
+                              <td className="px-4 py-3 text-slate-600">{formatDate(historyRow.effectiveDate)}</td>
+                              <td className="px-4 py-3"><StatusBadge status={historyRow.status || SalesAgreementStatus.draft} /></td>
+                              <td className="px-4 py-3 text-right font-semibold text-slate-900">
+                                {formatCurrency(historyRow.amountCents)}
+                              </td>
+                              <td className={`px-4 py-3 text-right font-semibold ${deltaTone}`}>
+                                {historyRow.amountDeltaCents > 0 ? '+' : ''}{formatCurrency(historyRow.amountDeltaCents)}
+                              </td>
+                              <td className="px-4 py-3">
+                                <Link
+                                  to={`/company/sales/agreements/${historyRow.id}`}
+                                  className="font-semibold text-blue-700 hover:text-blue-900"
+                                >
+                                  {historyRow.isCurrentAgreement ? 'Current Agreement' : historyRow.title || 'Open Agreement'}
+                                </Link>
+                              </td>
+                              <td className="max-w-[360px] whitespace-normal px-4 py-3 text-xs text-slate-600">
+                                {notes || '-'}
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   )}

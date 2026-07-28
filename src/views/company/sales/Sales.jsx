@@ -4,6 +4,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { format } from 'date-fns';
 import {
   FaCalendarAlt,
+  FaChartLine,
   FaCheckCircle,
   FaCreditCard,
   FaExternalLinkAlt,
@@ -398,6 +399,13 @@ const Sales = () => {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <Link
+                to="/company/sales/pnl-viewer"
+                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+              >
+                <FaChartLine className="text-xs" />
+                PNL Viewer
+              </Link>
               <Link
                 to="/company/sales/catalog-items"
                 className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"

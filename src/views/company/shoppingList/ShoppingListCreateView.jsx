@@ -12,8 +12,15 @@ import {
 } from "firebase/firestore";
 import Select from "react-select";
 import { v4 as uuidv4 } from "uuid";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
+import {
+    getItemPhotoUrl,
+    itemPhotoFieldsFromSource,
+    itemPhotoFieldsFromUrl,
+    uploadItemPhoto,
+    validateItemPhotoFile,
+} from "../../../utils/itemPhotos";
 
 const categoryOptions = [
     { value: "Personal", label: "Personal" },
@@ -30,7 +37,11 @@ const subCategoryOptions = [
 
 const statusOptions = [
     { value: "Need to Purchase", label: "Need to Purchase" },
+    { value: "Needs Customer Approval", label: "Needs Customer Approval" },
+    { value: "Ready to Purchase", label: "Ready to Purchase" },
+    { value: "Customer Rejected", label: "Customer Rejected" },
     { value: "Purchased", label: "Purchased" },
+    { value: "Delivered", label: "Delivered" },
     { value: "Installed", label: "Installed" },
 ];
 
@@ -74,6 +85,9 @@ const ShoppingListCreateView = () => {
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [selectedJob, setSelectedJob] = useState(null);
     const [selectedDbItem, setSelectedDbItem] = useState(null);
+    const [photoFile, setPhotoFile] = useState(null);
+    const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
+    const [photoError, setPhotoError] = useState("");
 
     const [formData, setFormData] = useState({
         category: "Personal",
@@ -99,6 +113,10 @@ const ShoppingListCreateView = () => {
         userName: "",
 
         dbItemId: "",
+        photoUrl: "",
+        imageUrl: "",
+        primaryPhotoUrl: "",
+        photoUrls: [],
 
         purchasedItem: "",
         invoiced: false,
@@ -107,6 +125,14 @@ const ShoppingListCreateView = () => {
     useEffect(() => {
         fetchSelectorData();
     }, [recentlySelectedCompany]);
+
+    useEffect(() => {
+        return () => {
+            if (photoPreviewUrl?.startsWith("blob:")) {
+                URL.revokeObjectURL(photoPreviewUrl);
+            }
+        };
+    }, [photoPreviewUrl]);
 
     const fetchSelectorData = async () => {
         try {
@@ -228,6 +254,10 @@ const ShoppingListCreateView = () => {
                     rate: Number(data.rate || 0),
                     sellPrice: Number(data.sellPrice || 0),
                     cost: Number(data.cost || data.rate || 0),
+                    photoUrl: getItemPhotoUrl(data),
+                    imageUrl: data.imageUrl || data.imageURL || "",
+                    primaryPhotoUrl: data.primaryPhotoUrl || "",
+                    photoUrls: Array.isArray(data.photoUrls) ? data.photoUrls : [],
                     label: name,
                     value: data.id || docSnap.id,
                 };
@@ -250,6 +280,22 @@ const ShoppingListCreateView = () => {
             ...prev,
             [field]: value,
         }));
+    };
+
+    const handlePhotoFileChange = (event) => {
+        const file = event.target.files?.[0] || null;
+        const validationMessage = validateItemPhotoFile(file);
+
+        if (validationMessage) {
+            setPhotoError(validationMessage);
+            setPhotoFile(null);
+            setPhotoPreviewUrl("");
+            return;
+        }
+
+        setPhotoError("");
+        setPhotoFile(file);
+        setPhotoPreviewUrl(file ? URL.createObjectURL(file) : "");
     };
 
     const handleCategoryChange = (value) => {
@@ -283,6 +329,10 @@ const ShoppingListCreateView = () => {
         } else {
             nextData.dbItemId = "";
             nextData.genericItemId = "";
+            nextData.photoUrl = "";
+            nextData.imageUrl = "";
+            nextData.primaryPhotoUrl = "";
+            nextData.photoUrls = [];
             setSelectedDbItem(null);
         }
 
@@ -331,13 +381,18 @@ const ShoppingListCreateView = () => {
 
     const handleDbItemChange = (option) => {
         setSelectedDbItem(option);
+        const photoFields = option ? itemPhotoFieldsFromSource(option, option.name || "Shopping item photo") : itemPhotoFieldsFromUrl("");
         setFormData((prev) => ({
             ...prev,
             dbItemId: option?.id || "",
             genericItemId: option?.genericItemId || "",
             name: option?.name || "",
             description: option?.description || "",
+            ...photoFields,
         }));
+        setPhotoFile(null);
+        setPhotoPreviewUrl("");
+        setPhotoError("");
     };
 
     const requiresDbItem = formData.subCategory === "Data Base";
@@ -374,6 +429,24 @@ const ShoppingListCreateView = () => {
                 : 0;
             const plannedTotalCostCents = Math.round(plannedUnitCostCents * qty);
             const plannedTotalPriceCents = Math.round(plannedUnitPriceCents * qty);
+            let uploadedPhoto = {
+                photoUrl: formData.photoUrl || "",
+                storagePath: "",
+            };
+
+            if (photoFile) {
+                uploadedPhoto = await uploadItemPhoto({
+                    storage,
+                    companyId: recentlySelectedCompany,
+                    file: photoFile,
+                    itemType: "shoppingItems",
+                    itemId: id,
+                });
+            }
+
+            const photoFields = photoFile
+                ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, formData.name || "Shopping item photo", uploadedPhoto.storagePath)
+                : itemPhotoFieldsFromUrl(formData.photoUrl, formData.name || "Shopping item photo");
             const prepKeys = Array.from(
                 new Set(
                     [
@@ -413,7 +486,7 @@ const ShoppingListCreateView = () => {
                 serviceLocationId: formData.serviceLocationId || "",
                 serviceLocationName: formData.serviceLocationName || "",
                 prepKeys,
-                needsAction: formData.status !== "Installed",
+                needsAction: !["Delivered", "Installed"].includes(formData.status),
                 actionDate: Timestamp.now(),
                 assignedTechIds: [],
                 plannedUnitCostCents,
@@ -424,6 +497,7 @@ const ShoppingListCreateView = () => {
                 itemType: formData.subCategory,
                 cost: plannedUnitCostCents,
                 price: plannedUnitPriceCents,
+                ...photoFields,
                 createdAt: Timestamp.now(),
             };
 
@@ -602,6 +676,57 @@ const ShoppingListCreateView = () => {
                                     </div>
                                 </div>
                             )}
+
+                            <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                                    <div className="h-24 w-24 shrink-0 overflow-hidden rounded-md border border-gray-200 bg-white">
+                                        {photoPreviewUrl || formData.photoUrl ? (
+                                            <img
+                                                src={photoPreviewUrl || formData.photoUrl}
+                                                alt=""
+                                                className="h-full w-full object-cover"
+                                            />
+                                        ) : (
+                                            <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-gray-400">
+                                                Photo
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div className="min-w-0 flex-1 space-y-3">
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-500 mb-2">
+                                                Shopping Item Photo
+                                            </label>
+                                            <input
+                                                type="file"
+                                                accept="image/*"
+                                                onChange={handlePhotoFileChange}
+                                                className="block w-full text-sm text-gray-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+                                            />
+                                            {photoFile ? (
+                                                <p className="mt-1 text-xs text-gray-500">{photoFile.name} will upload when you create.</p>
+                                            ) : null}
+                                            {photoError ? (
+                                                <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
+                                            ) : null}
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-sm font-semibold text-gray-500 mb-2">
+                                                Photo URL
+                                            </label>
+                                            <input
+                                                type="url"
+                                                value={formData.photoUrl}
+                                                onChange={(e) => handleChange("photoUrl", e.target.value)}
+                                                className="w-full p-3 border border-gray-300 rounded-lg"
+                                                placeholder="https://..."
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         {formData.category === "Job" && (

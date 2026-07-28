@@ -358,6 +358,12 @@ const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
     amount: [],
     UOM: "lbs",
     rate: "",
+    cost: "",
+    price: "",
+    costCents: 0,
+    unitCostCents: 0,
+    priceCents: 0,
+    unitPriceCents: 0,
     linkedItemId: "",
     strength: 0,
     editable: true,
@@ -371,6 +377,12 @@ const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
     amount: [],
     UOM: "lbs",
     rate: "",
+    cost: "",
+    price: "",
+    costCents: 0,
+    unitCostCents: 0,
+    priceCents: 0,
+    unitPriceCents: 0,
     linkedItemId: "",
     strength: 0,
     editable: true,
@@ -384,6 +396,12 @@ const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
     amount: [],
     UOM: "oz",
     rate: "",
+    cost: "",
+    price: "",
+    costCents: 0,
+    unitCostCents: 0,
+    priceCents: 0,
+    unitPriceCents: 0,
     linkedItemId: "",
     strength: 0,
     editable: true,
@@ -397,6 +415,12 @@ const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
     amount: [],
     UOM: "scoop",
     rate: "",
+    cost: "",
+    price: "",
+    costCents: 0,
+    unitCostCents: 0,
+    priceCents: 0,
+    unitPriceCents: 0,
     linkedItemId: "",
     strength: 0,
     editable: true,
@@ -410,6 +434,12 @@ const REQUIRED_UNIVERSAL_DOSAGE_TEMPLATES = [
     amount: [],
     UOM: "oz",
     rate: "",
+    cost: "",
+    price: "",
+    costCents: 0,
+    unitCostCents: 0,
+    priceCents: 0,
+    unitPriceCents: 0,
     linkedItemId: "",
     strength: 0,
     editable: true,
@@ -530,7 +560,13 @@ const copyUniversalDosageTemplatesToCompany = async (companyId) => {
           name: documentData.name || "",
           amount: documentData.amount || [],
           UOM: documentData.UOM || "",
-          rate: documentData.rate || "",
+          rate: documentData.cost || documentData.rate || "",
+          cost: documentData.cost || documentData.rate || "",
+          price: documentData.price || "",
+          costCents: documentData.costCents || documentData.unitCostCents || 0,
+          unitCostCents: documentData.unitCostCents || documentData.costCents || 0,
+          priceCents: documentData.priceCents || documentData.unitPriceCents || 0,
+          unitPriceCents: documentData.unitPriceCents || documentData.priceCents || 0,
           linkedItemId: "",
           strength: documentData.strength || 0,
           editable: documentData.editable !== false,
@@ -3829,6 +3865,43 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
   const customerName = verifiedAuth.token?.name || approval.customerName || verifiedAuth.token?.email || "Customer";
   const nextShoppingStatus = action === "approved" ? "Ready to Purchase" : "Customer Rejected";
   const nextApprovalStatus = action;
+  const serviceStopId = approval.serviceStopId || approval.scheduledServiceStopId || "";
+  const serviceStopInternalId = approval.serviceStopInternalId || approval.scheduledServiceStopInternalId || "";
+  const scheduledDate = approval.scheduledDate || approval.serviceDate || null;
+  const assignedTechId =
+    approval.assignedTechId ||
+    approval.assignedToUserId ||
+    approval.techId ||
+    approval.userId ||
+    approval.purchaserId ||
+    "";
+  const assignedTechName =
+    approval.assignedTechName ||
+    approval.assignedToUserName ||
+    approval.techName ||
+    approval.userName ||
+    approval.purchaserName ||
+    "";
+  const assignedTechIds = Array.from(new Set([
+    ...(Array.isArray(approval.assignedTechIds) ? approval.assignedTechIds : []),
+    assignedTechId,
+    approval.techId,
+    approval.userId,
+    approval.purchaserId,
+  ].filter(Boolean)));
+  const assignedTechNames = Array.from(new Set([
+    ...(Array.isArray(approval.assignedTechNames) ? approval.assignedTechNames : []),
+    assignedTechName,
+    approval.techName,
+    approval.userName,
+    approval.purchaserName,
+  ].filter(Boolean)));
+  const photoFields = {
+    ...(approval.photoUrl ? { photoUrl: approval.photoUrl } : {}),
+    ...(approval.imageUrl ? { imageUrl: approval.imageUrl } : {}),
+    ...(approval.primaryPhotoUrl ? { primaryPhotoUrl: approval.primaryPhotoUrl } : {}),
+    ...(Array.isArray(approval.photoUrls) ? { photoUrls: approval.photoUrls } : {}),
+  };
 
   const batch = firestore.batch();
 
@@ -3841,6 +3914,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     respondedByUserId: verifiedAuth.uid,
     respondedByUserName: customerName,
     respondedByEmail: verifiedAuth.token?.email || approval.customerEmail || "",
+    fulfillmentStatus: action === "approved" ? "approvedAwaitingPurchase" : "rejected",
     shoppingListItemId,
     shoppingListPath: shoppingListItemId && companyId ? `companies/${companyId}/shoppingList/${shoppingListItemId}` : "",
     shoppingListGeneratedAt: generatedShoppingListItemId ? now : approval.shoppingListGeneratedAt || null,
@@ -3865,8 +3939,8 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       category: jobId ? "Job" : "Customer",
       subCategory: approval.subCategory || (approval.dbItemId ? "Data Base" : "Part"),
       status: nextShoppingStatus,
-      purchaserId: approval.purchaserId || "",
-      purchaserName: approval.purchaserName || "",
+      purchaserId: approval.purchaserId || assignedTechId || "",
+      purchaserName: approval.purchaserName || assignedTechName || "",
       genericItemId: approval.genericItemId || "",
       name: approval.itemName || approval.name || approval.dbItemName || "Pool Part",
       description: approval.description || "",
@@ -3879,22 +3953,32 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       customerId: approval.customerId || "",
       customerName: approval.customerName || "",
       customerUserId: approval.customerUserId || verifiedAuth.uid || "",
-      userId: "",
-      userName: "",
-      serviceStopId: "",
-      serviceStopInternalId: "",
+      userId: approval.userId || assignedTechId || "",
+      userName: approval.userName || assignedTechName || "",
+      serviceStopId,
+      serviceStopInternalId,
+      scheduledServiceStopId: serviceStopId,
+      scheduledServiceStopInternalId: serviceStopInternalId,
       serviceLocationId: approval.serviceLocationId || "",
       serviceLocationName: approval.serviceLocationName || "",
-      scheduledDate: null,
+      serviceLocationAddress: approval.serviceLocationAddress || "",
+      scheduledDate,
       prepKeys: Array.from(new Set([
         jobId ? `job:${jobId}` : "",
         approval.customerId ? `customer:${approval.customerId}` : "",
         approval.serviceLocationId ? `serviceLocation:${approval.serviceLocationId}` : "",
+        serviceStopId ? `serviceStop:${serviceStopId}` : "",
         linkedTaskId ? `jobTask:${linkedTaskId}` : "",
+        assignedTechId ? `user:${assignedTechId}` : "",
       ].filter(Boolean))),
       needsAction: action === "approved",
-      actionDate: now,
-      assignedTechIds: [],
+      actionDate: scheduledDate || now,
+      assignedTechIds,
+      assignedTechNames,
+      assignedTechId,
+      assignedTechName,
+      assignedToUserId: assignedTechId,
+      assignedToUserName: assignedTechName,
       dbItemId: approval.dbItemId || "",
       dbItemName: approval.dbItemName || approval.itemName || approval.name || "",
       itemId: approval.dbItemId || "",
@@ -3918,6 +4002,7 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
       approvalRequestId: approvalId,
       partApprovalRequestId: approvalId,
       sourceType: approval.sourceType || "partApprovalRequest",
+      ...photoFields,
       updatedAt: now,
     };
 

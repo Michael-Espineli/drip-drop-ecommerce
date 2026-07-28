@@ -551,6 +551,11 @@ const normalizeUnit = (value) => {
   return raw.replace(/[^a-z0-9]+/g, "");
 };
 
+const inferPackageUnit = (...values) => {
+  const inferred = normalizeUnit(values.filter(Boolean).join(" "));
+  return inferred === "unit" ? "" : inferred;
+};
+
 const unitLabels = {
   floz: "fl oz",
   gal: "gal",
@@ -630,24 +635,39 @@ const databaseItemDisplayName = (item = {}) =>
     item.sku ? `SKU ${item.sku}` : "",
   ].filter(Boolean).join(" | ");
 
-const purchaseQuantity = (purchase, databaseItemById) => {
-  const databaseItem = purchaseDatabaseItem(purchase, databaseItemById) || {};
-  const lineQuantity = toNumber(purchase.quantity ?? purchase.quantityString ?? 1) || 1;
-  const sizeValue = databaseItem.size ?? purchase.size ?? purchase.packageSize ?? "";
+const packageQuantityInfo = ({ purchase = {}, databaseItem = {}, lineQuantity = 1 } = {}) => {
+  const sizeValue = databaseItem.size ?? purchase.size ?? purchase.packageSize ?? purchase.packageQuantity ?? "";
   const parsedPackageSize = parseFirstNumber(sizeValue);
   const packageSize = parsedPackageSize && parsedPackageSize > 0 ? parsedPackageSize : 1;
-  const unit =
-    normalizeUnit(sizeValue) ||
-    normalizeUnit(databaseItem.UOM || databaseItem.uom) ||
-    normalizeUnit(purchase.UOM || purchase.uom) ||
-    "unit";
+  const sizeUnit = normalizeUnit(sizeValue);
+  const databaseItemUnit = normalizeUnit(databaseItem.UOM || databaseItem.uom);
+  const purchaseUnit = normalizeUnit(purchase.UOM || purchase.uom);
+  const textUnit = inferPackageUnit(
+    sizeValue,
+    databaseItem.name,
+    databaseItem.description,
+    databaseItem.subCategory,
+    databaseItem.category,
+    purchase.name,
+    purchase.description,
+    purchase.notes
+  );
+  const itemUnit = databaseItemUnit === "unit" && textUnit ? textUnit : databaseItemUnit;
+  const lineUnit = purchaseUnit === "unit" && textUnit ? textUnit : purchaseUnit;
+  const unit = sizeUnit || itemUnit || lineUnit || textUnit || "unit";
 
   return {
-    amount: lineQuantity * packageSize,
+    amount: Number(lineQuantity || 1) * packageSize,
     lineQuantity,
     packageSize,
     unit,
   };
+};
+
+const purchaseQuantity = (purchase, databaseItemById) => {
+  const databaseItem = purchaseDatabaseItem(purchase, databaseItemById) || {};
+  const lineQuantity = toNumber(purchase.quantity ?? purchase.quantityString ?? 1) || 1;
+  return packageQuantityInfo({ purchase, databaseItem, lineQuantity });
 };
 
 const jobRevenueCents = (job) => cents(job.revenueCents ?? job.invoiceTotalCents ?? job.totalCents ?? job.rate ?? job.amount ?? 0);
@@ -713,6 +733,153 @@ const pnlChemicalCostModes = {
   includeAll: "includeAll",
   excludeAll: "excludeAll",
   excludeSelected: "excludeSelected",
+};
+
+const positiveCentsField = (...values) => {
+  const value = centsField(...values);
+  return value > 0 ? value : 0;
+};
+
+const positiveDollarFieldToCents = (...values) => {
+  const value = dollarFieldToCents(...values);
+  return value > 0 ? value : 0;
+};
+
+const databaseItemPackageCostCents = (item = {}) =>
+  positiveCentsField(item.rate, item.rateCents, item.unitCostCents, item.costCents) ||
+  positiveDollarFieldToCents(item.unitCost, item.cost);
+
+const linkedItemSetForDosage = (dosage = {}, template = {}) =>
+  new Set(dosageLinkedItemIds(dosage, template).map(String).filter(Boolean));
+
+const linkedPurchaseUnitCostEstimate = ({ dosage = {}, template = {}, purchases = [], databaseItemById = new Map() } = {}) => {
+  const linkedItemIds = linkedItemSetForDosage(dosage, template);
+  const dosageUnit = normalizeUnit(reportItemUnit(dosage, template));
+  if (!linkedItemIds.size || !dosageUnit) return null;
+
+  const totals = purchases.reduce((result, purchase) => {
+    const purchaseItemId = String(purchaseDatabaseItemId(purchase) || "");
+    if (!linkedItemIds.has(purchaseItemId)) return result;
+
+    const quantityInfo = purchaseQuantity(purchase, databaseItemById);
+    const convertedAmount = convertAmount(quantityInfo.amount, quantityInfo.unit, dosageUnit);
+    if (convertedAmount === null || convertedAmount <= 0) return result;
+
+    const spendCents = purchaseTotalCents(purchase);
+    if (!spendCents) return result;
+
+    result.spendCents += spendCents;
+    result.amount += convertedAmount;
+    result.purchaseLines += 1;
+    return result;
+  }, { spendCents: 0, amount: 0, purchaseLines: 0 });
+
+  if (!totals.amount) return null;
+
+  return {
+    unitCostCents: totals.spendCents / totals.amount,
+    source: `${totals.purchaseLines} linked purchase${totals.purchaseLines === 1 ? "" : "s"}`,
+  };
+};
+
+const linkedCatalogUnitCostEstimate = ({ dosage = {}, template = {}, databaseItemById = new Map() } = {}) => {
+  const linkedItemIds = linkedItemSetForDosage(dosage, template);
+  const dosageUnit = normalizeUnit(reportItemUnit(dosage, template));
+  if (!linkedItemIds.size || !dosageUnit) return null;
+
+  const totals = [...linkedItemIds].reduce((result, itemId) => {
+    const databaseItem = databaseItemById.get(itemId);
+    if (!databaseItem) return result;
+
+    const packageCostCents = databaseItemPackageCostCents(databaseItem);
+    if (!packageCostCents) return result;
+
+    const quantityInfo = packageQuantityInfo({ databaseItem });
+    const convertedAmount = convertAmount(quantityInfo.amount, quantityInfo.unit, dosageUnit);
+    if (convertedAmount === null || convertedAmount <= 0) return result;
+
+    result.costCents += packageCostCents;
+    result.amount += convertedAmount;
+    result.itemCount += 1;
+    return result;
+  }, { costCents: 0, amount: 0, itemCount: 0 });
+
+  if (!totals.amount) return null;
+
+  return {
+    unitCostCents: totals.costCents / totals.amount,
+    source: `${totals.itemCount} linked catalog item${totals.itemCount === 1 ? "" : "s"}`,
+  };
+};
+
+const dosageTemplateUnitCostEstimate = (dosage = {}, template = {}) => {
+  const unitCostCents =
+    positiveCentsField(dosage.unitCostCents, dosage.costCents, template.unitCostCents, template.costCents) ||
+    positiveDollarFieldToCents(dosage.unitCost, dosage.cost, template.unitCost, template.cost, dosage.rate, template.rate);
+
+  return unitCostCents ? { unitCostCents, source: "template cost" } : null;
+};
+
+const dosageAmountForCost = (dosage = {}) => {
+  const amount = Number(dosage.amount ?? dosage.quantity ?? dosage.value ?? 0);
+  return Number.isFinite(amount) ? amount : 0;
+};
+
+const dosageChemicalCostEstimate = ({ dosage = {}, template = {}, purchases = [], databaseItemById = new Map() } = {}) => {
+  const explicitTotalCents =
+    positiveCentsField(dosage.totalCostCents, dosage.extendedCostCents) ||
+    positiveDollarFieldToCents(dosage.totalCost, dosage.extendedCost);
+  const amount = dosageAmountForCost(dosage);
+
+  if (explicitTotalCents) {
+    return {
+      totalCostCents: explicitTotalCents,
+      unitCostCents: amount > 0 ? explicitTotalCents / amount : 0,
+      source: "explicit dosage cost",
+    };
+  }
+
+  if (amount <= 0) return { totalCostCents: 0, unitCostCents: 0, source: "" };
+
+  const unitCostEstimate =
+    linkedPurchaseUnitCostEstimate({ dosage, template, purchases, databaseItemById }) ||
+    linkedCatalogUnitCostEstimate({ dosage, template, databaseItemById }) ||
+    dosageTemplateUnitCostEstimate(dosage, template);
+
+  if (!unitCostEstimate?.unitCostCents) return { totalCostCents: 0, unitCostCents: 0, source: "" };
+
+  return {
+    ...unitCostEstimate,
+    totalCostCents: Math.round(amount * unitCostEstimate.unitCostCents),
+  };
+};
+
+const dosageTemplateUnitPriceCents = (dosage = {}, template = {}) =>
+  positiveCentsField(
+    dosage.priceCents,
+    dosage.unitPriceCents,
+    dosage.billingRateCents,
+    dosage.sellPriceCents,
+    template.priceCents,
+    template.unitPriceCents,
+    template.billingRateCents,
+    template.sellPriceCents
+  ) ||
+  positiveDollarFieldToCents(
+    dosage.price,
+    dosage.unitPrice,
+    dosage.billingRate,
+    dosage.sellPrice,
+    template.price,
+    template.unitPrice,
+    template.billingRate,
+    template.sellPrice
+  );
+
+const dosageChemicalRevenueCents = (dosage = {}, template = {}) => {
+  const amount = dosageAmountForCost(dosage);
+  const unitPriceCents = dosageTemplateUnitPriceCents(dosage, template);
+  return amount > 0 && unitPriceCents > 0 ? Math.round(amount * unitPriceCents) : 0;
 };
 
 const activeRangeOverlapDays = (recordStart, recordEnd, rangeStart, rangeEnd) => {
@@ -3425,6 +3592,8 @@ const buildPnlPerPoolReport = ({
   serviceLocations = [],
   bodiesOfWater = [],
   customersById = new Map(),
+  purchases = [],
+  databaseItemById = new Map(),
   mode,
   dateRangeStart,
   dateRangeEnd,
@@ -3693,6 +3862,20 @@ const buildPnlPerPoolReport = ({
     });
   };
 
+  const addChemicalRevenue = (descriptor, amountCents, agreement, row = {}) => {
+    const amount = Math.round(Number(amountCents || 0));
+    if (!amount) return;
+    const pool = ensurePool(descriptor);
+    pool.revenueCents += amount;
+    if (agreement?.id) pool.agreementIds.add(agreement.id);
+    addDetail(descriptor, {
+      ...row,
+      type: row.type || "Chemical Revenue",
+      revenueCents: amount,
+      netCents: amount,
+    });
+  };
+
   const addLabor = (descriptor, amountCents, row = {}) => {
     const amount = Math.round(Number(amountCents || 0));
     if (!amount) return;
@@ -3814,24 +3997,47 @@ const buildPnlPerPoolReport = ({
         date: stop.date || serviceStop.serviceDate || serviceStop.date,
       };
       const costAgreement = agreementForPnlCost(serviceAgreements, costRecord, costRecord.date);
+      const billing = costAgreement
+        ? classifyAgreementChemicalBilling({ agreement: costAgreement, record: costRecord, linkedRecord: template })
+        : null;
+      const dateInfo = normalizeDetailDate(stop.date);
+      const dosageName = dosage.name || template.name || template.chemType || "Dosage";
+      const dosageValue = valueWithUnit(dosage);
+
+      if (billing?.billSeparately) {
+        const chemicalRevenueCents = dosageChemicalRevenueCents(dosage, template);
+        if (chemicalRevenueCents) {
+          addChemicalRevenue(descriptor, chemicalRevenueCents, costAgreement, {
+            ...dateInfo,
+            source: [
+              dosageName,
+              dosageValue,
+              "separately billed",
+            ].filter(Boolean).join(" | "),
+          });
+        }
+      }
+
       if (shouldExcludePnlChemicalCost({ agreement: costAgreement, record: costRecord, linkedRecord: template })) return;
 
-      const explicitCostCents = centsField(dosage.totalCostCents, dosage.costCents, dosage.extendedCostCents);
-      const explicitCostDollars = dollarFieldToCents(dosage.totalCost, dosage.cost, dosage.extendedCost);
-      const amount = Number(dosage.amount ?? dosage.quantity ?? dosage.value ?? 0);
-      const unitRateCents =
-        centsField(dosage.rateCents, dosage.unitCostCents, template.rateCents, template.unitCostCents) ||
-        dollarFieldToCents(dosage.rate, dosage.unitCost, template.rate, template.unitCost);
-      const chemicalCostCents = explicitCostCents || explicitCostDollars || Math.round((Number.isFinite(amount) ? amount : 0) * unitRateCents);
+      const costEstimate = dosageChemicalCostEstimate({
+        dosage,
+        template,
+        purchases,
+        databaseItemById,
+      });
+      const chemicalCostCents = costEstimate.totalCostCents;
 
       if (!chemicalCostCents) return;
 
-      const dateInfo = normalizeDetailDate(stop.date);
       addChemical(descriptor, chemicalCostCents, {
         ...dateInfo,
         source: [
-          dosage.name || template.name || template.chemType || "Dosage",
-          valueWithUnit(dosage),
+          dosageName,
+          dosageValue,
+          costEstimate.source
+            ? `${costEstimate.source} @ ${moneyFromCents(costEstimate.unitCostCents)}/${unitLabel(reportItemUnit(dosage, template)) || "unit"}`
+            : "",
         ].filter(Boolean).join(" | "),
       });
     });
@@ -5161,7 +5367,7 @@ const Reports = () => {
       const readingTemplates = sortReadingTemplates(normalizeDocs(readingsSnap));
       const dosageTemplates = normalizeDocs(dosagesSnap);
 
-      const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users"].includes(reportType);
+      const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users", "pnlPerPool"].includes(reportType);
       const needsJobs = ["pnl", "job", "tax", "users"].includes(reportType);
       const needsPayroll = ["payroll", "futurePayroll", "pnl", "job", "users", "pnlPerPool"].includes(reportType);
       const needsPayrollFallback = ["futurePayroll", "pnlPerPool"].includes(reportType);

@@ -739,6 +739,7 @@ exports.analyzeTesterStripScan = onCall(async (request) => {
     profileMapping: companyProfileMapping,
   });
   const scanId = String(payload.scanId || `tester_strip_scan_${uuidv4()}`).trim();
+  const scanImageUrl = String(payload.scanImageURL || payload.scanImageUrl || payload.scanImagePath || "").trim();
   const response = {
     status: 200,
     scanId,
@@ -746,7 +747,9 @@ exports.analyzeTesterStripScan = onCall(async (request) => {
     profileId,
     serviceStopId,
     bodyOfWaterId,
-    scanImagePath: payload.scanImagePath || "",
+    scanImagePath: scanImageUrl,
+    scanImageURL: scanImageUrl,
+    scanImageUrl,
     padMatches: matches,
     suggestedReadings,
     needsReview: matches.some((match) => match.confidenceLabel !== "High"),

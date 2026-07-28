@@ -35,6 +35,8 @@ const emptyDosageForm = {
     amount: '',
     UOM: '',
     rate: '',
+    cost: '',
+    price: '',
     linkedItemId: '',
     linkedItemIds: [],
     strength: '',
@@ -57,6 +59,9 @@ const normalizeNumber = (value, fallback = 0) => {
     const number = Number(value);
     return Number.isFinite(number) ? number : fallback;
 };
+
+const firstNonEmpty = (...values) =>
+    values.find((value) => value !== null && value !== undefined && value !== '') ?? '';
 
 const parseAmountList = (value) =>
     String(value || '')
@@ -98,18 +103,40 @@ const formatCurrency = (amount) =>
         currency: 'USD',
     }).format(normalizeNumber(amount));
 
+const dollarStringFromCents = (value) => {
+    const centsValue = normalizeNumber(value, 0);
+    return centsValue > 0 ? String(centsValue / 100) : '';
+};
+
+const centsFromDollarInput = (value) => {
+    const parsed = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+    return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
+};
+
+const parseFirstNumber = (value) => {
+    const match = String(value || '').replaceAll(',', '').match(/-?\d+(\.\d+)?/);
+    if (!match) return null;
+    const parsed = Number(match[0]);
+    return Number.isFinite(parsed) ? parsed : null;
+};
+
 const getDatabaseItemUnitCostCents = (item = {}) => {
     const centsValue = [item.rate, item.rateCents, item.unitCostCents, item.costCents]
         .map((value) => normalizeNumber(value, null))
         .find((value) => Number.isFinite(value) && value > 0);
 
-    if (Number.isFinite(centsValue)) return centsValue;
+    let packageAmount = parseFirstNumber(item.size) || 1;
+    if (!Number.isFinite(packageAmount) || packageAmount <= 0) packageAmount = 1;
+
+    if (Number.isFinite(centsValue)) return Math.round(centsValue / packageAmount);
 
     const dollarValue = [item.unitCost, item.cost]
         .map((value) => normalizeNumber(value, null))
         .find((value) => Number.isFinite(value) && value > 0);
 
-    return Number.isFinite(dollarValue) ? Math.round(dollarValue * 100) : 0;
+    return Number.isFinite(dollarValue)
+        ? Math.round((dollarValue * 100) / packageAmount)
+        : 0;
 };
 
 const sortTemplates = (templates = []) =>
@@ -139,7 +166,9 @@ const formFromTemplate = (type, template = {}) => {
         name: template.name || '',
         amount: formatAmountList(template.amount),
         UOM: template.UOM || '',
-        rate: template.rate || '',
+        rate: template.rate || template.cost || '',
+        cost: firstNonEmpty(template.cost, template.unitCost, dollarStringFromCents(template.costCents || template.unitCostCents), template.rate),
+        price: firstNonEmpty(template.price, template.unitPrice, template.billingRate, template.sellPrice, dollarStringFromCents(template.priceCents || template.unitPriceCents)),
         linkedItemId: template.linkedItemId || '',
         linkedItemIds: normalizeLinkedItemIds(template.linkedItemIds, template.linkedItemId, template.linkedItem),
         strength: template.strength ?? '',
@@ -171,10 +200,20 @@ const payloadFromForm = (type, id, form) => {
     }
 
     const linkedItemIds = normalizeLinkedItemIds(form.linkedItemIds, form.linkedItemId);
+    const cost = String(form.cost || form.rate || '').trim();
+    const price = String(form.price || '').trim();
+    const costCents = centsFromDollarInput(cost);
+    const priceCents = centsFromDollarInput(price);
 
     return {
         ...basePayload,
-        rate: String(form.rate || '').trim(),
+        rate: cost,
+        cost,
+        price,
+        costCents,
+        unitCostCents: costCents,
+        priceCents,
+        unitPriceCents: priceCents,
         linkedItem: '',
         linkedItemId: linkedItemIds[0] || '',
         linkedItemIds,
@@ -210,9 +249,20 @@ const payloadFromUniversalTemplate = (type, id, template, companyDosages = []) =
 
     const linkedItemIds = normalizeLinkedItemIds(template.linkedItemIds, template.linkedItemId, template.linkedItem);
 
+    const cost = String(firstNonEmpty(template.cost, template.unitCost, dollarStringFromCents(template.costCents || template.unitCostCents), template.rate));
+    const price = String(firstNonEmpty(template.price, template.unitPrice, template.billingRate, template.sellPrice, dollarStringFromCents(template.priceCents || template.unitPriceCents)));
+    const costCents = centsFromDollarInput(cost) || normalizeNumber(template.costCents || template.unitCostCents);
+    const priceCents = centsFromDollarInput(price) || normalizeNumber(template.priceCents || template.unitPriceCents);
+
     return {
         ...basePayload,
-        rate: String(template.rate || ''),
+        rate: cost,
+        cost,
+        price,
+        costCents,
+        unitCostCents: costCents,
+        priceCents,
+        unitPriceCents: priceCents,
         linkedItem: '',
         linkedItemId: linkedItemIds[0] || '',
         linkedItemIds,
@@ -423,7 +473,7 @@ const ReadingsAndDosages = () => {
         );
 
         if (!targetTemplate) return;
-        if (selectedTemplateId === targetTemplate.id && mode === 'detail') return;
+        if (selectedTemplateId === targetTemplate.id && mode !== 'list') return;
 
         setSelectedTemplateId(targetTemplate.id);
         setAmountInput('');
@@ -810,12 +860,24 @@ const ReadingsAndDosages = () => {
 
     const renderDosageFields = () => (
         <>
-            <Field label="Rate">
+            <Field label="Cost">
                 <TextInput
                     type="text"
-                    value={form.rate}
-                    onChange={(event) => updateForm('rate', event.target.value)}
+                    value={form.cost}
+                    onChange={(event) => {
+                        updateForm('cost', event.target.value);
+                        updateForm('rate', event.target.value);
+                    }}
                     placeholder="5.00"
+                />
+            </Field>
+
+            <Field label="Price">
+                <TextInput
+                    type="text"
+                    value={form.price}
+                    onChange={(event) => updateForm('price', event.target.value)}
+                    placeholder="7.50"
                 />
             </Field>
 
@@ -1062,13 +1124,26 @@ const ReadingsAndDosages = () => {
             };
         });
         const linkedItemsWithUnitCosts = detailLinkedItems.filter(({ unitCostCents }) => unitCostCents > 0);
-        const suggestedRateCents = linkedItemsWithUnitCosts.length
+        const suggestedCostCents = linkedItemsWithUnitCosts.length
             ? Math.round(linkedItemsWithUnitCosts.reduce((total, { unitCostCents }) => total + unitCostCents, 0) / linkedItemsWithUnitCosts.length)
             : 0;
-        const suggestedRateRange = linkedItemsWithUnitCosts.length > 1
+        const suggestedCostRange = linkedItemsWithUnitCosts.length > 1
             ? `${formatCurrency(Math.min(...linkedItemsWithUnitCosts.map(({ unitCostCents }) => unitCostCents)) / 100)} - ${formatCurrency(Math.max(...linkedItemsWithUnitCosts.map(({ unitCostCents }) => unitCostCents)) / 100)}`
             : '';
         const missingLinkedItemsCount = detailLinkedItems.filter(({ item }) => !item).length;
+        const templateCost = firstNonEmpty(
+            selectedTemplate.cost,
+            selectedTemplate.unitCost,
+            dollarStringFromCents(selectedTemplate.costCents || selectedTemplate.unitCostCents),
+            selectedTemplate.rate
+        );
+        const templatePrice = firstNonEmpty(
+            selectedTemplate.price,
+            selectedTemplate.unitPrice,
+            selectedTemplate.billingRate,
+            selectedTemplate.sellPrice,
+            dollarStringFromCents(selectedTemplate.priceCents || selectedTemplate.unitPriceCents)
+        );
 
         return (
             <div className="space-y-4">
@@ -1131,8 +1206,12 @@ const ReadingsAndDosages = () => {
                         ) : (
                             <>
                                 <div>
-                                    <p className="font-bold text-gray-500">Rate</p>
-                                    <p className="mt-1 text-gray-900">{selectedTemplate.rate ? `$${selectedTemplate.rate}` : '-'}</p>
+                                    <p className="font-bold text-gray-500">Cost</p>
+                                    <p className="mt-1 text-gray-900">{templateCost ? `$${templateCost}` : '-'}</p>
+                                </div>
+                                <div>
+                                    <p className="font-bold text-gray-500">Price</p>
+                                    <p className="mt-1 text-gray-900">{templatePrice ? `$${templatePrice}` : '-'}</p>
                                 </div>
                                 <div>
                                     <p className="font-bold text-gray-500">Strength</p>
@@ -1165,16 +1244,16 @@ const ReadingsAndDosages = () => {
 
                         <div className="p-5">
                             <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
-                                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Suggested Rate</p>
+                                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Suggested Cost</p>
                                 <p className="mt-1 text-2xl font-bold text-emerald-950">
-                                    {suggestedRateCents ? formatCurrency(suggestedRateCents / 100) : 'No cost data'}
+                                    {suggestedCostCents ? formatCurrency(suggestedCostCents / 100) : 'No cost data'}
                                 </p>
                                 <p className="mt-1 text-sm text-emerald-800">
-                                    {suggestedRateCents
-                                        ? `Average unit cost from ${linkedItemsWithUnitCosts.length} linked database item${linkedItemsWithUnitCosts.length === 1 ? '' : 's'}${suggestedRateRange ? `, range ${suggestedRateRange}` : ''}.`
+                                    {suggestedCostCents
+                                        ? `Average unit cost from ${linkedItemsWithUnitCosts.length} linked database item${linkedItemsWithUnitCosts.length === 1 ? '' : 's'}${suggestedCostRange ? `, range ${suggestedCostRange}` : ''}.`
                                         : databaseItemsLoading
                                             ? 'Loading linked item costs...'
-                                            : 'Link database items with unit costs to produce a suggested rate.'}
+                                            : 'Link database items with unit costs to produce a suggested cost.'}
                                 </p>
                             </div>
 
@@ -1347,7 +1426,7 @@ const ReadingsAndDosages = () => {
 
     const renderList = () => {
         const showLinkedItemsColumn = activeTab === 'Dosages';
-        const tableColumnCount = showLinkedItemsColumn ? 6 : 5;
+        const tableColumnCount = showLinkedItemsColumn ? 7 : 6;
 
         return (
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -1385,6 +1464,7 @@ const ReadingsAndDosages = () => {
                                 <th className="px-5 py-3 text-left font-bold text-gray-600">Linked Items</th>
                             )}
                             <th className="px-5 py-3 text-left font-bold text-gray-600">Order</th>
+                            <th className="px-5 py-3 text-right font-bold text-gray-600">Actions</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 bg-white">
@@ -1423,6 +1503,20 @@ const ReadingsAndDosages = () => {
                                         </td>
                                     )}
                                     <td className="px-5 py-3 text-gray-700">{template.order ?? 0}</td>
+                                    <td className="px-5 py-3">
+                                        <div className="flex justify-end gap-2">
+                                            <Button
+                                                type="button"
+                                                onClick={(event) => {
+                                                    event.stopPropagation();
+                                                    openEdit(template);
+                                                }}
+                                                className="border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+                                            >
+                                                <FaPencilAlt /> Edit
+                                            </Button>
+                                        </div>
+                                    </td>
                                 </tr>
                             );
                         })}

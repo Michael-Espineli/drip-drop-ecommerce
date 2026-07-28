@@ -6,7 +6,7 @@ import {
   getDocs,
   writeBatch,
 } from "firebase/firestore";
-import { db } from "../../../utils/config";
+import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { v4 as uuidv4 } from "uuid";
 import { useNavigate } from "react-router-dom";
@@ -15,6 +15,8 @@ import { fetchCompanyVendors } from "../../../utils/vendors";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
   CATEGORY_OPTIONS,
+  databaseItemSelectStyles,
+  databaseItemSelectTheme,
   DEFAULT_CATEGORY,
   DEFAULT_SUBCATEGORY,
   DEFAULT_UOM,
@@ -27,6 +29,11 @@ import {
   queueDatabaseItemDosageLinkUpdates,
   sortDosageTemplates,
 } from "../../../utils/dosageItemLinks";
+import {
+  itemPhotoFieldsFromUrl,
+  uploadItemPhoto,
+  validateItemPhotoFile,
+} from "../../../utils/itemPhotos";
 
 const centsFromDollarInput = (value) => {
   const parsed = Number(String(value || "").replace(/[^0-9.-]/g, ""));
@@ -34,13 +41,10 @@ const centsFromDollarInput = (value) => {
 };
 
 const CreateNewDataBaseItem = () => {
-  const { name, recentlySelectedCompany } = useContext(Context);
+  const { recentlySelectedCompany } = useContext(Context);
   const { requirePermission } = useCompanyPermissions();
 
   const navigate = useNavigate();
-
-  const [purchase, setPurchase] = useState({});
-  const [edit, setEdit] = useState(false);
 
   const [billable, setBillable] = useState(false);
 
@@ -57,6 +61,10 @@ const CreateNewDataBaseItem = () => {
   const [color, setColor] = useState("");
   const [description, setDescription] = useState("");
   const [itemName, setItemName] = useState("");
+  const [photoUrl, setPhotoUrl] = useState("");
+  const [photoFile, setPhotoFile] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
+  const [photoError, setPhotoError] = useState("");
   const [size, setSize] = useState("");
   const [tracking, setTracking] = useState("");
 
@@ -73,6 +81,14 @@ const CreateNewDataBaseItem = () => {
   const [subcategoryList] = useState(SUBCATEGORY_OPTIONS);
 
   const allowsLinkedDosages = isChemicalCategory(category);
+
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl?.startsWith("blob:")) {
+        URL.revokeObjectURL(photoPreviewUrl);
+      }
+    };
+  }, [photoPreviewUrl]);
 
   const handleUOMChange = (selectedOption2) => {
     (async () => {
@@ -98,6 +114,22 @@ const CreateNewDataBaseItem = () => {
       setVenderId(selectedOption2?.id || "");
       setVender(selectedOption2);
     })();
+  };
+
+  const handlePhotoFileChange = (event) => {
+    const file = event.target.files?.[0] || null;
+    const validationMessage = validateItemPhotoFile(file);
+
+    if (validationMessage) {
+      setPhotoError(validationMessage);
+      setPhotoFile(null);
+      setPhotoPreviewUrl("");
+      return;
+    }
+
+    setPhotoError("");
+    setPhotoFile(file);
+    setPhotoPreviewUrl(file ? URL.createObjectURL(file) : "");
   };
 
   useEffect(() => {
@@ -159,34 +191,6 @@ const CreateNewDataBaseItem = () => {
     );
   };
 
-  async function editItem(e) {
-    e.preventDefault();
-    try {
-      setEdit(true);
-      setRate(purchase.rate);
-      setUom(UOM_OPTIONS.find((option) => option.label === purchase.UOM) || DEFAULT_UOM);
-      setCategory(CATEGORY_OPTIONS.find((option) => option.label === purchase.category) || DEFAULT_CATEGORY);
-      setColor(purchase.color);
-      setDescription(purchase.description);
-      setItemName(purchase.name);
-      setSize(purchase.size);
-      setSellPrice(String((purchase.sellPrice ?? purchase.billingRate ?? 0) / 100));
-      setSubcategory(SUBCATEGORY_OPTIONS.find((option) => option.label === purchase.subCategory) || DEFAULT_SUBCATEGORY);
-      setTracking(purchase.tracking || "");
-    } catch (error) {
-      console.log(error);
-    }
-  }
-
-  async function cancelEdit(e) {
-    e.preventDefault();
-    try {
-      setEdit(false);
-    } catch (error) {
-      console.log(error);
-    }
-  }
-
   async function rateInput(e) {
     e.preventDefault();
     try {
@@ -246,6 +250,26 @@ const CreateNewDataBaseItem = () => {
       let sellPriceCents = centsFromDollarInput(sellPriceUSD || sellPrice);
       const selectedVendorId = vender?.id || venderId || "";
       const selectedVendorName = vender?.label || vender?.name || venderName || "";
+      let uploadedPhoto = {
+        photoUrl: photoUrl.trim(),
+        storagePath: "",
+      };
+
+      if (photoFile) {
+        uploadedPhoto = await uploadItemPhoto({
+          storage,
+          companyId: recentlySelectedCompany,
+          file: photoFile,
+          itemType: "databaseItems",
+          itemId: id,
+        });
+      }
+
+      const photoFields = itemPhotoFieldsFromUrl(
+        uploadedPhoto.photoUrl,
+        itemName || "Database item photo",
+        uploadedPhoto.storagePath
+      );
 
       let item = {
         UOM: uom?.label || "Unit",
@@ -267,6 +291,7 @@ const CreateNewDataBaseItem = () => {
         sellPrice: sellPriceCents,
         billingRate: sellPriceCents,
         tracking: tracking,
+        ...photoFields,
       };
 
       const batch = writeBatch(db);
@@ -285,25 +310,26 @@ const CreateNewDataBaseItem = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 px-4 md:px-10 py-8 text-slate-900">
-      <div className="mx-auto max-w-4xl space-y-6">
-        {/* Top Bar */}
-        <div className="flex items-center justify-between">
-          <Link
-            className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
-            to={`/company/items`}
-          >
-            ← Go Back
-          </Link>
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company catalog</p>
+              <h2 className="mt-1 text-3xl font-bold text-slate-950">Create Database Item</h2>
+              <p className="mt-1 text-sm text-slate-500">Add an item to your company catalog.</p>
+            </div>
 
-          <div className="text-right">
-            <div className="text-lg font-semibold tracking-tight">Create Database Item</div>
-            <div className="text-sm text-slate-500">Add an item to your company catalog.</div>
+            <Link
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              to={`/company/items`}
+            >
+              &larr; Back to Items
+            </Link>
           </div>
-        </div>
+        </section>
 
-        {/* Main Card */}
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+        <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <div className="px-6 py-5 border-b border-slate-200 bg-slate-50">
             <div className="text-sm font-semibold text-slate-700">Item Details</div>
             <div className="text-xs text-slate-500 mt-1">Fill out the fields below and create the item.</div>
@@ -314,7 +340,7 @@ const CreateNewDataBaseItem = () => {
             <div>
               <label className="block text-sm font-semibold text-slate-700">Item Name</label>
               <input
-                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setItemName(e.target.value)}
                 type="text"
                 placeholder="e.g. Chlorine Tabs"
@@ -322,10 +348,57 @@ const CreateNewDataBaseItem = () => {
               />
             </div>
 
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+                <div className="h-24 w-24 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white">
+                  {photoPreviewUrl || photoUrl ? (
+                    <img
+                      src={photoPreviewUrl || photoUrl}
+                      alt=""
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs font-semibold text-slate-400">
+                      Photo
+                    </div>
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700">Item Photo</label>
+                    <input
+                      className="mt-2 block w-full text-sm text-slate-700 file:mr-3 file:rounded-md file:border-0 file:bg-blue-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-blue-700 hover:file:bg-blue-100"
+                      type="file"
+                      accept="image/*"
+                      onChange={handlePhotoFileChange}
+                    />
+                    {photoFile ? (
+                      <p className="mt-1 text-xs text-slate-500">{photoFile.name} will upload when you create.</p>
+                    ) : null}
+                    {photoError ? (
+                      <p className="mt-1 text-xs font-semibold text-red-600">{photoError}</p>
+                    ) : null}
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-slate-700">Photo URL</label>
+                    <input
+                      className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      type="url"
+                      placeholder="https://..."
+                      value={photoUrl}
+                      onChange={(e) => setPhotoUrl(e.target.value)}
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Rate */}
             <div>
               <label className="block text-sm font-semibold text-slate-700">Rate</label>
-              <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-400">
+              <div className="mt-2 flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
                 <span className="text-sm font-semibold text-slate-500">$</span>
                 <input
                   className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
@@ -339,7 +412,7 @@ const CreateNewDataBaseItem = () => {
             </div>
 
             {/* Billable Toggle + Billing Rate */}
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <div className="text-sm font-semibold text-slate-800">Billing</div>
@@ -351,14 +424,14 @@ const CreateNewDataBaseItem = () => {
                 {billable ? (
                   <button
                     onClick={(e) => billableFalse(e)}
-                    className="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 transition"
+                    className="inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-700"
                   >
                     Billable
                   </button>
                 ) : (
                   <button
                     onClick={(e) => billableTrue(e)}
-                    className="inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50 transition"
+                    className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                   >
                     Not Billable
                   </button>
@@ -368,7 +441,7 @@ const CreateNewDataBaseItem = () => {
               {billable && (
                 <div className="mt-4">
                   <label className="block text-sm font-semibold text-slate-700">Sell Price</label>
-                  <div className="mt-2 flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm focus-within:ring-2 focus-within:ring-blue-500/30 focus-within:border-blue-400">
+                  <div className="mt-2 flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100">
                     <span className="text-sm font-semibold text-slate-500">$</span>
                     <input
                       className="w-full bg-transparent text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none"
@@ -386,7 +459,7 @@ const CreateNewDataBaseItem = () => {
             <div>
               <label className="block text-sm font-semibold text-slate-700">SKU</label>
               <input
-                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setSku(e.target.value)}
                 type="text"
                 placeholder="e.g. SKU-1234"
@@ -405,36 +478,8 @@ const CreateNewDataBaseItem = () => {
                     onChange={handleVenderChange}
                     isSearchable
                     placeholder="Select a Vendor"
-                    styles={{
-                      control: (base, state) => ({
-                        ...base,
-                        minHeight: "48px",
-                        borderRadius: "12px",
-                        borderColor: state.isFocused ? "#93C5FD" : "#E2E8F0",
-                        boxShadow: state.isFocused ? "0 0 0 4px rgba(59,130,246,0.15)" : "none",
-                        "&:hover": { borderColor: "#CBD5E1" },
-                      }),
-                      valueContainer: (base) => ({ ...base, padding: "0 12px" }),
-                      menu: (base) => ({ ...base, borderRadius: "12px", overflow: "hidden" }),
-                      option: (base, state) => ({
-                        ...base,
-                        backgroundColor: state.isFocused ? "rgba(59,130,246,0.10)" : "white",
-                        color: "#0F172A",
-                      }),
-                    }}
-                    theme={(theme) => ({
-                      ...theme,
-                      borderRadius: 12,
-                      colors: {
-                        ...theme.colors,
-                        primary25: "rgba(59,130,246,0.10)",
-                        primary: "#2563EB",
-                        neutral0: "#FFFFFF",
-                        neutral80: "#0F172A",
-                        neutral20: "#E2E8F0",
-                        neutral30: "#CBD5E1",
-                      },
-                    })}
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
               </div>
@@ -448,36 +493,8 @@ const CreateNewDataBaseItem = () => {
                     onChange={handleUOMChange}
                     isSearchable
                     placeholder="Select a UOM"
-                    styles={{
-                      control: (base, state) => ({
-                        ...base,
-                        minHeight: "48px",
-                        borderRadius: "12px",
-                        borderColor: state.isFocused ? "#93C5FD" : "#E2E8F0",
-                        boxShadow: state.isFocused ? "0 0 0 4px rgba(59,130,246,0.15)" : "none",
-                        "&:hover": { borderColor: "#CBD5E1" },
-                      }),
-                      valueContainer: (base) => ({ ...base, padding: "0 12px" }),
-                      menu: (base) => ({ ...base, borderRadius: "12px", overflow: "hidden" }),
-                      option: (base, state) => ({
-                        ...base,
-                        backgroundColor: state.isFocused ? "rgba(59,130,246,0.10)" : "white",
-                        color: "#0F172A",
-                      }),
-                    }}
-                    theme={(theme) => ({
-                      ...theme,
-                      borderRadius: 12,
-                      colors: {
-                        ...theme.colors,
-                        primary25: "rgba(59,130,246,0.10)",
-                        primary: "#2563EB",
-                        neutral0: "#FFFFFF",
-                        neutral80: "#0F172A",
-                        neutral20: "#E2E8F0",
-                        neutral30: "#CBD5E1",
-                      },
-                    })}
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
               </div>
@@ -491,36 +508,8 @@ const CreateNewDataBaseItem = () => {
                     onChange={handleCategoryChange}
                     isSearchable
                     placeholder="Select a Category"
-                    styles={{
-                      control: (base, state) => ({
-                        ...base,
-                        minHeight: "48px",
-                        borderRadius: "12px",
-                        borderColor: state.isFocused ? "#93C5FD" : "#E2E8F0",
-                        boxShadow: state.isFocused ? "0 0 0 4px rgba(59,130,246,0.15)" : "none",
-                        "&:hover": { borderColor: "#CBD5E1" },
-                      }),
-                      valueContainer: (base) => ({ ...base, padding: "0 12px" }),
-                      menu: (base) => ({ ...base, borderRadius: "12px", overflow: "hidden" }),
-                      option: (base, state) => ({
-                        ...base,
-                        backgroundColor: state.isFocused ? "rgba(59,130,246,0.10)" : "white",
-                        color: "#0F172A",
-                      }),
-                    }}
-                    theme={(theme) => ({
-                      ...theme,
-                      borderRadius: 12,
-                      colors: {
-                        ...theme.colors,
-                        primary25: "rgba(59,130,246,0.10)",
-                        primary: "#2563EB",
-                        neutral0: "#FFFFFF",
-                        neutral80: "#0F172A",
-                        neutral20: "#E2E8F0",
-                        neutral30: "#CBD5E1",
-                      },
-                    })}
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
               </div>
@@ -534,36 +523,8 @@ const CreateNewDataBaseItem = () => {
                     onChange={handleSubcategoryChange}
                     isSearchable
                     placeholder="Select a Sub-category"
-                    styles={{
-                      control: (base, state) => ({
-                        ...base,
-                        minHeight: "48px",
-                        borderRadius: "12px",
-                        borderColor: state.isFocused ? "#93C5FD" : "#E2E8F0",
-                        boxShadow: state.isFocused ? "0 0 0 4px rgba(59,130,246,0.15)" : "none",
-                        "&:hover": { borderColor: "#CBD5E1" },
-                      }),
-                      valueContainer: (base) => ({ ...base, padding: "0 12px" }),
-                      menu: (base) => ({ ...base, borderRadius: "12px", overflow: "hidden" }),
-                      option: (base, state) => ({
-                        ...base,
-                        backgroundColor: state.isFocused ? "rgba(59,130,246,0.10)" : "white",
-                        color: "#0F172A",
-                      }),
-                    }}
-                    theme={(theme) => ({
-                      ...theme,
-                      borderRadius: 12,
-                      colors: {
-                        ...theme.colors,
-                        primary25: "rgba(59,130,246,0.10)",
-                        primary: "#2563EB",
-                        neutral0: "#FFFFFF",
-                        neutral80: "#0F172A",
-                        neutral20: "#E2E8F0",
-                        neutral30: "#CBD5E1",
-                      },
-                    })}
+                    styles={databaseItemSelectStyles}
+                    theme={databaseItemSelectTheme}
                   />
                 </div>
               </div>
@@ -574,7 +535,7 @@ const CreateNewDataBaseItem = () => {
               <div>
                 <label className="block text-sm font-semibold text-slate-700">Color</label>
                 <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   onChange={(e) => setColor(e.target.value)}
                   type="text"
                   placeholder="e.g. White"
@@ -585,7 +546,7 @@ const CreateNewDataBaseItem = () => {
               <div>
                 <label className="block text-sm font-semibold text-slate-700">Size</label>
                 <input
-                  className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                  className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   onChange={(e) => setSize(e.target.value)}
                   type="text"
                   placeholder="e.g. 25lb"
@@ -597,7 +558,7 @@ const CreateNewDataBaseItem = () => {
             <div>
               <label className="block text-sm font-semibold text-slate-700">Description</label>
               <input
-                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setDescription(e.target.value)}
                 type="text"
                 placeholder="Short description"
@@ -608,7 +569,7 @@ const CreateNewDataBaseItem = () => {
             <div>
               <label className="block text-sm font-semibold text-slate-700">Tracking</label>
               <input
-                className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 onChange={(e) => setTracking(e.target.value)}
                 type="text"
                 placeholder="Optional linked tracking/template ID"
@@ -617,7 +578,7 @@ const CreateNewDataBaseItem = () => {
             </div>
 
             {allowsLinkedDosages && (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                   <div>
                     <div className="text-sm font-semibold text-slate-800">Linked Dosages</div>
@@ -631,7 +592,7 @@ const CreateNewDataBaseItem = () => {
                 </div>
 
                 <input
-                  className="mt-4 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+                  className="mt-4 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                   type="search"
                   value={dosageSearchTerm}
                   onChange={(event) => setDosageSearchTerm(event.target.value)}
@@ -644,7 +605,7 @@ const CreateNewDataBaseItem = () => {
                     return (
                       <label
                         key={dosage.id}
-                        className={`flex items-start gap-3 rounded-xl border px-3 py-2 text-sm transition ${
+                        className={`flex items-start gap-3 rounded-md border px-3 py-2 text-sm transition ${
                           checked ? "border-blue-300 bg-white text-blue-900" : "border-slate-200 bg-white text-slate-700 hover:border-blue-200"
                         }`}
                       >
@@ -663,7 +624,7 @@ const CreateNewDataBaseItem = () => {
                   })}
 
                   {filteredDosages.length === 0 ? (
-                    <p className="rounded-xl border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
+                    <p className="rounded-md border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500">
                       No dosage templates match that search.
                     </p>
                   ) : null}
@@ -688,7 +649,7 @@ const CreateNewDataBaseItem = () => {
               onClick={(e) => {
                 createNewItem(e);
               }}
-              className="w-full inline-flex items-center justify-center rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+              className="inline-flex w-full items-center justify-center rounded-md bg-blue-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
             >
               Create New
             </button>

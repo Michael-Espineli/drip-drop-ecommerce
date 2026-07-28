@@ -6,6 +6,7 @@ import { Link } from "react-router-dom";
 import "react-datepicker/dist/react-datepicker.css";
 import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { getItemPhotoUrl } from "../../../utils/itemPhotos";
 
 const PAGE_SIZE_OPTIONS = [10, 25, 50];
 const ALL_FILTER_VALUE = "all";
@@ -98,6 +99,7 @@ const DatabaseItems = () => {
             sellPrice: formattedSellPriceUSD,
             billingRate: formattedSellPriceUSD,
             tracking: itemData.tracking || "",
+            photoUrl: getItemPhotoUrl(itemData),
           };
         });
 
@@ -387,10 +389,23 @@ const DatabaseItems = () => {
                     <td className="px-5 py-3 text-sm font-semibold text-slate-900">
                       <Link
                         to={`/company/items/detail/${item.id}`}
-                        className="block w-full h-full hover:text-blue-700"
-                        style={{ display: "block", width: "100%", height: "100%" }}
+                        className="flex h-full w-full items-center gap-3 hover:text-blue-700"
                       >
-                        {item.name}
+                        <span className="h-12 w-12 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-slate-50">
+                          {item.photoUrl ? (
+                            <img src={item.photoUrl} alt="" className="h-full w-full object-cover" />
+                          ) : (
+                            <span className="flex h-full w-full items-center justify-center text-[10px] font-semibold text-slate-400">
+                              Photo
+                            </span>
+                          )}
+                        </span>
+                        <span className="min-w-0">
+                          <span className="block truncate">{item.name}</span>
+                          {item.sku ? (
+                            <span className="block text-xs font-normal text-slate-500">{item.sku}</span>
+                          ) : null}
+                        </span>
                       </Link>
                     </td>
 

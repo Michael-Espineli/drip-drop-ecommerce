@@ -33,6 +33,8 @@ const emptyDosageForm = {
   amount: '',
   UOM: '',
   rate: '',
+  cost: '',
+  price: '',
   linkedItemId: '',
   strength: 0,
   editable: true,
@@ -60,6 +62,19 @@ const toNumber = (value, fallback = 0) => {
   return Number.isFinite(number) ? number : fallback;
 };
 
+const firstNonEmpty = (...values) =>
+  values.find((value) => value !== null && value !== undefined && value !== '') ?? '';
+
+const dollarStringFromCents = (value) => {
+  const centsValue = toNumber(value, 0);
+  return centsValue > 0 ? String(centsValue / 100) : '';
+};
+
+const centsFromDollarInput = (value) => {
+  const parsed = Number(String(value || '').replace(/[^0-9.-]/g, ''));
+  return Number.isFinite(parsed) ? Math.round(parsed * 100) : 0;
+};
+
 const formFromTemplate = (templateType, template = {}) => {
   if (templateType === 'readings') {
     return {
@@ -80,7 +95,9 @@ const formFromTemplate = (templateType, template = {}) => {
     name: template.name || '',
     amount: formatAmountList(template.amount),
     UOM: template.UOM || '',
-    rate: template.rate || '',
+    rate: template.rate || template.cost || '',
+    cost: firstNonEmpty(template.cost, template.unitCost, dollarStringFromCents(template.costCents || template.unitCostCents), template.rate),
+    price: firstNonEmpty(template.price, template.unitPrice, template.billingRate, template.sellPrice, dollarStringFromCents(template.priceCents || template.unitPriceCents)),
     linkedItemId: template.linkedItemId || '',
     strength: template.strength || 0,
     editable: template.editable !== false,
@@ -111,9 +128,20 @@ const payloadFromForm = (templateType, id, form) => {
     };
   }
 
+  const cost = String(form.cost || form.rate || '').trim();
+  const price = String(form.price || '').trim();
+  const costCents = centsFromDollarInput(cost);
+  const priceCents = centsFromDollarInput(price);
+
   return {
     ...basePayload,
-    rate: form.rate.trim(),
+    rate: cost,
+    cost,
+    price,
+    costCents,
+    unitCostCents: costCents,
+    priceCents,
+    unitPriceCents: priceCents,
     linkedItemId: form.linkedItemId.trim(),
     strength: toNumber(form.strength),
   };
@@ -280,11 +308,23 @@ function UniversalReadingsDosages() {
   const renderDosageFields = () => (
     <>
       <div>
-        <label className="text-sm font-semibold text-slate-300">Rate</label>
+        <label className="text-sm font-semibold text-slate-300">Cost</label>
         <input
           type="text"
-          value={form.rate}
-          onChange={(event) => updateForm('rate', event.target.value)}
+          value={form.cost}
+          onChange={(event) => {
+            updateForm('cost', event.target.value);
+            updateForm('rate', event.target.value);
+          }}
+          className={`${inputClass} mt-1`}
+        />
+      </div>
+      <div>
+        <label className="text-sm font-semibold text-slate-300">Price</label>
+        <input
+          type="text"
+          value={form.price}
+          onChange={(event) => updateForm('price', event.target.value)}
           className={`${inputClass} mt-1`}
         />
       </div>

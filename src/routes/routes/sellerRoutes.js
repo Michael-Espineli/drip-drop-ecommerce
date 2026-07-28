@@ -160,6 +160,7 @@ const ScheduleEstimate = lazy(() => import('../../views/company/marketing/Schedu
 
 const Sales = lazy(() => import('../../views/company/sales/Sales'));
 const CompanyAccountingWorkspace = lazy(() => import('../../views/company/accounting/CompanyAccountingWorkspace'));
+const PnlViewer = lazy(() => import('../../views/company/sales/PnlViewer'));
 const SalesCatalogItems = lazy(() => import('../../views/company/sales/SalesCatalogItems'));
 const SalesAgreements = lazy(() => import('../../views/company/sales/SalesAgreements'));
 const CreateSalesAgreement = lazy(() => import('../../views/company/sales/CreateSalesAgreement'));
@@ -1220,6 +1221,12 @@ export const sellerRoutes = [
     }, {
         path: '/company/accounting',
         element: <CompanyAccountingWorkspace />,
+        role: 'Company',
+        permissionId: '400',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/pnl-viewer',
+        element: <PnlViewer />,
         role: 'Company',
         permissionId: '400',
         featureFlagId: 'feature_flag_004',

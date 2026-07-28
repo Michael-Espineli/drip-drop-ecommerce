@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
     doc,
@@ -33,6 +33,14 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
     normalizeServiceStopTypeBucket,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
+import PartApprovalCreateModal from "../partApprovals/PartApprovalCreateModal";
+import { getItemPhotoUrl } from "../../../utils/itemPhotos";
+import {
+    buildPartApprovalShoppingItemPayload,
+    isPartApprovalPending,
+    isShoppingItemDelivered,
+    partApprovalTotalPriceCents,
+} from "../../../utils/partApprovalShopping";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -221,6 +229,20 @@ const displayText = (value, fallback = "—") => {
     return text || fallback;
 };
 
+const userDisplayName = (user = {}) => (
+    user.userName ||
+    user.displayName ||
+    [user.firstName, user.lastName].filter(Boolean).join(" ") ||
+    user.name ||
+    user.email ||
+    ""
+);
+
+const centsCurrency = (amountCents = 0) => new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+}).format((Number(amountCents) || 0) / 100);
+
 const formatDateText = (value) => {
     const date = getDateValue(value);
     return date ? format(date, "PP") : "—";
@@ -367,8 +389,12 @@ const photoUrl = (photo) => {
 
     return photo.url ||
         photo.imageURL ||
+        photo.imageUrl ||
         photo.downloadURL ||
         photo.photoUrl ||
+        photo.scanImageURL ||
+        photo.scanImageUrl ||
+        photo.scanImagePath ||
         photo.path ||
         "";
 };
@@ -377,6 +403,24 @@ const photoCaption = (photo, fallback) => {
     if (!photo || typeof photo === "string") return fallback;
     return photo.caption || photo.description || photo.name || fallback;
 };
+
+const testerStripScanPhotos = (record = {}) => (
+    (Array.isArray(record.testerStripScans) ? record.testerStripScans : [])
+        .map((scan, index) => {
+            const image = scan.image || scan.photo || scan;
+            const url = photoUrl(image) || photoUrl(scan);
+            if (!url) return null;
+
+            const createdAt = getDateValue(scan.createdAt);
+            return {
+                id: scan.id || `${url}-${index}`,
+                url,
+                caption: photoCaption(image, scan.profileName || `Tester strip ${index + 1}`),
+                createdAtLabel: createdAt ? format(createdAt, "MMM d, yyyy h:mm a") : "",
+            };
+        })
+        .filter(Boolean)
+);
 
 const isWebUrl = (value) => /^https?:\/\//i.test(String(value || ""));
 
@@ -393,6 +437,14 @@ const getBodyOfWaterTitle = (body = {}) => (
     body.bodyOfWaterType ||
     "Unnamed Body Of Water"
 );
+
+const getBodyOfWaterMeta = (body = {}) => {
+    const gallons = displayText(body.gallons || body.capacityGallons || body.volume, "");
+    const material = displayText(body.material || body.surfaceMaterial, "");
+    const type = displayText(body.type || body.bodyOfWaterType || body.waterType, "");
+
+    return [gallons ? `${gallons} gal` : "", material, type].filter(Boolean).join(" • ");
+};
 
 const getEquipmentSurveyFindings = (equipmentList = []) => (
     equipmentList
@@ -471,7 +523,7 @@ const SurveyPhotoGrid = ({ photos = [], title }) => {
 };
 
 const ServiceStopDetails = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser, companyUserAccess } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const { serviceStopId } = useParams();
     const navigate = useNavigate();
@@ -479,6 +531,7 @@ const ServiceStopDetails = () => {
     const [serviceStop, setServiceStop] = useState(null);
     const [taskList, setTaskList] = useState([]);
     const [companyUsers, setCompanyUsers] = useState([]);
+    const [customerRecord, setCustomerRecord] = useState(null);
     const [serviceLocation, setServiceLocation] = useState(null);
     const [bodiesOfWater, setBodiesOfWater] = useState([]);
     const [equipmentList, setEquipmentList] = useState([]);
@@ -506,6 +559,11 @@ const ServiceStopDetails = () => {
     const [manualFinishTaskIds, setManualFinishTaskIds] = useState([]);
     const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
     const [deleting, setDeleting] = useState(false);
+    const [partApprovals, setPartApprovals] = useState([]);
+    const [serviceStopShoppingItems, setServiceStopShoppingItems] = useState([]);
+    const [loadingPartWorkflow, setLoadingPartWorkflow] = useState(false);
+    const [showPartApprovalModal, setShowPartApprovalModal] = useState(false);
+    const [partWorkflowActionId, setPartWorkflowActionId] = useState("");
 
     const [showAddTask, setShowAddTask] = useState(false);
     const [savingTask, setSavingTask] = useState(false);
@@ -690,6 +748,22 @@ const ServiceStopDetails = () => {
                         setEquipmentList([]);
                     }
 
+                    if (stopData.customerId) {
+                        const customerSnapshot = await getDoc(
+                            doc(db, "companies", recentlySelectedCompany, "customers", stopData.customerId)
+                        );
+                        setCustomerRecord(
+                            customerSnapshot.exists()
+                                ? {
+                                    id: customerSnapshot.id,
+                                    ...customerSnapshot.data(),
+                                }
+                                : null
+                        );
+                    } else {
+                        setCustomerRecord(null);
+                    }
+
                     setNewTask((prev) => ({
                         ...prev,
                         workerId: stopData.techId || "",
@@ -699,6 +773,7 @@ const ServiceStopDetails = () => {
                 } else {
                     setServiceStop(null);
                     setServiceLocation(null);
+                    setCustomerRecord(null);
                     setBodiesOfWater([]);
                     setEquipmentList([]);
                     console.log("No such document!");
@@ -714,9 +789,92 @@ const ServiceStopDetails = () => {
         fetchServiceStopDetails();
     }, [recentlySelectedCompany, serviceStopId]);
 
+    const loadPartWorkflow = useCallback(async () => {
+        if (!recentlySelectedCompany || !serviceStopId) {
+            setPartApprovals([]);
+            setServiceStopShoppingItems([]);
+            return;
+        }
+
+        try {
+            setLoadingPartWorkflow(true);
+            const shoppingCollection = collection(db, "companies", recentlySelectedCompany, "shoppingList");
+            const [shoppingByStopSnap, shoppingByScheduledStopSnap, approvalSnap] = await Promise.all([
+                getDocs(query(shoppingCollection, where("serviceStopId", "==", serviceStopId))),
+                getDocs(query(shoppingCollection, where("scheduledServiceStopId", "==", serviceStopId))),
+                getDocs(query(collection(db, "customerPartApprovals"), where("companyId", "==", recentlySelectedCompany))),
+            ]);
+
+            const shoppingItemsById = new Map();
+            [shoppingByStopSnap, shoppingByScheduledStopSnap].forEach((snapshot) => {
+                snapshot.docs.forEach((itemDoc) => {
+                    const data = itemDoc.data() || {};
+                    shoppingItemsById.set(itemDoc.id, {
+                        id: itemDoc.id,
+                        ...data,
+                        photoUrl: getItemPhotoUrl(data),
+                    });
+                });
+            });
+
+            const shoppingItems = Array.from(shoppingItemsById.values()).sort((left, right) =>
+                String(left.name || "").localeCompare(String(right.name || ""))
+            );
+            const shoppingApprovalIds = new Set(
+                shoppingItems
+                    .flatMap((item) => [item.partApprovalRequestId, item.approvalRequestId])
+                    .filter(Boolean)
+            );
+
+            const approvalsForStop = approvalSnap.docs
+                .map((approvalDoc) => ({ id: approvalDoc.id, ...(approvalDoc.data() || {}) }))
+                .filter((approval) => {
+                    const approvalStopIds = [
+                        approval.serviceStopId,
+                        approval.scheduledServiceStopId,
+                    ].filter(Boolean);
+                    const linkedByStopId = approvalStopIds.includes(serviceStopId);
+                    const linkedByShoppingItem = shoppingApprovalIds.has(approval.id);
+                    const linkedBySameVisit =
+                        !approvalStopIds.length &&
+                        approval.serviceLocationId &&
+                        serviceStop?.serviceLocationId &&
+                        approval.serviceLocationId === serviceStop.serviceLocationId &&
+                        sameDay(approval.scheduledDate || approval.serviceDate || approval.requestedAt, serviceStop?.serviceDate);
+
+                    return linkedByStopId || linkedByShoppingItem || linkedBySameVisit;
+                })
+                .sort((left, right) => {
+                    const leftDate = getDateValue(left.updatedAt || left.requestedAt || left.createdAt);
+                    const rightDate = getDateValue(right.updatedAt || right.requestedAt || right.createdAt);
+                    return (rightDate?.getTime() || 0) - (leftDate?.getTime() || 0);
+                });
+
+            setServiceStopShoppingItems(shoppingItems);
+            setPartApprovals(approvalsForStop);
+        } catch (error) {
+            console.error("Failed to load part approval workflow:", error);
+            toast.error("Failed to load part approvals for this stop");
+        } finally {
+            setLoadingPartWorkflow(false);
+        }
+    }, [recentlySelectedCompany, serviceStop?.serviceDate, serviceStop?.serviceLocationId, serviceStopId]);
+
     useEffect(() => {
-        if (selectedBodyOfWaterId || !bodiesOfWater.length) return;
-        setSelectedBodyOfWaterId(bodiesOfWater[0].id);
+        if (!serviceStop) return;
+        loadPartWorkflow();
+    }, [loadPartWorkflow, serviceStop]);
+
+    useEffect(() => {
+        if (!bodiesOfWater.length) {
+            if (selectedBodyOfWaterId) setSelectedBodyOfWaterId("");
+            return;
+        }
+
+        const selectedBodyExists = bodiesOfWater.some((body) => body.id === selectedBodyOfWaterId);
+        if (selectedBodyExists) return;
+
+        setSelectedBodyOfWaterId(bodiesOfWater[0].id || "");
     }, [bodiesOfWater, selectedBodyOfWaterId]);
 
     useEffect(() => {
@@ -766,13 +924,49 @@ const ServiceStopDetails = () => {
         );
     }, [dosageTemplates, readingTemplates, selectedBodyOfWaterId, stopDataRecords]);
 
+    const bodyOfWaterById = useMemo(() => (
+        new Map(bodiesOfWater.map((body) => [body.id, body]))
+    ), [bodiesOfWater]);
+    const selectedBodyOfWater = selectedBodyOfWaterId ? bodyOfWaterById.get(selectedBodyOfWaterId) : null;
+    const stopDataBodyIds = useMemo(() => (
+        new Set(stopDataRecords.map((record) => record.bodyOfWaterId).filter(Boolean))
+    ), [stopDataRecords]);
     const selectedStopDataRecord = stopDataRecords.find((record) => record.bodyOfWaterId === selectedBodyOfWaterId) || null;
     const selectedBodyEquipment = useMemo(() => (
         equipmentList.filter((equipment) => !selectedBodyOfWaterId || equipment.bodyOfWaterId === selectedBodyOfWaterId)
     ), [equipmentList, selectedBodyOfWaterId]);
-    const bodyOfWaterById = useMemo(() => (
-        new Map(bodiesOfWater.map((body) => [body.id, body]))
-    ), [bodiesOfWater]);
+    const serviceStopAddressText = useMemo(() => [
+        serviceStop?.address?.streetAddress,
+        [serviceStop?.address?.city, serviceStop?.address?.state].filter(Boolean).join(", "),
+        serviceStop?.address?.zip,
+    ].filter(Boolean).join(" "), [serviceStop]);
+    const partApprovalCustomer = useMemo(() => {
+        if (customerRecord) return customerRecord;
+        if (!serviceStop?.customerId) return null;
+
+        return {
+            id: serviceStop.customerId,
+            displayName: serviceStop.customerName || "Customer",
+            customerName: serviceStop.customerName || "Customer",
+            email: serviceStop.customerEmail || serviceStop.email || "",
+            billingEmail: serviceStop.billingEmail || "",
+            customerUserId: serviceStop.customerUserId || "",
+        };
+    }, [customerRecord, serviceStop]);
+    const partApprovalServiceLocation = useMemo(() => {
+        if (serviceLocation) return serviceLocation;
+        if (!serviceStop?.serviceLocationId) return null;
+
+        return {
+            id: serviceStop.serviceLocationId,
+            name: serviceStop.serviceLocationName || serviceStopAddressText || "Service Location",
+            nickName: serviceStop.serviceLocationName || "",
+            streetAddress: serviceStop?.address?.streetAddress || "",
+            city: serviceStop?.address?.city || "",
+            state: serviceStop?.address?.state || "",
+            zip: serviceStop?.address?.zip || "",
+        };
+    }, [serviceLocation, serviceStop, serviceStopAddressText]);
     const serviceStopBucket = useMemo(() => getServiceStopBucket(serviceStop), [serviceStop]);
     const isServiceAgreementEstimate = serviceStopBucket.id === SERVICE_STOP_TYPE_USE_CASES.serviceAgreementEstimate;
     const serviceAgreementSurveyDraftPath = useMemo(() => {
@@ -983,7 +1177,7 @@ const ServiceStopDetails = () => {
     const getStatusClass = (status) => {
         const normalized = String(status || "").toLowerCase();
 
-        if (["finished", "completed", "done", "complete"].includes(normalized)) {
+        if (["finished", "completed", "done", "complete", "delivered", "installed"].includes(normalized)) {
             return "bg-green-100 text-green-800";
         }
         if (["not finished", "in progress", "inprogress", "active"].includes(normalized)) {
@@ -1021,6 +1215,16 @@ const ServiceStopDetails = () => {
     const findCompanyUser = (userId) => (
         companyUsers.find((user) => user.userId === userId || user.id === userId) || null
     );
+    const currentCompanyUserIds = useMemo(() => new Set([
+        user?.uid,
+        dataBaseUser?.id,
+        dataBaseUser?.userId,
+        dataBaseUser?.uid,
+        companyUserAccess?.id,
+        companyUserAccess?.userId,
+        companyUserAccess?.uid,
+    ].filter(Boolean)), [companyUserAccess, dataBaseUser, user?.uid]);
+    const canManagePartWorkflow = can("244") || currentCompanyUserIds.has(serviceStop?.techId || "");
 
     const syncActiveRouteForServiceStops = async ({ date, techId, techName }) => {
         if (!recentlySelectedCompany || !date || !techId) return null;
@@ -1473,6 +1677,197 @@ const ServiceStopDetails = () => {
         }));
 
         return nextStatus;
+    };
+
+    const actorName = () => (
+        userDisplayName(dataBaseUser) ||
+        user?.displayName ||
+        user?.email ||
+        ""
+    );
+
+    const approvalWithStopContext = (approval = {}) => ({
+        ...approval,
+        customerId: approval.customerId || serviceStop?.customerId || "",
+        customerName: approval.customerName || serviceStop?.customerName || "",
+        customerUserId: approval.customerUserId || partApprovalCustomer?.customerUserId || "",
+        jobId: approval.jobId || serviceStop?.jobId || "",
+        jobName: approval.jobName || serviceStop?.jobInternalId || serviceStop?.jobName || "",
+        jobInternalId: approval.jobInternalId || serviceStop?.jobInternalId || "",
+        serviceStopId: approval.serviceStopId || serviceStopId || "",
+        serviceStopInternalId: approval.serviceStopInternalId || serviceStop?.internalId || "",
+        scheduledServiceStopId: approval.scheduledServiceStopId || serviceStopId || "",
+        scheduledServiceStopInternalId: approval.scheduledServiceStopInternalId || serviceStop?.internalId || "",
+        scheduledDate: approval.scheduledDate || serviceStop?.serviceDate || null,
+        serviceLocationId: approval.serviceLocationId || serviceStop?.serviceLocationId || "",
+        serviceLocationName: approval.serviceLocationName || partApprovalServiceLocation?.nickName || partApprovalServiceLocation?.name || "",
+        serviceLocationAddress: approval.serviceLocationAddress || serviceStopAddressText || "",
+        techId: approval.techId || serviceStop?.techId || "",
+        techName: approval.techName || serviceStop?.tech || "",
+        assignedTechId: approval.assignedTechId || serviceStop?.techId || "",
+        assignedTechName: approval.assignedTechName || serviceStop?.tech || "",
+        assignedToUserId: approval.assignedToUserId || serviceStop?.techId || "",
+        assignedToUserName: approval.assignedToUserName || serviceStop?.tech || "",
+        assignedTechIds: Array.from(new Set([
+            ...(Array.isArray(approval.assignedTechIds) ? approval.assignedTechIds : []),
+            serviceStop?.techId || "",
+        ].filter(Boolean))),
+        assignedTechNames: Array.from(new Set([
+            ...(Array.isArray(approval.assignedTechNames) ? approval.assignedTechNames : []),
+            serviceStop?.tech || "",
+        ].filter(Boolean))),
+        purchaserId: approval.purchaserId || serviceStop?.techId || "",
+        purchaserName: approval.purchaserName || serviceStop?.tech || "",
+    });
+
+    const markApprovalApprovedInPerson = async (approval) => {
+        if (!canManagePartWorkflow) {
+            toast.error("Only the assigned technician or an admin can approve this part from the stop.");
+            return;
+        }
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !approval?.id) return;
+
+        try {
+            setPartWorkflowActionId(`approve-${approval.id}`);
+            const now = Timestamp.fromDate(new Date());
+            const shoppingListItemId = approval.shoppingListItemId || `comp_shop_${crypto.randomUUID()}`;
+            const approverName = actorName();
+            const approvalUpdates = {
+                status: "approved",
+                approvalStatus: "approved",
+                response: "approved",
+                responseNote: approval.responseNote || "Approved in person",
+                fulfillmentStatus: "approvedAwaitingPurchase",
+                respondedAt: now,
+                respondedByUserId: user?.uid || "",
+                respondedByUserName: approverName,
+                respondedByEmail: user?.email || "",
+                approvedInPerson: true,
+                inPersonApprovedByUserId: user?.uid || "",
+                shoppingListItemId,
+                shoppingListPath: `companies/${recentlySelectedCompany}/shoppingList/${shoppingListItemId}`,
+                shoppingListGeneratedAt: approval.shoppingListGeneratedAt || now,
+                updatedAt: now,
+            };
+            const enrichedApproval = approvalWithStopContext({
+                ...approval,
+                ...approvalUpdates,
+            });
+            const shoppingPayload = buildPartApprovalShoppingItemPayload({
+                approval: enrichedApproval,
+                shoppingListItemId,
+                now,
+                generated: !approval.shoppingListItemId,
+            });
+
+            const batch = writeBatch(db);
+            batch.set(
+                doc(db, "customerPartApprovals", approval.id),
+                {
+                    ...approvalUpdates,
+                    serviceStopId: enrichedApproval.serviceStopId,
+                    serviceStopInternalId: enrichedApproval.serviceStopInternalId,
+                    scheduledServiceStopId: enrichedApproval.scheduledServiceStopId,
+                    scheduledServiceStopInternalId: enrichedApproval.scheduledServiceStopInternalId,
+                    scheduledDate: enrichedApproval.scheduledDate,
+                    serviceLocationId: enrichedApproval.serviceLocationId,
+                    serviceLocationName: enrichedApproval.serviceLocationName,
+                    serviceLocationAddress: enrichedApproval.serviceLocationAddress,
+                    techId: enrichedApproval.techId,
+                    techName: enrichedApproval.techName,
+                    assignedTechId: enrichedApproval.assignedTechId,
+                    assignedTechName: enrichedApproval.assignedTechName,
+                    assignedToUserId: enrichedApproval.assignedToUserId,
+                    assignedToUserName: enrichedApproval.assignedToUserName,
+                    assignedTechIds: enrichedApproval.assignedTechIds,
+                    assignedTechNames: enrichedApproval.assignedTechNames,
+                    purchaserId: enrichedApproval.purchaserId,
+                    purchaserName: enrichedApproval.purchaserName,
+                },
+                { merge: true }
+            );
+            batch.set(
+                doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingListItemId),
+                shoppingPayload,
+                { merge: true }
+            );
+            await batch.commit();
+            toast.success("Part approved and added to this tech's shopping list");
+            await loadPartWorkflow();
+        } catch (error) {
+            console.error("Failed to approve part in person:", error);
+            toast.error("Failed to approve part");
+        } finally {
+            setPartWorkflowActionId("");
+        }
+    };
+
+    const copyApprovalCustomerLink = async (approval) => {
+        if (!approval?.id) return;
+
+        const url = approval.customerApprovalUrl || `${window.location.origin}/customer/part-approvals/${approval.id}`;
+        try {
+            await navigator.clipboard.writeText(url);
+            toast.success("Customer approval link copied");
+        } catch (error) {
+            console.error("Failed to copy approval link:", error);
+            toast.error("Could not copy approval link");
+        }
+    };
+
+    const markShoppingItemDelivered = async (item) => {
+        if (!canManagePartWorkflow) {
+            toast.error("Only the assigned technician or an admin can deliver this part from the stop.");
+            return;
+        }
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop || !item?.id) return;
+
+        try {
+            setPartWorkflowActionId(`deliver-${item.id}`);
+            const now = Timestamp.fromDate(new Date());
+            const deliveredByName = actorName();
+            const updates = {
+                status: "Delivered",
+                deliveryStatus: "delivered",
+                fulfillmentStatus: "delivered",
+                needsAction: false,
+                deliveredAt: now,
+                deliveredByUserId: user?.uid || "",
+                deliveredByUserName: deliveredByName,
+                serviceStopId: item.serviceStopId || serviceStopId,
+                serviceStopInternalId: item.serviceStopInternalId || serviceStop.internalId || "",
+                scheduledServiceStopId: item.scheduledServiceStopId || serviceStopId,
+                scheduledServiceStopInternalId: item.scheduledServiceStopInternalId || serviceStop.internalId || "",
+                updatedAt: now,
+            };
+
+            const batch = writeBatch(db);
+            batch.update(doc(db, "companies", recentlySelectedCompany, "shoppingList", item.id), updates);
+
+            const approvalId = item.partApprovalRequestId || item.approvalRequestId || "";
+            if (approvalId) {
+                batch.set(
+                    doc(db, "customerPartApprovals", approvalId),
+                    {
+                        fulfillmentStatus: "delivered",
+                        deliveredAt: now,
+                        deliveredByUserId: user?.uid || "",
+                        deliveredByUserName: deliveredByName,
+                        updatedAt: now,
+                    },
+                    { merge: true }
+                );
+            }
+
+            await batch.commit();
+            toast.success("Part marked delivered");
+            await loadPartWorkflow();
+        } catch (error) {
+            console.error("Failed to mark part delivered:", error);
+            toast.error("Failed to mark part delivered");
+        } finally {
+            setPartWorkflowActionId("");
+        }
     };
 
     const handleTaskFieldChange = (field, value) => {
@@ -1962,6 +2357,171 @@ const ServiceStopDetails = () => {
                             </div>
                         </div>
 
+                        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div>
+                                    <h3 className="text-xl font-bold text-slate-800">Part Approvals & Deliveries</h3>
+                                    <p className="text-sm text-slate-600 mt-1">
+                                        Request customer approval for replacement parts and deliver approved items for this stop.
+                                    </p>
+                                </div>
+                                {canManagePartWorkflow && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowPartApprovalModal(true)}
+                                        disabled={!partApprovalCustomer}
+                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                    >
+                                        New Part Approval
+                                    </button>
+                                )}
+                            </div>
+
+                            {loadingPartWorkflow ? (
+                                <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                    Loading part approvals and shopping items...
+                                </div>
+                            ) : (
+                                <div className="mt-5 grid gap-5 xl:grid-cols-2">
+                                    <div>
+                                        <div className="mb-3 flex items-center justify-between gap-3">
+                                            <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Approval Requests</h4>
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                {partApprovals.length}
+                                            </span>
+                                        </div>
+
+                                        {partApprovals.length ? (
+                                            <div className="space-y-3">
+                                                {partApprovals.map((approval) => {
+                                                    const pending = isPartApprovalPending(approval);
+                                                    const actionId = `approve-${approval.id}`;
+
+                                                    return (
+                                                        <div key={approval.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <p className="font-semibold text-slate-900">
+                                                                        {approval.itemName || approval.name || approval.dbItemName || "Pool Part"}
+                                                                    </p>
+                                                                    <p className="mt-1 line-clamp-2 text-sm text-slate-600">
+                                                                        {approval.description || "Replacement part approval"}
+                                                                    </p>
+                                                                </div>
+                                                                <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${pending ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>
+                                                                    {approval.status || approval.approvalStatus || "pending"}
+                                                                </span>
+                                                            </div>
+
+                                                            <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
+                                                                <div>
+                                                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Qty</p>
+                                                                    <p className="font-semibold text-slate-800">{approval.quantity || "1"}</p>
+                                                                </div>
+                                                                <div>
+                                                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Price</p>
+                                                                    <p className="font-semibold text-slate-800">{centsCurrency(partApprovalTotalPriceCents(approval))}</p>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => copyApprovalCustomerLink(approval)}
+                                                                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                                                                >
+                                                                    Copy Customer Link
+                                                                </button>
+                                                                {pending && canManagePartWorkflow && (
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => markApprovalApprovedInPerson(approval)}
+                                                                        disabled={partWorkflowActionId === actionId}
+                                                                        className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                    >
+                                                                        {partWorkflowActionId === actionId ? "Approving..." : "Mark Approved In Person"}
+                                                                    </button>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                                No part approvals are linked to this stop yet.
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    <div>
+                                        <div className="mb-3 flex items-center justify-between gap-3">
+                                            <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Approved Parts For This Stop</h4>
+                                            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                                                {serviceStopShoppingItems.length}
+                                            </span>
+                                        </div>
+
+                                        {serviceStopShoppingItems.length ? (
+                                            <div className="space-y-3">
+                                                {serviceStopShoppingItems.map((item) => {
+                                                    const delivered = isShoppingItemDelivered(item);
+                                                    const actionId = `deliver-${item.id}`;
+
+                                                    return (
+                                                        <div key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                                            <div className="flex gap-3">
+                                                                <div className="h-16 w-16 shrink-0 overflow-hidden rounded-md border border-slate-200 bg-white">
+                                                                    {item.photoUrl ? (
+                                                                        <img src={item.photoUrl} alt="" className="h-full w-full object-cover" />
+                                                                    ) : (
+                                                                        <div className="flex h-full w-full items-center justify-center text-[11px] font-semibold text-slate-400">
+                                                                            Photo
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                                <div className="min-w-0 flex-1">
+                                                                    <div className="flex items-start justify-between gap-3">
+                                                                        <div className="min-w-0">
+                                                                            <p className="truncate font-semibold text-slate-900">{item.name || "Shopping item"}</p>
+                                                                            <p className="mt-1 text-sm text-slate-600">
+                                                                                Qty {item.quantity || "1"} · {centsCurrency(partApprovalTotalPriceCents(item))}
+                                                                            </p>
+                                                                        </div>
+                                                                        <span className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${delivered ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>
+                                                                            {item.status || "Ready"}
+                                                                        </span>
+                                                                    </div>
+                                                                    <p className="mt-2 text-xs text-slate-500">
+                                                                        Assigned to {item.assignedTechName || item.assignedToUserName || item.userName || serviceStop.tech || "technician"}
+                                                                    </p>
+                                                                </div>
+                                                            </div>
+
+                                                            {canManagePartWorkflow && !delivered && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => markShoppingItemDelivered(item)}
+                                                                    disabled={partWorkflowActionId === actionId}
+                                                                    className="mt-4 rounded-md bg-slate-900 px-3 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                >
+                                                                    {partWorkflowActionId === actionId ? "Saving..." : "Mark Delivered"}
+                                                                </button>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        ) : (
+                                            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-500">
+                                                Approved parts will appear here after customer or in-person approval.
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
                         {isServiceAgreementEstimate && (
                             <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                                 <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -2126,6 +2686,7 @@ const ServiceStopDetails = () => {
                                                     : Array.isArray(record.observations)
                                                         ? record.observations
                                                         : [];
+                                                const stripPhotos = testerStripScanPhotos(record);
 
                                                 return (
                                                     <div key={record.id || record.bodyOfWaterId} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
@@ -2174,6 +2735,34 @@ const ServiceStopDetails = () => {
                                                                 </ul>
                                                             </div>
                                                         )}
+                                                        {stripPhotos.length > 0 && (
+                                                            <div className="mt-4">
+                                                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tester Strip Photos</p>
+                                                                <div className="mt-2 grid grid-cols-2 gap-3 md:grid-cols-3">
+                                                                    {stripPhotos.map((photo) => (
+                                                                        <a
+                                                                            key={photo.id}
+                                                                            href={photo.url}
+                                                                            target="_blank"
+                                                                            rel="noreferrer"
+                                                                            className="group block overflow-hidden rounded-md border border-slate-200 bg-white"
+                                                                        >
+                                                                            <img
+                                                                                src={photo.url}
+                                                                                alt={photo.caption}
+                                                                                className="h-32 w-full object-cover transition-transform group-hover:scale-[1.02]"
+                                                                            />
+                                                                            <div className="px-2 py-1.5 text-xs text-slate-600">
+                                                                                <p className="truncate font-medium text-slate-700">{photo.caption}</p>
+                                                                                {photo.createdAtLabel && (
+                                                                                    <p className="mt-0.5 truncate">{photo.createdAtLabel}</p>
+                                                                                )}
+                                                                            </div>
+                                                                        </a>
+                                                                    ))}
+                                                                </div>
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 );
                                             })}
@@ -2213,21 +2802,61 @@ const ServiceStopDetails = () => {
                                 {showManualStopData ? (
                                     bodiesOfWater.length ? (
                                     <div className="mt-5 space-y-5">
-                                        <div>
-                                            <label className="block text-sm font-semibold text-slate-600 mb-1">
-                                                Body of Water
-                                            </label>
-                                            <select
-                                                value={selectedBodyOfWaterId}
-                                                onChange={(event) => setSelectedBodyOfWaterId(event.target.value)}
-                                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2"
-                                            >
-                                                {bodiesOfWater.map((body) => (
-                                                    <option key={body.id} value={body.id}>
-                                                        {body.name || body.type || "Unnamed Body Of Water"}
-                                                    </option>
-                                                ))}
-                                            </select>
+                                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                                <div>
+                                                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">
+                                                        Body of Water
+                                                    </p>
+                                                    <p className="mt-1 text-base font-semibold text-slate-950">
+                                                        {selectedBodyOfWater ? getBodyOfWaterTitle(selectedBodyOfWater) : "Select a body of water"}
+                                                    </p>
+                                                    {selectedBodyOfWater && (
+                                                        <p className="mt-1 text-sm text-slate-500">
+                                                            {getBodyOfWaterMeta(selectedBodyOfWater) || "No water details saved"}
+                                                        </p>
+                                                    )}
+                                                </div>
+                                                <span className="w-fit rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-600 ring-1 ring-slate-200">
+                                                    {bodiesOfWater.length} water{bodiesOfWater.length === 1 ? "" : "s"}
+                                                </span>
+                                            </div>
+                                            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+                                                {bodiesOfWater.map((body) => {
+                                                    const selected = body.id === selectedBodyOfWaterId;
+                                                    const hasStopData = stopDataBodyIds.has(body.id);
+
+                                                    return (
+                                                        <button
+                                                            key={body.id}
+                                                            type="button"
+                                                            onClick={() => setSelectedBodyOfWaterId(body.id)}
+                                                            className={[
+                                                                "min-w-[13rem] rounded-lg border px-3 py-2 text-left transition",
+                                                                selected
+                                                                    ? "border-cyan-500 bg-white text-slate-950 shadow-sm ring-2 ring-cyan-100"
+                                                                    : "border-slate-200 bg-white text-slate-700 hover:border-cyan-300 hover:bg-cyan-50/50",
+                                                            ].join(" ")}
+                                                        >
+                                                            <span className="flex items-start justify-between gap-3">
+                                                                <span className="min-w-0">
+                                                                    <span className="block truncate text-sm font-semibold">
+                                                                        {getBodyOfWaterTitle(body)}
+                                                                    </span>
+                                                                    <span className="mt-0.5 block truncate text-xs text-slate-500">
+                                                                        {getBodyOfWaterMeta(body) || "No water details"}
+                                                                    </span>
+                                                                </span>
+                                                                {hasStopData && (
+                                                                    <span className="shrink-0 rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-bold text-emerald-700">
+                                                                        Saved
+                                                                    </span>
+                                                                )}
+                                                            </span>
+                                                        </button>
+                                                    );
+                                                })}
+                                            </div>
                                         </div>
 
                                         {serviceStop.includeReadings !== false && readingTemplates.length > 0 && (
@@ -2888,6 +3517,27 @@ const ServiceStopDetails = () => {
                     </div>
                 </div>
             </div>
+            <PartApprovalCreateModal
+                open={showPartApprovalModal}
+                onClose={() => setShowPartApprovalModal(false)}
+                fixedCustomer={partApprovalCustomer}
+                fixedServiceLocation={partApprovalServiceLocation}
+                workflowContext={{
+                    serviceStopId,
+                    serviceStopInternalId: serviceStop.internalId || "",
+                    serviceDate: serviceStop.serviceDate || null,
+                    scheduledDate: serviceStop.serviceDate || null,
+                    techId: serviceStop.techId || "",
+                    techName: serviceStop.tech || "",
+                    jobId: serviceStop.jobId || "",
+                    jobName: serviceStop.jobName || serviceStop.jobInternalId || "",
+                    jobInternalId: serviceStop.jobInternalId || "",
+                    serviceLocationAddress: serviceStopAddressText,
+                }}
+                hideCost
+                allowInPersonApproval
+                onCreated={loadPartWorkflow}
+            />
             {showFinishConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
                     <div className="w-full max-w-xl rounded-lg bg-white p-5 shadow-2xl">
