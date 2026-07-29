@@ -7,21 +7,33 @@ export const safeItemPhotoFileName = (fileName = "item-photo") =>
     .replace(/[^a-zA-Z0-9._-]/g, "-")
     .slice(-90) || "item-photo";
 
-export const getItemPhotoUrl = (source = {}) => {
+export const getItemPhotoUrl = (source = {}, visited = new WeakSet()) => {
   if (!source) return "";
   if (typeof source === "string") return source;
+  if (typeof source !== "object") return "";
 
-  const directUrl =
-    source.photoUrl ||
-    source.photoURL ||
-    source.imageUrl ||
-    source.imageURL ||
-    source.primaryPhotoUrl ||
-    source.thumbnailUrl ||
-    source.url ||
-    "";
+  if (visited.has(source)) return "";
+  visited.add(source);
 
-  if (directUrl) return directUrl;
+  if (Array.isArray(source)) {
+    for (const photo of source) {
+      const photoUrl = getItemPhotoUrl(photo, visited);
+      if (photoUrl) return photoUrl;
+    }
+    return "";
+  }
+
+  const directUrl = [
+    source.photoUrl,
+    source.photoURL,
+    source.imageUrl,
+    source.imageURL,
+    source.primaryPhotoUrl,
+    source.thumbnailUrl,
+    source.url,
+  ].find((value) => typeof value === "string" && value.trim());
+
+  if (directUrl) return directUrl.trim();
 
   const photoList = Array.isArray(source.photoUrls)
     ? source.photoUrls
@@ -29,7 +41,12 @@ export const getItemPhotoUrl = (source = {}) => {
       ? source.photos
       : [];
 
-  return getItemPhotoUrl(photoList[0] || {});
+  for (const photo of photoList) {
+    const photoUrl = getItemPhotoUrl(photo, visited);
+    if (photoUrl) return photoUrl;
+  }
+
+  return "";
 };
 
 export const itemPhotoFieldsFromUrl = (photoUrl = "", description = "Item photo", storagePath = "") => {

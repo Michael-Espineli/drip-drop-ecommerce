@@ -4,7 +4,6 @@ import { collection, getDocs } from "firebase/firestore";
 import toast from "react-hot-toast";
 import {
   FiArrowUpRight,
-  FiBriefcase,
   FiCalendar,
   FiCheckCircle,
   FiClock,
@@ -116,7 +115,7 @@ const SummaryTile = ({ icon: Icon, label, value, detail, tone = "slate" }) => {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-          <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+          <p className="mt-1 text-xl font-bold text-slate-950">{value}</p>
           <p className="mt-1 text-xs text-slate-500">{detail}</p>
         </div>
         <span className={`flex h-10 w-10 items-center justify-center rounded-lg border ${toneClasses[tone] || toneClasses.slate}`}>
@@ -229,31 +228,25 @@ const OfferedWork = () => {
         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="max-w-3xl">
-              <div className="flex items-center gap-3">
-                <span className="flex h-11 w-11 items-center justify-center rounded-lg bg-blue-50 text-blue-700">
-                  <FiBriefcase className="h-5 w-5" />
-                </span>
-                <div>
-                  <h1 className="text-2xl font-bold text-slate-950">Offered Work</h1>
-                  <p className="mt-1 text-sm text-slate-500">
-                    Direct offers, internal board posts, accepted work, and scheduled offer work.
-                  </p>
-                </div>
-              </div>
+              <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company operations</p>
+              <h1 className="mt-1 text-3xl font-bold text-slate-950">Offered Work</h1>
+              <p className="mt-1 text-sm text-slate-500">
+                Direct offers, internal board posts, accepted work, and scheduled offer work.
+              </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={loadOffers}
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
               >
                 <FiRefreshCw className="h-4 w-4" />
                 Refresh
               </button>
               <Link
                 to="/company/jobs/operations"
-                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
               >
                 <FiArrowUpRight className="h-4 w-4" />
                 Jobs
@@ -269,8 +262,8 @@ const OfferedWork = () => {
           <SummaryTile icon={FiDollarSign} label="Estimated Pay" value={moneyFromCents(summary.estimatedPayCents)} detail={`${summary.total} total offers`} tone="violet" />
         </section>
 
-        <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(260px,1fr)_repeat(4,minmax(150px,180px))]">
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="grid grid-cols-1 gap-3 p-5 xl:grid-cols-[minmax(260px,1fr)_repeat(4,minmax(150px,180px))]">
             <label className="relative block">
               <FiSearch className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
               <input
@@ -278,7 +271,7 @@ const OfferedWork = () => {
                 value={searchTerm}
                 onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Search offered work..."
-                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               />
             </label>
 
@@ -287,7 +280,7 @@ const OfferedWork = () => {
               <select
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value)}
-                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+                className="h-10 w-full rounded-md border border-slate-300 bg-white pl-9 pr-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
               >
                 {WORK_OFFER_STATUS_FILTERS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -298,7 +291,7 @@ const OfferedWork = () => {
             <select
               value={typeFilter}
               onChange={(event) => setTypeFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {WORK_OFFER_TYPE_FILTERS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -308,7 +301,7 @@ const OfferedWork = () => {
             <select
               value={technicianFilter}
               onChange={(event) => setTechnicianFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               {technicianOptions.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -318,7 +311,7 @@ const OfferedWork = () => {
             <select
               value={schedulingFilter}
               onChange={(event) => setSchedulingFilter(event.target.value)}
-              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+              className="h-10 rounded-md border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             >
               <option value="all">All Scheduling</option>
               <option value="self">Tech Can Schedule</option>
@@ -330,11 +323,9 @@ const OfferedWork = () => {
         </section>
 
         <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <div className="flex flex-col gap-1 border-b border-slate-200 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="text-base font-bold text-slate-950">Offer List</h2>
-              <p className="text-sm text-slate-500">{filteredOffers.length} of {offers.length} offers shown</p>
-            </div>
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div>Showing {filteredOffers.length} of {offers.length} offer{offers.length === 1 ? "" : "s"}</div>
+            <div>{statusFilter === "all" ? "All statuses" : statusFilter} - {typeFilter === "all" ? "All types" : typeFilter}</div>
           </div>
 
           {loading ? (
@@ -346,17 +337,17 @@ const OfferedWork = () => {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200">
+              <table className="min-w-full bg-white">
                 <thead className="bg-slate-50">
-                  <tr className="text-left text-xs font-bold uppercase tracking-wide text-slate-500">
-                    <th className="px-4 py-3">Work</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Technician</th>
-                    <th className="px-4 py-3">Customer</th>
-                    <th className="px-4 py-3">Scope</th>
-                    <th className="px-4 py-3">Pay</th>
-                    <th className="px-4 py-3">Created</th>
-                    <th className="px-4 py-3 text-right">Job</th>
+                  <tr>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Work</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Technician</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Scope</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Pay</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Created</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500">Job</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200 bg-white">
@@ -368,7 +359,7 @@ const OfferedWork = () => {
 
                     return (
                       <tr key={offer.id} className="align-top transition hover:bg-slate-50">
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <div className="max-w-sm">
                             <p className="font-semibold text-slate-950">
                               {offer.title || offer.name || offer.serviceStopTypeName || "Offered Work"}
@@ -384,7 +375,7 @@ const OfferedWork = () => {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-bold ${statusClasses(status)}`}>
                             {status}
                           </span>
@@ -392,7 +383,7 @@ const OfferedWork = () => {
                             <span className="mt-2 block text-xs font-semibold text-emerald-700">Ready</span>
                           )}
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <div className="flex items-start gap-2 text-sm text-slate-700">
                             <FiUser className="mt-0.5 h-4 w-4 text-slate-400" />
                             <div>
@@ -401,20 +392,20 @@ const OfferedWork = () => {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <p className="text-sm font-semibold text-slate-800">{offer.customerName || "-"}</p>
                           <p className="mt-1 text-xs text-slate-500">{offer.serviceLocationName || offer.address?.streetAddress || "-"}</p>
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <p className="text-sm font-semibold text-slate-800">{getWorkOfferTaskCount(offer)} task{getWorkOfferTaskCount(offer) === 1 ? "" : "s"}</p>
                           <p className="mt-1 text-xs text-slate-500">{formatDurationMinutes(offer.estimatedMinutes)}</p>
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="px-5 py-3">
                           <p className="text-sm font-semibold text-slate-800">{moneyFromCents(getWorkOfferEstimatedPayCents(offer))}</p>
                           <p className="mt-1 text-xs text-slate-500">{offer.paySource || "Pay snapshot"}</p>
                         </td>
-                        <td className="px-4 py-4 text-sm text-slate-600">{formatDate(offer.createdAt)}</td>
-                        <td className="px-4 py-4 text-right">
+                        <td className="px-5 py-3 text-sm text-slate-600">{formatDate(offer.createdAt)}</td>
+                        <td className="px-5 py-3 text-right">
                           <Link
                             to={jobPath}
                             className="inline-flex items-center justify-end gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"

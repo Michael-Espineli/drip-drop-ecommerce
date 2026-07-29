@@ -68,6 +68,7 @@ const PurchaseListView = lazy(() => import("../../views/company/purchases/Purcha
 const CreateNewPurchase = lazy(() => import("../../views/company/purchases/CreateNewPurchase"))
 const PurchaseDetailView = lazy(() => import("../../views/company/purchases/PurchaseDetailView"))
 const AlphaWaterReceiptImport = lazy(() => import("../../views/company/purchases/AlphaWaterReceiptImport"))
+const ShoppingPurchaseReconciliation = lazy(() => import("../../views/company/purchases/ShoppingPurchaseReconciliation"))
 
 const ShoppingListView = lazy(() => import("../../views/company/shoppingList/ShoppingListListView"))
 const CreateNewShoppingList = lazy(() => import("../../views/company/shoppingList/ShoppingListCreateView"))
@@ -500,6 +501,13 @@ export const sellerRoutes = [
     {
         path: '/company/purchased-items/alpha-water-import',
         element: <AlphaWaterReceiptImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/shopping-purchase-reconciliation',
+        element: <ShoppingPurchaseReconciliation />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }

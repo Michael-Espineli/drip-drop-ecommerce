@@ -21,6 +21,11 @@ import {
     uploadItemPhoto,
     validateItemPhotoFile,
 } from "../../../utils/itemPhotos";
+import {
+    SHOPPING_LIST_INVOICED_STATUS,
+    shoppingItemNeedsAction,
+    syncLinkedShoppingPurchase,
+} from "../../../utils/shoppingPurchaseSync";
 
 const categoryOptions = [
     { value: "Personal", label: "Personal" },
@@ -43,6 +48,7 @@ const statusOptions = [
     { value: "Purchased", label: "Purchased" },
     { value: "Delivered", label: "Delivered" },
     { value: "Installed", label: "Installed" },
+    { value: SHOPPING_LIST_INVOICED_STATUS, label: SHOPPING_LIST_INVOICED_STATUS },
 ];
 
 const selectStyles = {
@@ -279,6 +285,24 @@ const ShoppingListCreateView = () => {
         setFormData((prev) => ({
             ...prev,
             [field]: value,
+            ...(field === "invoiced"
+                ? {
+                    status: value
+                        ? SHOPPING_LIST_INVOICED_STATUS
+                        : prev.status === SHOPPING_LIST_INVOICED_STATUS
+                            ? "Purchased"
+                            : prev.status,
+                }
+                : {}),
+            ...(field === "status"
+                ? {
+                    invoiced: value === SHOPPING_LIST_INVOICED_STATUS
+                        ? true
+                        : prev.status === SHOPPING_LIST_INVOICED_STATUS
+                            ? false
+                            : prev.invoiced,
+                }
+                : {}),
         }));
     };
 
@@ -447,6 +471,8 @@ const ShoppingListCreateView = () => {
             const photoFields = photoFile
                 ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, formData.name || "Shopping item photo", uploadedPhoto.storagePath)
                 : itemPhotoFieldsFromUrl(formData.photoUrl, formData.name || "Shopping item photo");
+            const nextInvoiced = formData.status === SHOPPING_LIST_INVOICED_STATUS || !!formData.invoiced;
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : formData.status;
             const prepKeys = Array.from(
                 new Set(
                     [
@@ -462,7 +488,7 @@ const ShoppingListCreateView = () => {
                 id,
                 category: formData.category,
                 subCategory: formData.subCategory,
-                status: formData.status,
+                status: nextStatus,
                 purchaserId: formData.purchaserId || "",
                 purchaserName: formData.purchaserName || "",
                 genericItemId: formData.genericItemId || "",
@@ -482,11 +508,12 @@ const ShoppingListCreateView = () => {
                 dbItemId: requiresDbItem ? formData.dbItemId || "" : "",
                 dbItemName: requiresDbItem ? selectedDbItem?.name || formData.name || "" : "",
                 purchasedItem: formData.purchasedItem || "",
-                invoiced: !!formData.invoiced,
+                invoiced: nextInvoiced,
+                invoiceStatus: nextInvoiced ? "Invoiced" : "",
                 serviceLocationId: formData.serviceLocationId || "",
                 serviceLocationName: formData.serviceLocationName || "",
                 prepKeys,
-                needsAction: !["Delivered", "Installed"].includes(formData.status),
+                needsAction: shoppingItemNeedsAction(nextStatus),
                 actionDate: Timestamp.now(),
                 assignedTechIds: [],
                 plannedUnitCostCents,
@@ -505,6 +532,17 @@ const ShoppingListCreateView = () => {
                 doc(db, "companies", recentlySelectedCompany, "shoppingList", id),
                 payload
             );
+
+            if (payload.purchasedItem) {
+                await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    shoppingItemId: id,
+                    purchasedItemId: payload.purchasedItem,
+                    shoppingItemData: payload,
+                    invoiced: payload.invoiced,
+                });
+            }
 
             navigate(`/company/shopping-list/detail/${id}`);
         } catch (error) {

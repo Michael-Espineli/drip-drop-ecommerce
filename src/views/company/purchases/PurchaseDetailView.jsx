@@ -10,8 +10,10 @@ import {
     where,
     orderBy,
     deleteDoc,
+    setDoc,
     arrayUnion,
     arrayRemove,
+    serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -19,12 +21,53 @@ import Select from "react-select";
 import { format } from "date-fns";
 import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
+import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
 
 const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
 const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
+const shoppingListStatusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", "Invoiced"];
+const defaultShoppingListStatusFilters = ["Purchased", "Installed", "Invoiced"];
+const jobBillingIsInvoiced = (status = "") =>
+    ["invoiced", "paid"].includes(String(status || "").trim().toLowerCase());
+const purchaseConnectedStatus = (invoiced) => invoiced ? "Invoiced" : "Connected to Job";
+const purchaseStandaloneStatus = ({ billable, invoiced, returned } = {}) => {
+    if (returned) return "Returned";
+    if (billable) return invoiced ? "Invoiced" : "Needs invoice";
+    return "Non-billable";
+};
+const invoicedPurchaseFieldsForJob = (job = {}) => {
+    const invoiceId = job.salesInvoiceId || job.invoiceRef || job.invoiceId || "";
+
+    return {
+        invoiced: true,
+        invoiceStatus: "Invoiced",
+        jobBillingStatus: "invoiced",
+        invoiceId,
+        invoiceRef: invoiceId,
+        invoiceType: job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job"),
+        invoicedAt: serverTimestamp(),
+        jobInvoicedAt: serverTimestamp(),
+        status: "Invoiced",
+    };
+};
+const invoicedPurchaseStateForJob = (job = {}) => {
+    const invoiceId = job.salesInvoiceId || job.invoiceRef || job.invoiceId || "";
+
+    return {
+        invoiced: true,
+        invoiceStatus: "Invoiced",
+        jobBillingStatus: "invoiced",
+        invoiceId,
+        invoiceRef: invoiceId,
+        invoiceType: job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job"),
+        invoicedAt: new Date(),
+        jobInvoicedAt: new Date(),
+        status: "Invoiced",
+    };
+};
 
 const PurchaseDetailView = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser, name } = useContext(Context);
     const { purchaseId } = useParams();
     const navigate = useNavigate();
 
@@ -32,6 +75,9 @@ const PurchaseDetailView = () => {
     const [notes, setNotes] = useState("");
     const [updating, setUpdating] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [purchaseHistory, setPurchaseHistory] = useState([]);
+    const [purchaseHistoryLoading, setPurchaseHistoryLoading] = useState(false);
+    const [purchaseHistoryModalOpen, setPurchaseHistoryModalOpen] = useState(false);
 
     const [customerList, setCustomerList] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -58,6 +104,7 @@ const PurchaseDetailView = () => {
     const [shoppingListItemsLoading, setShoppingListItemsLoading] = useState(false);
     const [shoppingListItems, setShoppingListItems] = useState([]);
     const [shoppingListSearch, setShoppingListSearch] = useState("");
+    const [shoppingListStatusFilters, setShoppingListStatusFilters] = useState(defaultShoppingListStatusFilters);
     const [jobModalOpen, setJobModalOpen] = useState(false);
     const [jobsLoading, setJobsLoading] = useState(false);
     const [jobs, setJobs] = useState([]);
@@ -90,6 +137,120 @@ const PurchaseDetailView = () => {
             paddingLeft: "0.5rem",
             paddingRight: "0.5rem",
         }),
+    };
+
+    const currentActor = () => {
+        const databaseName = [dataBaseUser?.firstName, dataBaseUser?.lastName]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+
+        return {
+            id: user?.uid || dataBaseUser?.id || "",
+            name: databaseName || name || user?.displayName || user?.email || "Unknown user",
+            email: user?.email || dataBaseUser?.email || "",
+        };
+    };
+
+    const historyDateValue = (value) => {
+        if (!value) return null;
+        if (value?.toDate) return value.toDate();
+        if (value instanceof Date) return value;
+
+        const parsed = new Date(value);
+        return Number.isNaN(parsed.getTime()) ? null : parsed;
+    };
+
+    const formatHistoryDate = (value) => {
+        const date = historyDateValue(value);
+        return date ? format(date, "MMM d, yyyy h:mm a") : "Unknown date";
+    };
+
+    const compactHistoryValue = (value) => {
+        if (value === true) return "Yes";
+        if (value === false) return "No";
+        if (value == null) return "Blank";
+
+        const cleanValue = String(value).trim();
+        if (!cleanValue) return "Blank";
+        return cleanValue.length > 140 ? `${cleanValue.slice(0, 137)}...` : cleanValue;
+    };
+
+    const historyChange = (label, previousValue, nextValue) => {
+        const previous = compactHistoryValue(previousValue);
+        const next = compactHistoryValue(nextValue);
+        if (previous === next) return null;
+        return `${label}: ${previous} -> ${next}`;
+    };
+
+    const historyMoneyChange = (label, previousCents, nextCents) =>
+        historyChange(
+            label,
+            formatCurrency((Number(previousCents) || 0) / 100),
+            formatCurrency((Number(nextCents) || 0) / 100)
+        );
+
+    const loadPurchaseHistory = async () => {
+        if (!recentlySelectedCompany || !purchaseId) return;
+
+        try {
+            setPurchaseHistoryLoading(true);
+            const historyQuery = query(
+                collection(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId, "history"),
+                orderBy("date", "desc")
+            );
+            const historySnap = await getDocs(historyQuery);
+            setPurchaseHistory(
+                historySnap.docs.map((docSnap) => ({
+                    id: docSnap.id,
+                    ...docSnap.data(),
+                }))
+            );
+        } catch (error) {
+            console.log(error);
+            console.log("Load Purchase History");
+            setPurchaseHistory([]);
+        } finally {
+            setPurchaseHistoryLoading(false);
+        }
+    };
+
+    const recordPurchaseHistory = async ({ title, eventType, changes }) => {
+        const filteredChanges = (changes || []).filter(Boolean);
+        if (!recentlySelectedCompany || !purchaseId || filteredChanges.length === 0) return;
+
+        const actor = currentActor();
+        const now = new Date();
+        const historyRef = doc(
+            collection(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId, "history")
+        );
+        const payload = {
+            id: historyRef.id,
+            date: now,
+            tech: actor.name,
+            actorId: actor.id,
+            actorName: actor.name,
+            actorEmail: actor.email,
+            source: "web",
+            eventType,
+            title,
+            changes: filteredChanges,
+            createdAt: serverTimestamp(),
+        };
+
+        await setDoc(historyRef, payload);
+        await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchaseId), {
+            lastHistoryEventId: historyRef.id,
+            lastHistoryEventTitle: title,
+            lastHistoryEventType: eventType,
+            lastHistoryEventAt: now,
+            updatedAt: serverTimestamp(),
+        });
+
+        setPurchaseHistory((prev) => [
+            payload,
+            ...prev.filter((entry) => entry.id !== payload.id),
+        ]);
     };
 
     useEffect(() => {
@@ -173,6 +334,13 @@ const PurchaseDetailView = () => {
                         jobBillingStatus: purchaseData.jobBillingStatus || (purchaseData.jobId || purchaseData.workOrderId ? "handledByJob" : ""),
                         jobBillable: Boolean(purchaseData.jobBillable ?? purchaseData.billable),
                         jobBillingRate: purchaseData.jobBillingRate || purchaseData.billingRate || purchaseData.price || 0,
+                        status: purchaseData.status || (purchaseData.jobId || purchaseData.workOrderId || purchaseData.assignedToJob
+                            ? purchaseConnectedStatus(!!purchaseData.invoiced)
+                            : purchaseStandaloneStatus({
+                                billable: !!purchaseData.billable,
+                                invoiced: !!purchaseData.invoiced,
+                                returned: !!purchaseData.returned,
+                            })),
                     };
 
                     setPurchase(purchaseObj);
@@ -249,6 +417,8 @@ const PurchaseDetailView = () => {
                 } else {
                     console.log("No such document!");
                 }
+
+                await loadPurchaseHistory();
             } catch (error) {
                 console.log("Error");
                 console.log(error);
@@ -336,6 +506,13 @@ const PurchaseDetailView = () => {
                 subCategory: editForm.subCategory || "",
                 notes: editForm.notes || "",
                 returned: !!editForm.returned,
+                status: assignedToJob
+                    ? purchaseConnectedStatus(purchase.invoiced)
+                    : purchaseStandaloneStatus({
+                        billable: !!editForm.billable,
+                        invoiced: !!editForm.billable ? !!editForm.invoiced : false,
+                        returned: !!editForm.returned,
+                    }),
                 ...(assignedToJob
                     ? {
                         jobBillable: !!editForm.billable,
@@ -350,8 +527,47 @@ const PurchaseDetailView = () => {
                             !!editForm.billable ? editForm.customerName || "" : "",
                     }),
             };
+            const editHistoryChanges = [
+                historyChange("Item", purchase.name, updatePayload.name),
+                historyChange("Invoice Number", purchase.invoiceNum, updatePayload.invoiceNum),
+                historyChange("Quantity", purchase.quantityString, updatePayload.quantityString),
+                historyChange("Description", purchase.description, updatePayload.description),
+                historyChange("Category", purchase.category, updatePayload.category),
+                historyChange("Subcategory", purchase.subCategory, updatePayload.subCategory),
+                historyChange("Notes", purchase.notes, updatePayload.notes),
+                historyChange("Returned", !!purchase.returned, updatePayload.returned),
+                historyChange("Status", purchase.status, updatePayload.status),
+                assignedToJob
+                    ? historyChange("Job Billable", Boolean(purchase.jobBillable ?? purchase.billable), updatePayload.jobBillable)
+                    : historyChange("Billable", !!purchase.billable, updatePayload.billable),
+                assignedToJob
+                    ? historyMoneyChange("Job Billing Rate", purchase.jobBillingRate || purchase.billingRateRaw || 0, updatePayload.jobBillingRate || 0)
+                    : historyMoneyChange("Billing Rate", purchase.billingRateRaw || 0, updatePayload.billingRate || 0),
+                !assignedToJob ? historyChange("Invoiced", !!purchase.invoiced, updatePayload.invoiced) : null,
+                !assignedToJob ? historyChange("Customer", purchase.customerName, updatePayload.customerName) : null,
+            ].filter(Boolean);
 
             await updateDoc(docRef, updatePayload);
+            if (purchase.shoppingListItemId) {
+                await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    purchasedItemId: purchaseId,
+                    shoppingItemId: purchase.shoppingListItemId,
+                    purchasedItemData: {
+                        ...purchase,
+                        ...updatePayload,
+                        id: purchaseId,
+                    },
+                    invoiced: updatePayload.invoiced,
+                    preferPurchasedContext: true,
+                });
+            }
+            await recordPurchaseHistory({
+                title: "Purchase edited",
+                eventType: "purchase_edited",
+                changes: editHistoryChanges,
+            });
 
             setPurchase((prev) => ({
                 ...prev,
@@ -432,9 +648,28 @@ const PurchaseDetailView = () => {
             );
 
             if (option == null) {
-                await updateDoc(docRef, {
+                const updates = {
                     customerId: "",
                     customerName: "",
+                };
+                const historyChanges = [
+                    historyChange("Customer", purchase.customerName, ""),
+                ];
+                await updateDoc(docRef, updates);
+                if (purchase.shoppingListItemId) {
+                    await syncLinkedShoppingPurchase({
+                        db,
+                        companyId: recentlySelectedCompany,
+                        purchasedItemId: purchaseId,
+                        shoppingItemId: purchase.shoppingListItemId,
+                        purchasedItemData: { ...purchase, ...updates, id: purchaseId },
+                        preferPurchasedContext: true,
+                    });
+                }
+                await recordPurchaseHistory({
+                    title: "Purchase customer cleared",
+                    eventType: "customer_updated",
+                    changes: historyChanges,
                 });
 
                 setPurchase((prev) => ({
@@ -443,9 +678,28 @@ const PurchaseDetailView = () => {
                     customerName: "",
                 }));
             } else {
-                await updateDoc(docRef, {
+                const updates = {
                     customerId: option.id,
                     customerName: option.name,
+                };
+                const historyChanges = [
+                    historyChange("Customer", purchase.customerName, option.name),
+                ];
+                await updateDoc(docRef, updates);
+                if (purchase.shoppingListItemId) {
+                    await syncLinkedShoppingPurchase({
+                        db,
+                        companyId: recentlySelectedCompany,
+                        purchasedItemId: purchaseId,
+                        shoppingItemId: purchase.shoppingListItemId,
+                        purchasedItemData: { ...purchase, ...updates, id: purchaseId },
+                        preferPurchasedContext: true,
+                    });
+                }
+                await recordPurchaseHistory({
+                    title: "Purchase customer updated",
+                    eventType: "customer_updated",
+                    changes: historyChanges,
                 });
 
                 setPurchase((prev) => ({
@@ -476,6 +730,13 @@ const PurchaseDetailView = () => {
             await updateDoc(docRef, {
                 notes,
             });
+            await recordPurchaseHistory({
+                title: "Purchase notes updated",
+                eventType: "notes_updated",
+                changes: [
+                    historyChange("Notes", purchase.notes, notes),
+                ],
+            });
 
             setPurchase((prev) => ({
                 ...prev,
@@ -493,21 +754,32 @@ const PurchaseDetailView = () => {
         try {
             setUpdating(true);
 
-            const docRef = doc(
+            const { purchasePayload } = await syncLinkedShoppingPurchase({
                 db,
-                "companies",
-                recentlySelectedCompany,
-                "purchasedItems",
-                purchaseId
-            );
-
-            await updateDoc(docRef, {
+                companyId: recentlySelectedCompany,
+                purchasedItemId: purchaseId,
+                shoppingItemId: purchase.shoppingListItemId || "",
+                purchasedItemData: {
+                    ...purchase,
+                    id: purchaseId,
+                    invoiced: value,
+                },
                 invoiced: value,
+                preferPurchasedContext: true,
+            });
+            await recordPurchaseHistory({
+                title: value ? "Purchase marked invoiced" : "Purchase marked not invoiced",
+                eventType: "invoiced_updated",
+                changes: [
+                    historyChange("Invoiced", !!purchase.invoiced, value),
+                    historyChange("Status", purchase.status, purchasePayload.status),
+                ],
             });
 
             setPurchase((prev) => ({
                 ...prev,
                 invoiced: value,
+                ...purchasePayload,
             }));
 
             if (edit) {
@@ -535,14 +807,39 @@ const PurchaseDetailView = () => {
                 "purchasedItems",
                 purchaseId
             );
+            const assignedToJob = Boolean(
+                purchase.jobId ||
+                purchase.workOrderId ||
+                purchase.assignedToJob ||
+                purchase.assignmentStatus === "assignedToJob"
+            );
+            const nextStatus = value
+                ? "Returned"
+                : assignedToJob
+                    ? purchaseConnectedStatus(purchase.invoiced)
+                    : purchaseStandaloneStatus({
+                        billable: purchase.billable,
+                        invoiced: purchase.invoiced,
+                        returned: false,
+                    });
 
             await updateDoc(docRef, {
                 returned: value,
+                status: nextStatus,
+            });
+            await recordPurchaseHistory({
+                title: value ? "Purchase marked returned" : "Purchase return cleared",
+                eventType: "returned_updated",
+                changes: [
+                    historyChange("Returned", !!purchase.returned, value),
+                    historyChange("Status", purchase.status, nextStatus),
+                ],
             });
 
             setPurchase((prev) => ({
                 ...prev,
                 returned: value,
+                status: nextStatus,
             }));
 
             if (edit) {
@@ -562,6 +859,7 @@ const PurchaseDetailView = () => {
     const openShoppingListModal = async () => {
         try {
             setShoppingListModalOpen(true);
+            setShoppingListStatusFilters(defaultShoppingListStatusFilters);
 
             if (shoppingListItems.length > 0) return;
 
@@ -609,21 +907,31 @@ const PurchaseDetailView = () => {
         try {
             setUpdating(true);
 
-            const docRef = doc(
+            const { purchasePayload } = await syncLinkedShoppingPurchase({
                 db,
-                "companies",
-                recentlySelectedCompany,
-                "purchasedItems",
-                purchaseId
-            );
-
-            await updateDoc(docRef, {
-                shoppingListItemId: shoppingListItem.id,
+                companyId: recentlySelectedCompany,
+                purchasedItemId: purchaseId,
+                shoppingItemId: shoppingListItem.id,
+                purchasedItemData: { ...purchase, id: purchaseId },
+                shoppingItemData: shoppingListItem,
+                previousShoppingItemId: purchase.shoppingListItemId || "",
+                preferPurchasedContext: true,
+            });
+            await recordPurchaseHistory({
+                title: "Shopping list item connected",
+                eventType: "shopping_item_connected",
+                changes: [
+                    historyChange("Shopping Item", connectedShoppingListItem?.name || "", shoppingListItem.name || "Unnamed item"),
+                    historyChange("Customer", purchase.customerName, purchasePayload.customerName || purchase.customerName),
+                    historyChange("Job", purchase.jobInternalId || purchase.jobName || (purchase.jobId ? "Job connected" : ""), purchasePayload.jobInternalId || purchasePayload.jobName || (purchasePayload.jobId ? "Job connected" : "")),
+                    historyChange("Status", purchase.status, purchasePayload.status),
+                ],
             });
 
             setPurchase((prev) => ({
                 ...prev,
                 shoppingListItemId: shoppingListItem.id,
+                ...purchasePayload,
             }));
 
             setShoppingListModalOpen(false);
@@ -649,6 +957,20 @@ const PurchaseDetailView = () => {
 
             await updateDoc(docRef, {
                 shoppingListItemId: "",
+            });
+            if (purchase.shoppingListItemId) {
+                await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    previousShoppingItemId: purchase.shoppingListItemId,
+                });
+            }
+            await recordPurchaseHistory({
+                title: "Shopping list item disconnected",
+                eventType: "shopping_item_disconnected",
+                changes: [
+                    historyChange("Shopping Item", connectedShoppingListItem?.name || "Connected shopping item", ""),
+                ],
             });
 
             setPurchase((prev) => ({
@@ -724,17 +1046,24 @@ const PurchaseDetailView = () => {
                 purchaseId
             );
 
-            await updateDoc(purchaseRef, {
+            const shouldMarkInvoiced = jobBillingIsInvoiced(job.billingStatus);
+            const updates = {
+                ...(shouldMarkInvoiced ? invoicedPurchaseFieldsForJob(job) : {}),
                 jobId: job.id,
                 workOrderId: job.id,
                 assignedJobId: job.id,
                 assignedToJob: true,
                 assignmentStatus: "assignedToJob",
                 billingOwner: "job",
-                jobBillingStatus: "handledByJob",
+                jobBillingStatus: shouldMarkInvoiced ? "invoiced" : "handledByJob",
                 jobBillable: Boolean(purchase.jobBillable ?? purchase.billable),
                 jobBillingRate: purchase.jobBillingRate || purchase.billingRateRaw || purchase.priceRaw || 0,
-            });
+                jobInternalId: job.internalId || "",
+                jobName: job.type || job.jobName || "",
+                status: shouldMarkInvoiced ? "Invoiced" : "Connected to Job",
+            };
+
+            await updateDoc(purchaseRef, updates);
 
             await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", job.id), {
                 purchasedItemsIds: arrayUnion(purchaseId),
@@ -746,17 +1075,31 @@ const PurchaseDetailView = () => {
                 });
             }
 
+            if (purchase.shoppingListItemId) {
+                await syncLinkedShoppingPurchase({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    purchasedItemId: purchaseId,
+                    shoppingItemId: purchase.shoppingListItemId,
+                    purchasedItemData: { ...purchase, ...updates, id: purchaseId },
+                    preferPurchasedContext: true,
+                });
+            }
+            await recordPurchaseHistory({
+                title: "Purchase job updated",
+                eventType: "job_updated",
+                changes: [
+                    historyChange("Job", purchase.jobInternalId || purchase.jobName || (previousJobId ? "Job connected" : ""), job.internalId || job.type || "Job connected"),
+                    historyChange("Customer", purchase.customerName, updates.customerName),
+                    historyChange("Status", purchase.status, updates.status),
+                    shouldMarkInvoiced ? historyChange("Invoiced", !!purchase.invoiced, true) : null,
+                ],
+            });
+
             setPurchase((prev) => ({
                 ...prev,
-                jobId: job.id,
-                workOrderId: job.id,
-                assignedJobId: job.id,
-                assignedToJob: true,
-                assignmentStatus: "assignedToJob",
-                billingOwner: "job",
-                jobBillingStatus: "handledByJob",
-                jobBillable: Boolean(prev.jobBillable ?? prev.billable),
-                jobBillingRate: prev.jobBillingRate || prev.billingRateRaw || prev.priceRaw || 0,
+                ...updates,
+                ...(shouldMarkInvoiced ? invoicedPurchaseStateForJob(job) : {}),
             }));
             setJobModalOpen(false);
         } catch (error) {
@@ -784,10 +1127,28 @@ const PurchaseDetailView = () => {
                 jobBillingStatus: "",
                 jobBillable: false,
                 jobBillingRate: 0,
+                status: purchaseStandaloneStatus({
+                    billable: purchase.billable,
+                    invoiced: purchase.invoiced,
+                    returned: purchase.returned,
+                }),
             });
 
             await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", currentJobId), {
                 purchasedItemsIds: arrayRemove(purchaseId),
+            });
+            const nextStatus = purchaseStandaloneStatus({
+                billable: purchase.billable,
+                invoiced: purchase.invoiced,
+                returned: purchase.returned,
+            });
+            await recordPurchaseHistory({
+                title: "Purchase job cleared",
+                eventType: "job_cleared",
+                changes: [
+                    historyChange("Job", purchase.jobInternalId || purchase.jobName || "Job connected", ""),
+                    historyChange("Status", purchase.status, nextStatus),
+                ],
             });
 
             setPurchase((prev) => ({
@@ -801,6 +1162,7 @@ const PurchaseDetailView = () => {
                 jobBillingStatus: "",
                 jobBillable: false,
                 jobBillingRate: 0,
+                status: nextStatus,
             }));
         } catch (error) {
             console.log(error);
@@ -811,8 +1173,23 @@ const PurchaseDetailView = () => {
         }
     };
 
+    const toggleShoppingListStatusFilter = (status) => {
+        setShoppingListStatusFilters((current) => {
+            if (current.includes(status)) {
+                return current.filter((value) => value !== status);
+            }
+
+            return [...current, status];
+        });
+    };
+
     const filteredShoppingListItems = shoppingListItems.filter((item) => {
         const search = shoppingListSearch.toLowerCase().trim();
+        const activeStatusFilters = shoppingListStatusFilters.filter(Boolean);
+        const matchesStatus =
+            activeStatusFilters.length === 0 ||
+            activeStatusFilters.includes(item.status || "");
+        if (!matchesStatus) return false;
         if (!search) return true;
 
         return (
@@ -857,6 +1234,97 @@ const PurchaseDetailView = () => {
     const editCategoryOptions = purchaseCategoryOptions.includes(editForm.category)
         ? purchaseCategoryOptions
         : [editForm.category, ...purchaseCategoryOptions].filter(Boolean);
+    const historyChangeText = (change) => {
+        if (typeof change === "string") return change;
+        if (!change || typeof change !== "object") return "";
+
+        const label = change.label || change.field || "Change";
+        return `${label}: ${compactHistoryValue(change.previous ?? change.before)} -> ${compactHistoryValue(change.next ?? change.after)}`;
+    };
+    const recentPurchaseHistory = purchaseHistory.slice(0, 5);
+    const olderPurchaseHistory = purchaseHistory.slice(5);
+    const renderHistoryEntry = (entry) => {
+        const changes = Array.isArray(entry.changes)
+            ? entry.changes.map(historyChangeText).filter(Boolean)
+            : [];
+
+        return (
+            <div key={entry.id} className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="font-semibold text-gray-800">
+                            {entry.title || entry.eventType || "Purchase updated"}
+                        </p>
+                        <p className="mt-1 text-xs text-gray-500">
+                            {entry.actorName || entry.tech || "Unknown user"} | {formatHistoryDate(entry.date || entry.createdAt)}
+                        </p>
+                    </div>
+                    {entry.source && (
+                        <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold uppercase text-gray-500">
+                            {entry.source}
+                        </span>
+                    )}
+                </div>
+
+                {changes.length > 0 && (
+                    <ul className="mt-3 space-y-1 text-sm text-gray-700">
+                        {changes.map((change, index) => (
+                            <li key={`${entry.id}-${index}`} className="leading-snug">
+                                {change}
+                            </li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+        );
+    };
+    const renderPurchaseHistoryCard = () => (
+        <div className="bg-white p-6 rounded-xl shadow-lg">
+            <div className="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h3 className="text-xl font-bold text-gray-800">
+                        Purchase History
+                    </h3>
+                    <p className="text-sm text-gray-500 mt-1">
+                        Most recent 5 changes
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={loadPurchaseHistory}
+                    disabled={purchaseHistoryLoading}
+                    className="shrink-0 rounded-lg border border-gray-200 bg-gray-50 px-3 py-1.5 text-sm font-semibold text-gray-700 hover:bg-gray-100 disabled:opacity-60"
+                >
+                    Refresh
+                </button>
+            </div>
+
+            {purchaseHistoryLoading ? (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+                    Loading history...
+                </div>
+            ) : purchaseHistory.length === 0 ? (
+                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+                    No purchase history recorded yet.
+                </div>
+            ) : (
+                <>
+                    <div className="space-y-3">
+                        {recentPurchaseHistory.map(renderHistoryEntry)}
+                    </div>
+                    {olderPurchaseHistory.length > 0 && (
+                        <button
+                            type="button"
+                            onClick={() => setPurchaseHistoryModalOpen(true)}
+                            className="mt-4 w-full rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                        >
+                            View {olderPurchaseHistory.length} older history {olderPurchaseHistory.length === 1 ? "entry" : "entries"}
+                        </button>
+                    )}
+                </>
+            )}
+        </div>
+    );
 
     return (
         <div className="min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8">
@@ -1170,6 +1638,8 @@ const PurchaseDetailView = () => {
                                 />
                             )}
                         </div>
+
+                        {renderPurchaseHistoryCard()}
                     </div>
 
                     <div className="space-y-6">
@@ -1183,8 +1653,8 @@ const PurchaseDetailView = () => {
                                     <p className="text-sm font-semibold text-gray-500 mb-1">
                                         Connected Shopping List Item
                                     </p>
-                                    <p className="break-all">
-                                        {purchase.shoppingListItemId || "Not connected"}
+                                    <p>
+                                        {connectedShoppingListItem?.name || (purchase.shoppingListItemId ? "Connected" : "Not connected")}
                                     </p>
                                 </div>
 
@@ -1536,9 +2006,46 @@ const PurchaseDetailView = () => {
                                 </div>
                             </div>
                         </div>
+
                     </div>
                 </div>
             </div>
+
+            {purchaseHistoryModalOpen && (
+                <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+                    <div className="w-full max-w-4xl max-h-[86vh] bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col">
+                        <div className="flex items-center justify-between gap-4 px-6 py-4 border-b border-gray-200">
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-800">
+                                    Older Purchase History
+                                </h3>
+                                <p className="text-sm text-gray-500 mt-1">
+                                    {olderPurchaseHistory.length} older {olderPurchaseHistory.length === 1 ? "entry" : "entries"}
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setPurchaseHistoryModalOpen(false)}
+                                className="px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200 transition"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="p-5 overflow-y-auto">
+                            {olderPurchaseHistory.length === 0 ? (
+                                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-500">
+                                    No older purchase history to show.
+                                </div>
+                            ) : (
+                                <div className="space-y-3">
+                                    {olderPurchaseHistory.map(renderHistoryEntry)}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {shoppingListModalOpen && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
@@ -1561,13 +2068,47 @@ const PurchaseDetailView = () => {
                             </button>
                         </div>
 
-                        <div className="p-6">
+                        <div className="p-4">
+                            <div className="mb-3 flex flex-wrap items-center gap-2">
+                                <button
+                                    type="button"
+                                    onClick={() => setShoppingListStatusFilters([])}
+                                    className={[
+                                        "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                                        shoppingListStatusFilters.length === 0
+                                            ? "border-slate-700 bg-slate-800 text-white"
+                                            : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50",
+                                    ].join(" ")}
+                                >
+                                    All
+                                </button>
+                                {shoppingListStatusOptions.map((status) => {
+                                    const selected = shoppingListStatusFilters.includes(status);
+
+                                    return (
+                                        <button
+                                            key={status}
+                                            type="button"
+                                            onClick={() => toggleShoppingListStatusFilter(status)}
+                                            className={[
+                                                "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                                                selected
+                                                    ? "border-blue-600 bg-blue-50 text-blue-700"
+                                                    : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50",
+                                            ].join(" ")}
+                                        >
+                                            {status}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
                             <input
                                 type="text"
                                 value={shoppingListSearch}
                                 onChange={(e) => setShoppingListSearch(e.target.value)}
                                 placeholder="Search shopping list items..."
-                                className="w-full p-3 border border-gray-300 rounded-lg mb-4"
+                                className="mb-3 w-full rounded-lg border border-gray-300 p-2.5 text-sm"
                             />
 
                             {shoppingListItemsLoading ? (
@@ -1575,31 +2116,35 @@ const PurchaseDetailView = () => {
                                     Loading shopping list items...
                                 </div>
                             ) : filteredShoppingListItems.length > 0 ? (
-                                <div className="max-h-[420px] overflow-y-auto space-y-3">
+                                <div className="max-h-[520px] overflow-y-auto space-y-2">
                                     {filteredShoppingListItems.map((item) => (
                                         <div
                                             key={item.id}
-                                            className="p-4 rounded-xl border border-gray-200 bg-gray-50 flex flex-col md:flex-row md:items-center md:justify-between gap-4"
+                                            className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 md:flex-row md:items-center md:justify-between"
                                         >
-                                            <div className="min-w-0">
-                                                <p className="font-semibold text-gray-800">
-                                                    {item.name || "Unnamed Item"}
-                                                </p>
-                                                <p className="text-sm text-gray-500 mt-1">
+                                            <div className="min-w-0 flex-1">
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    <p className="truncate text-sm font-semibold text-gray-800">
+                                                        {item.name || "Unnamed Item"}
+                                                    </p>
+                                                    <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                                                        {item.status || "No status"}
+                                                    </span>
+                                                </div>
+                                                <p className="mt-0.5 truncate text-xs text-gray-500">
                                                     {item.description || "No description"}
                                                 </p>
-                                                <div className="mt-2 text-xs text-gray-500 space-y-1">
-                                                    <p>Category: {item.category || "—"}</p>
-                                                    <p>Status: {item.status || "—"}</p>
-                                                    <p>Purchaser: {item.purchaserName || "—"}</p>
-                                                    <p>Quantity: {item.quantity || "—"}</p>
+                                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-gray-500">
+                                                    <span>{item.category || "Uncategorized"}</span>
+                                                    <span>Qty {item.quantity || "—"}</span>
+                                                    <span>{item.purchaserName || "No purchaser"}</span>
                                                 </div>
                                             </div>
 
                                             <button
                                                 type="button"
                                                 onClick={() => connectShoppingListItem(item)}
-                                                className="shrink-0 px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                                                className="shrink-0 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
                                             >
                                                 Select
                                             </button>

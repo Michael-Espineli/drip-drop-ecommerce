@@ -267,7 +267,7 @@ const SortHeaderButton = ({ children, sortKey, activeSortKey, sortDirection, onS
         <button
             type="button"
             onClick={() => onSort(sortKey)}
-            className={`inline-flex items-center gap-1.5 text-left text-sm font-semibold uppercase tracking-wider transition ${active ? "text-blue-700" : "text-gray-600 hover:text-gray-800"}`}
+            className={`inline-flex items-center gap-1.5 text-left text-xs font-semibold uppercase tracking-wide transition ${active ? "text-blue-700" : "text-slate-500 hover:text-slate-900"}`}
             aria-label={`Sort jobs by ${children}`}
         >
             {children}
@@ -793,25 +793,25 @@ const Jobs = () => {
         switch (status) {
             case "Draft":
             case "Unscheduled":
-                return "bg-red-100 text-red-800";
+                return "bg-red-50 text-red-700";
             case "Estimate":
             case "In Progress":
             case "Estimate Pending":
-                return "bg-yellow-100 text-yellow-800";
+                return "bg-amber-50 text-amber-700";
             case "Accepted":
             case "Scheduled":
             case "Finished":
             case "Paid":
             case "Comped":
-                return "bg-green-100 text-green-800";
+                return "bg-emerald-50 text-emerald-700";
             case "Invoiced":
-                return "bg-blue-100 text-blue-800";
+                return "bg-blue-50 text-blue-700";
             case "Waiting for Parts":
-                return "bg-purple-100 text-purple-800";
+                return "bg-violet-50 text-violet-700";
             case "Expired":
-                return "bg-gray-100 text-gray-800";
+                return "bg-slate-100 text-slate-700";
             default:
-                return "bg-gray-100 text-gray-800";
+                return "bg-slate-100 text-slate-700";
         }
     };
 
@@ -826,7 +826,7 @@ const Jobs = () => {
             case "emerald":
                 return "bg-emerald-100 text-emerald-800";
             default:
-                return "bg-gray-100 text-gray-800";
+                return "bg-slate-100 text-slate-700";
         }
     };
 
@@ -853,17 +853,17 @@ const Jobs = () => {
 
     const JobMetricCard = ({ label, value, detail, tone = "slate" }) => {
         const toneClasses = {
-            slate: "border-slate-200 bg-white text-slate-950",
-            blue: "border-blue-200 bg-blue-50 text-blue-950",
-            amber: "border-amber-200 bg-amber-50 text-amber-950",
+            slate: "border-slate-200 bg-slate-50 text-slate-950",
+            blue: "border-blue-200 bg-slate-50 text-slate-950",
+            amber: "border-amber-200 bg-slate-50 text-slate-950",
             red: "border-red-200 bg-red-50 text-red-950",
-            green: "border-green-200 bg-green-50 text-green-950",
+            green: "border-emerald-200 bg-slate-50 text-slate-950",
         };
 
         return (
             <div className={`rounded-lg border p-4 shadow-sm ${toneClasses[tone] || toneClasses.slate}`}>
                 <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-                <p className="mt-2 text-2xl font-bold leading-tight">{value}</p>
+                <p className="mt-1 text-xl font-bold leading-tight">{value}</p>
                 {detail && (
                     <p className="mt-1 text-sm text-slate-600">{detail}</p>
                 )}
@@ -892,17 +892,17 @@ const Jobs = () => {
         };
 
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
-                <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-lg">
-                    <h3 className="text-2xl font-bold mb-6 text-gray-800">Filter & Sort</h3>
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                <div className="w-full max-w-lg rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="mb-5 text-xl font-bold text-slate-950">Filter & Sort</h3>
 
-                    <div className="space-y-6">
+                    <div className="space-y-5">
                         <div>
-                            <label className="block mb-2 font-semibold text-gray-700">Sort</label>
+                            <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-slate-500">Sort</label>
                             <select
                                 value={sortBy}
                                 onChange={(e) => setSortBy(e.target.value)}
-                                className="w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500"
+                                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                             >
                                 {JOB_SORT_OPTIONS.map((option) => (
                                     <option key={option.value} value={option.value}>
@@ -913,57 +913,57 @@ const Jobs = () => {
                         </div>
 
                         <div>
-                            <label className="block mb-3 font-semibold text-gray-700">
+                            <label className="mb-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
                                 Operational Status
                             </label>
 
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                                 {OPERATION_STATUS_OPTIONS.map(status => (
-                                    <label key={status} className="flex items-center space-x-3 cursor-pointer">
+                                    <label key={status} className="flex cursor-pointer items-center space-x-3">
                                         <input
                                             type="checkbox"
                                             checked={tempOperationFilters.includes(status)}
                                             onChange={() => handleOperationChange(status)}
-                                            className="form-checkbox h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                            className="form-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                         />
-                                        <span className="text-gray-700">{status}</span>
+                                        <span className="text-sm text-slate-700">{status}</span>
                                     </label>
                                 ))}
                             </div>
                         </div>
 
                         <div>
-                            <label className="block mb-3 font-semibold text-gray-700">
+                            <label className="mb-3 block text-xs font-bold uppercase tracking-wide text-slate-500">
                                 Billing Status
                             </label>
 
                             <div className="grid grid-cols-2 gap-x-6 gap-y-3">
                                 {BILLING_STATUS_OPTIONS.map(status => (
-                                    <label key={status} className="flex items-center space-x-3 cursor-pointer">
+                                    <label key={status} className="flex cursor-pointer items-center space-x-3">
                                         <input
                                             type="checkbox"
                                             checked={tempBillingFilters.includes(status)}
                                             onChange={() => handleBillingChange(status)}
-                                            className="form-checkbox h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                                            className="form-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                         />
-                                        <span className="text-gray-700">{status}</span>
+                                        <span className="text-sm text-slate-700">{status}</span>
                                     </label>
                                 ))}
                             </div>
                         </div>
                     </div>
 
-                    <div className="flex justify-end space-x-4 mt-8">
+                    <div className="mt-6 flex justify-end gap-3">
                         <button
                             onClick={onClose}
-                            className="py-2 px-6 bg-gray-200 text-gray-800 font-semibold rounded-lg hover:bg-gray-300 transition"
+                            className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
                         >
                             Cancel
                         </button>
 
                         <button
                             onClick={() => applyFilters(tempOperationFilters, tempBillingFilters)}
-                            className="py-2 px-6 bg-blue-600 text-white font-semibold rounded-lg hover:bg-blue-700 transition"
+                            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
                         >
                             Apply
                         </button>
@@ -975,40 +975,40 @@ const Jobs = () => {
 
     const CreateJobOptionsModal = () => {
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
-                    <div className="p-6 border-b border-gray-200">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                <div className="w-full max-w-lg overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-200 p-5">
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <h3 className="text-2xl font-bold text-gray-800">Create Job</h3>
-                                <p className="text-gray-600 mt-1">
+                                <h3 className="text-xl font-bold text-slate-950">Create Job</h3>
+                                <p className="mt-1 text-sm text-slate-500">
                                     Start blank or use a reusable job template.
                                 </p>
                             </div>
 
                             <button
                                 onClick={() => setShowCreateOptionsModal(false)}
-                                className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200"
+                                className="h-9 w-9 rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
                             >
                                 ✕
                             </button>
                         </div>
                     </div>
 
-                    <div className="p-6 space-y-3">
+                    <div className="space-y-3 p-5">
                         <button
                             type="button"
                             onClick={handleCreateBlankJob}
-                            className="w-full text-left rounded-xl border border-gray-200 bg-gray-50 p-4 hover:bg-gray-100 transition"
+                            className="w-full rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:bg-slate-100"
                         >
                             <div className="flex items-start gap-3">
-                                <div className="w-10 h-10 rounded-full bg-white border border-gray-200 flex items-center justify-center">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-white">
                                     <span className="text-lg">＋</span>
                                 </div>
 
                                 <div>
-                                    <p className="font-bold text-gray-800">Blank Job</p>
-                                    <p className="text-sm text-gray-600 mt-1">
+                                    <p className="font-bold text-slate-900">Blank Job</p>
+                                    <p className="mt-1 text-sm text-slate-500">
                                         Build a job manually from scratch.
                                     </p>
                                 </div>
@@ -1018,16 +1018,16 @@ const Jobs = () => {
                         <button
                             type="button"
                             onClick={handleOpenTemplatePicker}
-                            className="w-full text-left rounded-xl border border-blue-200 bg-blue-50 p-4 hover:bg-blue-100 transition"
+                            className="w-full rounded-md border border-blue-200 bg-blue-50 p-4 text-left transition hover:bg-blue-100"
                         >
                             <div className="flex items-start gap-3">
-                                <div className="w-10 h-10 rounded-full bg-white border border-blue-200 flex items-center justify-center">
+                                <div className="flex h-10 w-10 items-center justify-center rounded-md border border-blue-200 bg-white">
                                     <span className="text-lg">▣</span>
                                 </div>
 
                                 <div>
                                     <p className="font-bold text-blue-900">From Template</p>
-                                    <p className="text-sm text-blue-800 mt-1">
+                                    <p className="mt-1 text-sm text-blue-800">
                                         Copy planned stops, tasks, materials, and pricing into a new job.
                                     </p>
                                 </div>
@@ -1041,80 +1041,80 @@ const Jobs = () => {
 
     const TemplatePickerModal = () => {
         return (
-            <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[85vh] overflow-hidden">
-                    <div className="p-6 border-b border-gray-200">
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+                <div className="max-h-[85vh] w-full max-w-3xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="border-b border-slate-200 p-5">
                         <div className="flex items-start justify-between gap-4">
                             <div>
-                                <h3 className="text-2xl font-bold text-gray-800">Choose Template</h3>
-                                <p className="text-gray-600 mt-1">
+                                <h3 className="text-xl font-bold text-slate-950">Choose Template</h3>
+                                <p className="mt-1 text-sm text-slate-500">
                                     Select a template to prefill the new job.
                                 </p>
                             </div>
 
                             <button
                                 onClick={() => setShowTemplatePickerModal(false)}
-                                className="w-9 h-9 rounded-full bg-gray-100 text-gray-600 hover:bg-gray-200"
+                                className="h-9 w-9 rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
                             >
                                 ✕
                             </button>
                         </div>
                     </div>
 
-                    <div className="p-6 overflow-y-auto max-h-[65vh]">
+                    <div className="max-h-[65vh] overflow-y-auto p-5">
                         {loadingTemplates ? (
-                            <div className="rounded-xl border border-gray-200 bg-gray-50 p-6 text-center">
-                                <p className="font-semibold text-gray-700">Loading templates...</p>
+                            <div className="rounded-lg border border-slate-200 bg-slate-50 p-6 text-center">
+                                <p className="font-semibold text-slate-800">Loading templates...</p>
                             </div>
                         ) : jobTemplates.length === 0 ? (
-                            <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center">
-                                <p className="font-semibold text-gray-700">No templates found.</p>
-                                <p className="text-sm text-gray-500 mt-1">
+                            <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+                                <p className="font-semibold text-slate-800">No templates found.</p>
+                                <p className="mt-1 text-sm text-slate-500">
                                     Create a job template first, then return here.
                                 </p>
                             </div>
                         ) : (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                                 {jobTemplates.map((template) => (
                                     <button
                                         key={template.id}
                                         type="button"
                                         onClick={() => handleCreateFromTemplate(template)}
-                                        className="text-left rounded-xl border border-gray-200 bg-gray-50 p-4 hover:bg-blue-50 hover:border-blue-200 transition"
+                                        className="rounded-md border border-slate-200 bg-slate-50 p-4 text-left transition hover:border-blue-200 hover:bg-blue-50"
                                     >
                                         <div className="flex items-start justify-between gap-3">
                                             <div>
-                                                <p className="font-bold text-gray-800">
+                                                <p className="font-bold text-slate-900">
                                                     {template.name || "Job Template"}
                                                 </p>
 
                                                 {template.description && (
-                                                    <p className="text-sm text-gray-600 mt-1 line-clamp-2">
+                                                    <p className="mt-1 line-clamp-2 text-sm text-slate-500">
                                                         {template.description}
                                                     </p>
                                                 )}
                                             </div>
 
-                                            <span className="px-3 py-1 rounded-full text-xs font-bold bg-white border border-gray-200 text-gray-700">
+                                            <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-bold text-slate-700">
                                                 {formatTemplateMoney(template)}
                                             </span>
                                         </div>
 
                                         <div className="mt-4 flex flex-wrap gap-2">
                                             {template.type && (
-                                                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-100 text-gray-700">
+                                                <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
                                                     {template.type}
                                                 </span>
                                             )}
 
                                             {template.defaultLaborCostCents !== undefined && (
-                                                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200">
+                                                <span className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-semibold text-amber-700">
                                                     Labor {moneyFromCents(template.defaultLaborCostCents)}
                                                 </span>
                                             )}
 
                                             {template.locked && (
-                                                <span className="px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+                                                <span className="rounded-full border border-violet-200 bg-violet-50 px-3 py-1 text-xs font-semibold text-violet-700">
                                                     Locked
                                                 </span>
                                             )}
@@ -1130,39 +1130,42 @@ const Jobs = () => {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-            <div className="w-full">
-                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4 mb-6">
-                    <div>
-                        <h2 className="text-3xl font-bold text-gray-800">Jobs</h2>
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company operations</p>
+                            <h2 className="mt-1 text-3xl font-bold text-slate-950">Jobs</h2>
 
-                        <p className="text-gray-600 mt-1">
-                            Track jobs, service schedules, and operational status.
-                        </p>
+                            <p className="mt-1 text-sm text-slate-500">
+                                Track jobs, service schedules, and operational status.
+                            </p>
 
-                        <div className="mt-2 inline-flex items-center gap-3 text-sm text-gray-700">
-                            <span className="text-gray-600">
-                                Jobs: <span className="font-semibold text-gray-800">{visibleJobs.length}</span>
-                            </span>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                                    Jobs: {visibleJobs.length}
+                                </span>
 
-                            <span className="text-gray-600">
-                                Unique IDs: <span className="font-semibold text-gray-800">{uniqueJobsCount}</span>
-                            </span>
+                                <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                                    Unique IDs: {uniqueJobsCount}
+                                </span>
+                            </div>
                         </div>
+
+                        {canCreateJobs && (
+                            <button
+                                type="button"
+                                onClick={openCreateOptions}
+                                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+                            >
+                                Create Job
+                            </button>
+                        )}
                     </div>
+                </section>
 
-                    {canCreateJobs && (
-                        <button
-                            type="button"
-                            onClick={openCreateOptions}
-                            className={getOutlinedButtonClass({ tone: "blue" })}
-                        >
-                            Create Job
-                        </button>
-                    )}
-                </div>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3 mb-6">
+                <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                     <JobMetricCard
                         label="Shown Rate"
                         value={moneyFromCents(jobSummary.visibleRateCents)}
@@ -1185,10 +1188,10 @@ const Jobs = () => {
                             tone="green"
                         />
                     )}
-                </div>
+                </section>
 
-                <div className="rounded-lg bg-white p-6 shadow-lg">
-                    <div className="mb-4 flex flex-wrap gap-2">
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="flex flex-wrap gap-2 border-b border-slate-200 p-5">
                         <button
                             type="button"
                             onClick={() => handleJobListViewChange("operations")}
@@ -1210,25 +1213,25 @@ const Jobs = () => {
                             Finished Not Invoiced
                         </button>
                     </div>
-                    <div className="flex flex-col sm:flex-row justify-between items-center mb-4 gap-4">
+                    <div className="grid gap-3 border-b border-slate-200 p-5 lg:grid-cols-[minmax(280px,1fr)_auto] lg:items-center">
                         <input
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full sm:w-2/5 p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                             type="text"
                             placeholder="Search by customer, admin, ID, status, or description..."
                         />
 
                         <button
                             onClick={() => setShowFilterModal(true)}
-                            className={getOutlinedButtonClass({ tone: "slate", className: "w-full py-3 px-5 sm:w-auto" })}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
                         >
                             Filter & Sort
                         </button>
                     </div>
 
                     {canUpdateJobs && selectedJobIds.size > 0 && (
-                        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4 shadow-sm">
+                        <div className="border-b border-blue-100 bg-blue-50 p-5">
                             <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
                                 <div>
                                     <p className="text-sm font-bold text-blue-950">
@@ -1248,7 +1251,7 @@ const Jobs = () => {
                                             value={bulkOperationStatus}
                                             onChange={(event) => setBulkOperationStatus(event.target.value)}
                                             disabled={bulkUpdating}
-                                            className="mt-1 w-full rounded-lg border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                            className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <option value="">Leave unchanged</option>
                                             {OPERATION_STATUS_OPTIONS.map((status) => (
@@ -1267,7 +1270,7 @@ const Jobs = () => {
                                             value={bulkBillingStatus}
                                             onChange={(event) => setBulkBillingStatus(event.target.value)}
                                             disabled={bulkUpdating}
-                                            className="mt-1 w-full rounded-lg border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                            className="mt-1 w-full rounded-md border border-blue-200 bg-white p-2.5 text-sm text-slate-800 shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-60"
                                         >
                                             <option value="">Leave unchanged</option>
                                             {BILLING_STATUS_OPTIONS.map((status) => (
@@ -1302,68 +1305,73 @@ const Jobs = () => {
                         </div>
                     )}
 
-                    <div className="overflow-x-auto">
+                    <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                        <div>Showing {visibleJobs.length} of {jobs.length} job{jobs.length === 1 ? "" : "s"}</div>
+                        <div>{currentJobListView === "billing" ? "Finished not invoiced" : "Operations"} - {customFiltersActive ? "Custom filters" : "Default filters"}</div>
+                    </div>
+
+                    <div className="overflow-x-auto border-t border-slate-200">
                         <table className="min-w-full bg-white">
-                            <thead className="bg-gray-100">
+                            <thead className="bg-slate-50">
                                 <tr>
                                     {canUpdateJobs && (
-                                        <th className="w-12 p-4 text-left">
+                                        <th className="w-12 border-b border-slate-200 px-5 py-3 text-left">
                                             <input
                                                 type="checkbox"
                                                 aria-label="Select all visible jobs"
                                                 checked={allVisibleJobsSelected}
                                                 disabled={visibleJobs.length === 0 || bulkUpdating}
                                                 onChange={(event) => handleSelectAllVisibleJobs(event.target.checked)}
-                                                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                                             />
                                         </th>
                                     )}
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Job</th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Job</th>
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="dateCreated" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Date Created
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="customerName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Customer
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="adminName" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Admin
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="billingStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Billing Status
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="operationStatus" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Operation Status
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left">
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left">
                                         <SortHeaderButton sortKey="solutionTier" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Priority
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left hidden sm:table-cell">
+                                    <th className="hidden border-b border-slate-200 px-5 py-3 text-left sm:table-cell">
                                         <SortHeaderButton sortKey="rate" activeSortKey={activeSortKey} sortDirection={activeSortDirection} onSort={handleHeaderSort}>
                                             Rate
                                         </SortHeaderButton>
                                     </th>
-                                    <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">Description</th>
+                                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Description</th>
                                 </tr>
                             </thead>
 
-                            <tbody className="divide-y divide-gray-200">
+                            <tbody className="divide-y divide-slate-200">
                                 {visibleJobs.length === 0 ? (
                                     <tr>
-                                        <td colSpan={canUpdateJobs ? 10 : 9} className="p-8 text-center">
-                                            <p className="font-semibold text-gray-700">No jobs found.</p>
-                                            <p className="text-sm text-gray-500 mt-1">
+                                        <td colSpan={canUpdateJobs ? 10 : 9} className="px-6 py-12 text-center">
+                                            <p className="font-semibold text-slate-800">No jobs found.</p>
+                                            <p className="mt-1 text-sm text-slate-500">
                                                 Create a blank job or start from a template.
                                             </p>
 
@@ -1383,14 +1391,14 @@ const Jobs = () => {
                                         <tr
                                             key={job.id}
                                             className={[
-                                                selectedJobIds.has(job.id) ? "bg-blue-50 hover:bg-blue-100" : "hover:bg-gray-50",
+                                                selectedJobIds.has(job.id) ? "bg-blue-50 hover:bg-blue-100" : "hover:bg-slate-50",
                                                 "transition-colors cursor-pointer",
                                             ].join(" ")}
                                             onClick={() => navigate(`/company/jobs/detail/${job.id}`)}
                                         >
                                             {canUpdateJobs && (
                                                 <td
-                                                    className="p-4"
+                                                    className="px-5 py-3"
                                                     onClick={(event) => event.stopPropagation()}
                                                 >
                                                     <input
@@ -1399,11 +1407,11 @@ const Jobs = () => {
                                                         checked={selectedJobIds.has(job.id)}
                                                         disabled={bulkUpdating}
                                                         onChange={() => toggleJobSelection(job.id)}
-                                                        className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50"
                                                     />
                                                 </td>
                                             )}
-                                            <td className="p-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <div className="flex items-center gap-2">
                                                     <span>{job.internalId}</span>
 
@@ -1415,40 +1423,40 @@ const Jobs = () => {
                                                 </div>
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap text-gray-700">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
                                                 {job.dateCreated ? format(job.dateCreated, "MM/dd/yyyy") : "N/A"}
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-800">
                                                 {job.customerName}
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap text-gray-700">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
                                                 {job.adminName || "Unassigned"}
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.billingStatus)}`}>
                                                     {job.billingStatus}
                                                 </span>
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
                                                 <span className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(job.operationStatus)}`}>
                                                     {job.operationStatus}
                                                 </span>
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-900">
                                                 {renderSolutionTier(job.issuePriorityLevel || job.priorityLevel || job.solutionTier)}
                                             </td>
 
-                                            <td className="p-4 whitespace-nowrap text-gray-800 hidden sm:table-cell">
+                                            <td className="hidden whitespace-nowrap px-5 py-3 text-sm text-slate-800 sm:table-cell">
                                                 {moneyFromCents(job.rate)}
                                             </td>
 
                                             <td
-                                                className="p-4 whitespace-nowrap max-w-xs truncate text-gray-700"
+                                                className="max-w-xs whitespace-nowrap px-5 py-3 text-sm text-slate-700 truncate"
                                                 title={job.description}
                                             >
                                                 {job.description}
@@ -1459,7 +1467,7 @@ const Jobs = () => {
                             </tbody>
                         </table>
                     </div>
-                </div>
+                </section>
             </div>
 
             {showFilterModal && (

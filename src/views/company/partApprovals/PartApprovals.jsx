@@ -88,7 +88,7 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
     <div className="flex items-start justify-between gap-3">
       <div>
         <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+        <p className="mt-1 text-xl font-bold text-slate-950">{value}</p>
       </div>
       <span className="rounded-md bg-slate-100 p-2 text-slate-600">
         <Icon />
@@ -347,26 +347,29 @@ const CompanyPartApprovals = () => {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-      <div className="w-full">
-        <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6">
-          <div className="flex flex-col gap-2">
-            <h1 className="text-3xl font-bold text-slate-950">Part Approvals</h1>
-            <p className="max-w-3xl text-sm text-slate-600">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company approvals</p>
+            <h1 className="mt-1 text-3xl font-bold text-slate-950">Part Approvals</h1>
+            <p className="mt-1 max-w-3xl text-sm text-slate-500">
               Customer approvals for small parts before they move into the shopping, install, and invoice workflow.
             </p>
           </div>
           <button
             type="button"
             onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white hover:bg-blue-700"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
           >
             <FaPlus />
             New Part Approval
           </button>
         </div>
+        </section>
 
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4 mb-6">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <StatTile icon={FaClock} label="Pending" value={summary.pendingCount} helper="Waiting on customer" />
           <StatTile icon={FaCheckCircle} label="Approved" value={summary.approvedCount} helper="Ready to purchase" />
           <StatTile icon={FaFileInvoiceDollar} label="Requested Value" value={formatCurrency(summary.totalValueCents)} helper="Customer-facing value" />
@@ -387,7 +390,7 @@ const CompanyPartApprovals = () => {
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
-              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+              className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               <option value="all">All Statuses</option>
               <option value="pending">Pending</option>
@@ -399,26 +402,31 @@ const CompanyPartApprovals = () => {
 
           {error && <div className="border-b border-rose-200 bg-rose-50 p-4 text-sm text-rose-700">{error}</div>}
 
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div>Showing {filteredApprovals.length} of {approvals.length} approval{approvals.length === 1 ? "" : "s"}</div>
+            <div>{statusFilter === "all" ? "All statuses" : labelize(statusFilter)}</div>
+          </div>
+
           {loading ? (
             <div className="p-8 text-center text-sm text-slate-500">Loading part approvals...</div>
           ) : filteredApprovals.length === 0 ? (
-            <div className="p-8 text-center text-sm text-slate-500">No part approvals found.</div>
+            <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-sm text-slate-500">No part approvals found.</div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
+                <thead className="bg-slate-50">
                   <tr>
-                    <th className="px-5 py-3">Part</th>
-                    <th className="px-5 py-3">Customer</th>
-                    <th className="px-5 py-3">Job</th>
-                    <th className="px-5 py-3">Amount</th>
-                    <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3">Shopping Item</th>
-                    <th className="px-5 py-3">Updated</th>
-                    <th className="px-5 py-3">Workflow</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Part</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Job</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Amount</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Shopping Item</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Updated</th>
+                    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Workflow</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
+                <tbody className="divide-y divide-slate-200 bg-white">
                   {filteredApprovals.map((approval) => {
                     const statusKey = normalizeStatus(approval.status || approval.approvalStatus || 'pending');
                     const isApproved = statusKey === 'approved';
@@ -427,15 +435,15 @@ const CompanyPartApprovals = () => {
 
                     return (
                       <tr key={approval.id} className="transition hover:bg-slate-50">
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-3">
                           <p className="font-semibold text-slate-950">{approval.itemName || approval.name || 'Pool Part'}</p>
                           <p className="mt-1 max-w-xs truncate text-xs text-slate-500">{approval.description || 'Customer approval request'}</p>
                         </td>
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-3">
                           <p className="font-semibold text-slate-900">{approval.customerName || 'Customer'}</p>
                           <p className="mt-1 text-xs text-slate-500">{approval.customerEmail || 'No email'}</p>
                         </td>
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-3">
                           {approval.jobId ? (
                             <Link to={`/company/jobs/detail/${approval.jobId}`} className="font-semibold text-blue-700 hover:text-blue-900">
                               {approval.jobInternalId || approval.jobName || approval.jobId}
@@ -444,9 +452,9 @@ const CompanyPartApprovals = () => {
                             <span className="text-slate-500">Not linked</span>
                           )}
                         </td>
-                        <td className="px-5 py-4 font-semibold text-slate-950">{formatCurrency(approvalTotalCents(approval))}</td>
-                        <td className="px-5 py-4"><StatusBadge status={approval.status || approval.approvalStatus} /></td>
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-3 font-semibold text-slate-950">{formatCurrency(approvalTotalCents(approval))}</td>
+                        <td className="px-5 py-3"><StatusBadge status={approval.status || approval.approvalStatus} /></td>
+                        <td className="px-5 py-3">
                           {approval.shoppingListItemId ? (
                             <Link to={`/company/shopping-list/detail/${approval.shoppingListItemId}`} className="font-semibold text-blue-700 hover:text-blue-900">
                               Open
@@ -455,8 +463,8 @@ const CompanyPartApprovals = () => {
                             <span className="text-slate-500">Created after approval</span>
                           )}
                         </td>
-                        <td className="px-5 py-4 text-slate-500">{formatDate(approval.updatedAt || approval.requestedAt || approval.createdAt)}</td>
-                        <td className="px-5 py-4">
+                        <td className="px-5 py-3 text-slate-500">{formatDate(approval.updatedAt || approval.requestedAt || approval.createdAt)}</td>
+                        <td className="px-5 py-3">
                           {approval.invoiceId ? (
                             <Link to={`/company/sales/invoices/${approval.invoiceId}`} className="font-semibold text-blue-700 hover:text-blue-900">
                               Open invoice

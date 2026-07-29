@@ -1,0 +1,11 @@
+.route-day-calendar .react-datepicker__day--selected,
+.route-day-calendar .react-datepicker__day--keyboard-selected {
+    background-color: #0e245c;
+    color: #ffffff;
+}
+
+.route-day-calendar .react-datepicker__day--selected:hover,
+.route-day-calendar .react-datepicker__day--keyboard-selected:hover {
+    background-color: #163579;
+    color: #ffffff;
+}

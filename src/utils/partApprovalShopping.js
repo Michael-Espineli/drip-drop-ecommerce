@@ -15,7 +15,7 @@ export const isPartApprovalPending = (approval = {}) =>
 
 export const isShoppingItemDelivered = (item = {}) => {
   const status = normalizePartApprovalStatus(item.status || item.deliveryStatus || item.fulfillmentStatus);
-  return ["delivered", "installed", "resolved"].includes(status);
+  return ["delivered", "installed", "resolved", "invoiced"].includes(status);
 };
 
 export const partApprovalUnitPriceCents = (approval = {}) => {

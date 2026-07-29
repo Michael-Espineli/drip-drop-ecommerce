@@ -14,10 +14,15 @@ import {
     uploadItemPhoto,
     validateItemPhotoFile,
 } from "../../../utils/itemPhotos";
+import {
+    SHOPPING_LIST_INVOICED_STATUS,
+    shoppingItemNeedsAction,
+    syncLinkedShoppingPurchase,
+} from "../../../utils/shoppingPurchaseSync";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
-const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed"];
+const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", SHOPPING_LIST_INVOICED_STATUS];
 const shoppingListCollectionNames = ["shoppingList", "shoppingListItems"];
 
 const selectStyles = {
@@ -84,6 +89,9 @@ const ShoppingListDetailView = () => {
     const [photoFile, setPhotoFile] = useState(null);
     const [photoPreviewUrl, setPhotoPreviewUrl] = useState("");
     const [photoError, setPhotoError] = useState("");
+    const [purchasedItemModalOpen, setPurchasedItemModalOpen] = useState(false);
+    const [purchasedItemSearch, setPurchasedItemSearch] = useState("");
+    const [connectingPurchasedItemId, setConnectingPurchasedItemId] = useState("");
 
     const [item, setItem] = useState({
         id: "",
@@ -435,6 +443,24 @@ const ShoppingListDetailView = () => {
         setEditForm((prev) => ({
             ...prev,
             [field]: value,
+            ...(field === "invoiced"
+                ? {
+                    status: value
+                        ? SHOPPING_LIST_INVOICED_STATUS
+                        : prev.status === SHOPPING_LIST_INVOICED_STATUS
+                            ? "Purchased"
+                            : prev.status,
+                }
+                : {}),
+            ...(field === "status"
+                ? {
+                    invoiced: value === SHOPPING_LIST_INVOICED_STATUS
+                        ? true
+                        : prev.status === SHOPPING_LIST_INVOICED_STATUS
+                            ? false
+                            : prev.invoiced,
+                }
+                : {}),
         }));
     };
 
@@ -503,6 +529,25 @@ const ShoppingListDetailView = () => {
         };
     }, [availablePurchasedItemOptions, editForm.purchasedItem]);
 
+    const filteredPurchasedItemOptions = useMemo(() => {
+        const searchText = purchasedItemSearch.toLowerCase().trim();
+        if (!searchText) return availablePurchasedItemOptions;
+
+        return availablePurchasedItemOptions.filter((option) => (
+            [
+                option.name,
+                option.label,
+                option.dateLabel,
+                option.techName,
+                option.invoiceNum,
+                option.customerName,
+                option.venderName,
+                option.vendorName,
+                option.quantityString,
+            ].filter(Boolean).join(" ").toLowerCase().includes(searchText)
+        ));
+    }, [availablePurchasedItemOptions, purchasedItemSearch]);
+
     const handlePurchaserChange = (option) => {
         setEditForm((prev) => ({
             ...prev,
@@ -518,22 +563,38 @@ const ShoppingListDetailView = () => {
         }));
     };
 
-    const updatePurchasedItemConnection = async (purchasedItemId, shoppingListItemId) => {
-        const cleanPurchasedItemId = compactString(purchasedItemId);
-        if (!cleanPurchasedItemId) return;
+    const updatePurchasedItemOptionLinks = (previousPurchasedItemId, nextPurchasedItemId) => {
+        setPurchasedItemOptions((prev) => prev.map((option) => {
+            if (option.id === previousPurchasedItemId && previousPurchasedItemId !== nextPurchasedItemId) {
+                return { ...option, shoppingListItemId: "" };
+            }
 
-        const purchaseRef = doc(
+            if (option.id === nextPurchasedItemId) {
+                return { ...option, shoppingListItemId: shoppingItemId };
+            }
+
+            return option;
+        }));
+    };
+
+    const syncPurchasedItemConnection = async (previousPurchasedItemId, nextPurchasedItemId) => {
+        const nextId = compactString(nextPurchasedItemId);
+
+        return syncLinkedShoppingPurchase({
             db,
-            "companies",
-            recentlySelectedCompany,
-            "purchasedItems",
-            cleanPurchasedItemId
-        );
-        const purchaseSnap = await getDoc(purchaseRef);
-        if (!purchaseSnap.exists()) return;
-
-        await updateDoc(purchaseRef, {
-            shoppingListItemId,
+            companyId: recentlySelectedCompany,
+            shoppingItemId: nextId ? shoppingItemId : "",
+            purchasedItemId: nextId,
+            shoppingCollectionName: sourceCollection,
+            shoppingItemData: {
+                ...item,
+                ...editForm,
+                status: editForm.status,
+                invoiced: editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced,
+            },
+            purchasedItemData: purchasedItemOptions.find((option) => option.id === nextId) || null,
+            previousPurchasedItemId,
+            invoiced: editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced,
         });
     };
 
@@ -585,10 +646,12 @@ const ShoppingListDetailView = () => {
             const photoFields = photoFile
                 ? itemPhotoFieldsFromUrl(uploadedPhoto.photoUrl, editForm.name || item.name || "Shopping item photo", uploadedPhoto.storagePath)
                 : itemPhotoFieldsFromUrl(editForm.photoUrl, editForm.name || item.name || "Shopping item photo");
+            const nextInvoiced = editForm.status === SHOPPING_LIST_INVOICED_STATUS || !!editForm.invoiced;
+            const nextStatus = nextInvoiced ? SHOPPING_LIST_INVOICED_STATUS : editForm.status || "";
             const payload = {
                 category: editForm.category || "",
                 subCategory: editForm.subCategory || "",
-                status: editForm.status || "",
+                status: nextStatus,
                 purchaserId: editForm.purchaserId || "",
                 purchaserName: editForm.purchaserName || "",
                 genericItemId: editForm.genericItemId || "",
@@ -609,7 +672,8 @@ const ShoppingListDetailView = () => {
                 dbItemName: editForm.dbItemName || "",
                 ...photoFields,
                 purchasedItem: editForm.purchasedItem || "",
-                invoiced: !!editForm.invoiced,
+                invoiced: nextInvoiced,
+                invoiceStatus: nextInvoiced ? "Invoiced" : "",
                 serviceLocationId: isJobItem ? item.serviceLocationId || "" : editForm.serviceLocationId || "",
                 serviceLocationName: isJobItem ? item.serviceLocationName || "" : editForm.serviceLocationName || "",
                 plannedUnitCostCents: editForm.plannedUnitCostCents ?? null,
@@ -619,7 +683,7 @@ const ShoppingListDetailView = () => {
                 customerApprovalRequired: !!editForm.customerApprovalRequired,
                 customerApprovalStatus: editForm.customerApprovalStatus || "",
                 partApprovalRequestId: editForm.partApprovalRequestId || "",
-                needsAction: !["Delivered", "Installed"].includes(editForm.status),
+                needsAction: shoppingItemNeedsAction(nextStatus),
             };
 
             await updateDoc(docRef, payload);
@@ -627,46 +691,115 @@ const ShoppingListDetailView = () => {
             const previousPurchasedItemId = compactString(item.purchasedItem);
             const nextPurchasedItemId = compactString(editForm.purchasedItem);
 
-            if (previousPurchasedItemId && previousPurchasedItemId !== nextPurchasedItemId) {
-                await updatePurchasedItemConnection(previousPurchasedItemId, "");
-            }
-
-            if (nextPurchasedItemId) {
-                await updatePurchasedItemConnection(nextPurchasedItemId, shoppingItemId);
-            }
+            const { shoppingPayload } = await syncPurchasedItemConnection(previousPurchasedItemId, nextPurchasedItemId);
+            const syncedPayload = {
+                ...payload,
+                ...shoppingPayload,
+            };
 
             setItem({
                 ...editForm,
-                jobId: payload.jobId,
-                jobName: payload.jobName,
-                customerId: payload.customerId,
-                customerName: payload.customerName,
-                userId: payload.userId,
-                userName: payload.userName,
-                serviceLocationId: payload.serviceLocationId,
-                serviceLocationName: payload.serviceLocationName,
+                ...syncedPayload,
+                jobId: syncedPayload.jobId,
+                jobName: syncedPayload.jobName,
+                customerId: syncedPayload.customerId,
+                customerName: syncedPayload.customerName,
+                userId: syncedPayload.userId,
+                userName: syncedPayload.userName,
+                serviceLocationId: syncedPayload.serviceLocationId,
+                serviceLocationName: syncedPayload.serviceLocationName,
                 ...photoFields,
-                invoiced: !!editForm.invoiced,
+                status: syncedPayload.status,
+                invoiced: !!syncedPayload.invoiced,
+                invoiceStatus: syncedPayload.invoiceStatus,
             });
             setPhotoFile(null);
             setPhotoPreviewUrl("");
             setPhotoError("");
-            setPurchasedItemOptions((prev) => prev.map((option) => {
-                if (option.id === previousPurchasedItemId && previousPurchasedItemId !== nextPurchasedItemId) {
-                    return { ...option, shoppingListItemId: "" };
-                }
-
-                if (option.id === nextPurchasedItemId) {
-                    return { ...option, shoppingListItemId: shoppingItemId };
-                }
-
-                return option;
-            }));
+            updatePurchasedItemOptionLinks(previousPurchasedItemId, nextPurchasedItemId);
             setEdit(false);
         } catch (error) {
             console.log("Error saving shopping list item");
             console.log(error);
         } finally {
+            setUpdating(false);
+        }
+    };
+
+    const openPurchasedItemModal = () => {
+        setPurchasedItemSearch("");
+        setPurchasedItemModalOpen(true);
+    };
+
+    const connectPurchasedItemFromModal = async (option) => {
+        const nextPurchasedItemId = compactString(option?.id || option?.value);
+        if (!recentlySelectedCompany || !shoppingItemId || !nextPurchasedItemId) return;
+
+        try {
+            setUpdating(true);
+            setConnectingPurchasedItemId(nextPurchasedItemId);
+
+            const previousPurchasedItemId = compactString(item.purchasedItem);
+            const { shoppingPayload } = await syncPurchasedItemConnection(previousPurchasedItemId, nextPurchasedItemId);
+
+            setItem((prev) => ({
+                ...prev,
+                purchasedItem: nextPurchasedItemId,
+                ...shoppingPayload,
+            }));
+            setEditForm((prev) => ({
+                ...prev,
+                purchasedItem: nextPurchasedItemId,
+                ...shoppingPayload,
+            }));
+            updatePurchasedItemOptionLinks(previousPurchasedItemId, nextPurchasedItemId);
+            setPurchasedItemModalOpen(false);
+        } catch (error) {
+            console.log("Error connecting purchased item");
+            console.log(error);
+        } finally {
+            setConnectingPurchasedItemId("");
+            setUpdating(false);
+        }
+    };
+
+    const clearPurchasedItemConnectionFromDetail = async () => {
+        const previousPurchasedItemId = compactString(item.purchasedItem);
+        if (!recentlySelectedCompany || !shoppingItemId || !previousPurchasedItemId) return;
+
+        try {
+            setUpdating(true);
+            setConnectingPurchasedItemId(previousPurchasedItemId);
+
+            const docRef = doc(
+                db,
+                "companies",
+                recentlySelectedCompany,
+                sourceCollection,
+                shoppingItemId
+            );
+
+            await updateDoc(docRef, {
+                purchasedItem: "",
+                updatedAt: Timestamp.now(),
+            });
+            await syncPurchasedItemConnection(previousPurchasedItemId, "");
+
+            setItem((prev) => ({
+                ...prev,
+                purchasedItem: "",
+            }));
+            setEditForm((prev) => ({
+                ...prev,
+                purchasedItem: "",
+            }));
+            updatePurchasedItemOptionLinks(previousPurchasedItemId, "");
+            setPurchasedItemModalOpen(false);
+        } catch (error) {
+            console.log("Error clearing purchased item connection");
+            console.log(error);
+        } finally {
+            setConnectingPurchasedItemId("");
             setUpdating(false);
         }
     };
@@ -714,6 +847,7 @@ const ShoppingListDetailView = () => {
     const jobServiceLocationName = item.serviceLocationName || jobDetails?.serviceLocationName || serviceLocationDetails?.nickName || serviceLocationDetails?.name || "";
     const jobServiceLocationAddress = formatAddress(serviceLocationDetails) || formatAddress(item.serviceLocationAddress) || formatAddress(jobDetails?.serviceLocationAddress) || formatAddress(jobDetails) || "—";
     const jobDetailLink = item.jobId ? `/company/jobs/detail/${item.jobId}` : "";
+    const dbItemDetailLink = item.dbItemId ? `/company/items/detail/${item.dbItemId}` : "";
     const moneyFromCents = (value) => {
         if (value === null || value === undefined || value === "") return "—";
         const amount = Number(value);
@@ -980,20 +1114,6 @@ const ShoppingListDetailView = () => {
                                 </div>
 
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">DB Item ID</p>
-                                    {edit ? (
-                                        <input
-                                            type="text"
-                                            value={editForm.dbItemId}
-                                            onChange={(e) => handleEditFieldChange("dbItemId", e.target.value)}
-                                            className="w-full rounded-md border border-slate-300 p-3"
-                                        />
-                                    ) : (
-                                        <p>{item.dbItemId || "—"}</p>
-                                    )}
-                                </div>
-
-                                <div>
                                     <p className="text-sm font-semibold text-gray-500 mb-1">DB Item Name</p>
                                     {edit ? (
                                         <input
@@ -1002,6 +1122,10 @@ const ShoppingListDetailView = () => {
                                             onChange={(e) => handleEditFieldChange("dbItemName", e.target.value)}
                                             className="w-full rounded-md border border-slate-300 p-3"
                                         />
+                                    ) : dbItemDetailLink ? (
+                                        <Link to={dbItemDetailLink} className="font-semibold text-blue-600 hover:underline">
+                                            {item.dbItemName || "Open database item"}
+                                        </Link>
                                     ) : (
                                         <p>{item.dbItemName || "—"}</p>
                                     )}
@@ -1080,6 +1204,28 @@ const ShoppingListDetailView = () => {
                                     ) : (
                                         <p>—</p>
                                     )}
+
+                                    {!edit ? (
+                                        <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                                            <button
+                                                type="button"
+                                                onClick={openPurchasedItemModal}
+                                                className="rounded-md bg-blue-100 px-4 py-2 text-sm font-semibold text-blue-800 transition hover:bg-blue-200"
+                                            >
+                                                {item.purchasedItem ? "Change Purchased Item" : "Connect Purchased Item"}
+                                            </button>
+                                            {item.purchasedItem ? (
+                                                <button
+                                                    type="button"
+                                                    onClick={clearPurchasedItemConnectionFromDetail}
+                                                    disabled={updating}
+                                                    className="rounded-md bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100 disabled:opacity-60"
+                                                >
+                                                    Clear Connection
+                                                </button>
+                                            ) : null}
+                                        </div>
+                                    ) : null}
                                 </div>
 
                                 {(edit ? editForm.purchasedItem : item.purchasedItem) ? (
@@ -1343,6 +1489,84 @@ const ShoppingListDetailView = () => {
                     </div>
                 </div>
             </div>
+
+            {purchasedItemModalOpen && (
+                <div className="fixed inset-0 z-50 overflow-y-auto bg-black/40 p-4">
+                    <div className="mx-auto my-8 w-full max-w-3xl rounded-xl bg-white shadow-2xl">
+                        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-5 py-4">
+                            <div>
+                                <h3 className="text-xl font-bold text-gray-900">Select Purchased Item</h3>
+                                <p className="mt-1 text-sm text-gray-500">Search and connect a purchased item to this shopping list item.</p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setPurchasedItemModalOpen(false)}
+                                className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                            >
+                                Close
+                            </button>
+                        </div>
+
+                        <div className="space-y-4 p-5">
+                            {item.purchasedItem ? (
+                                <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-blue-600">Current connection</p>
+                                    <p className="mt-1 text-sm font-semibold text-blue-900">
+                                        {purchasedItemDisplayName || item.purchasedItem}
+                                    </p>
+                                </div>
+                            ) : null}
+
+                            <input
+                                type="text"
+                                value={purchasedItemSearch}
+                                onChange={(event) => setPurchasedItemSearch(event.target.value)}
+                                className="w-full rounded-lg border border-gray-300 p-3 text-sm"
+                                placeholder="Search purchased items..."
+                            />
+
+                            {loadingSelectors ? (
+                                <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+                                    Loading purchased items...
+                                </div>
+                            ) : filteredPurchasedItemOptions.length ? (
+                                <div className="max-h-[520px] space-y-2 overflow-y-auto">
+                                    {filteredPurchasedItemOptions.map((option) => (
+                                        <div
+                                            key={option.id}
+                                            className="flex flex-col gap-3 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 md:flex-row md:items-center md:justify-between"
+                                        >
+                                            <div className="min-w-0 flex-1">
+                                                <p className="truncate text-sm font-semibold text-gray-800">
+                                                    {option.name || "Purchased Item"}
+                                                </p>
+                                                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-500">
+                                                    <span>{option.dateLabel || "No date"}</span>
+                                                    <span>{option.techName || "No technician"}</span>
+                                                    {option.invoiceNum ? <span>Invoice {option.invoiceNum}</span> : null}
+                                                </div>
+                                            </div>
+
+                                            <button
+                                                type="button"
+                                                onClick={() => connectPurchasedItemFromModal(option)}
+                                                disabled={!!connectingPurchasedItemId}
+                                                className="shrink-0 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:opacity-60"
+                                            >
+                                                {connectingPurchasedItemId === option.id ? "Connecting..." : "Select"}
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+                                    No unconnected purchased items found.
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {(isLoading || updating) && (
                 <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">

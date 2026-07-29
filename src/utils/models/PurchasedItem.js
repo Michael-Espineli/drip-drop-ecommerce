@@ -1,5 +1,5 @@
 export class PurchasedItem {
-    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate, assignmentStatus = "unassigned", assignedToJob = false, assignedJobId = "", billingOwner = "purchasedItem", jobBillingStatus = "", jobBillable = false, jobBillingRate = 0, category = "Uncategorized", subCategory = "") {
+    constructor(id, receiptId, invoiceNum, venderId, venderName, techId, techName, itemId, name, price, quantityString, date, billable, invoiced, returned, customerId, customerName, sku, notes, jobId, billingRate, assignmentStatus = "unassigned", assignedToJob = false, assignedJobId = "", billingOwner = "purchasedItem", jobBillingStatus = "", jobBillable = false, jobBillingRate = 0, category = "Uncategorized", subCategory = "", shoppingListItemId = "", workOrderId = "", jobInternalId = "", jobName = "", status = "") {
         this.id = id;
         this.receiptId = receiptId;
         this.invoiceNum = invoiceNum;
@@ -30,6 +30,11 @@ export class PurchasedItem {
         this.jobBillingRate = jobBillingRate;
         this.category = category;
         this.subCategory = subCategory;
+        this.shoppingListItemId = shoppingListItemId;
+        this.workOrderId = workOrderId;
+        this.jobInternalId = jobInternalId;
+        this.jobName = jobName;
+        this.status = status;
     }
 
     get quantity() {
@@ -58,7 +63,7 @@ export class PurchasedItem {
             data.customerName,
             data.sku,
             data.notes,
-            data.jobId,
+            data.jobId || data.workOrderId || "",
             data.billingRate,
             data.assignmentStatus || (data.jobId || data.workOrderId ? "assignedToJob" : "unassigned"),
             Boolean(data.assignedToJob || data.jobId || data.workOrderId),
@@ -68,7 +73,12 @@ export class PurchasedItem {
             Boolean(data.jobBillable),
             data.jobBillingRate || 0,
             data.category || "Uncategorized",
-            data.subCategory || ""
+            data.subCategory || "",
+            data.shoppingListItemId || "",
+            data.workOrderId || data.jobId || "",
+            data.jobInternalId || "",
+            data.jobName || data.type || "",
+            data.status || (data.invoiced ? "Invoiced" : (data.jobId || data.workOrderId || data.assignedToJob ? "Connected to Job" : ""))
         );
     }
 
@@ -112,6 +122,7 @@ export class PurchasedItem {
             sku: this.sku,
             notes: this.notes,
             jobId: this.jobId,
+            workOrderId: this.workOrderId,
             billingRate: this.billingRate,
             assignmentStatus: this.assignmentStatus,
             assignedToJob: this.assignedToJob,
@@ -122,6 +133,10 @@ export class PurchasedItem {
             jobBillingRate: this.jobBillingRate,
             category: this.category,
             subCategory: this.subCategory,
+            shoppingListItemId: this.shoppingListItemId,
+            jobInternalId: this.jobInternalId,
+            jobName: this.jobName,
+            status: this.status,
         };
     }
 }

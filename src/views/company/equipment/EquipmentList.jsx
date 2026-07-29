@@ -53,7 +53,11 @@ const EQUIPMENT_FILTER_ALIASES = {
 const CUSTOM_CATALOG_VALUE = "__custom__";
 const DEFAULT_MAINTENANCE_NAME = "Clean";
 const inputBase =
-  "w-full p-3 border border-gray-300 rounded-lg bg-white focus:ring-blue-500 focus:border-blue-500";
+  "w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-500";
+const modalSecondaryButton =
+  "rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50";
+const modalPrimaryButton =
+  "rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700";
 
 const todayDateInputValue = () => format(new Date(), "yyyy-MM-dd");
 
@@ -66,22 +70,22 @@ const dateInputToLocalDate = (value) => {
 
 const Field = ({ label, children }) => (
   <div className="space-y-1">
-    <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{label}</p>
+    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
     {children}
   </div>
 );
 
 const ModalShell = ({ title, children, onClose, footer }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-60 p-4">
-    <div className="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl sm:p-8">
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+    <div className="w-full max-w-xl rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
       <div className="mb-5 flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-2xl font-bold text-gray-800">{title}</h3>
-          <p className="mt-1 text-sm text-gray-500">Make a quick update without leaving the list.</p>
+          <h3 className="text-xl font-bold text-slate-950">{title}</h3>
+          <p className="mt-1 text-sm text-slate-500">Make a quick update without leaving the list.</p>
         </div>
         <button
           onClick={onClose}
-          className="flex h-10 w-10 items-center justify-center rounded-xl bg-gray-100 text-gray-700 transition hover:bg-gray-200"
+          className="flex h-9 w-9 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50"
           aria-label="Close"
           type="button"
         >
@@ -187,17 +191,17 @@ const TopFilterButton = ({ label, count, active, onClick }) => (
     type="button"
     className={[
       "flex items-center justify-between gap-3 w-full sm:w-auto",
-      "px-4 py-3 rounded-lg border text-sm font-semibold transition-all",
+      "rounded-md border px-4 py-2 text-sm font-bold shadow-sm transition",
       active
         ? "bg-blue-600 text-white border-blue-600 shadow-sm"
-        : "bg-white text-gray-700 border-gray-200 hover:border-blue-300 hover:shadow-sm",
+        : "bg-white text-slate-700 border-slate-300 hover:bg-slate-50",
     ].join(" ")}
   >
     <span>{label}</span>
     <span
       className={[
         "min-w-[34px] text-center px-2 py-0.5 rounded-full text-xs font-bold",
-        active ? "bg-white/20 text-white" : "bg-gray-100 text-gray-700",
+        active ? "bg-white/20 text-white" : "bg-slate-100 text-slate-700",
       ].join(" ")}
     >
       {count}
@@ -209,9 +213,9 @@ const QuickActionMenuItem = ({ label, icon: Icon, tone = "black", onClick }) => 
   const toneClasses =
     tone === "amber"
       ? "text-amber-700 hover:bg-amber-50"
-      : tone === "green"
-        ? "text-green-700 hover:bg-green-50"
-        : "text-gray-900 hover:bg-gray-50";
+    : tone === "green"
+        ? "text-emerald-700 hover:bg-emerald-50"
+        : "text-slate-900 hover:bg-slate-50";
 
   return (
     <button
@@ -228,7 +232,7 @@ const QuickActionMenuItem = ({ label, icon: Icon, tone = "black", onClick }) => 
 const EquipmentDetailLink = ({ equipment, children }) => (
   <Link
     to={`/company/equipment/detail/${equipment.id}`}
-    className="font-semibold text-black-700 hover:text-blue-900 hover:underline"
+    className="font-semibold text-slate-900 hover:text-blue-900 hover:underline"
   >
     {children || "—"}
   </Link>
@@ -598,10 +602,11 @@ export default function EquipmentList() {
 
   const getStatusClass = (status, maintenanceFlag) => {
     const s = normalizeEquipmentStatus(status);
-    if (maintenanceFlag) return "bg-yellow-100 text-yellow-800";
-    if (s === "needsmaintenance" || s === "maintenance" || s === "needsservice") return "bg-yellow-100 text-yellow-800";
-    if (s === "needsrepair") return "bg-orange-100 text-orange-800";
-    return "border border-gray-200 bg-white text-black";
+    if (maintenanceFlag) return "bg-amber-50 text-amber-700";
+    if (s === "needsmaintenance" || s === "maintenance" || s === "needsservice") return "bg-amber-50 text-amber-700";
+    if (s === "needsrepair") return "bg-orange-50 text-orange-700";
+    if (s === "nonoperational") return "bg-red-50 text-red-700";
+    return "bg-slate-100 text-slate-700";
   };
 
   const getEquipmentDisplayName = (equipment) =>
@@ -1032,20 +1037,21 @@ export default function EquipmentList() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-      <div className="w-full">
-        <div className="flex flex-col gap-4 sm:flex-row sm:justify-between sm:items-center mb-6">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-gray-800">Equipment</h2>
-            <p className="text-gray-600 mt-1">Track assets, service schedules, and operational status.</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company assets</p>
+            <h2 className="mt-1 text-3xl font-bold text-slate-950">Equipment</h2>
+            <p className="mt-1 text-sm text-slate-500">Track assets, service schedules, and operational status.</p>
 
-            <div className="mt-2 inline-flex items-center gap-2 text-sm text-gray-700">
-              <span className="px-3 py-1 rounded-full bg-white border border-gray-200 font-semibold">
+            <div className="mt-3 flex flex-wrap gap-2">
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
                 Customers shown: {uniqueCustomerCount}
               </span>
-              <span className="text-gray-400">•</span>
-              <span className="text-gray-600">
-                Equipment shown: <span className="font-semibold text-gray-800">{equipmentList.length}</span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-700">
+                Equipment shown: {equipmentList.length}
               </span>
             </div>
           </div>
@@ -1053,15 +1059,16 @@ export default function EquipmentList() {
           {can("62") && (
             <Link
               to={"/company/equipment/createNew"}
-              className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
             >
               Create New
             </Link>
           )}
         </div>
+        </section>
 
         {/* TOP FILTER BUTTONS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <TopFilterButton
             label="All Equipment"
             count={topCounts.all}
@@ -1086,28 +1093,28 @@ export default function EquipmentList() {
             active={topFilter === "nonOperational"}
             onClick={() => handleTopFilterChange("nonOperational")}
           />
-        </div>
+        </section>
 
         {maintenanceDueCount > 0 && (
-          <div className="p-4 mb-6 text-sm text-red-800 rounded-lg bg-red-100 border border-red-200" role="alert">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
             <span className="font-bold">Maintenance Alert:</span> You have {maintenanceDueCount} item(s) needing maintenance (by status or due date).
           </div>
         )}
 
         {equipmentError && (
-          <div className="p-4 mb-6 text-sm text-red-800 rounded-lg bg-red-100 border border-red-200" role="alert">
+          <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700" role="alert">
             {equipmentError}
           </div>
         )}
 
-        <div className="rounded-lg bg-white shadow-lg border border-gray-200 overflow-hidden">
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           {/* Filters */}
-          <div className="p-6 border-b border-gray-100 bg-white">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="border-b border-slate-200 bg-white p-5">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <input
                 onChange={(e) => setSearchTerm(e.target.value)}
                 value={searchTerm}
-                className="md:col-span-1 w-full p-3 border border-gray-300 rounded-xl focus:ring-blue-500 focus:border-blue-500"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 md:col-span-1"
                 type="text"
                 placeholder="Search customer, make, model, type, status, notes..."
               />
@@ -1115,7 +1122,7 @@ export default function EquipmentList() {
               <select
                 onChange={(e) => setTypeFilter(e.target.value)}
                 value={typeFilter}
-                className="w-full p-3 border border-gray-300 rounded-xl bg-white focus:ring-blue-500 focus:border-blue-500"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               >
                 <option value="">All Types</option>
                 {types.map((t) => (
@@ -1129,7 +1136,7 @@ export default function EquipmentList() {
               <select
                 onChange={(e) => setNeedsServiceFilter(e.target.value)}
                 value={needsServiceFilter}
-                className="w-full p-3 border border-gray-300 rounded-xl bg-white focus:ring-blue-500 focus:border-blue-500"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               >
                 <option value="">Routine Service (All)</option>
                 <option value="true">Routine Service: Yes</option>
@@ -1138,30 +1145,35 @@ export default function EquipmentList() {
             </div>
           </div>
 
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div>Showing {filteredEquipmentList.length} of {equipmentList.length} item{equipmentList.length === 1 ? "" : "s"}</div>
+            <div>{topFilter === "all" ? "All equipment" : topFilter === "maintenance" ? "Needs maintenance" : topFilter === "repair" ? "Needs repair" : "Non-operational"} - {typeFilter || "All types"}</div>
+          </div>
+
           {/* Table */}
           <div className="overflow-x-auto">
             <table className="min-w-full bg-white">
-              <thead className="bg-gray-50">
+              <thead className="bg-slate-50">
                 <tr>
                   {["customerName", "make", "model", "type", "nextServiceDate", "status"].map((field) => (
                     <th
                       key={field}
-                      className="p-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider cursor-pointer select-none"
+                      className="cursor-pointer select-none border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500"
                       onClick={() => handleSort(field)}
                     >
                       {field.replace(/([A-Z])/g, " $1").replace(/^./, (str) => str.toUpperCase())}
                       {sortBy === field ? (sortOrder === "asc" ? " ▲" : " ▼") : ""}
                     </th>
                   ))}
-                  <th className="p-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Notes</th>
-                  <th className="p-4 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Quick Actions</th>
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</th>
+                  <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Quick Actions</th>
                 </tr>
               </thead>
 
-              <tbody className="divide-y divide-gray-200">
+              <tbody className="divide-y divide-slate-200">
                 {loadingEquipment && (
                   <tr>
-                    <td colSpan={8} className="p-10 text-center text-gray-500">
+                    <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
                       Loading equipment...
                     </td>
                   </tr>
@@ -1173,39 +1185,39 @@ export default function EquipmentList() {
                   const hasQuickActions = can("64") || can("22");
 
                   return (
-                    <tr key={equipment.id} className="hover:bg-gray-50 transition-colors">
-                      <td className="p-4 whitespace-nowrap">
+                    <tr key={equipment.id} className="transition hover:bg-slate-50">
+                      <td className="whitespace-nowrap px-5 py-3 text-sm">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.customerName}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.make}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
                         <EquipmentDetailLink equipment={equipment}>
                           {equipment.model}
                         </EquipmentDetailLink>
                       </td>
 
-                      <td className="p-4 whitespace-nowrap text-gray-700">
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">
                         {equipment.type}
                       </td>
 
                       <td
-                        className={`p-4 whitespace-nowrap ${dateIsDue(equipment.nextServiceDate) ? "text-red-600 font-semibold" : "text-gray-700"
+                        className={`whitespace-nowrap px-5 py-3 text-sm ${dateIsDue(equipment.nextServiceDate) ? "font-semibold text-red-600" : "text-slate-700"
                           }`}
                       >
                         {equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
                       </td>
 
-                      <td className="p-4 whitespace-nowrap">
+                      <td className="whitespace-nowrap px-5 py-3">
                         <span
-                          className={`px-3 py-1 text-xs font-bold leading-none rounded-full ${getStatusClass(
+                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(
                             equipment.status,
                             maintenanceFlag
                           )}`}
@@ -1214,11 +1226,11 @@ export default function EquipmentList() {
                         </span>
                       </td>
 
-                      <td className="p-4 whitespace-nowrap max-w-xs truncate text-gray-700" title={equipment.notes}>
+                      <td className="max-w-xs truncate whitespace-nowrap px-5 py-3 text-sm text-slate-700" title={equipment.notes}>
                         {equipment.notes}
                       </td>
 
-                      <td className="relative p-4 min-w-[140px]">
+                      <td className="relative min-w-[140px] px-5 py-3">
                         <div className="relative inline-flex">
                           <button
                             type="button"
@@ -1227,7 +1239,7 @@ export default function EquipmentList() {
                             aria-haspopup="menu"
                             aria-expanded={actionMenuOpen}
                             aria-label="Open quick actions"
-                            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-400"
+                            className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
                           >
                             <EllipsisVerticalIcon className="h-5 w-5" />
                             <span>Actions</span>
@@ -1240,7 +1252,7 @@ export default function EquipmentList() {
 
                 {!loadingEquipment && filteredEquipmentList.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-10 text-center text-gray-500">
+                    <td colSpan={8} className="px-6 py-12 text-center text-sm text-slate-500">
                       No equipment found for the selected filters.
                     </td>
                   </tr>
@@ -1248,12 +1260,7 @@ export default function EquipmentList() {
               </tbody>
             </table>
           </div>
-
-          <div className="p-4 border-t border-gray-100 bg-white text-sm text-gray-500">
-            Showing <span className="font-semibold text-gray-700">{filteredEquipmentList.length}</span> of{" "}
-            <span className="font-semibold text-gray-700">{equipmentList.length}</span> items
-          </div>
-        </div>
+        </section>
 
         {openActionEquipment && actionMenuPosition && (
           <>
@@ -1269,7 +1276,7 @@ export default function EquipmentList() {
                 top: actionMenuPosition.top,
                 left: actionMenuPosition.left,
               }}
-              className="fixed z-50 w-56 overflow-hidden rounded-xl border border-gray-200 bg-white py-1 shadow-xl"
+              className="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-sm"
             >
               {can("64") && (
                 <>
@@ -1336,14 +1343,14 @@ export default function EquipmentList() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={closeQuickModal}
-                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  className={modalSecondaryButton}
                   type="button"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSaveEquipment}
-                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  className={modalPrimaryButton}
                   type="button"
                 >
                   Save
@@ -1475,14 +1482,14 @@ export default function EquipmentList() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={closeQuickModal}
-                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  className={modalSecondaryButton}
                   type="button"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleSaveNotes}
-                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  className={modalPrimaryButton}
                   type="button"
                 >
                   Save
@@ -1509,14 +1516,14 @@ export default function EquipmentList() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={closeQuickModal}
-                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  className={modalSecondaryButton}
                   type="button"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleUpdateStatus}
-                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  className={modalPrimaryButton}
                   type="button"
                 >
                   Save
@@ -1551,14 +1558,14 @@ export default function EquipmentList() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={closeQuickModal}
-                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  className={modalSecondaryButton}
                   type="button"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreateMaintenance}
-                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  className={modalPrimaryButton}
                   type="button"
                 >
                   Create
@@ -1643,14 +1650,14 @@ export default function EquipmentList() {
               <div className="flex justify-end gap-3">
                 <button
                   onClick={closeQuickModal}
-                  className="rounded-lg bg-gray-200 px-5 py-2 font-semibold text-gray-800 transition hover:bg-gray-300"
+                  className={modalSecondaryButton}
                   type="button"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreateRepair}
-                  className="rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white transition hover:bg-blue-700"
+                  className={modalPrimaryButton}
                   type="button"
                 >
                   Create
@@ -1724,7 +1731,7 @@ export default function EquipmentList() {
                   />
                   <button
                     onClick={addPart}
-                    className="shrink-0 rounded-lg border border-gray-300 bg-white px-4 py-2 font-semibold text-gray-700 transition hover:bg-gray-100"
+                    className="shrink-0 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
                     type="button"
                   >
                     Add
@@ -1736,12 +1743,12 @@ export default function EquipmentList() {
                     {repairPartsReplaced.map((part, index) => (
                       <span
                         key={`${part}-${index}`}
-                        className="inline-flex items-center gap-2 rounded-full bg-gray-100 px-3 py-1 text-sm font-semibold text-gray-800"
+                        className="inline-flex items-center gap-2 rounded-full bg-slate-100 px-3 py-1 text-sm font-semibold text-slate-700"
                       >
                         {part}
                         <button
                           onClick={() => removePart(index)}
-                          className="font-bold text-gray-500 hover:text-red-600"
+                          className="font-bold text-slate-500 hover:text-red-600"
                           aria-label="Remove part"
                           type="button"
                         >
@@ -1770,7 +1777,7 @@ export default function EquipmentList() {
           <button
             type="button"
             onClick={downloadExcel}
-            className="px-4 py-2 text-sm font-medium text-green-700 bg-green-50 border border-green-200 rounded-xl shadow-sm hover:bg-green-100 transition"
+            className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-bold text-emerald-700 shadow-sm transition hover:bg-emerald-100"
           >
             Download Excel
           </button>

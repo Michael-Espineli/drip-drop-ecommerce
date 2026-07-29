@@ -512,33 +512,35 @@ export default function Customers() {
         }
     };
     return (
-        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-            <div className="w-full">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+            <div className="w-full space-y-6">
                 {/* Header */}
-                <div className="flex justify-between items-center mb-6">
-                    <div>
-                        <h1 className="text-3xl font-bold text-gray-900">Customers</h1>
-                        <p className="text-gray-600 mt-1">Manage your customers and their information.</p>
-
-                    </div>
-                    <div className="flex space-x-4">
-                        {can("12") && (
-                            <>
-                                <Link to="/company/customers/bulk-upload" className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50">
-                                    Upload Bulk
-                                </Link>
-                                <Link to="/company/customers/createNew"
-                                    className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-                                >
-                                    + Create New
-                                </Link>
-                            </>
-                        )}
-                        {/* <button onClick={updateCustomerAndLocations} className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition">
+                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company relationships</p>
+                            <h1 className="mt-1 text-3xl font-bold text-slate-950">Customers</h1>
+                            <p className="mt-1 text-sm text-slate-500">Manage your customers and their information.</p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                            {can("12") && (
+                                <>
+                                    <Link to="/company/customers/bulk-upload" className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50">
+                                        Upload Bulk
+                                    </Link>
+                                    <Link to="/company/customers/createNew"
+                                        className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+                                    >
+                                        Create New
+                                    </Link>
+                                </>
+                            )}
+                            {/* <button onClick={updateCustomerAndLocations} className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition">
                             Update Equipment
                         </button> */}
+                        </div>
                     </div>
-                </div>
+                </section>
 
                 {/* Upgrade Banner */}
                 {!upgradeState.isUnlimited && upgradeState.remaining < 10 && (
@@ -546,7 +548,7 @@ export default function Customers() {
                 )}
 
                 {canMergeCustomers && duplicateSuggestions.length > 0 && (
-                    <div className="mb-6 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div>
                                 <h2 className="text-lg font-bold text-slate-950">Merge Duplicate Customers</h2>
@@ -568,7 +570,7 @@ export default function Customers() {
                                         key={`${suggestion.primary.id}:${suggestion.duplicate.id}`}
                                         type="button"
                                         onClick={() => selectSuggestedMerge(suggestion)}
-                                        className="border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm transition hover:bg-amber-100"
+                                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-left text-sm transition hover:bg-amber-100"
                                     >
                                         <span className="block font-semibold text-amber-950">
                                             {getCustomerDuplicateDisplayName(suggestion.primary)} + {getCustomerDuplicateDisplayName(suggestion.duplicate)}
@@ -660,7 +662,7 @@ export default function Customers() {
                         </div>
 
                         {mergePreview && (
-                            <div className="mt-4 border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
+                            <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-3 py-3 text-sm text-blue-900">
                                 <p className="font-semibold">
                                     Preview: {mergePreview.totalReferences} linked record(s) and {mergePreview.contacts} contact(s) will move.
                                 </p>
@@ -681,24 +683,24 @@ export default function Customers() {
                                 )}
                             </div>
                         )}
-                    </div>
+                    </section>
                 )}
 
                 {/* Main Content */}
-                <div className="rounded-lg bg-white p-6 shadow-lg">
-                    <div className="mb-4 space-y-4">
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="space-y-4 border-b border-slate-200 p-5">
                         <input
                             type="text"
                             placeholder="Search customers..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                         />
                         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                             <button
                                 type="button"
                                 onClick={() => setShowFilters((current) => !current)}
-                                className="inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto"
+                                className="inline-flex w-full justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto"
                             >
                                 {showFilters ? 'Hide Filters' : `Show Filters${activeFilterCount > 0 ? ` (${activeFilterCount})` : ''}`}
                             </button>
@@ -715,7 +717,7 @@ export default function Customers() {
 
                         {showFilters && (
                             <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                <div className="inline-flex w-full rounded-lg border border-slate-200 bg-white p-1 sm:w-auto">
+                                <div className="inline-flex w-full rounded-md border border-slate-200 bg-white p-1 sm:w-auto">
                                     {[
                                         { value: 'all', label: 'All' },
                                         { value: 'active', label: 'Active' },
@@ -812,35 +814,35 @@ export default function Customers() {
                             <ClipLoader size={40} color="#4A90E2" />
                         </div>
                     ) : (
-                        <div className="overflow-x-auto">
+                        <div className="overflow-x-auto border-t border-slate-200">
                             <table className="w-full text-left">
-                                <thead>
-                                    <tr className="border-b border-gray-200">
-                                        <th className="px-4 py-3 text-sm font-semibold text-gray-600">Name</th>
-                                        <th className="px-4 py-3 text-sm font-semibold text-gray-600">Contact</th>
-                                        <th className="px-4 py-3 text-sm font-semibold text-gray-600">Address</th>
-                                        <th className="px-4 py-3 text-sm font-semibold text-gray-600">Tags</th>
-                                        <th className="px-4 py-3 text-sm font-semibold text-gray-600">Status</th>
+                                <thead className="bg-slate-50">
+                                    <tr>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Contact</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Address</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Tags</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                                     </tr>
                                 </thead>
-                                <tbody>
+                                <tbody className="divide-y divide-slate-200 bg-white">
                                     {filteredCustomers.map(customer => (
                                         <tr
                                             key={customer.id}
                                             onClick={() => navigate(`/company/customers/details/${customer.id}`)}
-                                            className="border-b border-gray-200 hover:bg-gray-50 cursor-pointer"
+                                            className="cursor-pointer transition hover:bg-slate-50"
                                         >
-                                            <td className="px-4 py-4">
-                                                <p className="font-medium text-gray-900">{getCustomerDisplayName(customer)}</p>
+                                            <td className="px-5 py-3">
+                                                <p className="text-sm font-semibold text-slate-900">{getCustomerDisplayName(customer)}</p>
                                             </td>
-                                            <td className="px-4 py-4">
-                                                <p className="text-sm text-gray-800">{customer.email}</p>
-                                                <p className="text-sm text-gray-600">{customer.phoneNumber}</p>
+                                            <td className="px-5 py-3">
+                                                <p className="text-sm text-slate-800">{customer.email}</p>
+                                                <p className="text-sm text-slate-500">{customer.phoneNumber}</p>
                                             </td>
-                                            <td className="px-4 py-4 text-sm text-gray-600">
+                                            <td className="px-5 py-3 text-sm text-slate-600">
                                                 {customer.billingAddress?.streetAddress}
                                             </td>
-                                            <td className="px-4 py-4">
+                                            <td className="px-5 py-3">
                                                 <div className="flex max-w-xs flex-wrap gap-1.5">
                                                     {normalizeCustomerTags(customer.tags).length > 0 ? (
                                                         normalizeCustomerTags(customer.tags).map((tag) => (
@@ -853,8 +855,8 @@ export default function Customers() {
                                                     )}
                                                 </div>
                                             </td>
-                                            <td className="px-4 py-4">
-                                                <span className={`px-2 py-1 text-xs font-semibold rounded-full ${customer.active ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}>
+                                            <td className="px-5 py-3">
+                                                <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${customer.active ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}`}>
                                                     {customer.active ? 'Active' : 'Inactive'}
                                                 </span>
                                             </td>
@@ -862,7 +864,7 @@ export default function Customers() {
                                     ))}
                                     {filteredCustomers.length === 0 && (
                                         <tr>
-                                            <td colSpan="5" className="text-center py-12 text-gray-500">
+                                            <td colSpan="5" className="px-6 py-12 text-center text-sm text-slate-500">
                                                 No customers found.
                                             </td>
                                         </tr>
@@ -871,7 +873,7 @@ export default function Customers() {
                             </table>
                         </div>
                     )}
-                </div>
+                </section>
             </div>
         </div>
     );

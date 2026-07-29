@@ -10,10 +10,10 @@ import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 // StatCard component for displaying header stats
 const StatCard = ({ title, count, icon, color }) => (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <div>
-            <p className="text-sm font-medium text-gray-500">{title}</p>
-            <p className="mt-2 text-2xl font-bold text-gray-900">{count}</p>
+            <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</p>
+            <p className="mt-1 text-xl font-bold text-slate-950">{count}</p>
         </div>
         <div className={`rounded-md p-2 ${color}`}>
             {icon}
@@ -126,23 +126,23 @@ export default function Leads() {
 
     const renderStatus = (status) => {
         const colors = {
-            Pending: 'bg-blue-200 text-blue-800',
-            'In Progress': 'bg-yellow-200 text-yellow-800',
-            Completed: 'bg-green-200 text-green-800',
-            Cancelled: 'bg-red-200 text-red-800',
+            Pending: 'bg-blue-50 text-blue-700',
+            'In Progress': 'bg-amber-50 text-amber-700',
+            Completed: 'bg-emerald-50 text-emerald-700',
+            Cancelled: 'bg-red-50 text-red-700',
         };
-        return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${colors[status] || 'bg-gray-200'}`}>{status}</span>;
+        return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${colors[status] || 'bg-slate-100 text-slate-700'}`}>{status}</span>;
     };
 
     const renderSource = (lead) => {
         const source = getNormalizedLeadSource(lead);
         const colors = {
-            Manual: 'bg-indigo-200 text-indigo-800',
-            Public: 'bg-orange-100 text-orange-800',
-            Customer: 'bg-teal-200 text-teal-800',
+            Manual: 'bg-violet-50 text-violet-700',
+            Public: 'bg-orange-50 text-orange-700',
+            Customer: 'bg-cyan-50 text-cyan-700',
         };
 
-        return <span className={`px-2 py-1 text-xs font-semibold rounded-full ${colors[source] || colors.Customer}`}>{source}</span>;
+        return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${colors[source] || colors.Customer}`}>{source}</span>;
     };
 
     const copyPublicLeadLink = async () => {
@@ -169,8 +169,8 @@ export default function Leads() {
         if (linkedCustomerId) {
             return (
                 <div>
-                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-green-100 text-green-800">Customer linked</span>
-                    <div className="mt-1 text-xs text-gray-500">{lead.customerName || "Linked customer"}</div>
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700">Customer linked</span>
+                    <div className="mt-1 text-xs text-slate-500">{lead.customerName || "Linked customer"}</div>
                 </div>
             );
         }
@@ -178,13 +178,13 @@ export default function Leads() {
         if (lead.homeownerId) {
             return (
                 <div>
-                    <span className="px-2 py-1 text-xs font-semibold rounded-full bg-teal-100 text-teal-800">Client request</span>
-                    <div className="mt-1 text-xs text-gray-500">{lead.homeownerId}</div>
+                    <span className="rounded-full bg-cyan-50 px-2.5 py-1 text-xs font-semibold text-cyan-700">Client request</span>
+                    <div className="mt-1 text-xs text-slate-500">{lead.homeownerId}</div>
                 </div>
             );
         }
 
-        return <span className="px-2 py-1 text-xs font-semibold rounded-full bg-gray-100 text-gray-700">Unlinked</span>;
+        return <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700">Unlinked</span>;
     };
 
     const buildLeadServiceAgreementPath = (lead) => {
@@ -199,19 +199,20 @@ export default function Leads() {
     };
 
     return (
-        <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
+        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <div className="rounded-lg border border-gray-200 bg-white p-5 shadow-sm">
+                <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
-                            <h1 className="text-3xl font-bold text-gray-900">Leads</h1>
-                            <p className="mt-1 text-sm text-gray-600">Manage and track all incoming homeowner service requests.</p>
+                            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company sales</p>
+                            <h1 className="mt-1 text-3xl font-bold text-slate-950">Leads</h1>
+                            <p className="mt-1 text-sm text-slate-500">Manage and track all incoming homeowner service requests.</p>
                         </div>
-                        <div className="flex flex-wrap gap-3">
+                        <div className="flex flex-wrap gap-2">
                             <button
                                 type="button"
                                 onClick={copyPublicLeadLink}
-                                className="inline-flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto"
+                                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
                             >
                                 <ClipboardDocumentIcon className="h-4 w-4" />
                                 Copy Public Form Link
@@ -219,7 +220,7 @@ export default function Leads() {
                             <button
                                 type="button"
                                 onClick={() => navigate('/company/leads/new')}
-                                className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-transparent bg-blue-600 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 sm:w-auto"
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
                             >
                                 <UserPlusIcon className="h-4 w-4" />
                                 Add Lead
@@ -228,11 +229,11 @@ export default function Leads() {
                     </div>
                 </div>
 
-                <div className="rounded-lg border border-blue-200 bg-white p-5 shadow-sm">
+                <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                         <div>
-                            <p className="text-sm font-semibold text-gray-900">Public no-account service request form</p>
-                            <p className="mt-1 text-sm text-gray-600">
+                            <p className="text-sm font-semibold text-slate-950">Public no-account service request form</p>
+                            <p className="mt-1 text-sm text-slate-500">
                                 Share this link on a website, text message, or service email so new homeowners can request service without signing in first.
                             </p>
                         </div>
@@ -241,12 +242,12 @@ export default function Leads() {
                                 type="text"
                                 readOnly
                                 value={publicLeadFormUrl}
-                                className="min-w-0 flex-1 rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                                className="min-w-0 flex-1 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-sm text-slate-700"
                             />
                             <button
                                 type="button"
                                 onClick={copyPublicLeadLink}
-                                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700"
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
                             >
                                 <ClipboardDocumentIcon className="h-4 w-4" />
                                 Copy
@@ -257,78 +258,78 @@ export default function Leads() {
 
                 {/* Header Stats */}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <StatCard title="Pending" count={stats.pending} color="bg-blue-100" icon={<svg className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
-                    <StatCard title="In Progress" count={stats.inProgress} color="bg-yellow-100" icon={<svg className="h-6 w-6 text-yellow-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.5 9.5a9 9 0 101.7 -5.2" /></svg>} />
-                    <StatCard title="Completed (30d)" count={stats.completed} color="bg-green-100" icon={<svg className="h-6 w-6 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
-                    <StatCard title="Cancelled (30d)" count={stats.cancelled} color="bg-red-100" icon={<svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.36 6.64a9 9 0 11-12.73 0M12 9v4m0 4h.01" /></svg>} />
+                    <StatCard title="Pending" count={stats.pending} color="bg-blue-50" icon={<svg className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
+                    <StatCard title="In Progress" count={stats.inProgress} color="bg-amber-50" icon={<svg className="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.5 9.5a9 9 0 101.7 -5.2" /></svg>} />
+                    <StatCard title="Completed (30d)" count={stats.completed} color="bg-emerald-50" icon={<svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
+                    <StatCard title="Cancelled (30d)" count={stats.cancelled} color="bg-red-50" icon={<svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.36 6.64a9 9 0 11-12.73 0M12 9v4m0 4h.01" /></svg>} />
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-                    <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_1fr]">
+                <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-[1.4fr_1fr_1fr]">
                         <input
                             type="search"
                             value={searchTerm}
                             onChange={(event) => setSearchTerm(event.target.value)}
                             placeholder="Search homeowner, email, phone, address..."
-                            className="rounded-md border border-gray-300 px-3 py-2 text-sm"
+                            className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                         />
-                        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
                             <option value="All">All statuses</option>
                             <option value="Pending">Pending</option>
                             <option value="In Progress">In Progress</option>
                             <option value="Completed">Completed</option>
                             <option value="Cancelled">Cancelled</option>
                         </select>
-                        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-gray-300 px-3 py-2 text-sm">
+                        <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
                             <option value="All">All sources</option>
                             <option value="Customer">Customer</option>
                             <option value="Public">Public</option>
                             <option value="Manual">Manual</option>
                         </select>
                     </div>
-                    <p className="mt-3 text-sm text-gray-500">{visibleLeads.length} visible lead(s)</p>
-                </div>
-
-                <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
+                    <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                        <div>Showing {visibleLeads.length} of {leads.length} lead{leads.length === 1 ? "" : "s"}</div>
+                        <div>{statusFilter === "All" ? "All statuses" : statusFilter} - {sourceFilter === "All" ? "All sources" : sourceFilter}</div>
+                    </div>
                     {loading ? (
                         <div className="flex justify-center items-center h-64">
                             <ClipLoader size={50} color={"#123abc"} loading={loading} />
                         </div>
                     ) : visibleLeads.length === 0 ? (
-                        <div className="text-center p-12">
-                            <h3 className="text-lg font-medium text-gray-900">No leads yet</h3>
-                            <p className="mt-2 text-sm text-gray-500">When a homeowner requests a service, or filters match, it will appear here.</p>
+                        <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-10 text-center">
+                            <h3 className="text-lg font-bold text-slate-900">No leads yet</h3>
+                            <p className="mt-1 text-sm text-slate-500">When a homeowner requests a service, or filters match, it will appear here.</p>
                         </div>
                     ) : (
                         <div className="overflow-x-auto">
-                            <table className="min-w-full divide-y divide-gray-200">
-                                <thead className="bg-gray-50">
+                            <table className="min-w-full bg-white">
+                                <thead className="bg-slate-50">
                                     <tr>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Homeowner</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Street Address</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Submitted</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Customer Link</th>
-                                        <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Homeowner</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Street Address</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Submitted</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Source</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Customer Link</th>
+                                        <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Actions</th>
                                     </tr>
                                 </thead>
-                                <tbody className="bg-white divide-y divide-gray-200">
+                                <tbody className="divide-y divide-slate-200 bg-white">
                                     {visibleLeads.map(lead => (
-                                        <tr key={lead.id} className="hover:bg-gray-50"
+                                        <tr key={lead.id} className="cursor-pointer transition hover:bg-slate-50"
                                             onClick={() => navigate(`/company/leads/${lead.id}`)}
                                         >
-                                            <td className="px-6 py-4 whitespace-nowrap">
-                                                <div className="font-medium text-gray-900">{lead.homeownerName}</div>
+                                            <td className="whitespace-nowrap px-5 py-3">
+                                                <div className="text-sm font-semibold text-slate-900">{lead.homeownerName}</div>
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800">{lead.serviceLocationAddress?.streetAddress || 'No address'}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{lead.serviceLocationAddress?.streetAddress || 'No address'}</td>
+                                            <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-500">
                                                 {toDate(lead.createdAt)?.toLocaleDateString() || 'N/A'}
                                             </td>
-                                            <td className="px-6 py-4 whitespace-nowrap">{renderStatus(lead.status)}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap">{renderSource(lead)}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap">{renderLinkStatus(lead)}</td>
-                                            <td className="px-6 py-4 whitespace-nowrap">
+                                            <td className="whitespace-nowrap px-5 py-3">{renderStatus(lead.status)}</td>
+                                            <td className="whitespace-nowrap px-5 py-3">{renderSource(lead)}</td>
+                                            <td className="whitespace-nowrap px-5 py-3">{renderLinkStatus(lead)}</td>
+                                            <td className="whitespace-nowrap px-5 py-3">
                                                 {can("612") && (
                                                     <button
                                                         type="button"
@@ -340,7 +341,7 @@ export default function Leads() {
                                                             }
                                                             navigate(buildLeadServiceAgreementPath(lead));
                                                         }}
-                                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                                                         disabled={!getLinkedCustomerId(lead)}
                                                     >
                                                         Create Estimate
@@ -353,7 +354,7 @@ export default function Leads() {
                             </table>
                         </div>
                     )}
-                </div>
+                </section>
             </div>
         </div>
     );

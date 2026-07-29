@@ -5,6 +5,7 @@ import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Select from "react-select";
 import {
     ArrowLeftIcon,
+    ArrowTopRightOnSquareIcon,
     BriefcaseIcon,
     CheckIcon,
     ChatBubbleBottomCenterTextIcon,
@@ -12,6 +13,7 @@ import {
     ClipboardDocumentListIcon,
     ClockIcon,
     CurrencyDollarIcon,
+    DocumentIcon,
     DocumentTextIcon,
     EyeIcon,
     EyeSlashIcon,
@@ -19,6 +21,7 @@ import {
     MapIcon,
     PaperClipIcon,
     PencilSquareIcon,
+    PhotoIcon,
     PlusIcon,
     SparklesIcon,
     StarIcon,
@@ -31,6 +34,8 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { CompanyUserStatus, WorkerTypeEnum } from "../../../utils/models/CompanyUser";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
+const MAX_COMPANY_USER_FILE_SIZE = 25 * 1024 * 1024;
+const COMPANY_USER_FILE_ACCEPT = "image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.heic,.heif";
 
 const emptyPersonalVehicle = {
     nickName: "",
@@ -58,6 +63,7 @@ const companyUserSections = [
     { id: "general", label: "General", helper: "Profile, role, route access, and rate sheet" },
     { id: "activity", label: "Activity", helper: "Recent service stops, routes, and statements" },
     { id: "onboarding", label: "Onboarding", helper: "Setup list and completion tracking" },
+    { id: "files", label: "Files", helper: "Documents, photos, and technician attachments" },
     { id: "performance", label: "Performance", helper: "Internal reviews, references, and shared reports", permissionId: "260" },
 ];
 
@@ -238,6 +244,15 @@ const formatMoneyFromCents = (value) => {
     return Number.isFinite(amount)
         ? amount.toLocaleString(undefined, { style: "currency", currency: "USD" })
         : "$0.00";
+};
+
+const formatFileSize = (value) => {
+    const bytes = Number(value || 0);
+    if (!Number.isFinite(bytes) || bytes <= 0) return "0 KB";
+    const units = ["B", "KB", "MB", "GB"];
+    const exponent = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+    const size = bytes / (1024 ** exponent);
+    return `${size.toLocaleString(undefined, { maximumFractionDigits: exponent === 0 ? 0 : 1 })} ${units[exponent]}`;
 };
 
 const formatDollarAmount = (value) => {
@@ -457,6 +472,10 @@ const companyUserOnboardingItemsRef = (companyId, companyUserId) => (
     collection(db, "companies", companyId, "companyUsers", companyUserId, "onboardingChecklist")
 );
 
+const companyUserFilesRef = (companyId, companyUserId) => (
+    collection(db, "companies", companyId, "companyUsers", companyUserId, "files")
+);
+
 const normalizeOnboardingItem = (item = {}, fallbackOrder = 0) => ({
     id: item.id || "",
     templateItemId: item.templateItemId || item.id || "",
@@ -477,6 +496,33 @@ const safeStorageFileName = (name) => (
         .replace(/[^a-zA-Z0-9._-]/g, "_")
         .slice(0, 140) || "attachment"
 );
+
+const getCompanyUserFileUrl = (file = {}) => file.downloadUrl || file.url || "";
+
+const isImageFile = (file = {}) => String(file.contentType || file.type || "").startsWith("image/");
+
+const getFileTypeLabel = (file = {}) => {
+    const contentType = String(file.contentType || file.type || "").toLowerCase();
+    const fileName = String(file.name || file.title || "");
+    const extension = fileName.includes(".") ? fileName.split(".").pop().toUpperCase() : "";
+
+    if (contentType.startsWith("image/")) return "Photo";
+    if (contentType.includes("pdf")) return "PDF";
+    if (contentType.includes("spreadsheet") || contentType.includes("excel") || ["XLS", "XLSX", "CSV"].includes(extension)) return extension || "Sheet";
+    if (contentType.includes("word") || ["DOC", "DOCX"].includes(extension)) return extension || "Doc";
+    if (contentType.includes("text") || extension === "TXT") return "Text";
+
+    return extension || "File";
+};
+
+const getFileTypeClass = (file = {}) => {
+    const label = getFileTypeLabel(file);
+    if (label === "Photo") return "bg-emerald-50 text-emerald-700 ring-emerald-200";
+    if (label === "PDF") return "bg-rose-50 text-rose-700 ring-rose-200";
+    if (["XLS", "XLSX", "CSV", "Sheet"].includes(label)) return "bg-blue-50 text-blue-700 ring-blue-200";
+    if (["DOC", "DOCX", "Doc"].includes(label)) return "bg-indigo-50 text-indigo-700 ring-indigo-200";
+    return "bg-slate-100 text-slate-600 ring-slate-200";
+};
 
 const EmptyState = ({ title, description }) => (
     <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
@@ -592,6 +638,11 @@ const CompanyUserDetails = () => {
     const [onboardingError, setOnboardingError] = useState("");
     const [isInitializingOnboarding, setIsInitializingOnboarding] = useState(false);
     const [updatingOnboardingItemId, setUpdatingOnboardingItemId] = useState("");
+    const [companyUserFiles, setCompanyUserFiles] = useState([]);
+    const [isFilesLoading, setIsFilesLoading] = useState(false);
+    const [filesError, setFilesError] = useState("");
+    const [pendingUserFiles, setPendingUserFiles] = useState([]);
+    const [isUploadingUserFiles, setIsUploadingUserFiles] = useState(false);
 
     const openPerformanceNoteModal = useCallback(() => {
         setPerformanceDraft(emptyPerformanceDraft);
@@ -976,6 +1027,51 @@ const CompanyUserDetails = () => {
         };
     }, [recentlySelectedCompany, user?.id]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany || !user?.id) {
+            setCompanyUserFiles([]);
+            setFilesError("");
+            setIsFilesLoading(false);
+            return;
+        }
+
+        if (activeTab !== "files") return;
+
+        let cancelled = false;
+
+        const fetchCompanyUserFiles = async () => {
+            setIsFilesLoading(true);
+            setFilesError("");
+
+            try {
+                const filesSnapshot = await getDocs(query(
+                    companyUserFilesRef(recentlySelectedCompany, user.id),
+                    orderBy("createdAt", "desc"),
+                    limit(100)
+                ));
+
+                if (cancelled) return;
+
+                setCompanyUserFiles(
+                    filesSnapshot.docs.map((fileDoc) => ({ id: fileDoc.id, ...fileDoc.data() }))
+                );
+            } catch (error) {
+                if (cancelled) return;
+                console.error("Error loading company user files:", error);
+                setFilesError("Could not load this user's files.");
+                setCompanyUserFiles([]);
+            } finally {
+                if (!cancelled) setIsFilesLoading(false);
+            }
+        };
+
+        fetchCompanyUserFiles();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [activeTab, recentlySelectedCompany, user?.id]);
+
     const roleOptions = useMemo(() => {
         const options = roleList.map((role) => ({
             ...role,
@@ -1013,6 +1109,7 @@ const CompanyUserDetails = () => {
     const canViewPerformanceReviews = can("260");
     const canEditPerformanceReviews = can("264");
     const canEditOnboardingChecklist = can("264");
+    const canEditUserFiles = can("264");
 
     useEffect(() => {
         if (
@@ -1166,6 +1263,17 @@ const CompanyUserDetails = () => {
             remaining: Math.max(onboardingItems.length - completed, 0),
         };
     }, [onboardingItems]);
+    const userFileStats = useMemo(() => {
+        const totalBytes = companyUserFiles.reduce((total, file) => total + Number(file.size || 0), 0);
+        const photos = companyUserFiles.filter(isImageFile).length;
+
+        return {
+            total: companyUserFiles.length,
+            photos,
+            documents: Math.max(companyUserFiles.length - photos, 0),
+            totalBytes,
+        };
+    }, [companyUserFiles]);
 
     const workTypeNameForRate = (rate) => {
         if (rate.payBasis === "technicianHourly" && !rate.workTypeId) return "General Hourly";
@@ -1374,6 +1482,106 @@ const CompanyUserDetails = () => {
             toast.error("Could not update onboarding item.");
         } finally {
             setUpdatingOnboardingItemId("");
+        }
+    };
+
+    const handleUserFilesChange = (event) => {
+        const files = Array.from(event.target.files || []);
+        if (!files.length) return;
+
+        const acceptedFiles = [];
+        files.forEach((file) => {
+            if (Number(file.size || 0) > MAX_COMPANY_USER_FILE_SIZE) {
+                toast.error(`${file.name || "File"} is larger than 25 MB.`);
+                return;
+            }
+
+            acceptedFiles.push(file);
+        });
+
+        if (acceptedFiles.length > 0) {
+            setPendingUserFiles((current) => [...current, ...acceptedFiles]);
+        }
+        event.target.value = "";
+    };
+
+    const removePendingUserFile = (fileIndex) => {
+        setPendingUserFiles((current) => current.filter((_, index) => index !== fileIndex));
+    };
+
+    const handleUploadUserFiles = async () => {
+        if (!requirePermission("264", "add files to company users")) return;
+        if (!recentlySelectedCompany || !user?.id) return;
+        if (pendingUserFiles.length === 0) {
+            toast.error("Select at least one file before uploading.");
+            return;
+        }
+
+        setIsUploadingUserFiles(true);
+        try {
+            const filesCollectionRef = companyUserFilesRef(recentlySelectedCompany, user.id);
+            const batch = writeBatch(db);
+            const uploadedRecords = [];
+            const localCreatedAt = Timestamp.fromDate(new Date());
+            const actorUserId = dataBaseUser?.id || dataBaseUser?.userId || authUser?.uid || "";
+
+            for (const [index, file] of pendingUserFiles.entries()) {
+                const fileDocRef = doc(filesCollectionRef);
+                const storagePath = [
+                    "companies",
+                    recentlySelectedCompany,
+                    "companyUsers",
+                    user.id,
+                    "files",
+                    `${fileDocRef.id}_${safeStorageFileName(file.name)}`,
+                ].join("/");
+                const storageRef = ref(storage, storagePath);
+
+                await uploadBytes(storageRef, file, {
+                    contentType: file.type || "application/octet-stream",
+                });
+                const url = await getDownloadURL(storageRef);
+                const payload = {
+                    name: file.name || `Technician file ${index + 1}`,
+                    title: file.name || `Technician file ${index + 1}`,
+                    url,
+                    downloadUrl: url,
+                    contentType: file.type || "",
+                    size: file.size || 0,
+                    storagePath,
+                    companyId: recentlySelectedCompany,
+                    companyUserId: user.id,
+                    technicianUserId: user.userId || "",
+                    technicianName: displayName,
+                    createdByUserId: actorUserId,
+                    createdByName: reviewerName,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                };
+
+                batch.set(fileDocRef, payload);
+                uploadedRecords.push({
+                    ...payload,
+                    id: fileDocRef.id,
+                    createdAt: localCreatedAt,
+                    updatedAt: localCreatedAt,
+                });
+            }
+
+            await batch.commit();
+            setCompanyUserFiles((current) => (
+                sortByRecentDate(
+                    [...uploadedRecords, ...current],
+                    (file) => file.createdAt
+                )
+            ));
+            setPendingUserFiles([]);
+            toast.success(`Uploaded ${uploadedRecords.length} file${uploadedRecords.length === 1 ? "" : "s"}.`);
+        } catch (error) {
+            console.error("Error uploading company user files:", error);
+            toast.error("Failed to upload technician files.");
+        } finally {
+            setIsUploadingUserFiles(false);
         }
     };
 
@@ -2569,6 +2777,180 @@ const CompanyUserDetails = () => {
         </div>
     );
 
+    const renderFilesTab = () => (
+        <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <StatTile
+                    icon={PaperClipIcon}
+                    title="Files"
+                    value={userFileStats.total}
+                    subtitle="Saved to profile"
+                />
+                <StatTile
+                    icon={PhotoIcon}
+                    title="Photos"
+                    value={userFileStats.photos}
+                    subtitle={`${userFileStats.documents.toLocaleString()} document${userFileStats.documents === 1 ? "" : "s"}`}
+                />
+                <StatTile
+                    icon={DocumentIcon}
+                    title="Storage"
+                    value={formatFileSize(userFileStats.totalBytes)}
+                    subtitle="Uploaded file size"
+                />
+            </div>
+
+            <Section
+                title="Add Files"
+                description="Documents, photos, certifications, and other technician attachments."
+            >
+                {canEditUserFiles ? (
+                    <div className="space-y-4">
+                        <label className="block rounded-lg border border-dashed border-slate-300 bg-slate-50 p-5 transition hover:border-blue-300 hover:bg-blue-50">
+                            <span className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <span className="flex min-w-0 items-center gap-3">
+                                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white text-slate-600 ring-1 ring-slate-200">
+                                        <PaperClipIcon className="h-5 w-5" />
+                                    </span>
+                                    <span className="min-w-0">
+                                        <span className="block text-sm font-semibold text-slate-900">Select technician files</span>
+                                        <span className="mt-1 block text-xs text-slate-500">Up to {formatFileSize(MAX_COMPANY_USER_FILE_SIZE)} per file</span>
+                                    </span>
+                                </span>
+                                <span className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white shadow-sm">
+                                    Choose Files
+                                </span>
+                            </span>
+                            <input
+                                type="file"
+                                multiple
+                                accept={COMPANY_USER_FILE_ACCEPT}
+                                onChange={handleUserFilesChange}
+                                disabled={isUploadingUserFiles}
+                                className="sr-only"
+                            />
+                        </label>
+
+                        {pendingUserFiles.length > 0 && (
+                            <div className="rounded-lg border border-slate-200 bg-white">
+                                <div className="flex flex-col gap-2 border-b border-slate-100 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <p className="text-sm font-semibold text-slate-900">
+                                        Ready to upload: {pendingUserFiles.length.toLocaleString()}
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={handleUploadUserFiles}
+                                        disabled={isUploadingUserFiles}
+                                        className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        <PlusIcon className="h-4 w-4" />
+                                        {isUploadingUserFiles ? "Uploading..." : "Upload Files"}
+                                    </button>
+                                </div>
+                                <div className="divide-y divide-slate-100">
+                                    {pendingUserFiles.map((file, index) => (
+                                        <div key={`${file.name}-${file.size}-${index}`} className="flex items-center justify-between gap-3 px-4 py-3">
+                                            <div className="min-w-0">
+                                                <p className="truncate text-sm font-semibold text-slate-800">{file.name}</p>
+                                                <p className="mt-0.5 text-xs text-slate-500">{formatFileSize(file.size)}</p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => removePendingUserFile(index)}
+                                                disabled={isUploadingUserFiles}
+                                                className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:cursor-not-allowed disabled:opacity-60"
+                                                aria-label={`Remove ${file.name}`}
+                                            >
+                                                <XMarkIcon className="h-4 w-4" />
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                ) : (
+                    <EmptyState
+                        title="Update permission required"
+                        description="You can view files, but cannot add files with this role."
+                    />
+                )}
+            </Section>
+
+            <Section title="Saved Files" description="Files attached directly to this technician profile.">
+                <div className="space-y-4">
+                    {filesError && (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                            {filesError}
+                        </div>
+                    )}
+
+                    {isFilesLoading ? (
+                        <p className="text-sm text-slate-500">Loading files...</p>
+                    ) : companyUserFiles.length === 0 ? (
+                        <EmptyState
+                            title="No files attached"
+                            description="Uploaded technician documents and photos will appear here."
+                        />
+                    ) : (
+                        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                            {companyUserFiles.map((file) => {
+                                const fileUrl = getCompanyUserFileUrl(file);
+                                const image = isImageFile(file);
+
+                                return (
+                                    <article key={file.id} className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                                        {image && fileUrl ? (
+                                            <img
+                                                src={fileUrl}
+                                                alt={file.name || "Technician file"}
+                                                className="h-36 w-full bg-slate-100 object-cover"
+                                            />
+                                        ) : (
+                                            <div className="flex h-36 items-center justify-center bg-slate-50">
+                                                <DocumentIcon className="h-12 w-12 text-slate-400" />
+                                            </div>
+                                        )}
+                                        <div className="space-y-3 p-4">
+                                            <div className="flex items-start justify-between gap-3">
+                                                <div className="min-w-0">
+                                                    <h3 className="truncate text-sm font-semibold text-slate-950">{file.name || file.title || "Technician file"}</h3>
+                                                    <p className="mt-1 text-xs text-slate-500">{formatDateTime(file.createdAt || file.uploadedAt)}</p>
+                                                </div>
+                                                <Badge className={getFileTypeClass(file)}>{getFileTypeLabel(file)}</Badge>
+                                            </div>
+
+                                            <div className="grid grid-cols-2 gap-3 text-sm">
+                                                <DetailField label="Size" value={formatFileSize(file.size)} />
+                                                <DetailField label="Uploaded By" value={file.createdByName || "Management"} />
+                                            </div>
+
+                                            {fileUrl ? (
+                                                <a
+                                                    href={fileUrl}
+                                                    target="_blank"
+                                                    rel="noreferrer"
+                                                    className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                                                >
+                                                    <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+                                                    Open File
+                                                </a>
+                                            ) : (
+                                                <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-800">
+                                                    File link unavailable
+                                                </p>
+                                            )}
+                                        </div>
+                                    </article>
+                                );
+                            })}
+                        </div>
+                    )}
+                </div>
+            </Section>
+        </div>
+    );
+
     const renderPerformanceLineForm = ({ onCancel }) => (
         <div className="space-y-5">
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_220px_minmax(0,1fr)]">
@@ -3158,7 +3540,7 @@ const CompanyUserDetails = () => {
                             Back
                         </button>
                         <h1 className="truncate text-2xl font-semibold tracking-tight text-slate-950 sm:text-3xl">{displayName}</h1>
-                        <p className="mt-1 text-sm text-slate-500">Company user profile, rate sheet, recent activity, and performance history.</p>
+                        <p className="mt-1 text-sm text-slate-500">Company user profile, files, rate sheet, recent activity, and performance history.</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                         <Badge className={getStatusClass(user.status)}>{normalizeStatus(user.status)}</Badge>
@@ -3258,7 +3640,9 @@ const CompanyUserDetails = () => {
                                 ? renderActivityTab()
                                 : activeTab === "onboarding"
                                     ? renderOnboardingTab()
-                                    : renderPerformanceTab()}
+                                    : activeTab === "files"
+                                        ? renderFilesTab()
+                                        : renderPerformanceTab()}
                     </main>
                 </section>
             </div>

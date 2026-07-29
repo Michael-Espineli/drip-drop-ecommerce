@@ -1346,6 +1346,7 @@ const AlphaWaterReceiptImport = () => {
           billable: Boolean(line.billable),
           invoiced: false,
           returned: false,
+          status: line.billable ? "Needs invoice" : "Non-billable",
           customerId: "",
           customerName: "",
           sku: databaseItem?.sku || line.sku || "",

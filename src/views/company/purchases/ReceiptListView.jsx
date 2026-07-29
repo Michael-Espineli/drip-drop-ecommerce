@@ -272,55 +272,55 @@ const ReceiptListView = () => {
   };
 
   const FilterModal = () => (
-    <div className="fixed inset-0 z-50 bg-gray-900/40 p-4">
-      <div className="mx-auto mt-16 max-w-2xl rounded-lg border border-gray-200 bg-white p-5 shadow-xl">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 bg-slate-900/40 p-4">
+      <div className="mx-auto mt-16 max-w-2xl overflow-hidden rounded-lg border border-slate-200 bg-white shadow-xl">
+        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
           <div>
-            <h3 className="text-lg font-semibold text-gray-900">Filter & Sort</h3>
-            <p className="text-sm text-gray-500">Receipts load from the selected date range.</p>
+            <h3 className="text-lg font-semibold text-slate-950">Filter & Sort</h3>
+            <p className="text-sm text-slate-500">Receipts load from the selected date range.</p>
           </div>
-          <button className="rounded-md px-3 py-1 text-sm font-semibold text-gray-600 hover:bg-gray-100" onClick={() => setShowFilterModal(false)}>
+          <button className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50" onClick={() => setShowFilterModal(false)}>
             Close
           </button>
         </div>
 
-        <div className="mt-5 grid gap-4 sm:grid-cols-2">
-          <label className="text-sm font-semibold text-gray-700">
+        <div className="grid gap-4 p-5 sm:grid-cols-2">
+          <label className="text-sm font-semibold text-slate-700">
             Start Date
             <input
               type="date"
               value={format(startViewingDate, "yyyy-MM-dd")}
               onChange={(event) => setStartViewingDate(startOfDay(new Date(`${event.target.value}T00:00:00`)))}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-normal focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             />
           </label>
-          <label className="text-sm font-semibold text-gray-700">
+          <label className="text-sm font-semibold text-slate-700">
             End Date
             <input
               type="date"
               value={format(endViewingDate, "yyyy-MM-dd")}
               onChange={(event) => setEndViewingDate(endOfDay(new Date(`${event.target.value}T00:00:00`)))}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 font-normal focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             />
           </label>
-          <label className="text-sm font-semibold text-gray-700">
+          <label className="text-sm font-semibold text-slate-700">
             Filter
             <select
               value={receiptFilterOption}
               onChange={(event) => setReceiptFilterOption(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               {receiptFilters.map((filter) => (
                 <option key={filter.value} value={filter.value}>{filter.label}</option>
               ))}
             </select>
           </label>
-          <label className="text-sm font-semibold text-gray-700">
+          <label className="text-sm font-semibold text-slate-700">
             Sort
             <select
               value={receiptSortOption}
               onChange={(event) => handleReceiptSortChange(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 font-normal"
+              className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 font-normal focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
             >
               {receiptSorts.map((sort) => (
                 <option key={sort.value} value={sort.value}>{sort.label}</option>
@@ -329,9 +329,9 @@ const ReceiptListView = () => {
           </label>
         </div>
 
-        <div className="mt-5">
+        <div className="border-t border-slate-200 px-5 py-4">
           <div className="flex items-center justify-between">
-            <h4 className="text-sm font-semibold text-gray-700">Technicians</h4>
+            <h4 className="text-sm font-semibold text-slate-700">Technicians</h4>
             <button
               type="button"
               className="text-sm font-semibold text-blue-700 hover:text-blue-900"
@@ -342,7 +342,7 @@ const ReceiptListView = () => {
           </div>
           <div className="mt-2 grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
             {companyUsers.map((user) => (
-              <label key={user.id} className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700">
+              <label key={user.id} className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
                   checked={techIds.includes(user.userId)}
@@ -358,14 +358,14 @@ const ReceiptListView = () => {
   );
 
   const SortHeader = ({ label, keyName }) => (
-    <th className="p-4 text-left text-sm font-semibold uppercase tracking-wider text-gray-600">
+    <th className="border-b border-slate-200 px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">
       <button
         type="button"
         onClick={() => setSort(keyName)}
-        className="inline-flex items-center gap-1 text-left uppercase tracking-wider hover:text-gray-900"
+        className="inline-flex items-center gap-1 text-left uppercase tracking-wide hover:text-slate-900"
       >
         {label}
-        <span className="text-xs text-gray-400">
+        <span className="text-[10px] text-slate-400">
           {tableSort.key === keyName ? (tableSort.direction === "asc" ? "ASC" : "DESC") : "--"}
         </span>
       </button>
@@ -373,12 +373,14 @@ const ReceiptListView = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50 px-2 py-6 sm:px-3 lg:px-4">
-      <div className="w-full">
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
+      <div className="w-full space-y-6">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div>
-            <h2 className="text-3xl font-bold text-gray-800">Receipts</h2>
-            <p className="mt-1 text-sm text-gray-500">
+            <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Company receipts</p>
+            <h2 className="mt-1 text-3xl font-bold text-slate-950">Receipts</h2>
+            <p className="mt-1 text-sm text-slate-500">
               Receipt headers, totals, files, and linked purchased items from {format(startViewingDate, "MM/dd/yy")} to {format(endViewingDate, "MM/dd/yy")}.
             </p>
           </div>
@@ -386,74 +388,80 @@ const ReceiptListView = () => {
             {showAlphaWaterImport ? (
               <Link
                 to="/company/purchased-items/alpha-water-import"
-                className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-800 shadow-sm transition hover:bg-amber-100"
+                className="inline-flex items-center justify-center rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-bold text-amber-800 shadow-sm transition hover:bg-amber-100"
               >
                 Alpha Water Import
               </Link>
             ) : null}
             <Link
               to="/company/purchased-items/createNew"
-              className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 shadow-sm transition hover:bg-blue-100"
+              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
             >
               Create New Receipt
             </Link>
             <Link
               to="/company/purchased-items"
-              className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
               Purchased Items
             </Link>
           </div>
-        </div>
+          </div>
+        </section>
 
-        <div className="rounded-lg bg-white p-6 shadow-lg">
-          <div className="mb-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-[minmax(280px,1fr)_auto] md:items-center">
             <input
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              className="w-full rounded-lg border border-gray-300 p-3 focus:border-blue-500 focus:ring-blue-500 sm:w-2/5"
+              className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
               type="text"
               placeholder="Search invoice, vendor, technician, notes, or receipt..."
             />
             <button
               type="button"
               onClick={() => setShowFilterModal(true)}
-              className="rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-100"
+              className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
             >
               Filter & Sort
             </button>
           </div>
 
-          <div className="mb-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Receipt Total</p>
-              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.total)}</p>
-              <p className="text-sm text-gray-500">{filteredReceipts.length} receipt(s)</p>
+          <div className="grid gap-3 border-b border-slate-200 p-5 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Receipt Total</p>
+              <p className="mt-1 text-xl font-bold text-slate-950">{moneyFromCents(summary.total)}</p>
+              <p className="text-sm text-slate-500">{filteredReceipts.length} receipt(s)</p>
             </div>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Subtotal</p>
-              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.subtotal)}</p>
-              <p className="text-sm text-gray-500">Before tax</p>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subtotal</p>
+              <p className="mt-1 text-xl font-bold text-slate-950">{moneyFromCents(summary.subtotal)}</p>
+              <p className="text-sm text-slate-500">Before tax</p>
             </div>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Tax</p>
-              <p className="mt-1 text-xl font-bold text-gray-900">{moneyFromCents(summary.tax)}</p>
-              <p className="text-sm text-gray-500">Receipt tax total</p>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Tax</p>
+              <p className="mt-1 text-xl font-bold text-slate-950">{moneyFromCents(summary.tax)}</p>
+              <p className="text-sm text-slate-500">Receipt tax total</p>
             </div>
-            <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Items</p>
-              <p className="mt-1 text-xl font-bold text-gray-900">{summary.itemCount}</p>
-              <p className="text-sm text-gray-500">Linked purchased items</p>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Items</p>
+              <p className="mt-1 text-xl font-bold text-slate-950">{summary.itemCount}</p>
+              <p className="text-sm text-slate-500">Linked purchased items</p>
             </div>
           </div>
 
-          {loading ? <p className="text-sm text-gray-500">Loading receipts...</p> : null}
+          <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+            <div>Showing {sortedReceipts.length} of {receipts.length} receipt{receipts.length === 1 ? "" : "s"}</div>
+            <div>{receiptFilters.find((filter) => filter.value === receiptFilterOption)?.label || "All"} - {receiptSorts.find((sort) => sort.value === receiptSortOption)?.label || "Recent"}</div>
+          </div>
+
+          {loading ? <p className="px-5 py-4 text-sm text-slate-500">Loading receipts...</p> : null}
           {error ? <p className="text-sm font-semibold text-red-600">{error}</p> : null}
 
           {!loading && !error ? (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto border-t border-slate-200">
               <table className="min-w-full bg-white">
-                <thead className="bg-gray-100">
+                <thead className="bg-slate-50">
                   <tr>
                     <SortHeader label="Invoice #" keyName="invoiceNum" />
                     <SortHeader label="Date" keyName="date" />
@@ -466,35 +474,35 @@ const ReceiptListView = () => {
                     <SortHeader label="Files" keyName="pdfUrlList" />
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-gray-200">
+                <tbody className="divide-y divide-slate-200">
                   {sortedReceipts.map((receipt) => (
                     <tr
                       key={receipt.id}
                       onClick={() => navigate(`/company/receipts/detail/${receipt.id}`)}
-                      className="cursor-pointer transition-colors hover:bg-gray-50"
+                      className="cursor-pointer transition-colors hover:bg-slate-50"
                     >
-                      <td className="whitespace-nowrap p-4 text-gray-700">{receipt.invoiceNum || "N/A"}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{shortDate(receipt.date)}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{receipt.storeName || "N/A"}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{receipt.techName || "N/A"}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{receipt.numberOfItems || 0}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{moneyFromCents(receipt.cost)}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{moneyFromCents(receipt.tax)}</td>
-                      <td className="whitespace-nowrap p-4 font-semibold text-gray-900">{moneyFromCents(receipt.costAfterTax)}</td>
-                      <td className="whitespace-nowrap p-4 text-gray-700">{receipt.pdfUrlList.length}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{receipt.invoiceNum || "N/A"}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{shortDate(receipt.date)}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{receipt.storeName || "N/A"}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{receipt.techName || "N/A"}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{receipt.numberOfItems || 0}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{moneyFromCents(receipt.cost)}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{moneyFromCents(receipt.tax)}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm font-semibold text-slate-950">{moneyFromCents(receipt.costAfterTax)}</td>
+                      <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{receipt.pdfUrlList.length}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
 
               {sortedReceipts.length === 0 ? (
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center text-gray-500">
+                <div className="m-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
                   No receipts match the current filters.
                 </div>
               ) : null}
             </div>
           ) : null}
-        </div>
+        </section>
       </div>
       {showFilterModal && <FilterModal />}
     </div>

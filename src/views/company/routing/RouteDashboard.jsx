@@ -17,6 +17,7 @@ import { Context } from "../../../context/AuthContext";
 import { format } from 'date-fns';
 import toast from 'react-hot-toast';
 import "react-datepicker/dist/react-datepicker.css";
+import "./RouteDashboard.css";
 import { v4 as uuidv4 } from "uuid";
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import { fetchCompanyVendors } from '../../../utils/vendors';
@@ -2115,6 +2116,7 @@ const RouteDashboard = () => {
                             minDate={currentWeekStart}
                             maxDate={maxSelectableDate}
                             className="bg-white border border-gray-300 rounded-lg p-2 shadow-sm text-gray-700"
+                            calendarClassName="route-day-calendar"
                         />
                     </div>
                 </header>
@@ -2886,6 +2888,7 @@ const MoveStopsPanel = ({
                                 selected={moveDate}
                                 onChange={onMoveDateChange}
                                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm"
+                                calendarClassName="route-day-calendar"
                             />
                         </label>
                     ) : (
