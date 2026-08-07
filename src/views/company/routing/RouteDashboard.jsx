@@ -1,16 +1,21 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import DatePicker from "react-datepicker";
-import { query, collection, getDocs, getDoc, where, Timestamp, doc, updateDoc, setDoc, writeBatch } from "firebase/firestore";
+import { query, collection, getDocs, getDoc, where, Timestamp, doc, updateDoc, setDoc, writeBatch, orderBy } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import {
     ArrowDownIcon,
     ArrowUpIcon,
     BriefcaseIcon,
+    ChatBubbleLeftRightIcon,
     ChevronLeftIcon,
     ChevronRightIcon,
     ClipboardDocumentCheckIcon,
+    Cog6ToothIcon,
+    DevicePhoneMobileIcon,
     MapIcon,
+    PaperAirplaneIcon,
+    XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -21,6 +26,20 @@ import "./RouteDashboard.css";
 import { v4 as uuidv4 } from "uuid";
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import { fetchCompanyVendors } from '../../../utils/vendors';
+import {
+    canUseCompanyRouteVehicle,
+    canUsePersonalRouteVehicle,
+} from '../../../utils/models/CompanyUser';
+import { sortCompanyUsersByName } from '../../../utils/companyUsers';
+import {
+    buildServiceStopTextTemplateContext,
+    buildSmsHref,
+    getBestSmsPhoneNumber,
+    mergeTextMessageTemplates,
+    normalizeTextMessageTemplate,
+    renderTextMessageTemplate,
+    textMessageTemplatesRef,
+} from '../../../utils/textMessageTemplates';
 
 const ALL_ROUTES_OPTION = '__all_active_routes__';
 const ALL_ROUTES_MAP_OVERLAYS = Object.freeze({
@@ -560,6 +579,10 @@ const personalVehicleLabel = (tech) => {
     return `${name || `${tech?.userName || 'Technician'} personal vehicle`}${plate}`;
 };
 
+const routeTechnician = (route, technicians) => (
+    technicians.find(item => item.userId === route?.techId || item.id === route?.techId)
+);
+
 const routeVehicleSelectionValue = (route) => {
     if (route?.vehicleSource === 'Personal') return `personal:${route.personalVehicleOwnerId || route.techId}`;
     if (route?.vehicalId) return `fleet:${route.vehicalId}`;
@@ -570,7 +593,7 @@ const routeVehicleSummary = (route, fleetVehicles, technicians) => {
     if (!route) return 'No vehicle assigned';
 
     if (route.vehicleSource === 'Personal') {
-        const tech = technicians.find(item => item.userId === (route.personalVehicleOwnerId || route.techId));
+        const tech = technicians.find(item => item.userId === (route.personalVehicleOwnerId || route.techId) || item.id === (route.personalVehicleOwnerId || route.techId));
         return route.vehicleLabel || personalVehicleLabel(tech);
     }
 
@@ -589,20 +612,35 @@ const routeVehicleSourceLabel = (route) => {
 };
 
 const buildVehicleOptionsForRoute = (route, technicians, fleetVehicles) => {
-    const tech = technicians.find(item => item.userId === route.techId);
+    const tech = routeTechnician(route, technicians);
+    const canUseCompanyVehicles = canUseCompanyRouteVehicle(tech);
+    const canUsePersonalVehicle = canUsePersonalRouteVehicle(tech);
+    const selectedFleetVehicleId = route?.vehicalId;
     const activeFleetVehicles = fleetVehicles.filter(vehicle => vehicle.status !== 'Retired');
+    let fleetOptions = canUseCompanyVehicles
+        ? activeFleetVehicles
+        : activeFleetVehicles.filter(vehicle => vehicle.id === selectedFleetVehicleId);
+
+    if (selectedFleetVehicleId && !fleetOptions.some(vehicle => vehicle.id === selectedFleetVehicleId)) {
+        const selectedFleetVehicle = fleetVehicles.find(vehicle => vehicle.id === selectedFleetVehicleId);
+        if (selectedFleetVehicle) {
+            fleetOptions = [selectedFleetVehicle, ...fleetOptions];
+        }
+    }
+
     const options = [
         { value: 'none', label: 'No vehicle assigned' },
-        ...activeFleetVehicles.map(vehicle => ({
+        ...fleetOptions.map(vehicle => ({
             value: `fleet:${vehicle.id}`,
-            label: `Company: ${vehicleLabel(vehicle)}`,
+            label: `${canUseCompanyVehicles ? 'Company' : 'Company (current)'}: ${vehicleLabel(vehicle)}`,
         })),
     ];
 
-    if (tech?.allowPersonalVehicle) {
+    if (canUsePersonalVehicle || route?.vehicleSource === 'Personal') {
+        const ownerId = route?.personalVehicleOwnerId || tech?.userId || route?.techId;
         options.push({
-            value: `personal:${tech.userId}`,
-            label: `Personal: ${personalVehicleLabel(tech)}`,
+            value: `personal:${ownerId}`,
+            label: `${canUsePersonalVehicle ? 'Personal' : 'Personal (current)'}: ${route?.vehicleLabel || personalVehicleLabel(tech)}`,
         });
     }
 
@@ -1091,7 +1129,7 @@ const useNow = () => {
 
 const RouteDashboard = () => {
     const navigate = useNavigate();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName } = useContext(Context);
     const now = useNow();
     const todayDate = useMemo(() => startOfDayDate(new Date()), []);
     const currentWeekStart = useMemo(() => startOfWeekDate(todayDate), [todayDate]);
@@ -1109,6 +1147,10 @@ const RouteDashboard = () => {
     const [activeRoutes, setActiveRoutes] = useState([]);
     const [activeRouteLocations, setActiveRouteLocations] = useState([]);
     const [activeRouteLogs, setActiveRouteLogs] = useState([]);
+    const [textMessageTemplates, setTextMessageTemplates] = useState([]);
+    const [isLoadingTextMessageTemplates, setIsLoadingTextMessageTemplates] = useState(false);
+    const [routeCustomersById, setRouteCustomersById] = useState({});
+    const [routeServiceLocationsById, setRouteServiceLocationsById] = useState({});
     const [selectedRouteId, setSelectedRouteId] = useState('');
     const [isSeedingDemoRoute, setIsSeedingDemoRoute] = useState(false);
     const [vehicleUpdatingRouteId, setVehicleUpdatingRouteId] = useState('');
@@ -1191,7 +1233,7 @@ const RouteDashboard = () => {
 
             const techQuery = query(collection(db, "companies", recentlySelectedCompany, 'companyUsers'));
             const techSnapshot = await getDocs(techQuery);
-            const fetchedTechs = techSnapshot.docs.map(doc => ({ ...doc.data(), docId: doc.id }));
+            const fetchedTechs = sortCompanyUsersByName(techSnapshot.docs.map(doc => ({ ...doc.data(), docId: doc.id })));
             setTechnicians(fetchedTechs);
 
             const fleetQuery = query(collection(db, "companies", recentlySelectedCompany, 'vehicals'));
@@ -1511,6 +1553,38 @@ const RouteDashboard = () => {
         };
     }, [recentlySelectedCompany]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setTextMessageTemplates([]);
+            setIsLoadingTextMessageTemplates(false);
+            return undefined;
+        }
+
+        let isMounted = true;
+        setIsLoadingTextMessageTemplates(true);
+
+        getDocs(query(textMessageTemplatesRef(db, recentlySelectedCompany), orderBy("sortOrder", "asc")))
+            .then((snapshot) => {
+                if (!isMounted) return;
+
+                setTextMessageTemplates(snapshot.docs.map((templateDoc, index) => normalizeTextMessageTemplate({
+                    id: templateDoc.id,
+                    ...templateDoc.data(),
+                }, index)));
+            })
+            .catch((error) => {
+                console.error('Error loading route text templates:', error);
+                if (isMounted) setTextMessageTemplates([]);
+            })
+            .finally(() => {
+                if (isMounted) setIsLoadingTextMessageTemplates(false);
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [recentlySelectedCompany]);
+
     const isAllRoutesSelected = selectedRouteId === ALL_ROUTES_OPTION;
     const displayActiveRoutes = useMemo(() => (
         activeRoutes.filter(route => getOrderedRouteStops(route, serviceStops).length > 0)
@@ -1593,6 +1667,85 @@ const RouteDashboard = () => {
         () => isAllRoutesSelected ? allRouteStops : getOrderedRouteStops(selectedRoute, serviceStops),
         [allRouteStops, isAllRoutesSelected, selectedRoute, serviceStops]
     );
+
+    const activeTextMessageTemplates = useMemo(
+        () => mergeTextMessageTemplates(textMessageTemplates),
+        [textMessageTemplates]
+    );
+
+    const selectedRouteCustomerIds = useMemo(() => {
+        if (isAllRoutesSelected) return [];
+
+        return [...new Set(
+            selectedRouteStops
+                .map(stop => stop.customerId)
+                .filter(Boolean)
+        )].sort();
+    }, [isAllRoutesSelected, selectedRouteStops]);
+
+    const selectedRouteServiceLocationIds = useMemo(() => {
+        if (isAllRoutesSelected) return [];
+
+        return [...new Set(
+            selectedRouteStops
+                .map(stop => stop.serviceLocationId || stop.locationId)
+                .filter(Boolean)
+        )].sort();
+    }, [isAllRoutesSelected, selectedRouteStops]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany || selectedRouteCustomerIds.length === 0) {
+            setRouteCustomersById({});
+            return undefined;
+        }
+
+        let isMounted = true;
+
+        Promise.all(selectedRouteCustomerIds.map(async (customerId) => {
+            const customerSnapshot = await getDoc(doc(db, "companies", recentlySelectedCompany, "customers", customerId));
+            return customerSnapshot.exists()
+                ? [customerId, { id: customerSnapshot.id, ...customerSnapshot.data() }]
+                : null;
+        }))
+            .then((entries) => {
+                if (isMounted) setRouteCustomersById(Object.fromEntries(entries.filter(Boolean)));
+            })
+            .catch((error) => {
+                console.error('Error loading route customers for texting:', error);
+                if (isMounted) setRouteCustomersById({});
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [recentlySelectedCompany, selectedRouteCustomerIds]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany || selectedRouteServiceLocationIds.length === 0) {
+            setRouteServiceLocationsById({});
+            return undefined;
+        }
+
+        let isMounted = true;
+
+        Promise.all(selectedRouteServiceLocationIds.map(async (serviceLocationId) => {
+            const locationSnapshot = await getDoc(doc(db, "companies", recentlySelectedCompany, "serviceLocations", serviceLocationId));
+            return locationSnapshot.exists()
+                ? [serviceLocationId, { id: locationSnapshot.id, ...locationSnapshot.data() }]
+                : null;
+        }))
+            .then((entries) => {
+                if (isMounted) setRouteServiceLocationsById(Object.fromEntries(entries.filter(Boolean)));
+            })
+            .catch((error) => {
+                console.error('Error loading route service locations for texting:', error);
+                if (isMounted) setRouteServiceLocationsById({});
+            });
+
+        return () => {
+            isMounted = false;
+        };
+    }, [recentlySelectedCompany, selectedRouteServiceLocationIds]);
 
     const selectedStopsForMove = useMemo(() => {
         const stopsById = new Map(allRouteStops.map(stop => [stop.id, stop]));
@@ -1776,11 +1929,17 @@ const RouteDashboard = () => {
             };
 
             if (selectedValue.startsWith('fleet:')) {
+                const tech = routeTechnician(route, technicians);
                 const vehicleId = selectedValue.replace('fleet:', '');
                 const vehicle = fleetVehicles.find(item => item.id === vehicleId);
 
                 if (!vehicle) {
                     toast.error('Vehicle no longer exists.');
+                    return;
+                }
+
+                if (!canUseCompanyRouteVehicle(tech)) {
+                    toast.error('This technician is not allowed to use company vehicles.');
                     return;
                 }
 
@@ -1796,10 +1955,10 @@ const RouteDashboard = () => {
                 };
             } else if (selectedValue.startsWith('personal:')) {
                 const ownerId = selectedValue.replace('personal:', '');
-                const tech = technicians.find(item => item.userId === ownerId);
+                const tech = technicians.find(item => item.userId === ownerId || item.id === ownerId);
                 const personalVehicle = tech?.personalVehicle || {};
 
-                if (!tech?.allowPersonalVehicle) {
+                if (!canUsePersonalRouteVehicle(tech)) {
                     toast.error('This technician is not allowed to use a personal vehicle.');
                     return;
                 }
@@ -2065,7 +2224,7 @@ const RouteDashboard = () => {
     };
 
     return (
-        <div className='min-h-screen bg-gray-50 p-4 sm:p-6 lg:p-8'>
+        <div className='min-h-screen bg-gray-50 p-4 pb-28 sm:p-6 sm:pb-28 lg:p-8 lg:pb-28'>
             <div className=" mx-auto">
                 <header className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -2349,8 +2508,286 @@ const RouteDashboard = () => {
                             </section>
                     </main>
                 )}
+
+                {!isLoading && !isAllRoutesSelected && selectedRoute && (
+                    <RouteActionFooter
+                        route={selectedRoute}
+                        stops={selectedRouteStops}
+                        templates={activeTextMessageTemplates}
+                        isLoadingTemplates={isLoadingTextMessageTemplates}
+                        customersById={routeCustomersById}
+                        serviceLocationsById={routeServiceLocationsById}
+                        company={{ id: recentlySelectedCompany, name: recentlySelectedCompanyName }}
+                        serviceDate={serviceDate}
+                    />
+                )}
             </div>
         </div>
+    );
+};
+
+const getRouteActionDefaultStopId = (stops = [], customersById = {}, serviceLocationsById = {}) => {
+    const stopHasPhone = (stop) => {
+        const serviceLocationId = stop.serviceLocationId || stop.locationId;
+        return Boolean(getBestSmsPhoneNumber({
+            stop,
+            customer: customersById[stop.customerId] || {},
+            serviceLocation: serviceLocationsById[serviceLocationId] || {},
+        }));
+    };
+    const activeStop = stops.find(stop => {
+        const { start, end } = getStopTiming(stop);
+        return start && !end && stopHasPhone(stop);
+    });
+    if (activeStop) return activeStop.id;
+
+    const nextMovableStop = stops.find(stop => isStopMovable(stop) && stopHasPhone(stop));
+    if (nextMovableStop) return nextMovableStop.id;
+
+    return stops.find(stopHasPhone)?.id || stops[0]?.id || "";
+};
+
+const RouteActionFooter = ({
+    route,
+    stops = [],
+    templates = [],
+    isLoadingTemplates = false,
+    customersById = {},
+    serviceLocationsById = {},
+    company = {},
+    serviceDate,
+}) => {
+    const [isPretextOpen, setIsPretextOpen] = useState(false);
+    const [selectedStopId, setSelectedStopId] = useState("");
+    const [selectedTemplateId, setSelectedTemplateId] = useState("");
+
+    const defaultStopId = useMemo(
+        () => getRouteActionDefaultStopId(stops, customersById, serviceLocationsById),
+        [customersById, serviceLocationsById, stops]
+    );
+    const selectedStop = stops.find(stop => stop.id === selectedStopId) || stops.find(stop => stop.id === defaultStopId) || stops[0] || null;
+    const selectedTemplate = templates.find(template => template.id === selectedTemplateId) || templates[0] || null;
+    const textableStopCount = stops.filter((stop) => {
+        const serviceLocationId = stop.serviceLocationId || stop.locationId;
+        return getBestSmsPhoneNumber({
+            stop,
+            customer: customersById[stop.customerId] || {},
+            serviceLocation: serviceLocationsById[serviceLocationId] || {},
+        });
+    }).length;
+
+    useEffect(() => {
+        if (!isPretextOpen) return;
+        if (!selectedStopId || !stops.some(stop => stop.id === selectedStopId)) {
+            setSelectedStopId(defaultStopId);
+        }
+    }, [defaultStopId, isPretextOpen, selectedStopId, stops]);
+
+    useEffect(() => {
+        if (!templates.length) {
+            setSelectedTemplateId("");
+            return;
+        }
+
+        if (!selectedTemplateId || !templates.some(template => template.id === selectedTemplateId)) {
+            setSelectedTemplateId(templates[0].id);
+        }
+    }, [selectedTemplateId, templates]);
+
+    if (!route || stops.length === 0) return null;
+
+    const serviceLocationId = selectedStop?.serviceLocationId || selectedStop?.locationId || "";
+    const customer = selectedStop?.customerId ? customersById[selectedStop.customerId] || {} : {};
+    const serviceLocation = serviceLocationId ? serviceLocationsById[serviceLocationId] || {} : {};
+    const phoneNumber = getBestSmsPhoneNumber({ stop: selectedStop, customer, serviceLocation });
+    const context = buildServiceStopTextTemplateContext({
+        stop: {
+            ...(selectedStop || {}),
+            serviceDate: selectedStop?.serviceDate || serviceDate,
+        },
+        customer,
+        serviceLocation,
+        route,
+        company: {
+            ...company,
+            companyName: company.name,
+        },
+    });
+    const draftMessage = selectedTemplate
+        ? renderTextMessageTemplate(selectedTemplate, context)
+        : "";
+
+    const openPretextModal = () => {
+        setSelectedStopId(defaultStopId);
+        if (templates[0]?.id) setSelectedTemplateId(templates[0].id);
+        setIsPretextOpen(true);
+    };
+
+    const openSmsDraft = () => {
+        const smsHref = buildSmsHref(phoneNumber, draftMessage);
+
+        if (!smsHref) {
+            toast.error("No customer phone number found for this stop.");
+            return;
+        }
+
+        window.location.href = smsHref;
+    };
+
+    return (
+        <>
+            <footer className="sticky bottom-0 z-30 mt-6 rounded-lg border border-slate-200 bg-white/95 p-3 shadow-[0_-10px_30px_rgba(15,23,42,0.12)] backdrop-blur">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                        <p className="truncate text-sm font-bold text-slate-950">{route.techName || route.name || "Selected Route"}</p>
+                        <p className="text-xs font-semibold text-slate-500">
+                            {stops.length} stop{stops.length === 1 ? "" : "s"} · {textableStopCount} text-ready
+                        </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <Link
+                            to="/company/settings/text-templates"
+                            className="inline-flex h-11 w-11 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50"
+                            aria-label="Manage text templates"
+                            title="Manage text templates"
+                        >
+                            <Cog6ToothIcon className="h-5 w-5" />
+                        </Link>
+                        <button
+                            type="button"
+                            onClick={openPretextModal}
+                            disabled={!stops.length}
+                            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            <ChatBubbleLeftRightIcon className="h-5 w-5" />
+                            Pretext
+                        </button>
+                    </div>
+                </div>
+            </footer>
+
+            {isPretextOpen && (
+                <div className="fixed inset-0 z-[90] flex items-end justify-center bg-slate-950/60 p-0 sm:items-center sm:p-4">
+                    <div className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden rounded-t-lg bg-white shadow-2xl sm:rounded-lg">
+                        <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                            <div className="flex min-w-0 items-center gap-3">
+                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+                                    <DevicePhoneMobileIcon className="h-6 w-6" />
+                                </span>
+                                <div className="min-w-0">
+                                    <h3 className="truncate text-lg font-bold text-slate-950">Pretext Customer</h3>
+                                    <p className="truncate text-sm text-slate-500">{route.techName || route.name || "Route"}</p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setIsPretextOpen(false)}
+                                className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                                aria-label="Close pretext modal"
+                            >
+                                <XMarkIcon className="h-5 w-5" />
+                            </button>
+                        </div>
+
+                        <div className="min-h-0 overflow-y-auto p-5">
+                            <div className="grid gap-5 lg:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.2fr)]">
+                                <div className="space-y-4">
+                                    <label className="block space-y-1.5">
+                                        <span className="text-sm font-semibold text-slate-700">Customer Stop</span>
+                                        <select
+                                            value={selectedStop?.id || ""}
+                                            onChange={(event) => setSelectedStopId(event.target.value)}
+                                            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+                                        >
+                                            {stops.map((stop, index) => {
+                                                const optionLocationId = stop.serviceLocationId || stop.locationId;
+                                                const optionPhone = getBestSmsPhoneNumber({
+                                                    stop,
+                                                    customer: customersById[stop.customerId] || {},
+                                                    serviceLocation: serviceLocationsById[optionLocationId] || {},
+                                                });
+
+                                                return (
+                                                    <option key={stop.id} value={stop.id}>
+                                                        {index + 1}. {stop.customerName || "Service Stop"}{optionPhone ? "" : " - no phone"}
+                                                    </option>
+                                                );
+                                            })}
+                                        </select>
+                                    </label>
+
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                        <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Recipient</p>
+                                        <p className="mt-2 text-sm font-semibold text-slate-950">{context.customerName || selectedStop?.customerName || "Customer"}</p>
+                                        <p className={`mt-1 text-sm font-semibold ${phoneNumber ? "text-slate-600" : "text-rose-600"}`}>
+                                            {phoneNumber || "No phone number saved"}
+                                        </p>
+                                        <p className="mt-2 text-xs text-slate-500">{context.serviceAddress || selectedStop?.address?.streetAddress || "No address"}</p>
+                                    </div>
+
+                                    <div className="space-y-2">
+                                        <div className="flex items-center justify-between gap-3">
+                                            <p className="text-sm font-semibold text-slate-700">Template</p>
+                                            {isLoadingTemplates && <span className="text-xs font-semibold text-slate-400">Loading...</span>}
+                                        </div>
+                                        <div className="grid gap-2">
+                                            {templates.map((template) => (
+                                                <button
+                                                    key={template.id}
+                                                    type="button"
+                                                    onClick={() => setSelectedTemplateId(template.id)}
+                                                    className={`rounded-lg border px-3 py-2 text-left transition ${selectedTemplate?.id === template.id
+                                                        ? "border-blue-500 bg-blue-50 text-blue-900"
+                                                        : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                                                        }`}
+                                                >
+                                                    <span className="block text-sm font-semibold">{template.name}</span>
+                                                    {template.description && <span className="mt-0.5 block text-xs text-slate-500">{template.description}</span>}
+                                                </button>
+                                            ))}
+                                            {!templates.length && (
+                                                <p className="rounded-lg border border-dashed border-slate-300 bg-white px-3 py-4 text-sm text-slate-500">
+                                                    No active text templates found.
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex min-h-[420px] flex-col rounded-lg border border-slate-200 bg-white">
+                                    <div className="border-b border-slate-200 px-4 py-3">
+                                        <p className="text-sm font-semibold text-slate-950">Draft Preview</p>
+                                    </div>
+                                    <textarea
+                                        value={draftMessage}
+                                        readOnly
+                                        className="min-h-[280px] flex-1 resize-none border-0 p-4 text-sm leading-6 text-slate-800 outline-none"
+                                    />
+                                    <div className="flex flex-col-reverse gap-2 border-t border-slate-200 bg-slate-50 px-4 py-3 sm:flex-row sm:justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setIsPretextOpen(false)}
+                                            className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
+                                        >
+                                            Cancel
+                                        </button>
+                                        <button
+                                            type="button"
+                                            onClick={openSmsDraft}
+                                            disabled={!phoneNumber || !draftMessage || !selectedTemplate}
+                                            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            <PaperAirplaneIcon className="h-4 w-4" />
+                                            Open Text Draft
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
     );
 };
 
@@ -2429,7 +2866,7 @@ const RouteWeekNavigator = ({
                             type="button"
                             onClick={() => onSelectDate(date)}
                             className={`min-w-0 rounded-lg border px-3 py-2 text-left transition ${isSelected
-                                    ? 'border-slate-950 bg-slate-900 text-white shadow-md hover:bg-slate-800'
+                                    ? 'border-[#0e245c] bg-[#0e245c] text-white shadow-md hover:bg-[#163579]'
                                     : isToday
                                         ? 'border-blue-200 bg-blue-50 text-gray-900 hover:bg-blue-100'
                                         : 'border-gray-200 bg-gray-50 text-gray-800 hover:border-gray-300 hover:bg-white'
@@ -2445,7 +2882,7 @@ const RouteWeekNavigator = ({
                                     </p>
                                 </div>
                                 {isToday && (
-                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white text-slate-900' : 'bg-blue-100 text-blue-700'}`}>
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-white text-[#0e245c]' : 'bg-blue-100 text-blue-700'}`}>
                                         Today
                                     </span>
                                 )}

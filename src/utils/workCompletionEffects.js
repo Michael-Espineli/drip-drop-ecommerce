@@ -58,6 +58,33 @@ const isReplacementTaskType = (taskType) =>
 const replacementEquipmentIdFor = (task = {}) =>
   task.replacementEquipmentId || task.newEquipmentId || task.installedEquipmentId || "";
 
+const replacedEquipmentUpdatesFor = ({
+  completedAt,
+  replacementEquipmentId = "",
+  task = {},
+  jobId = "",
+}) => {
+  const updates = {
+    isActive: false,
+    active: false,
+    needsService: false,
+    nextServiceDate: null,
+    status: EQUIPMENT_STATUS.REPLACED,
+    dateUninstalled: completedAt,
+    replacementTaskId: sourceTaskIdFor(task),
+  };
+
+  if (replacementEquipmentId) {
+    updates.replacedByEquipmentId = replacementEquipmentId;
+  }
+
+  if (jobId) {
+    updates.replacementJobId = jobId;
+  }
+
+  return updates;
+};
+
 const equipmentStatusOnCompletionFor = (task = {}) =>
   task.equipmentStatusOnCompletion ||
   task.completedEquipmentStatus ||
@@ -453,7 +480,17 @@ export const recordEquipmentTaskHistory = async ({
     }
 
     await updateDoc(equipmentRef, maintenanceUpdates);
-  } else if (!isReplacementTaskType(taskType)) {
+  } else if (isReplacementTaskType(taskType)) {
+    await updateDoc(
+      equipmentRef,
+      replacedEquipmentUpdatesFor({
+        completedAt,
+        replacementEquipmentId,
+        task,
+        jobId: resolvedJobId,
+      })
+    );
+  } else {
     const statusOnCompletion = equipmentStatusOnCompletionFor(task);
 
     if (statusOnCompletion) {
@@ -467,7 +504,6 @@ export const recordEquipmentTaskHistory = async ({
     await updateReplacementEquipmentLinks({
       db,
       companyId,
-      oldEquipmentRef: equipmentRef,
       oldEquipment: { id: equipmentId, ...equipment },
       replacementEquipmentId,
       task,
@@ -482,7 +518,6 @@ export const recordEquipmentTaskHistory = async ({
 const updateReplacementEquipmentLinks = async ({
   db,
   companyId,
-  oldEquipmentRef,
   oldEquipment,
   replacementEquipmentId,
   task,
@@ -491,16 +526,6 @@ const updateReplacementEquipmentLinks = async ({
 }) => {
   const replacementRef = doc(db, "companies", companyId, "equipment", replacementEquipmentId);
   const replacementSnap = await getDoc(replacementRef);
-
-  await updateDoc(oldEquipmentRef, {
-    isActive: false,
-    active: false,
-    status: "Replaced",
-    dateUninstalled: completedAt,
-    replacedByEquipmentId: replacementEquipmentId,
-    replacementJobId: jobId || "",
-    replacementTaskId: sourceTaskIdFor(task),
-  });
 
   if (!replacementSnap.exists()) return;
 

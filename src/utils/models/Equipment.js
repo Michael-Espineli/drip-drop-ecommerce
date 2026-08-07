@@ -28,6 +28,43 @@ export const displayEquipmentStatus = (status) => {
   return status || "";
 };
 
+const normalizedEquipmentText = (equipment = {}) => (
+  [
+    equipment.type,
+    equipment.category,
+    equipment.name,
+    equipment.make,
+    equipment.model,
+    equipment.label,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase()
+);
+
+export const isFilterEquipment = (equipment = {}) => (
+  /\b(filter|cartridge|sand\s+filter|d\.?e\.?\s+filter)\b/.test(normalizedEquipmentText(equipment))
+);
+
+export const isSaltCellEquipment = (equipment = {}) => (
+  /\b(salt\s*cell|salt\s+chlorine|salt\s+chlorinator|chlorine\s+generator|salt\s+generator)\b/.test(
+    normalizedEquipmentText(equipment)
+  )
+);
+
+export const equipmentDefaultsToNeedsService = (equipment = {}) => (
+  isFilterEquipment(equipment) || isSaltCellEquipment(equipment)
+);
+
+export const buildEquipmentNickname = (equipment = {}) => (
+  [equipment.make, equipment.model].filter(Boolean).join(" ").trim()
+  || equipment.model
+  || equipment.name
+  || equipment.type
+  || equipment.category
+  || ""
+);
+
 export class Equipment {
   constructor({
     id = null,
@@ -38,6 +75,8 @@ export class Equipment {
     currentPressure = 0,
     customerId = "",
     customerName = "",
+    createdAt = null,
+    createdAtMillis = null,
     dateInstalled = null,
     dateUninstalled = null,
     lastServiceDate = null,
@@ -67,6 +106,8 @@ export class Equipment {
     this.currentPressure = currentPressure;
     this.customerId = customerId;
     this.customerName = customerName;
+    this.createdAt = createdAt;
+    this.createdAtMillis = createdAtMillis;
     this.isActive = isActive;
     this.dateInstalled = dateInstalled;
     this.dateUninstalled = dateUninstalled;
@@ -98,6 +139,8 @@ export class Equipment {
       currentPressure: this.currentPressure,
       customerId: this.customerId,
       customerName: this.customerName,
+      createdAt: this.createdAt,
+      createdAtMillis: this.createdAtMillis,
       dateInstalled: this.dateInstalled,
       dateUninstalled: this.dateUninstalled,
       lastServiceDate: this.lastServiceDate,
@@ -141,6 +184,8 @@ export class Equipment {
       currentPressure: data.currentPressure || 0,
       customerId: data.customerId || "",
       customerName: data.customerName || "",
+      createdAt: data.createdAt ? data.createdAt.toDate() : null,
+      createdAtMillis: data.createdAtMillis || null,
       dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
       dateUninstalled: data.dateUninstalled ? data.dateUninstalled.toDate() : null,
       lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,

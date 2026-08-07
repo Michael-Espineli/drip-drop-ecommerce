@@ -4,6 +4,7 @@ import { Navigate } from "react-router-dom";
 const Home = lazy(() => import("../../views/Home"))
 const ProfilePage = lazy(() => import("../../views/company/ProfilePage"))
 const CompanyDashboardWrapper = lazy(() => import("../../views/company/CompanyDashboardWrapper"))
+const CompanyUserDashboard = lazy(() => import("../../views/company/CompanyUserDashboard"))
 const CompanySelection = lazy(() => import("../../views/company/companySelection/CompanySelection"))
 const OperationsDashboard = lazy(() => import("../../views/company/dashboard/OperationsDashboard"));
 
@@ -31,6 +32,7 @@ const Chat = lazy(() => import("../../views/tech/techChat/Chat"));
 const WorkInProgress = lazy(() => import("../../views/company/WorkInProgress"))
 
 const Customers = lazy(() => import("../../views/company/customers/Customers"))
+const CustomerTagManager = lazy(() => import("../../views/company/customers/CustomerTagManager"))
 const CustomerDetails = lazy(() => import("../../views/company/customers/CustomerDetails"))
 const CreateNewCustomer = lazy(() => import("../../views/company/customers/CreateNewCustomer"))
 const DuplicateCustomer = lazy(() => import("../../views/company/customers/DuplicateCustomer"))
@@ -97,6 +99,7 @@ const EquipmentMaintenanceHistory = lazy(() => import("../../views/company/equip
 const EquipmentRepairHistory = lazy(() => import("../../views/company/equipment/EquipmentRepairHistory"))
 const EquipmentServiceHistory = lazy(() => import("../../views/company/equipment/EquipmentServiceHistory"))
 const CreateNewEquipment = lazy(() => import("../../views/company/equipment/CreateNewEquipment"))
+const UniversalEquipmentSuggestions = lazy(() => import("../../views/company/equipment/UniversalEquipmentSuggestions"))
 const FleetList = lazy(() => import("../../views/company/fleet/FleetList"))
 const FleetTripDetail = lazy(() => import("../../views/company/fleet/FleetTripDetail"))
 
@@ -130,6 +133,7 @@ const CompanySettings = lazy(() => import("../../views/company/settings/CompanyS
 const TesterStripSettings = lazy(() => import("../../views/company/settings/TesterStripSettings"))
 const StripeBillingSnapshot = lazy(() => import("../../views/company/settings/StripeBillingSnapshot"))
 const OnboardingChecklistSettings = lazy(() => import("../../views/company/settings/OnboardingChecklistSettings"))
+const TextMessageTemplates = lazy(() => import("../../views/company/settings/TextMessageTemplates"))
 const CompanySetupGuide = lazy(() => import("../../views/company/setup/CompanySetupGuide"))
 
 const EmailConfiguration = lazy(() => import("../../views/company/settings/EmailConfiguration/EmailConfiguration"))
@@ -194,7 +198,7 @@ export const sellerRoutes = [
         element: <TesterStripSettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionId: '900',
     }, {
         path: '/company/settings/stripe-billing',
         element: <StripeBillingSnapshot />,
@@ -206,19 +210,26 @@ export const sellerRoutes = [
         element: <Payroll mode="setup" />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '400',
+        permissionId: '420',
         featureFlagId: 'feature_flag_006',
     }, {
         path: '/company/settings/onboarding-checklist',
         element: <OnboardingChecklistSettings />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionIds: ['900', '634'],
+    }, {
+        path: '/company/settings/text-templates',
+        element: <TextMessageTemplates />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '900',
     }, {
         path: '/company/setup-guide',
         element: <CompanySetupGuide />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '900',
     }, { //Basic Pages 
         path: '/company/selector',
         element: <CompanySelection />,
@@ -244,6 +255,13 @@ export const sellerRoutes = [
         element: <Customers />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
+    }, {
+        path: '/company/customers/tags',
+        element: <CustomerTagManager />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '14',
+        featureFlagId: 'feature_flag_014',
     }, {
         path: '/company/customers/history/:customerId',
         element: <CustomerHistory />,
@@ -271,6 +289,13 @@ export const sellerRoutes = [
     {
         path: '/company/equipment',
         element: <EquipmentList />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }
+    ,
+    {
+        path: '/company/equipment/universal-suggestions',
+        element: <UniversalEquipmentSuggestions />,
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }
@@ -468,7 +493,8 @@ export const sellerRoutes = [
         path: '/company/items/bulk-upload',
         element: <DataBaseItemBulkUpload />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '910',
     }, {
         path: '/company/items/createNew',
         element: <CreateNewDataBaseItem />,
@@ -1020,12 +1046,19 @@ export const sellerRoutes = [
     }
     ,
     {
+        path: '/company/pipeline',
+        element: <CustomerMigrationTracker />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '630',
+    }
+    ,
+    {
         path: '/company/migration',
         element: <CustomerMigrationTracker />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
-        featureFlagId: 'feature_flag_008',
+        permissionId: '630',
     }
     ,
     {
@@ -1033,7 +1066,7 @@ export const sellerRoutes = [
         element: <CustomerExportImport />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionId: '910',
         featureFlagId: 'feature_flag_008',
     }
     ,
@@ -1042,7 +1075,7 @@ export const sellerRoutes = [
         element: <EquipmentImport />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionId: '910',
         featureFlagId: 'feature_flag_008',
     }
     ,
@@ -1051,7 +1084,7 @@ export const sellerRoutes = [
         element: <SkimmerPreviousDosagesUpload />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionId: '910',
         featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
     }
     ,
@@ -1060,7 +1093,7 @@ export const sellerRoutes = [
         element: <PerformanceHistoryImport />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
-        permissionId: '800',
+        permissionId: '910',
         featureFlagId: 'feature_flag_008',
     }
     ,
@@ -1069,6 +1102,7 @@ export const sellerRoutes = [
         element: <Payroll />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
+        permissionId: '420',
         featureFlagId: 'feature_flag_006',
     }
     ,
@@ -1077,6 +1111,7 @@ export const sellerRoutes = [
         element: <Navigate to="/company/settings/payroll-setup" replace />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
+        permissionId: '420',
         featureFlagId: 'feature_flag_006',
     }
     ,
@@ -1091,7 +1126,8 @@ export const sellerRoutes = [
         path: '/company/customers/bulk-upload',
         element: <BulkCustomerUpload />,
         ability: ['Admin', 'Seller'],
-        role: 'Company'
+        role: 'Company',
+        permissionId: '910',
     }
     ,
     {
@@ -1236,7 +1272,7 @@ export const sellerRoutes = [
         path: '/company/sales/pnl-viewer',
         element: <PnlViewer />,
         role: 'Company',
-        permissionId: '400',
+        permissionId: '420',
         featureFlagId: 'feature_flag_004',
     }, {
         path: '/company/sales/catalog-items',
@@ -1304,8 +1340,9 @@ export const sellerRoutes = [
     },
     {
         path: '/company/user-dashboard',
-        element: <CompanyUsers />,
+        element: <CompanyUserDashboard />,
         role: 'Company',
+        permissionId: '260',
     },
     {
         path: '/company/invites/pending',

@@ -18,6 +18,7 @@ import { Link } from "react-router-dom";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { salesCollectionNames } from "../../../utils/models/Sales";
+import { compareCompanyUsersByName, getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import {
   TODO_DONE_BOARD_LOOKBACK_DAYS,
   TODO_PRIORITY,
@@ -32,10 +33,14 @@ import {
   dateTimeInputValue,
   formatShortDateTime,
   normalizeTodo,
+  todoAssignedToUser,
+  todoAssigneeIds,
   todoCompletedInDateRange,
+  todoCreatedByUser,
   todoDueState,
   todoIsOpen,
   todoNeedsAttention,
+  todoUserIdSet,
 } from "../../../utils/models/TodoItem";
 import { ALERT_SEVERITY } from "../../../utils/models/AlertNotification";
 
@@ -308,7 +313,7 @@ const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
 };
 
 const TodoList = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName, user, name } = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, user, dataBaseUser, companyUserAccess, name } = useContext(Context);
   const [todoItems, setTodoItems] = useState([]);
   const [todoBoards, setTodoBoards] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
@@ -319,6 +324,7 @@ const TodoList = () => {
   const [filter, setFilter] = useState("open");
   const [selectedBoardId, setSelectedBoardId] = useState(BOARD_FILTER_ALL);
   const [searchTerm, setSearchTerm] = useState("");
+  const [createTodoModalOpen, setCreateTodoModalOpen] = useState(false);
   const [form, setForm] = useState(emptyTodoForm);
   const [boardForm, setBoardForm] = useState(emptyBoardForm);
   const [editingBoardId, setEditingBoardId] = useState("");
@@ -336,8 +342,10 @@ const TodoList = () => {
       setSelectedBoardId(BOARD_FILTER_ALL);
       setSelectedTodoId("");
       setEditForm(null);
+      setCreateTodoModalOpen(false);
       setBoardForm(emptyBoardForm());
       setEditingBoardId("");
+      setRelatedEntitySearch("");
       setLoading(false);
       return undefined;
     }
@@ -377,10 +385,10 @@ const TodoList = () => {
     const unsubscribeUsers = onSnapshot(
       usersRef,
       (snapshot) => {
-        setCompanyUsers(snapshot.docs.map((userDoc) => ({
+        setCompanyUsers(sortCompanyUsersByName(snapshot.docs.map((userDoc) => ({
           id: userDoc.id,
           ...userDoc.data(),
-        })));
+        }))));
       },
       (error) => {
         console.error("Error loading company users:", error);
@@ -409,6 +417,25 @@ const TodoList = () => {
       setForm((current) => current.boardId ? current : { ...current, boardId: selectedBoardId });
     }
   }, [selectedBoardId]);
+
+  useEffect(() => {
+    if (!createTodoModalOpen) return undefined;
+
+    const originalOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !saving) {
+        setCreateTodoModalOpen(false);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [createTodoModalOpen, saving]);
 
   useEffect(() => {
     const config = relatedEntityPickerConfig[form.relatedEntityType];
@@ -451,11 +478,11 @@ const TodoList = () => {
     .map((companyUser) => ({
       id: companyUser.id,
       userId: companyUser.userId || companyUser.id,
-      userName: companyUser.userName || companyUser.name || companyUser.email || "Company user",
+      userName: getCompanyUserDisplayName(companyUser),
       roleName: companyUser.roleName || "",
       status: companyUser.status || "",
     }))
-    .sort((left, right) => left.userName.localeCompare(right.userName)), [companyUsers]);
+    .sort(compareCompanyUsersByName), [companyUsers]);
 
   const currentUserAssignee = useMemo(() => {
     if (!user?.uid) return null;
@@ -468,6 +495,32 @@ const TodoList = () => {
       status: "",
     };
   }, [companyUserOptions, name, user?.email, user?.uid]);
+
+  const currentTodoUserIds = useMemo(() => todoUserIdSet([
+    user?.uid,
+    user?.id,
+    dataBaseUser?.id,
+    dataBaseUser?.uid,
+    dataBaseUser?.userId,
+    companyUserAccess?.uid,
+    companyUserAccess?.userId,
+    companyUserAccess?.companyUserId,
+    companyUserAccess?.companyUserDocId,
+    currentUserAssignee?.id,
+    currentUserAssignee?.userId,
+  ]), [
+    companyUserAccess?.companyUserId,
+    companyUserAccess?.companyUserDocId,
+    companyUserAccess?.uid,
+    companyUserAccess?.userId,
+    currentUserAssignee?.id,
+    currentUserAssignee?.userId,
+    dataBaseUser?.id,
+    dataBaseUser?.uid,
+    dataBaseUser?.userId,
+    user?.id,
+    user?.uid,
+  ]);
 
   const boardById = useMemo(() => (
     new Map(todoBoards.map((board) => [board.id, board]))
@@ -510,6 +563,7 @@ const TodoList = () => {
   const selectedTodo = useMemo(() => (
     todoItems.find((todo) => todo.id === selectedTodoId) || null
   ), [selectedTodoId, todoItems]);
+  const detailsModalOpen = Boolean(selectedTodo && editForm);
 
   useEffect(() => {
     if (selectedTodoId && !selectedTodo) {
@@ -517,6 +571,26 @@ const TodoList = () => {
       setEditForm(null);
     }
   }, [selectedTodo, selectedTodoId]);
+
+  useEffect(() => {
+    if (!detailsModalOpen) return undefined;
+
+    const originalOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !savingTodoEdit) {
+        setSelectedTodoId("");
+        setEditForm(null);
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [detailsModalOpen, savingTodoEdit]);
 
   const stats = useMemo(() => {
     const openItems = boardScopedTodos.filter(todoIsOpen);
@@ -539,7 +613,11 @@ const TodoList = () => {
         if (filter === "done" && !todoCompletedInDateRange(todo, recentDoneRange.startDate, recentDoneRange.endDate)) return false;
         if (filter === "team" && (todo.scope !== TODO_SCOPE.team || !todoIsOpen(todo))) return false;
         if (filter === "mine") {
-          const mine = todo.scope === TODO_SCOPE.me || todo.assignedToUserId === user?.uid || todo.createdByUserId === user?.uid;
+          const mine = todoAssignedToUser(todo, currentTodoUserIds) || (
+            todo.scope === TODO_SCOPE.me &&
+            todoAssigneeIds(todo).length === 0 &&
+            todoCreatedByUser(todo, currentTodoUserIds)
+          );
           if (!mine || !todoIsOpen(todo)) return false;
         }
 
@@ -556,7 +634,7 @@ const TodoList = () => {
         ].some((value) => String(value || "").toLowerCase().includes(search));
       })
       .sort(compareTodosByUrgency);
-  }, [boardById, boardScopedTodos, filter, recentDoneRange.endDate, recentDoneRange.startDate, searchTerm, user?.uid]);
+  }, [boardById, boardScopedTodos, currentTodoUserIds, filter, recentDoneRange.endDate, recentDoneRange.startDate, searchTerm]);
 
   const selectedBoardLabel = useMemo(() => {
     if (selectedBoardId === BOARD_FILTER_ALL) return "All boards";
@@ -582,6 +660,17 @@ const TodoList = () => {
   const selectedRelatedEntity = useMemo(() => (
     relatedEntityOptions.find((option) => option.id === form.relatedEntityId) || null
   ), [form.relatedEntityId, relatedEntityOptions]);
+
+  const openCreateTodoModal = () => {
+    if (
+      selectedBoardId !== BOARD_FILTER_ALL &&
+      selectedBoardId !== BOARD_FILTER_UNASSIGNED
+    ) {
+      setForm((current) => ({ ...current, boardId: selectedBoardId }));
+    }
+
+    setCreateTodoModalOpen(true);
+  };
 
   const updateForm = (field, value) => {
     setForm((current) => ({
@@ -690,6 +779,12 @@ const TodoList = () => {
   const openTodoDetails = (todo) => {
     setSelectedTodoId(todo.id);
     setEditForm(buildTodoEditForm(todo, user?.uid || ""));
+  };
+
+  const closeTodoDetails = () => {
+    if (savingTodoEdit) return;
+    setSelectedTodoId("");
+    setEditForm(null);
   };
 
   const updateEditForm = (field, value) => {
@@ -925,6 +1020,8 @@ const TodoList = () => {
 
       await Promise.all(writes);
       setForm(emptyTodoForm());
+      setRelatedEntitySearch("");
+      setCreateTodoModalOpen(false);
       toast.success("Todo created.");
     } catch (error) {
       console.error("Failed to create todo:", error);
@@ -966,6 +1063,14 @@ const TodoList = () => {
               </p>
             </div>
             <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+              <button
+                type="button"
+                onClick={openCreateTodoModal}
+                className="inline-flex items-center justify-center gap-2 rounded-md border border-white/30 bg-white px-4 py-3 text-sm font-bold text-[#0C66E4] shadow-sm transition hover:bg-blue-50"
+              >
+                <FaPlus className="h-4 w-4" />
+                New Task
+              </button>
               <Link
                 to={todoHistoryLink}
                 className="inline-flex items-center justify-center gap-2 rounded-md border border-white/30 bg-white px-4 py-3 text-sm font-bold text-[#0C66E4] shadow-sm transition hover:bg-blue-50"
@@ -988,16 +1093,43 @@ const TodoList = () => {
           <StatCard icon={FaBell} label="Needs Attention" value={stats.attention} helper="Due today, overdue, or alerting" tone={stats.attention ? "amber" : "emerald"} />
         </section>
 
-        <section className="grid gap-6 xl:grid-cols-[390px_minmax(0,1fr)]">
-          <div className="space-y-6 xl:sticky xl:top-4 xl:self-start">
-            <form onSubmit={createTodo} className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-5">
-              <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Issue creator</p>
-              <h2 className="mt-1 text-lg font-bold text-slate-950">Create Todo</h2>
-              <p className="mt-1 text-sm text-slate-500">Add team work, assign an owner, and link the record it belongs to.</p>
-            </div>
+        <section className="grid gap-6 2xl:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="space-y-6 2xl:sticky 2xl:top-4 2xl:self-start">
+            {createTodoModalOpen && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+                onMouseDown={(event) => {
+                  if (!saving && event.target === event.currentTarget) {
+                    setCreateTodoModalOpen(false);
+                  }
+                }}
+              >
+                <section
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="create-todo-modal-title"
+                  className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Issue creator</p>
+                      <h2 id="create-todo-modal-title" className="mt-1 text-lg font-bold text-slate-950">Create Todo</h2>
+                      <p className="mt-1 text-sm text-slate-500">Add team work, assign an owner, and link the record it belongs to.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setCreateTodoModalOpen(false)}
+                      disabled={saving}
+                      className="inline-flex shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      aria-label="Close new task form"
+                    >
+                      <FaTimes className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
 
-            <div className="space-y-4">
+                  <div className="overflow-y-auto px-5 py-5">
+                    <form onSubmit={createTodo} className="space-y-4">
               <div>
                 <label className="text-sm font-semibold text-slate-700" htmlFor="todo-title">Title</label>
                 <input
@@ -1223,8 +1355,11 @@ const TodoList = () => {
               >
                 {saving ? "Creating..." : "Create Issue"}
               </button>
-            </div>
-            </form>
+                    </form>
+                  </div>
+                </section>
+              </div>
+            )}
 
             <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-5 flex items-start justify-between gap-3">
@@ -1320,7 +1455,7 @@ const TodoList = () => {
             </section>
           </div>
 
-          <div className="space-y-6">
+          <div className="min-w-0 space-y-6">
             <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
@@ -1358,8 +1493,8 @@ const TodoList = () => {
               </div>
             </section>
 
-            <section className="grid gap-6 2xl:grid-cols-[minmax(0,1fr)_390px]">
-              <section className="rounded-md border border-slate-200 bg-white shadow-sm">
+            <section className="space-y-6">
+              <section className="min-w-0 rounded-md border border-slate-200 bg-white shadow-sm">
                 <div className="border-b border-slate-200 px-5 py-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
@@ -1393,11 +1528,21 @@ const TodoList = () => {
                 </div>
 
                 {filteredTodos.length === 0 ? (
-                  <div className="p-6 text-sm text-slate-500">No todos match this view.</div>
+                  <div className="flex flex-col gap-3 p-6 text-sm text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+                    <span>No todos match this view.</span>
+                    <button
+                      type="button"
+                      onClick={openCreateTodoModal}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-[#0C66E4] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC]"
+                    >
+                      <FaPlus className="h-3.5 w-3.5" />
+                      New Task
+                    </button>
+                  </div>
                 ) : (
-                  <div className="grid gap-3 bg-slate-50 p-3 xl:grid-cols-3">
+                  <div className="grid gap-4 bg-slate-50 p-4 lg:grid-cols-3">
                     {kanbanColumns.map((column) => (
-                      <div key={column.id} className="min-h-[360px] rounded-md border border-slate-200 bg-slate-100/80">
+                      <div key={column.id} className="min-h-[520px] rounded-md border border-slate-200 bg-slate-100/80">
                         <div className="sticky top-0 z-10 rounded-t-md border-b border-slate-200 bg-slate-100 px-3 py-3">
                           <div className="flex items-center justify-between gap-3">
                             <div className="min-w-0">
@@ -1525,26 +1670,31 @@ const TodoList = () => {
                 )}
               </section>
 
-              <aside className="rounded-md border border-slate-200 bg-white p-5 shadow-sm 2xl:sticky 2xl:top-4 2xl:self-start">
-                {!selectedTodo || !editForm ? (
-                  <div className="text-sm text-slate-500">
-                    <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Inspector</p>
-                    <h2 className="mt-1 text-lg font-bold text-slate-950">Issue Details</h2>
-                    <p className="mt-2">Select an issue card to view details and make changes.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-5">
+              {detailsModalOpen && (
+                <div
+                  className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+                  onMouseDown={(event) => {
+                    if (event.target === event.currentTarget) closeTodoDetails();
+                  }}
+                >
+                  <section
+                    role="dialog"
+                    aria-modal="true"
+                    aria-labelledby="todo-details-modal-title"
+                    className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
+                    onMouseDown={(event) => event.stopPropagation()}
+                  >
+                    <div className="overflow-y-auto px-5 py-5">
+                      <div className="space-y-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
                         <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">{todoIssueKey(selectedTodo)} | {todoBoardName(selectedTodo, boardById)}</p>
-                        <h2 className="mt-1 break-words text-lg font-bold text-slate-950">Issue Details</h2>
+                        <h2 id="todo-details-modal-title" className="mt-1 break-words text-lg font-bold text-slate-950">Issue Details</h2>
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedTodoId("");
-                          setEditForm(null);
-                        }}
+                        onClick={closeTodoDetails}
+                        disabled={savingTodoEdit}
                         className="inline-flex shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-100"
                         aria-label="Close todo details"
                       >
@@ -1583,7 +1733,7 @@ const TodoList = () => {
                         />
                       </div>
 
-                      <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-1">
+                      <div className="grid gap-4 sm:grid-cols-2">
                         <div>
                           <label className="text-sm font-semibold text-slate-700" htmlFor="edit-todo-status">Status</label>
                           <select
@@ -1660,7 +1810,7 @@ const TodoList = () => {
                         </div>
                       )}
 
-                      <div className="grid gap-4 sm:grid-cols-2 2xl:grid-cols-1">
+                      <div className="grid gap-4 sm:grid-cols-2">
                         <div>
                           <label className="text-sm font-semibold text-slate-700" htmlFor="edit-todo-priority">Priority</label>
                           <select
@@ -1719,9 +1869,11 @@ const TodoList = () => {
                         {savingTodoEdit ? "Saving..." : "Save Issue"}
                       </button>
                     </form>
-                  </div>
-                )}
-              </aside>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )}
         </section>
           </div>
         </section>

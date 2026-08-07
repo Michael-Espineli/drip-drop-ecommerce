@@ -17,13 +17,14 @@ import {
 import { mergeDuplicateCustomers, previewCustomerMerge } from '../../../utils/customerMerge';
 import {
     customerHasAnyTag,
-    filterCustomersByRoleTagAccess,
+    filterCustomersByRegionalAccess,
+    getCustomerRegionAccessTags,
     getCustomerTagOptions,
-    getRoleCustomerTagAccess,
     normalizeCustomerTag,
     normalizeCustomerTags,
 } from '../../../utils/customerTags';
 import { appConfirm } from '../../../utils/appDialog';
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 
 const FREE_CUSTOMER_LIMIT = 5;
 const ACTIVE_SUBSCRIPTION_STATUSES = ['active', 'trialing', 'pending_cancellation'];
@@ -137,7 +138,14 @@ const UpgradeBanner = ({ remaining, onUpgrade }) => (
 
 export default function Customers() {
     const navigate = useNavigate();
-    const { recentlySelectedCompany, companyRole } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const { can } = useCompanyPermissions();
     const [allCustomers, setAllCustomers] = useState([]);
     const [filteredCustomers, setFilteredCustomers] = useState([]);
@@ -153,14 +161,23 @@ export default function Customers() {
     const [mergePreview, setMergePreview] = useState(null);
     const [mergeLoading, setMergeLoading] = useState(false);
     const [merging, setMerging] = useState(false);
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     const visibleCustomers = useMemo(
-        () => filterCustomersByRoleTagAccess(allCustomers, companyRole),
-        [allCustomers, companyRole]
+        () => filterCustomersByRegionalAccess(allCustomers, {
+            userAccess: companyUserAccess,
+            role: companyRole,
+            selectedRegionTag: selectedCustomerRegionTag,
+            regionalAccessEnabled: customerAreaFilteringEnabled,
+        }),
+        [allCustomers, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]
     );
 
     const availableTags = useMemo(() => getCustomerTagOptions(visibleCustomers), [visibleCustomers]);
-    const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
+    const regionalTagAccess = useMemo(
+        () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
+        [companyUserAccess, companyRole]
+    );
     const duplicateSuggestions = useMemo(() => {
         const seenPairs = new Set();
         const suggestions = [];
@@ -261,7 +278,12 @@ export default function Customers() {
                 const customerSnapshot = await getDocs(customerQuery);
                 const customerData = customerSnapshot.docs.map(doc => Customer.fromFirestore(doc));
                 setAllCustomers(customerData);
-                setFilteredCustomers(filterCustomersByRoleTagAccess(customerData, companyRole));
+                setFilteredCustomers(filterCustomersByRegionalAccess(customerData, {
+                    userAccess: companyUserAccess,
+                    role: companyRole,
+                    selectedRegionTag: selectedCustomerRegionTag,
+                    regionalAccessEnabled: customerAreaFilteringEnabled,
+                }));
 
                 // Check subscription status
                 const activeCount = customerData.filter(c => c.active).length;
@@ -301,7 +323,7 @@ export default function Customers() {
         };
 
         fetchCustomerData();
-    }, [recentlySelectedCompany, companyRole]);
+    }, [recentlySelectedCompany, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]);
 
     useEffect(() => {
         const lowerCaseSearchTerm = searchTerm.toLowerCase();
@@ -523,6 +545,14 @@ export default function Customers() {
                             <p className="mt-1 text-sm text-slate-500">Manage your customers and their information.</p>
                         </div>
                         <div className="flex flex-wrap gap-2">
+                            {customerAreaFilteringEnabled && can("14") && (
+                                <Link
+                                    to="/company/customers/tags"
+                                    className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 shadow-sm transition hover:bg-blue-100"
+                                >
+                                    Tag Helper
+                                </Link>
+                            )}
                             {can("12") && (
                                 <>
                                     <Link to="/company/customers/bulk-upload" className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50">
@@ -709,9 +739,15 @@ export default function Customers() {
                             </div>
                         </div>
 
-                        {roleTagAccess.length > 0 && (
+                        {customerAreaFilteringEnabled && regionalTagAccess.length > 0 && (
                             <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-                                Your role is limited to customers tagged {roleTagAccess.join(', ')}.
+                                Your access is limited to customers tagged {regionalTagAccess.join(', ')}.
+                                {selectedCustomerRegionTag ? ` Header area filter: ${selectedCustomerRegionTag}.` : ''}
+                            </div>
+                        )}
+                        {customerAreaFilteringEnabled && regionalTagAccess.length === 0 && selectedCustomerRegionTag && (
+                            <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+                                Header area filter: {selectedCustomerRegionTag}.
                             </div>
                         )}
 

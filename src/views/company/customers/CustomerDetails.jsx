@@ -1,14 +1,16 @@
 
 import React, { useState, useEffect, useContext, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, updateDoc, collection, query, where, getDocs, orderBy, limit, deleteDoc, serverTimestamp, setDoc, onSnapshot, arrayUnion } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { v4 as uuidv4 } from 'uuid';
 import {
     ArrowsPointingInIcon,
     ArrowsPointingOutIcon,
+    BriefcaseIcon,
     ClipboardDocumentIcon,
     DocumentDuplicateIcon,
+    EllipsisVerticalIcon,
     EnvelopeIcon,
     ListBulletIcon,
     PencilSquareIcon,
@@ -17,12 +19,13 @@ import {
     WrenchScrewdriverIcon,
     XMarkIcon,
 } from '@heroicons/react/24/outline';
+import { Menu, MenuButton, MenuItem, MenuItems } from '@headlessui/react';
 import { Context } from '../../../context/AuthContext';
 import { ClipLoader } from 'react-spinners';
 import toast from 'react-hot-toast';
 import { addDays, addMonths, addWeeks, addYears, format } from 'date-fns';
 
-import { functions } from '../../../utils/config';
+import { functions, storage } from '../../../utils/config';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { RepairRequest, displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { loadCustomerTimeline } from '../../../utils/customerTimeline';
@@ -34,8 +37,8 @@ import PartApprovalCreateModal from '../partApprovals/PartApprovalCreateModal';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 import {
-    customerMatchesRoleTagAccess,
-    getRoleCustomerTagAccess,
+    customerMatchesRegionalAccess,
+    getCustomerRegionAccessTags,
     normalizeCustomerTag,
     normalizeCustomerTags,
 } from '../../../utils/customerTags';
@@ -51,8 +54,24 @@ import {
     isOpenSuggestedWorkStatus,
     normalizeSuggestedWorkTier,
 } from '../../../utils/models/SuggestedWork';
-import { EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from '../../../utils/models/Equipment';
+import {
+    EQUIPMENT_STATUS,
+    EQUIPMENT_STATUS_OPTIONS,
+    buildEquipmentNickname,
+    displayEquipmentStatus,
+    equipmentDefaultsToNeedsService,
+    isFilterEquipment,
+} from '../../../utils/models/Equipment';
 import { appConfirm } from '../../../utils/appDialog';
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
+import {
+    buildCompanyServiceLocationPhotoPath,
+    getServiceLocationPhotoUrl,
+    uploadServiceLocationPhoto,
+    validateServiceLocationPhotoFile,
+} from '../../../utils/serviceLocationPhotos';
+import { deleteEquipmentWithSubcollections } from '../../../utils/equipmentDelete';
+import { endCustomerPipelineRowsForInactiveCustomer } from '../../../utils/customerPipeline';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -61,6 +80,7 @@ const customerSections = [
     { id: 'history', label: 'History', helper: 'Service, job, lead, chemistry, equipment, and notes timeline' },
 ];
 const validCustomerTabs = customerSections.map((section) => section.id);
+const WATER_TYPE_OPTIONS = ['Fresh Water', 'Salt Water'];
 
 const getLinkedCustomerUserId = (customer = {}) => {
     const linkedIds = Array.isArray(customer.linkedCustomerIds) ? customer.linkedCustomerIds : [];
@@ -213,7 +233,7 @@ const getDefaultEquipmentCreateForm = (bodyOfWaterId = '') => ({
     modelId: '',
     universalEquipmentId: '',
     manualPdfLink: '',
-    dateInstalled: format(new Date(), 'yyyy-MM-dd'),
+    dateInstalled: '',
     cleanFilterPressure: '',
     needsService: false,
     serviceFrequency: '6',
@@ -221,6 +241,22 @@ const getDefaultEquipmentCreateForm = (bodyOfWaterId = '') => ({
     notes: '',
     bodyOfWaterId,
 });
+
+const isActiveEquipment = (equipment = {}) => (
+    (equipment.isActive ?? equipment.active ?? true) !== false
+);
+
+const applyEquipmentDefaults = (current = {}, next = {}) => {
+    const merged = { ...current, ...next };
+    const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+
+    return {
+        ...merged,
+        needsService: shouldDefaultNeedsService ? true : merged.needsService,
+        serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? '6' : merged.serviceFrequency,
+        serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? 'Month' : merged.serviceFrequencyEvery,
+    };
+};
 
 const formatDateTimeValue = (value) => {
     const millis = toMillis(value);
@@ -270,6 +306,45 @@ const StatusBadge = ({ children, tone = 'slate' }) => {
             {children}
         </span>
     );
+};
+
+const QuickActionMenuItem = ({ label, icon: Icon, onClick, tone = 'slate', disabled = false }) => {
+    const toneClasses = tone === 'amber'
+        ? 'text-amber-700 hover:bg-amber-50 data-[focus]:bg-amber-50'
+        : tone === 'rose'
+            ? 'text-rose-700 hover:bg-rose-50 data-[focus]:bg-rose-50'
+            : tone === 'emerald'
+                ? 'text-emerald-700 hover:bg-emerald-50 data-[focus]:bg-emerald-50'
+                : 'text-slate-700 hover:bg-slate-50 data-[focus]:bg-slate-50';
+
+    return (
+        <MenuItem disabled={disabled}>
+            <button
+                type="button"
+                onClick={onClick}
+                disabled={disabled}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${toneClasses}`}
+            >
+                {Icon && <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />}
+                <span className="flex-1">{label}</span>
+            </button>
+        </MenuItem>
+    );
+};
+
+const getBodyOfWaterEditForm = (bodyOfWater = {}) => ({
+    name: bodyOfWater.name || '',
+    gallons: bodyOfWater.gallons || '',
+    material: bodyOfWater.material || '',
+    waterType: bodyOfWater.waterType || '',
+    notes: bodyOfWater.notes || '',
+});
+
+const normalizeWaterType = (value = '') => {
+    const text = String(value || '').trim();
+    if (/salt/i.test(text)) return 'Salt Water';
+    if (/fresh/i.test(text)) return 'Fresh Water';
+    return text;
 };
 
 const getNoteText = (note = {}) => note.note || note.comment || note.text || '';
@@ -895,7 +970,7 @@ const TimelineEventTable = ({ events }) => (
 
 // Profile Tab
 const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerInactiveCascade }) => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, user, dataBaseUser } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
     const [isEditing, setIsEditing] = useState(false);
@@ -949,10 +1024,19 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
             const inactiveCascadeCounts = shouldCascadeInactive
                 ? await onCustomerInactiveCascade?.()
                 : null;
+            const pipelineRowsEnded = shouldCascadeInactive
+                ? await endCustomerPipelineRowsForInactiveCustomer({
+                    companyId: recentlySelectedCompany,
+                    customerId: customer.id,
+                    reason: 'Customer marked inactive from customer profile',
+                    actorId: user?.uid || '',
+                    actorName: `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() || user?.displayName || user?.email || '',
+                })
+                : 0;
 
             toast.success(
                 inactiveCascadeCounts
-                    ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, and ${inactiveCascadeCounts.equipment} equipment records were also marked inactive.`
+                    ? `Customer details updated. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
                     : 'Customer details updated!'
             );
             onCustomerUpdate?.(payload);
@@ -1132,6 +1216,10 @@ const ServiceLocationsTab = ({ customer }) => {
     const [selectedLocation, setSelectedLocation] = useState(null);
     const [editingLocation, setEditingLocation] = useState(false);
     const [savingLocation, setSavingLocation] = useState(false);
+    const [locationNotesDraft, setLocationNotesDraft] = useState('');
+    const [savingLocationNotes, setSavingLocationNotes] = useState(false);
+    const [locationPhotoFiles, setLocationPhotoFiles] = useState([]);
+    const [uploadingLocationPhotos, setUploadingLocationPhotos] = useState(false);
     const [locationForm, setLocationForm] = useState({
         nickName: '',
         streetAddress: '',
@@ -1157,6 +1245,7 @@ const ServiceLocationsTab = ({ customer }) => {
     const [contactMode, setContactMode] = useState('new');
     const [selectedContactId, setSelectedContactId] = useState('');
     const { recentlySelectedCompany } = useContext(Context);
+    const { requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
     useEffect(() => {
@@ -1180,6 +1269,11 @@ const ServiceLocationsTab = ({ customer }) => {
             fetchLocations();
         }
     }, [customer.id, recentlySelectedCompany, db]);
+
+    useEffect(() => {
+        setLocationNotesDraft(selectedLocation?.notes || '');
+        setLocationPhotoFiles([]);
+    }, [selectedLocation?.id, selectedLocation?.notes]);
 
     const getDefaultNewContact = () => ({
         id: "com_cus_con_" + uuidv4(),
@@ -1488,6 +1582,90 @@ const ServiceLocationsTab = ({ customer }) => {
         }
     };
 
+    const handleSaveLocationNotes = async () => {
+        if (!selectedLocation?.id || !recentlySelectedCompany) return;
+        if (!requirePermission("44", "update service locations")) return;
+
+        setSavingLocationNotes(true);
+        try {
+            const notesValue = locationNotesDraft;
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', selectedLocation.id),
+                {
+                    notes: notesValue,
+                    updatedAt: serverTimestamp(),
+                }
+            );
+            updateSelectedLocationState({ ...selectedLocation, notes: notesValue });
+            toast.success('Location notes saved.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to save location notes.');
+        } finally {
+            setSavingLocationNotes(false);
+        }
+    };
+
+    const handleLocationPhotoSelection = (event) => {
+        const files = Array.from(event.target.files || []);
+        const validationMessage = files.map(validateServiceLocationPhotoFile).find(Boolean);
+
+        if (validationMessage) {
+            toast.error(validationMessage);
+            setLocationPhotoFiles([]);
+        } else {
+            setLocationPhotoFiles(files);
+        }
+
+        event.target.value = '';
+    };
+
+    const handleUploadLocationPhotos = async () => {
+        if (!selectedLocation?.id || !recentlySelectedCompany || !locationPhotoFiles.length || uploadingLocationPhotos) return;
+        if (!requirePermission("44", "update service locations")) return;
+
+        setUploadingLocationPhotos(true);
+        try {
+            const uploadedPhotos = await Promise.all(
+                locationPhotoFiles.map((file) => uploadServiceLocationPhoto({
+                    storage,
+                    file,
+                    path: buildCompanyServiceLocationPhotoPath({
+                        companyId: recentlySelectedCompany,
+                        serviceLocationId: selectedLocation.id,
+                        file,
+                    }),
+                    description: file.name,
+                }))
+            );
+
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'serviceLocations', selectedLocation.id),
+                {
+                    photoUrls: arrayUnion(...uploadedPhotos),
+                    updatedAt: serverTimestamp(),
+                }
+            );
+
+            updateSelectedLocationState({
+                ...selectedLocation,
+                photoUrls: [
+                    ...(Array.isArray(selectedLocation.photoUrls) ? selectedLocation.photoUrls : []),
+                    ...uploadedPhotos,
+                ],
+            });
+            setLocationPhotoFiles([]);
+            toast.success('Location photos uploaded.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to upload location photos.');
+        } finally {
+            setUploadingLocationPhotos(false);
+        }
+    };
+
+    const selectedLocationPhotos = Array.isArray(selectedLocation?.photoUrls) ? selectedLocation.photoUrls : [];
+
     return (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <div className="space-y-6">
@@ -1785,16 +1963,101 @@ const ServiceLocationsTab = ({ customer }) => {
                                         <p className="text-sm text-slate-500">None found.</p>
                                     )}
                                 </div>
-                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                        Location Notes
-                                    </p>
-                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                        {selectedLocation.notes || "No location notes added."}
-                                    </p>
-                                </div>
                             </>
                         )}
+
+                        {!editingLocation && (
+                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                                <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                        Location Notes
+                                    </p>
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveLocationNotes}
+                                        disabled={savingLocationNotes}
+                                        className="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+                                    >
+                                        {savingLocationNotes ? 'Saving...' : 'Save Notes'}
+                                    </button>
+                                </div>
+                                <textarea
+                                    value={locationNotesDraft}
+                                    onChange={(event) => setLocationNotesDraft(event.target.value)}
+                                    rows="4"
+                                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    placeholder="Add service location notes..."
+                                />
+                            </div>
+                        )}
+
+                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    Location Photos
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                    <label
+                                        htmlFor={`location-photo-upload-${selectedLocation.id}`}
+                                        className="cursor-pointer rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                                    >
+                                        Select Photos
+                                        <input
+                                            id={`location-photo-upload-${selectedLocation.id}`}
+                                            type="file"
+                                            accept="image/*"
+                                            multiple
+                                            className="sr-only"
+                                            onChange={handleLocationPhotoSelection}
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={handleUploadLocationPhotos}
+                                        disabled={!locationPhotoFiles.length || uploadingLocationPhotos}
+                                        className={[
+                                            "rounded-lg px-3 py-1.5 text-xs font-semibold shadow-sm transition",
+                                            locationPhotoFiles.length && !uploadingLocationPhotos
+                                                ? "bg-blue-600 text-white hover:bg-blue-700"
+                                                : "cursor-not-allowed bg-slate-100 text-slate-400",
+                                        ].join(" ")}
+                                    >
+                                        {uploadingLocationPhotos ? 'Uploading...' : 'Upload'}
+                                    </button>
+                                </div>
+                            </div>
+                            {locationPhotoFiles.length > 0 && (
+                                <p className="mb-3 text-xs font-semibold text-slate-500">
+                                    {locationPhotoFiles.length} file{locationPhotoFiles.length > 1 ? 's' : ''} selected
+                                </p>
+                            )}
+                            {selectedLocationPhotos.length > 0 ? (
+                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                                    {selectedLocationPhotos.map((photo, index) => {
+                                        const photoSrc = getServiceLocationPhotoUrl(photo);
+                                        const photoAlt = photo?.description || photo?.name || `Location photo ${index + 1}`;
+
+                                        return photoSrc ? (
+                                            <a
+                                                key={`${photoSrc}-${index}`}
+                                                href={photoSrc}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="group block overflow-hidden rounded-lg border border-slate-200 bg-slate-100 shadow-sm transition hover:border-blue-200"
+                                            >
+                                                <img
+                                                    src={photoSrc}
+                                                    alt={photoAlt}
+                                                    className="aspect-square w-full object-cover transition duration-200 group-hover:scale-105"
+                                                />
+                                            </a>
+                                        ) : null;
+                                    })}
+                                </div>
+                            ) : (
+                                <p className="text-sm text-slate-500">No location photos uploaded.</p>
+                            )}
+                        </div>
 
                     </InfoCard>
                 }
@@ -1887,7 +2150,11 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     const [customerServiceLocations, setCustomerServiceLocations] = useState([]);
     const [customerBodiesOfWater, setCustomerBodiesOfWater] = useState([]);
     const [equipment, setEquipment] = useState([]);
+    const [showPastEquipment, setShowPastEquipment] = useState(false);
     const [loading, setLoading] = useState(true);
+    const [editingBodyOfWaterId, setEditingBodyOfWaterId] = useState('');
+    const [bodyOfWaterEditForm, setBodyOfWaterEditForm] = useState(getBodyOfWaterEditForm());
+    const [savingBodyOfWaterEdit, setSavingBodyOfWaterEdit] = useState(false);
     const [movingEquipmentId, setMovingEquipmentId] = useState('');
     const [equipmentMoveForm, setEquipmentMoveForm] = useState({ serviceLocationId: '', bodyOfWaterId: '' });
     const [movingEquipment, setMovingEquipment] = useState(false);
@@ -1900,6 +2167,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
+    const navigate = useNavigate();
 
     useEffect(() => {
         const fetchDetails = async () => {
@@ -1947,6 +2215,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         setMovingEquipmentId('');
         setEquipmentMoveForm({ serviceLocationId: '', bodyOfWaterId: '' });
         setMovingEquipment(false);
+        setShowPastEquipment(false);
+        setEditingBodyOfWaterId('');
+        setBodyOfWaterEditForm(getBodyOfWaterEditForm());
+        setSavingBodyOfWaterEdit(false);
         setEditingEquipmentId('');
         setEquipmentEditForm(getEquipmentEditForm());
         setSavingEquipmentEdit(false);
@@ -1967,6 +2239,19 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         () => equipment.find((item) => item.id === editingEquipmentId) || null,
         [equipment, editingEquipmentId]
     );
+    const selectedEditingBodyOfWater = useMemo(
+        () => customerBodiesOfWater.find((item) => item.id === editingBodyOfWaterId) || null,
+        [customerBodiesOfWater, editingBodyOfWaterId]
+    );
+    const activeEquipment = useMemo(
+        () => equipment.filter(isActiveEquipment),
+        [equipment]
+    );
+    const pastEquipment = useMemo(
+        () => equipment.filter((item) => !isActiveEquipment(item)),
+        [equipment]
+    );
+    const visibleEquipment = showPastEquipment ? pastEquipment : activeEquipment;
     const targetBodiesOfWater = useMemo(
         () => customerBodiesOfWater.filter((bow) => bow.serviceLocationId === equipmentMoveForm.serviceLocationId),
         [customerBodiesOfWater, equipmentMoveForm.serviceLocationId]
@@ -1984,6 +2269,14 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             equipmentEditForm.serviceFrequencyEvery
         ));
     }, [equipmentEditForm]);
+    const equipmentCreateIsFilter = useMemo(
+        () => isFilterEquipment(equipmentCreateForm),
+        [equipmentCreateForm]
+    );
+    const equipmentEditIsFilter = useMemo(
+        () => isFilterEquipment(equipmentEditForm),
+        [equipmentEditForm]
+    );
     const standaloneServiceStopLinks = [
         {
             category: 'serviceAgreementEstimate',
@@ -2009,6 +2302,65 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         });
 
         return `/company/serviceStops/createNew?${params.toString()}`;
+    };
+
+    const startBodyOfWaterEdit = (bodyOfWater) => {
+        setEditingBodyOfWaterId(bodyOfWater.id);
+        setBodyOfWaterEditForm({
+            ...getBodyOfWaterEditForm(bodyOfWater),
+            waterType: normalizeWaterType(bodyOfWater.waterType),
+        });
+    };
+
+    const closeBodyOfWaterEdit = () => {
+        if (savingBodyOfWaterEdit) return;
+        setEditingBodyOfWaterId('');
+        setBodyOfWaterEditForm(getBodyOfWaterEditForm());
+    };
+
+    const updateBodyOfWaterEditField = (field, value) => {
+        setBodyOfWaterEditForm((current) => ({
+            ...current,
+            [field]: value,
+        }));
+    };
+
+    const handleSaveBodyOfWaterEdit = async (event) => {
+        event.preventDefault();
+
+        if (!requirePermission("54", "update bodies of water")) return;
+        if (!selectedEditingBodyOfWater?.id || !recentlySelectedCompany) return;
+
+        const updates = {
+            name: bodyOfWaterEditForm.name,
+            gallons: bodyOfWaterEditForm.gallons,
+            material: bodyOfWaterEditForm.material,
+            waterType: bodyOfWaterEditForm.waterType,
+            notes: bodyOfWaterEditForm.notes,
+            updatedAt: serverTimestamp(),
+        };
+
+        setSavingBodyOfWaterEdit(true);
+        try {
+            await updateDoc(
+                doc(db, 'companies', recentlySelectedCompany, 'bodiesOfWater', selectedEditingBodyOfWater.id),
+                updates
+            );
+            setBodiesOfWater((current) => current.map((item) => (
+                item.id === selectedEditingBodyOfWater.id ? { ...item, ...updates } : item
+            )));
+            setCustomerBodiesOfWater((current) => current.map((item) => (
+                item.id === selectedEditingBodyOfWater.id ? { ...item, ...updates } : item
+            )));
+            setEditingBodyOfWaterId('');
+            setBodyOfWaterEditForm(getBodyOfWaterEditForm());
+            toast.success('Body of water updated.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to update body of water.');
+        } finally {
+            setSavingBodyOfWaterEdit(false);
+        }
     };
 
     const openEquipmentCreate = () => {
@@ -2116,8 +2468,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         const catalogEquipmentId = equipmentCreateForm.universalEquipmentId || equipmentCreateForm.modelId || '';
         const isCustomModel = Boolean(equipmentCreateForm.model && !catalogEquipmentId);
         const selectedBodyOfWater = locationBodiesOfWater.find((bow) => bow.id === equipmentCreateForm.bodyOfWaterId) || null;
-        const dateInstalled = dateInputToLocalDate(equipmentCreateForm.dateInstalled) || new Date();
+        const createdAt = new Date();
         const customerName = getCustomerName(customer) || location.customerName || '';
+        const finalNeedsService = equipmentCreateForm.needsService || equipmentDefaultsToNeedsService(equipmentCreateForm);
+        const finalIsFilter = isFilterEquipment(equipmentCreateForm);
 
         const equipmentId = "com_equ_" + uuidv4();
         const newEquipment = {
@@ -2131,14 +2485,16 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             modelId: isCustomModel ? '' : catalogEquipmentId,
             universalEquipmentId: isCustomModel ? '' : catalogEquipmentId,
             manualPdfLink: isCustomModel ? '' : equipmentCreateForm.manualPdfLink || '',
-            dateInstalled,
-            cleanFilterPressure: equipmentCreateForm.cleanFilterPressure === '' || !Number.isFinite(numericCleanFilterPressure)
+            createdAt,
+            createdAtMillis: createdAt.getTime(),
+            dateInstalled: dateInputToLocalDate(equipmentCreateForm.dateInstalled),
+            cleanFilterPressure: !finalIsFilter || equipmentCreateForm.cleanFilterPressure === '' || !Number.isFinite(numericCleanFilterPressure)
                 ? null
                 : numericCleanFilterPressure,
-            serviceFrequency: equipmentCreateForm.needsService && equipmentCreateForm.serviceFrequency !== '' && Number.isFinite(numericServiceFrequency)
+            serviceFrequency: finalNeedsService && equipmentCreateForm.serviceFrequency !== '' && Number.isFinite(numericServiceFrequency)
                 ? numericServiceFrequency
                 : null,
-            serviceFrequencyEvery: equipmentCreateForm.needsService ? equipmentCreateForm.serviceFrequencyEvery || 'Month' : null,
+            serviceFrequencyEvery: finalNeedsService ? equipmentCreateForm.serviceFrequencyEvery || 'Month' : null,
             notes: equipmentCreateForm.notes,
             customerId,
             customerName,
@@ -2149,7 +2505,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             isActive: true,
             active: true,
             dateUninstalled: null,
-            needsService: equipmentCreateForm.needsService,
+            needsService: finalNeedsService,
             status: EQUIPMENT_STATUS.OPERATIONAL,
             currentPressure: null,
         };
@@ -2213,7 +2569,9 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 
         const dateInstalled = dateInputToLocalDate(equipmentEditForm.dateInstalled);
         const lastServiceDate = dateInputToLocalDate(equipmentEditForm.lastServiceDate);
-        const nextServiceDate = equipmentEditForm.needsService
+        const finalNeedsService = equipmentEditForm.needsService || equipmentDefaultsToNeedsService(equipmentEditForm);
+        const finalIsFilter = isFilterEquipment(equipmentEditForm);
+        const nextServiceDate = finalNeedsService
             ? computeNextEquipmentServiceDate(
                 lastServiceDate,
                 equipmentEditForm.serviceFrequency,
@@ -2224,10 +2582,10 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         const equipmentUpdates = {
             type: equipmentEditForm.type,
             typeId: equipmentEditForm.typeId,
-            cleanFilterPressure: equipmentEditForm.cleanFilterPressure,
-            currentPressure: equipmentEditForm.currentPressure,
+            cleanFilterPressure: finalIsFilter ? equipmentEditForm.cleanFilterPressure : null,
+            currentPressure: finalIsFilter ? equipmentEditForm.currentPressure : null,
             dateInstalled,
-            lastServiceDate,
+            lastServiceDate: finalNeedsService ? lastServiceDate : null,
             nextServiceDate,
             make: equipmentEditForm.make,
             makeId: equipmentEditForm.makeId,
@@ -2236,13 +2594,15 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             universalEquipmentId: equipmentEditForm.universalEquipmentId,
             manualPdfLink: equipmentEditForm.manualPdfLink,
             name: equipmentEditForm.name,
+            createdAt: selectedEditingEquipment.createdAt || serverTimestamp(),
+            createdAtMillis: selectedEditingEquipment.createdAtMillis || Date.now(),
             isActive: equipmentEditForm.isActive,
             active: equipmentEditForm.isActive,
-            needsService: equipmentEditForm.needsService,
-            serviceFrequency: equipmentEditForm.needsService && equipmentEditForm.serviceFrequency !== ''
+            needsService: finalNeedsService,
+            serviceFrequency: finalNeedsService && equipmentEditForm.serviceFrequency !== ''
                 ? Number(equipmentEditForm.serviceFrequency)
                 : null,
-            serviceFrequencyEvery: equipmentEditForm.needsService ? equipmentEditForm.serviceFrequencyEvery || '' : '',
+            serviceFrequencyEvery: finalNeedsService ? equipmentEditForm.serviceFrequencyEvery || '' : '',
             status: equipmentEditForm.status,
             notes: equipmentEditForm.notes,
         };
@@ -2266,6 +2626,33 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         } catch (error) {
             console.error(error);
             toast.error('Failed to update equipment.');
+        } finally {
+            setSavingEquipmentEdit(false);
+        }
+    };
+
+    const handleDeleteEquipmentEdit = async () => {
+        if (!requirePermission("66", "delete equipment")) return;
+        if (!selectedEditingEquipment?.id || !recentlySelectedCompany) return;
+
+        const confirmed = await appConfirm({
+            title: 'Delete Equipment',
+            message: `Delete ${selectedEditingEquipment.name || selectedEditingEquipment.model || selectedEditingEquipment.type || 'this equipment'} and its saved history/parts?`,
+            confirmLabel: 'Delete Equipment',
+            variant: 'danger',
+        });
+        if (!confirmed) return;
+
+        setSavingEquipmentEdit(true);
+        try {
+            await deleteEquipmentWithSubcollections(db, recentlySelectedCompany, selectedEditingEquipment.id);
+            setEquipment((currentEquipment) => currentEquipment.filter((item) => item.id !== selectedEditingEquipment.id));
+            setEditingEquipmentId('');
+            setEquipmentEditForm(getEquipmentEditForm());
+            toast.success('Equipment deleted.');
+        } catch (error) {
+            console.error(error);
+            toast.error('Failed to delete equipment.');
         } finally {
             setSavingEquipmentEdit(false);
         }
@@ -2340,6 +2727,45 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         }
     };
 
+    const getEquipmentDisplayName = (eq = {}) => (
+        [eq.name, eq.make, eq.model].filter(Boolean).join(' ') || eq.type || 'Equipment'
+    );
+
+    const buildEquipmentContext = (eq = {}, jobIntent = '') => ({
+        equipmentId: eq.id,
+        equipmentName: getEquipmentDisplayName(eq),
+        equipmentType: eq.type || '',
+        equipmentMake: eq.make || '',
+        equipmentModel: eq.model || '',
+        customerId,
+        customerName: getCustomerName(customer) || eq.customerName || '',
+        serviceLocationId: eq.serviceLocationId || location.id,
+        bodyOfWaterId: eq.bodyOfWaterId || '',
+        jobIntent,
+    });
+
+    const createEquipmentJobFromCard = (eq, jobIntent) => {
+        navigate('/company/jobs/createNew', {
+            state: {
+                equipmentContext: buildEquipmentContext(eq, jobIntent),
+                jobIntent,
+            },
+        });
+    };
+
+    const createEquipmentRepairRequestFromCard = (eq) => {
+        const basePath = eq.customerId
+            ? `/company/repair-requests/create/${eq.customerId}${eq.serviceLocationId ? `/${eq.serviceLocationId}` : ''}`
+            : '/company/repair-requests/create';
+
+        navigate(basePath, {
+            state: {
+                equipmentContext: buildEquipmentContext(eq, 'repairRequest'),
+                defaultDescription: `Repair request for ${getEquipmentDisplayName(eq)}`,
+            },
+        });
+    };
+
     return (<div className="grid gap-6 lg:grid-cols-2">
         <div className="lg:col-span-2">
             <InfoCard title="Schedule Service Stop">
@@ -2375,10 +2801,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                 <ul className="space-y-3">
                     {bodiesOfWater.map((bow) => (
                         <li key={bow.id}>
-                            <Link
-                                to={`/company/bodiesOfWater/detail/${bow.id}`}
-                                className="block rounded-2xl border border-slate-200 bg-white p-4 hover:border-blue-200 hover:bg-slate-50 transition"
-                            >
+                            <div className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-slate-50">
                                 <div className="flex items-start justify-between gap-4">
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-900">
@@ -2420,7 +2843,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                             Water Type
                                         </p>
                                         <p className="mt-1 text-sm text-slate-800">
-                                            {bow.waterType || bow.shape || "Not specified"}
+                                            {normalizeWaterType(bow.waterType) || "Not specified"}
                                         </p>
                                     </div>
                                 </div>
@@ -2433,7 +2856,24 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                         {bow.notes || "No notes added."}
                                     </p>
                                 </div>
-                            </Link>
+                                <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                    {can("54") && (
+                                        <button
+                                            type="button"
+                                            onClick={() => startBodyOfWaterEdit(bow)}
+                                            className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
+                                        >
+                                            Edit
+                                        </button>
+                                    )}
+                                    <Link
+                                        to={`/company/bodiesOfWater/detail/${bow.id}`}
+                                        className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+                                    >
+                                        View Details
+                                    </Link>
+                                </div>
+                            </div>
                         </li>
                     ))}
 
@@ -2445,22 +2885,33 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         </InfoCard>
 
 	        <InfoCard
-	            title="Equipment"
-	            actions={
-	                <button
-	                    type="button"
-	                    onClick={openEquipmentCreate}
-	                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
-	                >
-	                    + Add
-	                </button>
-	            }
-	        >
+		            title={`Equipment (${visibleEquipment.length})`}
+		            actions={
+                        <div className="flex flex-wrap justify-end gap-2">
+                            {pastEquipment.length > 0 && (
+                                <button
+                                    type="button"
+                                    onClick={() => setShowPastEquipment((current) => !current)}
+                                    className="text-sm font-semibold text-slate-700 bg-white border border-slate-300 px-3 py-1.5 rounded-xl hover:bg-slate-50 shadow-sm transition"
+                                >
+                                    {showPastEquipment ? `Active (${activeEquipment.length})` : `Past (${pastEquipment.length})`}
+                                </button>
+                            )}
+                            <button
+                                type="button"
+                                onClick={openEquipmentCreate}
+                                className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                            >
+                                + Add
+                            </button>
+                        </div>
+		            }
+		        >
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
                 <ul className="grid gap-3">
-                    {equipment.map((eq) => (
+	                    {visibleEquipment.map((eq) => (
                         <li key={eq.id}>
                             <div className="rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-slate-50">
                                 <Link
@@ -2496,19 +2947,25 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                     </div>
 
                                     <div className="mt-3 flex flex-wrap gap-2">
-                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
-                                        </span>
-                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                            {eq.currentPressure ?? "—"} PSI
-                                        </span>
-                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                            Last {formatDateValue(eq.lastServiceDate)}
-                                        </span>
-                                        {eq.nextServiceDate && (
-                                            <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
-                                                Next {formatDateValue(eq.nextServiceDate)}
-                                            </span>
+	                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+	                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
+	                                        </span>
+	                                        {isFilterEquipment(eq) && (
+	                                            <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+	                                                {eq.currentPressure ?? "—"} PSI
+	                                            </span>
+	                                        )}
+                                        {eq.needsService && (
+                                            <>
+                                                <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                                    Last {formatDateValue(eq.lastServiceDate)}
+                                                </span>
+                                                {eq.nextServiceDate && (
+                                                    <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
+                                                        Next {formatDateValue(eq.nextServiceDate)}
+                                                    </span>
+                                                )}
+                                            </>
                                         )}
                                     </div>
 
@@ -2582,38 +3039,169 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                             </div>
                                         </form>
                                         ) : (
-                                            <div className="flex flex-wrap gap-2">
-                                                {can("64") && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => startEquipmentEdit(eq)}
-                                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100"
-                                                    >
-                                                        Edit
-                                                    </button>
-                                                )}
-                                                <button
-                                                    type="button"
-                                                    onClick={() => startEquipmentMove(eq)}
-                                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-                                                >
-                                                    Move Equipment
-                                                </button>
-                                            </div>
-                                        )}
+	                                            <div className="flex flex-wrap gap-2">
+                                                    <Menu as="div" className="relative inline-block text-left">
+                                                        <MenuButton className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50">
+                                                            <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+                                                            Actions
+                                                        </MenuButton>
+                                                        <MenuItems className="absolute right-0 z-30 mt-2 w-56 origin-top-right overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-lg focus:outline-none">
+                                                            {can("64") && (
+                                                                <>
+                                                                    <QuickActionMenuItem
+                                                                        label="Edit Equipment"
+                                                                        icon={PencilSquareIcon}
+                                                                        onClick={() => startEquipmentEdit(eq)}
+                                                                    />
+                                                                    <QuickActionMenuItem
+                                                                        label="Move Equipment"
+                                                                        icon={ArrowsPointingOutIcon}
+                                                                        onClick={() => startEquipmentMove(eq)}
+                                                                    />
+                                                                </>
+                                                            )}
+                                                            {can("32") && (
+                                                                <QuickActionMenuItem
+                                                                    label="Add Repair Request"
+                                                                    icon={WrenchScrewdriverIcon}
+                                                                    tone="amber"
+                                                                    onClick={() => createEquipmentRepairRequestFromCard(eq)}
+                                                                />
+                                                            )}
+                                                            {can("22") && (
+                                                                <>
+                                                                    <QuickActionMenuItem
+                                                                        label="Create Maintenance Job"
+                                                                        icon={BriefcaseIcon}
+                                                                        tone="emerald"
+                                                                        onClick={() => createEquipmentJobFromCard(eq, 'maintenance')}
+                                                                    />
+                                                                    <QuickActionMenuItem
+                                                                        label="Create Repair Job"
+                                                                        icon={BriefcaseIcon}
+                                                                        tone="amber"
+                                                                        onClick={() => createEquipmentJobFromCard(eq, 'repair')}
+                                                                    />
+                                                                </>
+                                                            )}
+                                                        </MenuItems>
+                                                    </Menu>
+	                                            </div>
+	                                        )}
                                     </div>
                                 </div>
                             </li>
                         ))}
 
-                    {equipment.length === 0 && (
-                        <p className="text-sm text-slate-500">None found.</p>
-                    )}
+	                    {visibleEquipment.length === 0 && (
+	                        <p className="text-sm text-slate-500">
+                                {showPastEquipment ? 'No past equipment found.' : 'No active equipment found.'}
+                            </p>
+	                    )}
                     </ul>
 	            )}
 	        </InfoCard>
 
-	        {showEquipmentCreate && (
+                {editingBodyOfWaterId && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+                        <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
+                            <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
+                                <div className="min-w-0">
+                                    <h3 className="text-lg font-bold text-slate-950">Edit Body of Water</h3>
+                                    <p className="mt-1 truncate text-sm text-slate-500">
+                                        {selectedEditingBodyOfWater?.name || 'Body of water'}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={closeBodyOfWaterEdit}
+                                    disabled={savingBodyOfWaterEdit}
+                                    className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                                >
+                                    Close
+                                </button>
+                            </div>
+
+                            <form onSubmit={handleSaveBodyOfWaterEdit} className="space-y-4">
+                                <div className="grid gap-4 md:grid-cols-2">
+                                    <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                        Name
+                                        <input
+                                            value={bodyOfWaterEditForm.name}
+                                            onChange={(event) => updateBodyOfWaterEditField('name', event.target.value)}
+                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+
+                                    <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                        Gallons
+                                        <input
+                                            value={bodyOfWaterEditForm.gallons}
+                                            onChange={(event) => updateBodyOfWaterEditField('gallons', event.target.value)}
+                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+
+                                    <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                        Water Type
+                                        <select
+                                            value={bodyOfWaterEditForm.waterType}
+                                            onChange={(event) => updateBodyOfWaterEditField('waterType', event.target.value)}
+                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        >
+                                            <option value="">Select water type</option>
+                                            {bodyOfWaterEditForm.waterType && !WATER_TYPE_OPTIONS.includes(bodyOfWaterEditForm.waterType) && (
+                                                <option value={bodyOfWaterEditForm.waterType}>{bodyOfWaterEditForm.waterType}</option>
+                                            )}
+                                            {WATER_TYPE_OPTIONS.map((option) => (
+                                                <option key={option} value={option}>{option}</option>
+                                            ))}
+                                        </select>
+                                    </label>
+
+                                    <label className="space-y-1 text-xs font-semibold text-slate-600">
+                                        Material
+                                        <input
+                                            value={bodyOfWaterEditForm.material}
+                                            onChange={(event) => updateBodyOfWaterEditField('material', event.target.value)}
+                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+
+                                    <label className="space-y-1 text-xs font-semibold text-slate-600 md:col-span-2">
+                                        Notes
+                                        <textarea
+                                            value={bodyOfWaterEditForm.notes}
+                                            onChange={(event) => updateBodyOfWaterEditField('notes', event.target.value)}
+                                            rows={4}
+                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        />
+                                    </label>
+                                </div>
+
+                                <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
+                                    <button
+                                        type="button"
+                                        onClick={closeBodyOfWaterEdit}
+                                        disabled={savingBodyOfWaterEdit}
+                                        className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={savingBodyOfWaterEdit}
+                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+                                    >
+                                        {savingBodyOfWaterEdit ? 'Saving...' : 'Save'}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                )}
+
+		        {showEquipmentCreate && (
 	            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
 	                <div className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl">
 	                    <div className="mb-4 flex items-start justify-between gap-3 border-b border-slate-200 pb-3">
@@ -2677,14 +3265,29 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 	                            <h4 className="text-sm font-bold text-slate-800">Equipment Specifications</h4>
 	                            <EquipmentCatalogPicker
 	                                value={equipmentCreateForm}
-	                                onChange={(nextEquipment) => setEquipmentCreateForm((current) => ({
-	                                    ...current,
-	                                    ...nextEquipment,
-	                                }))}
-	                                onModelSelected={(selectedModel) => setEquipmentCreateForm((current) => ({
-	                                    ...current,
-	                                    name: current.name.trim() ? current.name : selectedModel?.name || selectedModel?.model || '',
-	                                }))}
+	                                preferCustom
+	                                onChange={(nextEquipment) => setEquipmentCreateForm((current) => {
+	                                    const nextForm = applyEquipmentDefaults(current, nextEquipment);
+	                                    return {
+	                                        ...nextForm,
+	                                        name: current.name.trim()
+	                                            ? current.name
+	                                            : buildEquipmentNickname(nextForm),
+	                                    };
+	                                })}
+	                                onModelSelected={(selectedModel) => setEquipmentCreateForm((current) => {
+	                                    const nextForm = applyEquipmentDefaults(current, {
+	                                        ...current,
+	                                        model: selectedModel?.model || selectedModel?.name || current.model,
+	                                        modelId: selectedModel?.id || current.modelId,
+	                                        universalEquipmentId: selectedModel?.id || current.universalEquipmentId,
+	                                        manualPdfLink: selectedModel?.manualPdfLink || current.manualPdfLink,
+	                                    });
+	                                    return {
+	                                        ...nextForm,
+	                                        name: current.name.trim() ? current.name : buildEquipmentNickname(nextForm),
+	                                    };
+	                                })}
 	                                inputClassName="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
 	                                labelClassName="block text-xs font-semibold text-slate-600 mb-1"
 	                            />
@@ -2714,15 +3317,17 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 	                                    />
 	                                </label>
 
-	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
-	                                    Clean Filter Pressure (PSI)
-	                                    <input
-	                                        value={equipmentCreateForm.cleanFilterPressure}
-	                                        onChange={(event) => updateEquipmentCreateField('cleanFilterPressure', event.target.value)}
-	                                        placeholder="e.g., 25"
-	                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-	                                    />
-	                                </label>
+	                                {equipmentCreateIsFilter && (
+	                                    <label className="space-y-1 text-xs font-semibold text-slate-600">
+	                                        Clean Filter Pressure (PSI)
+	                                        <input
+	                                            value={equipmentCreateForm.cleanFilterPressure}
+	                                            onChange={(event) => updateEquipmentCreateField('cleanFilterPressure', event.target.value)}
+	                                            placeholder="e.g., 25"
+	                                            className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+	                                        />
+	                                    </label>
+	                                )}
 
 	                                <label className="space-y-1 text-xs font-semibold text-slate-600">
 	                                    Will This Equipment Need Service?
@@ -2827,46 +3432,30 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                     />
                                 </label>
 
-                                <label className="space-y-1 text-xs font-semibold text-slate-600">
-                                    Category
-                                    <input
-                                        value={equipmentEditForm.type}
-                                        onChange={(event) => setEquipmentEditForm((current) => ({
-                                            ...current,
-                                            type: event.target.value,
-                                            typeId: '',
-                                        }))}
-                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                <div className="md:col-span-2">
+                                    <EquipmentCatalogPicker
+                                        value={equipmentEditForm}
+                                        preferCustom
+                                        onChange={(nextEquipment) => setEquipmentEditForm((current) => (
+                                            applyEquipmentDefaults(current, nextEquipment)
+                                        ))}
+                                        onModelSelected={(selectedModel) => setEquipmentEditForm((current) => {
+                                            const nextForm = applyEquipmentDefaults(current, {
+                                                ...current,
+                                                model: selectedModel?.model || selectedModel?.name || current.model,
+                                                modelId: selectedModel?.id || current.modelId,
+                                                universalEquipmentId: selectedModel?.id || current.universalEquipmentId,
+                                                manualPdfLink: selectedModel?.manualPdfLink || current.manualPdfLink,
+                                            });
+                                            return {
+                                                ...nextForm,
+                                                name: current.name.trim() ? current.name : buildEquipmentNickname(nextForm),
+                                            };
+                                        })}
+                                        inputClassName="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        labelClassName="block text-xs font-semibold text-slate-600 mb-1"
                                     />
-                                </label>
-
-                                <label className="space-y-1 text-xs font-semibold text-slate-600">
-                                    Make
-                                    <input
-                                        value={equipmentEditForm.make}
-                                        onChange={(event) => setEquipmentEditForm((current) => ({
-                                            ...current,
-                                            make: event.target.value,
-                                            makeId: '',
-                                        }))}
-                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                                    />
-                                </label>
-
-                                <label className="space-y-1 text-xs font-semibold text-slate-600">
-                                    Model
-                                    <input
-                                        value={equipmentEditForm.model}
-                                        onChange={(event) => setEquipmentEditForm((current) => ({
-                                            ...current,
-                                            model: event.target.value,
-                                            modelId: '',
-                                            universalEquipmentId: '',
-                                            manualPdfLink: '',
-                                        }))}
-                                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                                    />
-                                </label>
+                                </div>
 
                                 <label className="space-y-1 text-xs font-semibold text-slate-600">
                                     Date Installed
@@ -2916,7 +3505,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                     Active
                                 </label>
 
-                                {equipmentEditForm.needsService && (
+                                {equipmentEditIsFilter && (
                                     <>
                                         <label className="space-y-1 text-xs font-semibold text-slate-600">
                                             Clean Filter Pressure
@@ -2935,7 +3524,11 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                                 className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-normal text-slate-700 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                             />
                                         </label>
+                                    </>
+                                )}
 
+                                {equipmentEditForm.needsService && (
+                                    <>
                                         <label className="space-y-1 text-xs font-semibold text-slate-600">
                                             Last Service Date
                                             <input
@@ -2995,23 +3588,35 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                 </label>
                             </div>
 
-                            <div className="flex justify-end gap-2 border-t border-slate-200 pt-4">
-                                <button
-                                    type="button"
-                                    onClick={closeEquipmentEdit}
-                                    disabled={savingEquipmentEdit}
-                                    className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
-                                >
-                                    Cancel
-                                </button>
-                                <button
-                                    type="submit"
-                                    disabled={savingEquipmentEdit}
-                                    className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
-                                >
-                                    {savingEquipmentEdit ? 'Saving...' : 'Save'}
-                                </button>
-                            </div>
+	                            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 pt-4">
+                                    {can("66") ? (
+                                        <button
+                                            type="button"
+                                            onClick={handleDeleteEquipmentEdit}
+                                            disabled={savingEquipmentEdit}
+                                            className="rounded-md border border-rose-200 bg-rose-50 px-4 py-2 text-sm font-semibold text-rose-700 transition hover:bg-rose-100 disabled:opacity-60"
+                                        >
+                                            Delete
+                                        </button>
+                                    ) : <span />}
+                                    <div className="flex justify-end gap-2">
+	                                    <button
+	                                        type="button"
+	                                        onClick={closeEquipmentEdit}
+	                                        disabled={savingEquipmentEdit}
+	                                        className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:opacity-60"
+	                                    >
+	                                        Cancel
+	                                    </button>
+	                                    <button
+	                                        type="submit"
+	                                        disabled={savingEquipmentEdit}
+	                                        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:opacity-60"
+	                                    >
+	                                        {savingEquipmentEdit ? 'Saving...' : 'Save'}
+	                                    </button>
+                                    </div>
+	                            </div>
                         </form>
                     </div>
                 </div>
@@ -3310,7 +3915,7 @@ const RepairRequestsSection = ({ customer }) => {
             </div>
             {request.id && (
                 <Link
-                    to={`/company/repair-requests/${request.id}`}
+                    to={`/company/repair-requests/detail/${request.id}`}
                     className="text-sm font-semibold text-blue-600 hover:underline"
                 >
                     View Details
@@ -4324,7 +4929,17 @@ const HistoryTab = ({ customer }) => {
 export default function CustomerDetails() {
     const { customerId, tab } = useParams();
     const navigate = useNavigate();
-    const { recentlySelectedCompany, companyRole, companyRoleLoading } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        companyRoleLoading,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+        user,
+        dataBaseUser,
+    } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const db = getFirestore();
 
@@ -4341,6 +4956,7 @@ export default function CustomerDetails() {
     const [accessDenied, setAccessDenied] = useState(false);
     const [customerInviteLink, setCustomerInviteLink] = useState('');
     const [creatingInviteLink, setCreatingInviteLink] = useState(false);
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     useEffect(() => {
         setActiveTab(getInitialTab(tab));
@@ -4371,12 +4987,18 @@ export default function CustomerDetails() {
                         nextCustomer.userId = linkedCustomerUserId;
                     }
 
-                    if (!customerMatchesRoleTagAccess(nextCustomer, companyRole)) {
-                        console.warn('[CustomerDetails] Customer hidden by role tag access', {
+                    if (!customerMatchesRegionalAccess(nextCustomer, {
+                        userAccess: companyUserAccess,
+                        role: companyRole,
+                        selectedRegionTag: selectedCustomerRegionTag,
+                        regionalAccessEnabled: customerAreaFilteringEnabled,
+                    })) {
+                        console.warn('[CustomerDetails] Customer hidden by regional customer tag access', {
                             companyId: recentlySelectedCompany,
                             customerId,
                             customerTags: nextCustomer.tags || [],
-                            roleCustomerTags: companyRole?.customerTags || companyRole?.allowedCustomerTags || [],
+                            regionalCustomerTags: companyUserAccess?.customerRegionTags || companyRole?.customerTags || companyRole?.allowedCustomerTags || [],
+                            selectedCustomerRegionTag,
                         });
                         setCustomer(null);
                         setAccessDenied(true);
@@ -4406,7 +5028,7 @@ export default function CustomerDetails() {
             }
         };
         fetchCustomer();
-    }, [customerId, recentlySelectedCompany, db, companyRole, companyRoleLoading]);
+    }, [customerId, recentlySelectedCompany, db, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled, companyRoleLoading]);
 
     useEffect(() => {
         if (!tab || !validCustomerTabs.includes(tab)) {
@@ -4508,10 +5130,19 @@ export default function CustomerDetails() {
             await updateDoc(customerRef, { active: nextActive, isActive: nextActive });
 
             const inactiveCascadeCounts = !nextActive ? await deactivateCustomerRelations() : null;
+            const pipelineRowsEnded = !nextActive
+                ? await endCustomerPipelineRowsForInactiveCustomer({
+                    companyId: recentlySelectedCompany,
+                    customerId,
+                    reason: 'Customer marked inactive',
+                    actorId: user?.uid || '',
+                    actorName: `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() || user?.displayName || user?.email || '',
+                })
+                : 0;
 
             toast.success(
                 inactiveCascadeCounts
-                    ? `Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, and ${inactiveCascadeCounts.equipment} equipment records were also marked inactive.`
+                    ? `Customer marked inactive. ${inactiveCascadeCounts.serviceLocations} service locations, ${inactiveCascadeCounts.bodiesOfWater} bodies of water, ${inactiveCascadeCounts.equipment} equipment records, and ${pipelineRowsEnded} pipeline row(s) were ended.`
                     : `Customer has been marked as ${nextActive ? 'active' : 'inactive'}.`
             );
             setCustomer(prev => ({ ...prev, active: nextActive, isActive: nextActive })); // Update local state
@@ -4574,13 +5205,14 @@ export default function CustomerDetails() {
     }
 
     if (accessDenied) {
-        const allowedTags = getRoleCustomerTagAccess(companyRole);
+        const allowedTags = getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole });
         return (
             <div className="flex min-h-screen items-center justify-center bg-slate-50 p-6">
                 <div className="max-w-md rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
                     <h1 className="text-lg font-bold text-slate-900">Customer access restricted</h1>
                     <p className="mt-2 text-sm text-slate-600">
-                        Your role can only view customers tagged {allowedTags.join(', ') || 'by your assigned customer tags'}.
+                        Your access can only view customers tagged {allowedTags.join(', ') || 'by your assigned customer areas'}.
+                        {selectedCustomerRegionTag ? ` The current header area filter is ${selectedCustomerRegionTag}.` : ''}
                     </p>
                     <Link
                         to="/company/customers"

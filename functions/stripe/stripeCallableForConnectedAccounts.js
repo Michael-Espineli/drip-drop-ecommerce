@@ -448,6 +448,49 @@ const linkedJobIdForAgreement = (agreement = {}) => {
   return '';
 };
 
+const linkedLeadIdForAgreement = (agreement = {}) => {
+  if (agreement.leadId) return agreement.leadId;
+  if (agreement.homeownerServiceRequestId) return agreement.homeownerServiceRequestId;
+  if (normalizeStatus(agreement.sourceType) === 'lead' && agreement.sourceId) return agreement.sourceId;
+  return '';
+};
+
+const syncLinkedLeadForAgreementStatus = async ({
+  agreement,
+  status,
+  timestamp = admin.firestore.FieldValue.serverTimestamp(),
+}) => {
+  const leadId = linkedLeadIdForAgreement(agreement);
+  if (!leadId) return;
+
+  const statusKey = normalizeStatus(status);
+  const update = {
+    serviceAgreementId: agreement.id || agreement.agreementId || '',
+    serviceAgreementTitle: agreement.title || 'Service Agreement',
+    serviceAgreementStatus: status,
+    updatedAt: timestamp,
+  };
+
+  if (statusKey === 'accepted') {
+    update.status = 'Completed';
+    update.leadStatus = 'Completed';
+    update.serviceAgreementAcceptedAt = timestamp;
+    update.dateCompleted = timestamp;
+    update.lostReason = '';
+    update.cancelReason = '';
+  }
+
+  if (statusKey === 'sent') {
+    update.status = 'In Progress';
+    update.leadStatus = 'In Progress';
+    update.dateCompleted = null;
+    update.lostReason = '';
+    update.cancelReason = '';
+  }
+
+  await db.collection('homeownerServiceRequests').doc(leadId).set(update, { merge: true });
+};
+
 const solutionOptionForAgreement = (agreement = {}, requestedSolutionId = '') => {
   const options = Array.isArray(agreement.planOptions) && agreement.planOptions.length
     ? agreement.planOptions
@@ -1517,6 +1560,11 @@ exports.acceptSalesServiceAgreement = functions.https.onCall(async (data, contex
     selectedSolutionId,
     selectedSolutionOption,
   });
+  await syncLinkedLeadForAgreementStatus({
+    agreement: acceptanceAgreement,
+    status: 'accepted',
+    timestamp: acceptedAt,
+  });
 
   return {
     status: 'success',
@@ -1854,6 +1902,11 @@ exports.acceptPublicSalesServiceAgreement = functions.https.onCall(async (data, 
     timestamp: acceptedAt,
     selectedSolutionId,
     selectedSolutionOption,
+  });
+  await syncLinkedLeadForAgreementStatus({
+    agreement: acceptanceAgreement,
+    status: 'accepted',
+    timestamp: acceptedAt,
   });
 
   return {

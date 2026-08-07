@@ -9,6 +9,7 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 import { db } from './config';
+import { isFirebaseClientStorageError } from './firebaseNetwork';
 
 export const APP_ERRORS_COLLECTION = 'appErrors';
 
@@ -23,6 +24,7 @@ const MAX_DATA_LENGTH = 10000;
 const RECENT_ERROR_WINDOW_MS = 30000;
 
 const recentFingerprints = new Map();
+let loggedClientStorageReportingSkip = false;
 
 const trimString = (value, maxLength = 1000) => {
   const text = String(value || '').trim();
@@ -129,8 +131,23 @@ const shouldSkipRecentDuplicate = (fingerprint) => {
   return false;
 };
 
+const warnClientStorageReportingSkip = (error) => {
+  if (loggedClientStorageReportingSkip) return;
+  loggedClientStorageReportingSkip = true;
+  console.warn(
+    'Skipped remote app-error logging because browser storage is unavailable:',
+    error?.message || error
+  );
+};
+
 export const reportAppError = async (error, options = {}) => {
   const normalizedError = normalizeError(error);
+
+  if (isFirebaseClientStorageError(error) || isFirebaseClientStorageError(normalizedError)) {
+    warnClientStorageReportingSkip(normalizedError);
+    return null;
+  }
+
   const browserLocation = getBrowserLocation();
   const context = options.context || {};
   const pathname = trimString(options.pathname || context.pathname || browserLocation.pathname, 500);
@@ -181,6 +198,11 @@ export const reportAppError = async (error, options = {}) => {
   try {
     return await addDoc(collection(db, APP_ERRORS_COLLECTION), payload);
   } catch (loggingError) {
+    if (isFirebaseClientStorageError(loggingError)) {
+      warnClientStorageReportingSkip(loggingError);
+      return null;
+    }
+
     console.error('Unable to report app error:', loggingError);
     return null;
   }

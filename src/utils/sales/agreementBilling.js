@@ -221,20 +221,20 @@ export const buildBillingSubscriptionFromAgreement = (agreement = {}, options = 
 export const ensureBillingSubscriptionForAgreement = async (db, agreement, options = {}) => {
   if (!agreement?.id) throw new Error('Missing agreement id.');
 
-  const subscription = buildBillingSubscriptionFromAgreement(agreement, options);
   const agreementRef = doc(db, salesCollectionNames.agreements, agreement.id);
-  const subscriptionRef = doc(db, salesCollectionNames.billingSubscriptions, subscription.id);
 
-  await runTransaction(db, async (transaction) => {
-    const [agreementSnap, subscriptionSnap] = await Promise.all([
-      transaction.get(agreementRef),
-      transaction.get(subscriptionRef),
-    ]);
-
+  const subscription = await runTransaction(db, async (transaction) => {
+    const agreementSnap = await transaction.get(agreementRef);
     if (!agreementSnap.exists()) throw new Error('Service agreement no longer exists.');
 
     const currentAgreement = { id: agreementSnap.id, ...agreementSnap.data() };
-    const existingSubscription = subscriptionSnap.exists()
+    const subscription = buildBillingSubscriptionFromAgreement(currentAgreement, options);
+    const subscriptionRef = doc(db, salesCollectionNames.billingSubscriptions, subscription.id);
+    const shouldReadExistingSubscription = Boolean(currentAgreement.billingSubscriptionId);
+    const subscriptionSnap = shouldReadExistingSubscription
+      ? await transaction.get(subscriptionRef)
+      : null;
+    const existingSubscription = subscriptionSnap?.exists()
       ? { id: subscriptionSnap.id, ...subscriptionSnap.data() }
       : null;
     const hasStripeSubscription = Boolean(existingSubscription?.stripeSubscriptionId);
@@ -434,6 +434,8 @@ export const ensureBillingSubscriptionForAgreement = async (db, agreement, optio
         supersededByBillingSubscriptionId: subscription.id,
       });
     }
+
+    return nextSubscription;
   });
 
   return subscription;

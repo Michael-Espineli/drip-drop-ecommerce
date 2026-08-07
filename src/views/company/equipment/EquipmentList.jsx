@@ -24,6 +24,7 @@ import {
   PencilSquareIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
+import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const EMPTY_TOP_COUNTS = {
   all: 0,
@@ -121,7 +122,7 @@ const isNeedsMaintenance = (eq) => {
     status === "maintenance" ||
     status === "needsservice";
 
-  return statusSaysMaintenance || dateIsDue(eq.nextServiceDate);
+  return statusSaysMaintenance || (eq.needsService === true && dateIsDue(eq.nextServiceDate));
 };
 
 const isNeedsRepair = (eq) => normalizeEquipmentStatus(eq?.status) === "needsrepair";
@@ -327,7 +328,7 @@ export default function EquipmentList() {
       try {
         const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
         const snap = await getDocs(query(usersRef, orderBy("userName", "asc")));
-        const data = snap.docs.map((userDoc) => ({ id: userDoc.id, ...userDoc.data() }));
+        const data = sortCompanyUsersByName(snap.docs.map((userDoc) => ({ id: userDoc.id, ...userDoc.data() })));
 
         if (!cancelled) {
           setCompanyUsers(data);
@@ -1015,10 +1016,10 @@ export default function EquipmentList() {
           Type: eq?.type || "",
           Status: maintenanceFlag ? "Needs Maintenance" : displayEquipmentStatus(eq?.status || ""),
           "Needs Service (bool)": eq?.needsService ?? "",
-          "Last Service Date": eq?.lastServiceDate ? format(eq.lastServiceDate, "yyyy-MM-dd") : "",
-          "Next Service Date": eq?.nextServiceDate ? format(eq.nextServiceDate, "yyyy-MM-dd") : "",
-          "Service Frequency": eq?.serviceFrequency || "",
-          "Service Frequency Every": eq?.serviceFrequencyEvery ?? "",
+          "Last Service Date": eq?.needsService && eq?.lastServiceDate ? format(eq.lastServiceDate, "yyyy-MM-dd") : "",
+          "Next Service Date": eq?.needsService && eq?.nextServiceDate ? format(eq.nextServiceDate, "yyyy-MM-dd") : "",
+          "Service Frequency": eq?.needsService ? eq?.serviceFrequency || "" : "",
+          "Service Frequency Every": eq?.needsService ? eq?.serviceFrequencyEvery ?? "" : "",
           "Is Active": eq?.isActive ?? "",
           Notes: eq?.notes || "",
         };
@@ -1209,10 +1210,10 @@ export default function EquipmentList() {
                       </td>
 
                       <td
-                        className={`whitespace-nowrap px-5 py-3 text-sm ${dateIsDue(equipment.nextServiceDate) ? "font-semibold text-red-600" : "text-slate-700"
+                        className={`whitespace-nowrap px-5 py-3 text-sm ${equipment.needsService && dateIsDue(equipment.nextServiceDate) ? "font-semibold text-red-600" : "text-slate-700"
                           }`}
                       >
-                        {equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "N/A"}
+                        {equipment.needsService && equipment.nextServiceDate ? format(equipment.nextServiceDate, "PP") : "—"}
                       </td>
 
                       <td className="whitespace-nowrap px-5 py-3">

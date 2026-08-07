@@ -9,6 +9,7 @@ import {
     ArchiveBoxIcon,
     CreditCardIcon,
     CurrencyDollarIcon,
+    ChatBubbleLeftRightIcon,
     ClipboardDocumentCheckIcon,
     DocumentTextIcon,
     BuildingStorefrontIcon,
@@ -18,6 +19,7 @@ import {
     ArrowUpIcon,
     XMarkIcon,
     BookmarkIcon,
+    WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import { BiPurchaseTagAlt } from 'react-icons/bi';
 import { httpsCallable } from 'firebase/functions';
@@ -27,6 +29,7 @@ import { Context } from "../../../context/AuthContext";
 import { db, functions } from '../../../utils/config';
 import { allNav } from '../../../navigation/allNav';
 import { COMPANY_PINNED_CATEGORY, DEFAULT_COMPANY_CATEGORY_ORDER } from '../../../navigation';
+import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 
 const SettingsLink = ({ to, icon, title, description, accent = "default" }) => {
     const isAccounting = accent === "accounting";
@@ -100,6 +103,15 @@ const featureFlagsEnabledForItem = (item, featureFlagsLoaded, isFeatureEnabled) 
     ].filter(Boolean);
 
     return featureFlagIds.length === 0 || (featureFlagsLoaded && featureFlagIds.every((featureFlagId) => isFeatureEnabled(featureFlagId)));
+};
+
+const permissionsEnabledForItem = (item, canPermission) => {
+    const permissionIds = [
+        item.permissionId,
+        ...(Array.isArray(item.permissionIds) ? item.permissionIds : []),
+    ].filter(Boolean);
+
+    return permissionIds.length === 0 || permissionIds.some((permissionId) => canPermission(permissionId));
 };
 
 const getBookmarkCandidateItems = ({
@@ -380,7 +392,10 @@ const CompanySettings = () => {
     const {
         user,
         recentlySelectedCompany,
+        featureFlagsLoaded,
+        isFeatureEnabled,
     } = useContext(Context);
+    const { can } = useCompanyPermissions();
     const [selectedCompany, setSelectedCompany] = useState(null);
     const [companyLoading, setCompanyLoading] = useState(false);
 
@@ -434,7 +449,8 @@ const CompanySettings = () => {
                 to: '/company/setup-guide',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Setup Guide',
-                description: 'Walk through setup from customers to service, routing, agreements, and billing.'
+                description: 'Walk through setup from customers to service, routing, agreements, and billing.',
+                permissionId: '900',
             },
             {
                 to: '/company/selector',
@@ -446,81 +462,144 @@ const CompanySettings = () => {
                 to: '/company/settings/subscriptions',
                 icon: <CreditCardIcon className="w-6 h-6" />,
                 title: 'Manage Subscriptions',
-                description: 'Upgrade, downgrade, or cancel your subscription plans.'
+                description: 'Upgrade, downgrade, or cancel your subscription plans.',
+                permissionId: '890',
             }
         ],
-        company: [
+        configuration: [
             {
                 to: '/Company/CompanyInfo',
                 icon: <BuildingOffice2Icon className="w-6 h-6" />,
                 title: 'Company Information',
-                description: 'Update your company\'s name, address, and other details.'
+                description: 'Update your company\'s name, address, and other details.',
+                permissionId: '810',
             },
             {
                 to: '/Company/TaskGroups',
                 icon: <ArchiveBoxIcon className="w-6 h-6" />,
                 title: 'Task Groups',
-                description: 'Manage templates for recurring job tasks.'
+                description: 'Manage templates for recurring job tasks.',
+                permissionId: '820',
             },
             {
                 to: '/company/settings/job-templates',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Job Templates',
-                description: 'Review reusable job templates shared with iOS.'
+                description: 'Review reusable job templates shared with iOS.',
+                permissionId: '820',
             },
             {
                 to: '/Company/EmailConfiguration',
                 icon: <EnvelopeIcon className="w-6 h-6" />,
                 title: 'Email Configuration',
-                description: 'Configure your company\'s email settings.'
+                description: 'Configure your company\'s email settings.',
+                permissionId: '830',
+            },
+            {
+                to: '/company/settings/text-templates',
+                icon: <ChatBubbleLeftRightIcon className="w-6 h-6" />,
+                title: 'Text Templates',
+                description: 'Create SMS draft templates for route technicians.',
+                permissionId: '900',
             },
             {
                 to: '/company/readingsAndDosages',
                 icon: <BeakerIcon className="w-6 h-6" />,
                 title: 'Reading and Dosages',
-                description: 'Set up measurement units and chemical dosages.'
+                description: 'Set up measurement units and chemical dosages.',
+                permissionId: '840',
             },
             {
                 to: '/company/settings/tester-strips',
                 icon: <BeakerIcon className="w-6 h-6" />,
                 title: 'Tester Strips',
-                description: 'Enable strip profiles and map strip readings to company reading templates.'
+                description: 'Enable strip profiles and map strip readings to company reading templates.',
+                permissionId: '900',
             },
             {
                 to: '/company/settings/stop-data',
                 icon: <BeakerIcon className="w-6 h-6" />,
                 title: 'Stop Data',
-                description: 'Review captured readings, dosages, observations, and service stop details.'
+                description: 'Review captured readings, dosages, observations, and service stop details.',
+                permissionId: '840',
             },
             {
                 to: '/Company/Roles',
                 icon: <UsersIcon className="w-6 h-6" />,
                 title: 'User Roles',
-                description: 'Define and manage roles and permissions for your team.'
+                description: 'Define and manage roles and permissions for your team.',
+                permissionId: '860',
             },
             {
                 to: '/company/settings/onboarding-checklist',
                 icon: <ClipboardDocumentCheckIcon className="w-6 h-6" />,
-                title: 'Onboarding Checklist',
-                description: 'Manage the default setup list copied onto new company users.'
+                title: 'Onboarding Checklists',
+                description: 'Manage the default setup list copied onto new company users.',
+                permissionId: '900',
             },
+            {
+                to: '/company/settings/onboarding-checklist#customer-pipeline',
+                icon: <ClipboardDocumentCheckIcon className="w-6 h-6" />,
+                title: 'Customer Onboarding Pipeline',
+                description: 'Manage customer setup stages, lead sources, and pipeline follow-through defaults.',
+                permissionIds: ['900', '634'],
+            },
+        ],
+        uploads: [
+            {
+                to: '/company/migration/customer-export-import',
+                icon: <DocumentTextIcon className="w-6 h-6" />,
+                title: 'Customer Export Upload',
+                description: 'Upload the old customer export workbook and import customer migration records.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+            {
+                to: '/company/migration/equipment-import',
+                icon: <WrenchScrewdriverIcon className="w-6 h-6" />,
+                title: 'Equipment Upload',
+                description: 'Import equipment records and connect them with customers, pools, and service locations.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+            {
+                to: '/company/migration/skimmer-previous-dosages-upload',
+                icon: <BeakerIcon className="w-6 h-6" />,
+                title: 'Service History Upload',
+                description: 'Upload previous service readings and dosage history for migrated customers.',
+                permissionId: '910',
+                featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
+            },
+            {
+                to: '/company/migration/performance-history-import',
+                icon: <ClipboardDocumentCheckIcon className="w-6 h-6" />,
+                title: 'Performance History Upload (Murdock Only)',
+                description: 'Import technician performance history for supported migration workflows.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+        ].filter((item) => featureFlagsEnabledForItem(item, featureFlagsLoaded, isFeatureEnabled)),
+        other: [
             {
                 to: '/company/vendors',
                 icon: <BuildingStorefrontIcon className="w-6 h-6" />,
                 title: 'Vendors',
-                description: 'Manage vendors used for purchases, receipts, parts, and company records.'
+                description: 'Manage vendors used for purchases, receipts, parts, and company records.',
+                permissionId: '600',
             },
             {
                 to: '/company/fleet',
                 icon: <TruckIcon className="w-6 h-6" />,
                 title: 'Fleet',
-                description: 'Manage company vehicles used for routing, reports, and route assignments.'
+                description: 'Manage company vehicles used for routing, reports, and route assignments.',
+                permissionId: '290',
             },
             {
                 to: '/company/reports',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Reports',
-                description: 'Run Reports for all aspects of your company'
+                description: 'Run Reports for all aspects of your company',
+                permissionId: '870',
             }
         ],
         billing: [
@@ -529,25 +608,29 @@ const CompanySettings = () => {
                 icon: <CurrencyDollarIcon className="w-6 h-6" />,
                 title: 'Switch to Accounting Mode',
                 description: 'Open the accountant workspace for AR, reconciliation, payouts, tax, and accounting notes.',
+                permissionId: '400',
                 accent: 'accounting'
             },
             ...(ownerCanManageStripe ? [{
                 to: '/company/settings/stripe-billing',
                 icon: <CreditCardIcon className="w-6 h-6" />,
                 title: 'Stripe Billing Snapshot',
-                description: 'Review connected account setup, webhook sync, platform fee, and recent payouts.'
+                description: 'Review connected account setup, webhook sync, platform fee, and recent payouts.',
+                permissionId: '400',
             }] : []),
             {
                 to: '/Company/Items',
                 icon: <ArchiveBoxIcon className="w-6 h-6" />,
                 title: 'Database Items',
-                description: 'Manage your company\'s internal database of items.'
+                description: 'Manage your company\'s internal database of items.',
+                permissionId: '850',
             },
             {
                 to: '/company/sales/catalog-items',
                 icon: <BiPurchaseTagAlt className="w-6 h-6" />,
                 title: 'Sales Catalog Items',
-                description: 'Manage billable services, recurring charges, materials, fees, and discounts.'
+                description: 'Manage billable services, recurring charges, materials, fees, and discounts.',
+                permissionId: '400',
             },
             // Update 3.1
             // {
@@ -560,16 +643,25 @@ const CompanySettings = () => {
                 to: '/company/settings/terms-templates',
                 icon: <DocumentTextIcon className="w-6 h-6" />,
                 title: 'Terms Templates',
-                description: 'Create and manage templates for your terms and conditions.'
+                description: 'Create and manage templates for your terms and conditions.',
+                permissionId: '880',
             },
             {
                 to: '/company/settings/payroll-setup',
                 icon: <CurrencyDollarIcon className="w-6 h-6" />,
                 title: 'Payroll Setup',
-                description: 'Configure stop pay, technician rates, and pay rules.'
+                description: 'Configure stop pay, technician rates, and pay rules.',
+                permissionId: '420',
             }
         ]
     };
+
+    const visibleSettings = Object.fromEntries(
+        Object.entries(settings).map(([section, items]) => [
+            section,
+            items.filter((item) => permissionsEnabledForItem(item, can)),
+        ])
+    );
     async function runFunction(e) {
         e.preventDefault()
         try {
@@ -604,9 +696,13 @@ const CompanySettings = () => {
                     <p className="text-gray-600 mt-1">Manage your company's information, users, billing, and integrations.</p>
                 </div>
 
-                <SettingsSection title="General" items={settings.general} />
-                <SettingsSection title="Company" items={settings.company} />
-                <SettingsSection title="Billing & Payroll" items={settings.billing} />
+                {visibleSettings.general.length > 0 && <SettingsSection title="General" items={visibleSettings.general} />}
+                {visibleSettings.configuration.length > 0 && <SettingsSection title="Configuration" items={visibleSettings.configuration} />}
+                {visibleSettings.uploads.length > 0 && (
+                    <SettingsSection title="Data Uploads" items={visibleSettings.uploads} />
+                )}
+                {visibleSettings.other.length > 0 && <SettingsSection title="Other" items={visibleSettings.other} />}
+                {visibleSettings.billing.length > 0 && <SettingsSection title="Billing & Payroll" items={visibleSettings.billing} />}
 
                 <NavigationOrderSettings />
 

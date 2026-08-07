@@ -12,6 +12,7 @@ import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import { appConfirm } from "../../../utils/appDialog";
+import CustomerPipelineSettingsPanel from "./CustomerPipelineSettingsPanel";
 
 const DEFAULT_ONBOARDING_TEMPLATE_ITEMS = [
   {
@@ -216,8 +217,8 @@ const OnboardingChecklistSettings = () => {
               <ArrowLeftIcon className="h-4 w-4" />
               Back to Settings
             </Link>
-            <h1 className="text-3xl font-bold tracking-tight text-slate-950">Onboarding Checklist</h1>
-            <p className="mt-1 text-sm text-slate-500">Customize the default checklist copied onto new company users.</p>
+            <h1 className="text-3xl font-bold tracking-tight text-slate-950">Onboarding Checklists</h1>
+            <p className="mt-1 text-sm text-slate-500">Manage user onboarding and customer onboarding pipeline defaults in one place.</p>
           </div>
           <button
             type="button"
@@ -226,13 +227,20 @@ const OnboardingChecklistSettings = () => {
             className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <CheckIcon className="h-4 w-4" />
-            Add Defaults
+            Add User Defaults
           </button>
         </header>
 
+        <section id="user-onboarding" className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <h2 className="text-xl font-semibold text-slate-950">User Onboarding Checklist</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            These items are copied onto new company users so managers can track access, profile, permissions, payroll, and training setup.
+          </p>
+        </section>
+
         <section className="grid gap-6 lg:grid-cols-[minmax(320px,420px)_minmax(0,1fr)]">
           <form onSubmit={saveItem} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="text-lg font-semibold text-slate-950">{draft.id ? "Edit Item" : "New Item"}</h2>
+            <h2 className="text-lg font-semibold text-slate-950">{draft.id ? "Edit User Item" : "New User Item"}</h2>
             <div className="mt-4 space-y-4">
               <label className="block space-y-1.5">
                 <span className="text-sm font-semibold text-slate-700">Name</span>
@@ -259,23 +267,23 @@ const OnboardingChecklistSettings = () => {
               )}
               <button type="submit" disabled={isSaving} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60">
                 <PlusIcon className="h-4 w-4" />
-                {isSaving ? "Saving..." : "Save Item"}
+                {isSaving ? "Saving..." : "Save User Item"}
               </button>
             </div>
           </form>
 
           <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4">
-              <h2 className="text-lg font-semibold text-slate-950">Template Items</h2>
-              <p className="mt-1 text-sm text-slate-500">{sortedItems.length} item{sortedItems.length === 1 ? "" : "s"} in the company template.</p>
+              <h2 className="text-lg font-semibold text-slate-950">User Template Items</h2>
+              <p className="mt-1 text-sm text-slate-500">{sortedItems.length} item{sortedItems.length === 1 ? "" : "s"} in the user onboarding template.</p>
             </div>
             {isLoading ? (
-              <p className="p-5 text-sm text-slate-500">Loading onboarding checklist...</p>
+              <p className="p-5 text-sm text-slate-500">Loading user onboarding checklist...</p>
             ) : sortedItems.length === 0 ? (
               <div className="p-5">
                 <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                  <p className="text-sm font-semibold text-slate-800">No onboarding items yet</p>
-                  <p className="mt-1 text-sm text-slate-500">Add defaults or create the first checklist item.</p>
+                  <p className="text-sm font-semibold text-slate-800">No user onboarding items yet</p>
+                  <p className="mt-1 text-sm text-slate-500">Add defaults or create the first user checklist item.</p>
                 </div>
               </div>
             ) : (
@@ -305,6 +313,10 @@ const OnboardingChecklistSettings = () => {
               </div>
             )}
           </section>
+        </section>
+
+        <section className="pt-2">
+          <CustomerPipelineSettingsPanel companyId={recentlySelectedCompany} />
         </section>
       </div>
     </div>

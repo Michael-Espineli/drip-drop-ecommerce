@@ -1,9 +1,9 @@
 const webImplementedPermissionIds = new Set([
   "0", "10", "12", "14", "16", "20", "22", "23", "24", "26", "27", "30", "32", "34", "36",
   "40", "42", "44", "50", "52", "54", "60", "62", "64", "66",
-  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", "400",
-  "600", "610", "612", "614", "620", "622", "800", "810", "820", "822", "824", "826", "830",
-  "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890"
+  "210", "230", "232", "240", "242", "244", "246", "260", "262", "264", "280", "290", "292", "294", "296", "400", "420",
+  "600", "610", "612", "614", "620", "622", "630", "632", "634", "800", "810", "820", "822", "824", "826", "830",
+  "840", "850", "852", "854", "856", "860", "864", "870", "880", "882", "884", "886", "890", "900", "910"
 ]);
 
 const permissionCatalog = [
@@ -66,6 +66,7 @@ const permissionCatalog = [
   { id: "412", name: "Create Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "414", name: "Update Finished Jobs", description: "", category: "Finance", ios: false, web: false },
   { id: "416", name: "Delete Finished Jobs", description: "", category: "Finance", ios: false, web: false },
+  { id: "420", name: "Payroll Information", description: "Can view payroll setup, pay statements, and technician pay line items.", category: "Finance", ios: true, web: false },
   { id: "600", name: "Marketing", description: "", category: "Marketing", ios: false, web: false },
   { id: "610", name: "Leads", description: "", category: "Marketing", ios: false, web: false },
   { id: "612", name: "Respond Leads", description: "", category: "Marketing", ios: false, web: false },
@@ -75,6 +76,9 @@ const permissionCatalog = [
   { id: "622", name: "Respond Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: "624", name: "Update Estimates", description: "", category: "Marketing", ios: false, web: false },
   { id: "626", name: "Delete Estimates", description: "", category: "Marketing", ios: false, web: false },
+  { id: "630", name: "Pipeline", description: "Can view the customer onboarding pipeline.", category: "Marketing", ios: false, web: false },
+  { id: "632", name: "Create Pipeline", description: "Can sync leads and customers into the pipeline and add manual pipeline rows.", category: "Marketing", ios: false, web: false },
+  { id: "634", name: "Update Pipeline", description: "Can update pipeline notes, manual signoffs, statuses, lead sources, and pipeline settings.", category: "Marketing", ios: false, web: false },
   { id: "800", name: "Settings", description: "", category: "Settings", ios: true, web: false },
   { id: "810", name: "Company Information", description: "", category: "Settings", ios: true, web: false },
   { id: "812", name: "Create Company Information", description: "", category: "Settings", ios: false, web: false },
@@ -111,7 +115,9 @@ const permissionCatalog = [
   { id: "890", name: "Manage Subscriptions", description: "", category: "Settings", ios: true, web: false },
   { id: "892", name: "Create Manage Subscriptions", description: "", category: "Settings", ios: false, web: false },
   { id: "894", name: "Update Manage Subscriptions", description: "", category: "Settings", ios: false, web: false },
-  { id: "896", name: "Delete Manage Subscriptions", description: "", category: "Settings", ios: false, web: false }
+  { id: "896", name: "Delete Manage Subscriptions", description: "", category: "Settings", ios: false, web: false },
+  { id: "900", name: "General Company Configuration", description: "Can manage general company setup and configuration tools.", category: "Settings", ios: false, web: false },
+  { id: "910", name: "Data Uploads", description: "Can access company data import and upload tools.", category: "Settings", ios: false, web: false }
 ];
 
 export const companyPermissions = permissionCatalog.map(permission => ({

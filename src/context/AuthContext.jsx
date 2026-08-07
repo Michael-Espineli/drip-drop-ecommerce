@@ -5,6 +5,8 @@ import { getDoc, doc, getDocs, where, query, collection, onSnapshot } from "fire
 import { roleHasCompanyPermission } from "../utils/companyPermissionAccess";
 import { normalizeEmail } from "../utils/email";
 import { isCompanyAccessInactive } from "../utils/invites";
+import { FIREBASE_NETWORK_FALLBACK_MS, isFirebaseNetworkError } from "../utils/firebaseNetwork";
+import { normalizeCustomerTag } from "../utils/customerTags";
 
 export const Context = createContext();
 
@@ -19,6 +21,36 @@ const getStripeConnectedAccountId = (companyData = {}) => (
 const getCompanyDisplayName = (companyData = {}) => (
     String(companyData.name || companyData.companyName || companyData.displayName || companyData.businessName || "").trim() || null
 );
+
+const FEATURE_FLAGS_CACHE_KEY = "dripdrop.featureFlags.v1";
+const CUSTOMER_REGION_FILTER_PREFIX = "dripdrop.customerRegionFilter";
+
+const readCachedFeatureFlags = () => {
+    if (typeof window === "undefined") return {};
+
+    try {
+        const rawFlags = window.localStorage.getItem(FEATURE_FLAGS_CACHE_KEY);
+        const parsedFlags = rawFlags ? JSON.parse(rawFlags) : {};
+        return parsedFlags && typeof parsedFlags === "object" && !Array.isArray(parsedFlags)
+            ? parsedFlags
+            : {};
+    } catch (error) {
+        console.warn("Unable to read cached feature flags:", error);
+        return {};
+    }
+};
+
+const writeCachedFeatureFlags = (featureFlags) => {
+    if (typeof window === "undefined") return;
+
+    try {
+        window.localStorage.setItem(FEATURE_FLAGS_CACHE_KEY, JSON.stringify(featureFlags));
+    } catch (error) {
+        console.warn("Unable to cache feature flags:", error);
+    }
+};
+
+const hasCachedFeatureFlags = (featureFlags = {}) => Object.keys(featureFlags).length > 0;
 
 const hydrateInviteCompanyName = async (invite) => {
     const companyId = String(invite?.companyId || invite?.linkedCompanyId || "").trim();
@@ -58,6 +90,7 @@ export function AuthContext({ children }) {
     const [companyRole, setCompanyRole] = useState(null);
     const [companyRoleLoading, setCompanyRoleLoading] = useState(false);
     const [companyRoleLoaded, setCompanyRoleLoaded] = useState(false);
+    const [selectedCustomerRegionTag, setSelectedCustomerRegionTagState] = useState("");
 
     // Subscription Information
     const [companySubscription, setCompanySubscription] = useState(null);
@@ -66,8 +99,9 @@ export function AuthContext({ children }) {
     const [pendingInvite, setPendingInvite] = useState(null);
 
     // Feature Flags
-    const [featureFlags, setFeatureFlags] = useState({});
-    const [featureFlagsLoaded, setFeatureFlagsLoaded] = useState(false);
+    const [featureFlags, setFeatureFlags] = useState(() => readCachedFeatureFlags());
+    const [featureFlagsLoaded, setFeatureFlagsLoaded] = useState(() => hasCachedFeatureFlags(readCachedFeatureFlags()));
+    const [featureFlagsOfflineFallback, setFeatureFlagsOfflineFallback] = useState(false);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -151,6 +185,7 @@ export function AuthContext({ children }) {
                 setPendingInvite(null);
                 setFeatureFlags({});
                 setFeatureFlagsLoaded(false);
+                setFeatureFlagsOfflineFallback(false);
             }
             setLoading(false);
         });
@@ -162,10 +197,28 @@ export function AuthContext({ children }) {
         if (!user) {
             setFeatureFlags({});
             setFeatureFlagsLoaded(false);
+            setFeatureFlagsOfflineFallback(false);
             return undefined;
         }
 
-        setFeatureFlagsLoaded(false);
+        const cachedFlags = readCachedFeatureFlags();
+        let featureFlagsResolved = false;
+
+        setFeatureFlags((currentFlags) => hasCachedFeatureFlags(cachedFlags) ? cachedFlags : currentFlags);
+        setFeatureFlagsLoaded(hasCachedFeatureFlags(cachedFlags));
+        setFeatureFlagsOfflineFallback(false);
+
+        const fallbackTimer = window.setTimeout(() => {
+            if (featureFlagsResolved) return;
+
+            const latestCachedFlags = readCachedFeatureFlags();
+            if (hasCachedFeatureFlags(latestCachedFlags)) {
+                setFeatureFlags(latestCachedFlags);
+            }
+
+            setFeatureFlagsOfflineFallback(true);
+            setFeatureFlagsLoaded(true);
+        }, FIREBASE_NETWORK_FALLBACK_MS);
 
         const unsubscribe = onSnapshot(
             collection(db, "featureFlags"),
@@ -178,18 +231,39 @@ export function AuthContext({ children }) {
 
                     return acc;
                 }, {});
+                const waitingForServerFlags = snapshot.metadata?.fromCache && !hasCachedFeatureFlags(nextFeatureFlags);
 
-                setFeatureFlags(nextFeatureFlags);
+                if (!waitingForServerFlags) {
+                    featureFlagsResolved = true;
+                    window.clearTimeout(fallbackTimer);
+                    writeCachedFeatureFlags(nextFeatureFlags);
+                }
+
+                setFeatureFlags((currentFlags) => (
+                    waitingForServerFlags && hasCachedFeatureFlags(currentFlags)
+                        ? currentFlags
+                        : nextFeatureFlags
+                ));
                 setFeatureFlagsLoaded(true);
+                setFeatureFlagsOfflineFallback(waitingForServerFlags);
             },
             (error) => {
+                featureFlagsResolved = true;
+                window.clearTimeout(fallbackTimer);
+
                 console.error("Error loading feature flags:", error);
-                setFeatureFlags({});
+                const cachedFlags = readCachedFeatureFlags();
+                setFeatureFlags(cachedFlags);
                 setFeatureFlagsLoaded(true);
+                setFeatureFlagsOfflineFallback(isFirebaseNetworkError(error));
             }
         );
 
-        return unsubscribe;
+        return () => {
+            featureFlagsResolved = true;
+            window.clearTimeout(fallbackTimer);
+            unsubscribe();
+        };
     }, [user]);
 
     useEffect(() => {
@@ -285,13 +359,51 @@ export function AuthContext({ children }) {
         };
     }, [user, accountType, recentlySelectedCompany, dataBaseUser]);
 
+    useEffect(() => {
+        if (!recentlySelectedCompany || typeof window === "undefined") {
+            setSelectedCustomerRegionTagState("");
+            return;
+        }
+
+        try {
+            setSelectedCustomerRegionTagState(
+                normalizeCustomerTag(window.localStorage.getItem(`${CUSTOMER_REGION_FILTER_PREFIX}.${recentlySelectedCompany}`))
+            );
+        } catch (error) {
+            console.warn("Unable to read customer region filter:", error);
+            setSelectedCustomerRegionTagState("");
+        }
+    }, [recentlySelectedCompany]);
+
+    const setSelectedCustomerRegionTag = useCallback((tag) => {
+        const normalizedTag = normalizeCustomerTag(tag);
+        setSelectedCustomerRegionTagState(normalizedTag);
+
+        if (!recentlySelectedCompany || typeof window === "undefined") return;
+
+        try {
+            const key = `${CUSTOMER_REGION_FILTER_PREFIX}.${recentlySelectedCompany}`;
+            if (normalizedTag) {
+                window.localStorage.setItem(key, normalizedTag);
+            } else {
+                window.localStorage.removeItem(key);
+            }
+        } catch (error) {
+            console.warn("Unable to store customer region filter:", error);
+        }
+    }, [recentlySelectedCompany]);
+
     const hasCompanyPermission = useCallback((permissionId) => {
         return roleHasCompanyPermission(companyRole, permissionId);
     }, [companyRole]);
 
     const isFeatureEnabled = useCallback((featureFlagId) => {
+        if (featureFlagsOfflineFallback && !featureFlags[featureFlagId]) {
+            return true;
+        }
+
         return Boolean(featureFlags[featureFlagId]?.enabled);
-    }, [featureFlags]);
+    }, [featureFlags, featureFlagsOfflineFallback]);
 
     const values = {
         user,
@@ -318,8 +430,11 @@ export function AuthContext({ children }) {
         companyRoleLoading,
         companyRoleLoaded,
         hasCompanyPermission,
+        selectedCustomerRegionTag,
+        setSelectedCustomerRegionTag,
         featureFlags,
         featureFlagsLoaded,
+        featureFlagsOfflineFallback,
         isFeatureEnabled,
         companySubscription,
         setCompanySubscription,

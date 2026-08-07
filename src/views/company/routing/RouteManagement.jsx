@@ -13,6 +13,7 @@ import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { generateServiceAgreementsFromRoutes } from "../../../utils/sales/routeAgreementGeneration";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const daysOfWeek = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -184,10 +185,18 @@ const RouteManagement = () => {
 
         setAllRoutes(routesSnapshot.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() })));
         setTechnicians(
-          usersSnapshot.docs
-            .map((docSnap) => ({ id: docSnap.id, value: docSnap.data().userId || docSnap.id, label: docSnap.data().userName || docSnap.id, ...docSnap.data() }))
+          sortCompanyUsersByName(usersSnapshot.docs
+            .map((docSnap) => {
+              const data = docSnap.data();
+              return {
+                id: docSnap.id,
+                value: data.userId || docSnap.id,
+                label: getCompanyUserDisplayName(data, docSnap.id),
+                ...data,
+              };
+            })
             .filter((user) => String(user.status || "Active").toLowerCase() === "active")
-            .sort((a, b) => a.label.localeCompare(b.label))
+          )
         );
       } catch (error) {
         console.error("Error fetching planned routes:", error);

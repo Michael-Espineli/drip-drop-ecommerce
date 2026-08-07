@@ -2,7 +2,7 @@ import React from 'react';
 import CompanyChatInitiationView from '../../components/chat/CompanyChatInitiationView';
 
 const ChatInitiation = () => (
-  <CompanyChatInitiationView backPath="/companies-chat" />
+  <CompanyChatInitiationView backPath="/company/messages" />
 );
 
 export default ChatInitiation;

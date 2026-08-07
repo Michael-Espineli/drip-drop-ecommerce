@@ -1098,6 +1098,16 @@ const SalesAgreementDetail = () => {
     return '';
   };
 
+  const linkedLeadIdForAgreement = (targetAgreement = agreement) => {
+    if (!targetAgreement) return '';
+    if (targetAgreement.leadId) return targetAgreement.leadId;
+    if (targetAgreement.homeownerServiceRequestId) return targetAgreement.homeownerServiceRequestId;
+    if (normalizeStatus(targetAgreement.sourceType) === 'lead' && targetAgreement.sourceId) {
+      return targetAgreement.sourceId;
+    }
+    return '';
+  };
+
   const syncLinkedJobForAcceptedAgreement = async () => {
     const linkedJobId = linkedJobIdForAgreement();
     const companyId = agreement?.companyId || recentlySelectedCompany;
@@ -1125,6 +1135,28 @@ const SalesAgreementDetail = () => {
       await updateDoc(jobRef, updatePayload);
     } catch (syncError) {
       console.warn('Unable to sync linked job after agreement acceptance', syncError);
+    }
+  };
+
+  const syncLinkedLeadForAcceptedAgreement = async () => {
+    const linkedLeadId = linkedLeadIdForAgreement();
+    if (!linkedLeadId) return;
+
+    try {
+      await updateDoc(doc(db, 'homeownerServiceRequests', linkedLeadId), {
+        status: 'Completed',
+        leadStatus: 'Completed',
+        serviceAgreementId: agreement.id,
+        serviceAgreementTitle: agreement.title || 'Service Agreement',
+        serviceAgreementStatus: SalesAgreementStatus.accepted,
+        serviceAgreementAcceptedAt: serverTimestamp(),
+        dateCompleted: serverTimestamp(),
+        lostReason: '',
+        cancelReason: '',
+        updatedAt: serverTimestamp(),
+      });
+    } catch (syncError) {
+      console.warn('Unable to sync linked lead after agreement acceptance', syncError);
     }
   };
 
@@ -1857,6 +1889,7 @@ const SalesAgreementDetail = () => {
       });
 
       await syncLinkedJobForAcceptedAgreement();
+      await syncLinkedLeadForAcceptedAgreement();
 
       toast.success(billingSubscriptionDraft.customerCanPayImmediately
         ? 'Agreement accepted and billing subscription is ready for payment setup.'

@@ -15,15 +15,23 @@ import { MdNotificationsActive, MdNotificationsOff, MdOutlineSchedule } from "re
 import { db } from "../../utils/config";
 import { Context } from "../../context/AuthContext";
 import {
+  getConversationLinkLabel,
+  getConversationLinkRoute,
+  normalizeConversationLink,
+} from "../../utils/chatMessaging";
+import { compareCompanyUsersByName, getCompanyUserDisplayName, sortCompanyUsersByName } from "../../utils/companyUsers";
+import {
   ALERT_RELATED_ENTITY_TYPES,
   ALERT_SEVERITY,
   ALERT_STATUS,
+  alertBelongsToCompany,
   alertDisplayTime,
   alertIsScheduled,
   alertIsUnread,
   alertNeedsAttention,
+  attachAlertNotificationSource,
   compareAlertsFresh,
-  normalizeAlertNotification,
+  mergeAlertNotifications,
 } from "../../utils/models/AlertNotification";
 import { formatShortDateTime } from "../../utils/models/TodoItem";
 
@@ -110,7 +118,7 @@ const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
 
 const Alerts = () => {
   const { recentlySelectedCompany, recentlySelectedCompanyName, user, name } = useContext(Context);
-  const [alerts, setAlerts] = useState([]);
+  const [alertSources, setAlertSources] = useState({ company: [], personal: [] });
   const [companyUsers, setCompanyUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -120,7 +128,7 @@ const Alerts = () => {
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
-      setAlerts([]);
+      setAlertSources({ company: [], personal: [] });
       setCompanyUsers([]);
       setLoading(false);
       return undefined;
@@ -134,7 +142,10 @@ const Alerts = () => {
     const unsubscribeAlerts = onSnapshot(
       alertsRef,
       (snapshot) => {
-        setAlerts(snapshot.docs.map(normalizeAlertNotification));
+        setAlertSources((current) => ({
+          ...current,
+          company: snapshot.docs.map((alertDoc) => attachAlertNotificationSource(alertDoc, "company")),
+        }));
         setLoading(false);
       },
       (error) => {
@@ -144,13 +155,30 @@ const Alerts = () => {
       }
     );
 
+    const unsubscribePersonalAlerts = user?.uid ? onSnapshot(
+      collection(db, "users", user.uid, "alerts"),
+      (snapshot) => {
+        const personalAlerts = snapshot.docs
+          .map((alertDoc) => attachAlertNotificationSource(alertDoc, "personal"))
+          .filter((alert) => alertBelongsToCompany(alert, recentlySelectedCompany));
+
+        setAlertSources((current) => ({
+          ...current,
+          personal: personalAlerts,
+        }));
+      },
+      (error) => {
+        console.error("Error loading personal alerts:", error);
+      }
+    ) : () => {};
+
     const unsubscribeUsers = onSnapshot(
       usersRef,
       (snapshot) => {
-        setCompanyUsers(snapshot.docs.map((userDoc) => ({
+        setCompanyUsers(sortCompanyUsersByName(snapshot.docs.map((userDoc) => ({
           id: userDoc.id,
           ...userDoc.data(),
-        })));
+        }))));
       },
       (error) => {
         console.error("Error loading company users:", error);
@@ -159,18 +187,26 @@ const Alerts = () => {
 
     return () => {
       unsubscribeAlerts();
+      unsubscribePersonalAlerts();
       unsubscribeUsers();
     };
-  }, [recentlySelectedCompany]);
+  }, [recentlySelectedCompany, user]);
+
+  const alerts = useMemo(() => (
+    mergeAlertNotifications([
+      ...alertSources.personal,
+      ...alertSources.company,
+    ]).filter((alert) => alertBelongsToCompany(alert, recentlySelectedCompany))
+  ), [alertSources, recentlySelectedCompany]);
 
   const companyUserOptions = useMemo(() => companyUsers
     .map((companyUser) => ({
       id: companyUser.id,
       userId: companyUser.userId || companyUser.id,
-      userName: companyUser.userName || companyUser.name || companyUser.email || "Company user",
+      userName: getCompanyUserDisplayName(companyUser),
       roleName: companyUser.roleName || "",
     }))
-    .sort((left, right) => left.userName.localeCompare(right.userName)), [companyUsers]);
+    .sort(compareCompanyUsersByName), [companyUsers]);
 
   const stats = useMemo(() => ({
     active: alerts.filter((alert) => alertNeedsAttention(alert)).length,
@@ -296,13 +332,25 @@ const Alerts = () => {
     if (!recentlySelectedCompany) return;
 
     try {
-      await updateDoc(doc(db, "companies", recentlySelectedCompany, "alerts", alert.id), {
+      const notificationSources = Array.isArray(alert.notificationSources) && alert.notificationSources.length > 0
+        ? alert.notificationSources
+        : [{ scope: "company", id: alert.id }];
+      const updatePayload = {
         status,
         read: status === ALERT_STATUS.read,
         readAt: status === ALERT_STATUS.read ? serverTimestamp() : null,
         archivedAt: status === ALERT_STATUS.archived ? serverTimestamp() : null,
         updatedAt: serverTimestamp(),
+      };
+      const updates = notificationSources.map((source) => {
+        const alertRef = source.scope === "personal" && user?.uid
+          ? doc(db, "users", user.uid, "alerts", source.id)
+          : doc(db, "companies", recentlySelectedCompany, "alerts", source.id);
+
+        return updateDoc(alertRef, updatePayload);
       });
+
+      await Promise.all(updates);
     } catch (error) {
       console.error("Failed to update alert:", error);
       toast.error("Failed to update alert.");
@@ -310,9 +358,28 @@ const Alerts = () => {
   };
 
   const alertHref = (alert) => {
+    if (alert.share || alert.relatedEntity?.type) {
+      const link = normalizeConversationLink({
+        ...(alert.share || {}),
+        type: alert.share?.type || alert.relatedEntity?.type,
+        recordId: alert.share?.recordId || alert.share?.id || alert.relatedEntity?.id,
+        title: alert.share?.title || alert.relatedEntity?.label,
+        companyId: alert.share?.companyId || alert.relatedEntity?.companyId || alert.companyId,
+        webPath: alert.share?.webPath || alert.relatedEntity?.webPath || "",
+      });
+      const route = getConversationLinkRoute(link, "company");
+      if (route) return route;
+    }
     if (alert.route && alert.route.startsWith("/")) return alert.route;
     if (alert.source === "todoList" || alert.todoId) return "/company/todo-list";
     return "";
+  };
+
+  const alertRecordLabel = (alert) => {
+    const type = alert.share?.type || alert.relatedEntity?.type;
+    if (!type) return "";
+
+    return getConversationLinkLabel(type);
   };
 
   if (loading) {
@@ -326,9 +393,9 @@ const Alerts = () => {
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || "Selected company"}</p>
-              <h1 className="mt-2 text-3xl font-bold text-slate-950">Alerts and Notifications</h1>
+              <h1 className="mt-2 text-3xl font-bold text-slate-950">Notification Center</h1>
               <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                System alerts, todo reminders, scheduled notifications, and iOS-ready notification records.
+                System alerts, todo reminders, shared records, scheduled notifications, and iOS-ready notification records.
               </p>
             </div>
           </div>
@@ -541,7 +608,7 @@ const Alerts = () => {
                         <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
                           <span>{alert.assignedToName ? `Assigned to ${alert.assignedToName}` : "Team alert"}</span>
                           {alert.relatedEntity?.type && alert.relatedEntity?.id && (
-                            <span>{alert.relatedEntity.type}: {alert.relatedEntity.label || alert.relatedEntity.id}</span>
+                            <span>{alertRecordLabel(alert)}: {alert.relatedEntity.label || alert.relatedEntity.id}</span>
                           )}
                           {Array.isArray(alert.deliveryTargets) && alert.deliveryTargets.length > 0 && (
                             <span>{alert.deliveryTargets.join(" + ")}</span>

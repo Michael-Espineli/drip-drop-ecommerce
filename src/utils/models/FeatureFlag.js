@@ -1,6 +1,7 @@
 export const CONFIRM_USER_EMAIL_ON_INVITE_FEATURE_FLAG_ID = 'feature_flag_013';
 
 export const APP_LIVE_FEATURE_FLAG_ID = 'feature_flag_000';
+export const CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID = 'feature_flag_014';
 
 export class FeatureFlag {
   constructor({
@@ -39,12 +40,14 @@ export class FeatureFlag {
         4: 'Sales',
         5: 'Legacy email delivery flag',
         6: 'Payroll',
+        7: 'Marketing and Estimates',
         8: 'Migration',
         9: 'Skimmer previous dosages upload',
         10: 'Todo List',
         11: 'Alerts and Notifications',
         12: 'Turn on real emails',
         13: 'Confirm user email on invite',
+        14: 'Customer Area Filtering',
       }[index] || ''
     );
   }
@@ -59,12 +62,14 @@ export class FeatureFlag {
         4: 'Enables the Sales slice: dashboard, catalog items, service agreements, and sales billing workflows.',
         5: 'Unused. Real customer email delivery is controlled by feature_flag_012.',
         6: 'Enables Payroll and Payroll Setup under company Finance.',
+        7: 'Enables marketing and estimate workflows including leads, public profile, finished jobs, and estimates.',
         8: 'Enables migration tooling for moving company CRM data into Drip Drop.',
         9: 'Enables the Skimmer previous dosages Excel upload inside migration tooling.',
         10: 'Enables the web Todo List for team tasks, specific assignments, linked records, due dates, and reminders.',
         11: 'Enables the shared alerts and notifications framework for dashboard alerts and future iOS notification delivery.',
         12: 'When off, customer-facing emails are routed to the internal test inbox instead of homeowners.',
         13: 'When on, invited company users must verify their signup email before selecting and accessing a company.',
+        14: 'Enables customer area tags, the desktop area picker, user-level regional customer access, and area-aware customer/work filtering.',
       }[index] || ''
     );
   }

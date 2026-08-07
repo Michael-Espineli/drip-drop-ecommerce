@@ -10,6 +10,7 @@ export class EquipmentHO {
     currentPressure = 0,
     userId = "",
     customerName = "",
+    createdAt = null,
     dateInstalled = null,
     lastServiceDate = null,
     type = "",
@@ -39,6 +40,7 @@ export class EquipmentHO {
     this.currentPressure = currentPressure;
     this.userId = userId;
     this.customerName = customerName;
+    this.createdAt = createdAt;
     this.dateInstalled = dateInstalled;
     this.lastServiceDate = lastServiceDate;
     this.isActive = isActive;
@@ -70,6 +72,7 @@ export class EquipmentHO {
       currentPressure: this.currentPressure,
       userId: this.userId,
       customerName: this.customerName,
+      createdAt: this.createdAt,
       dateInstalled: this.dateInstalled,
       lastServiceDate: this.lastServiceDate,
       isActive: this.isActive,
@@ -105,6 +108,7 @@ export class EquipmentHO {
       currentPressure: data.currentPressure || 0,
       userId: data.userId || "",
       customerName: data.customerName || "",
+      createdAt: data.createdAt ? data.createdAt.toDate() : null,
       dateInstalled: data.dateInstalled ? data.dateInstalled.toDate() : null,
       lastServiceDate: data.lastServiceDate ? data.lastServiceDate.toDate() : null,
       type: data.type || data.category || "",

@@ -708,6 +708,8 @@ exports.submitPublicServiceRequestLead = onCall(publicLeadCallableOptions, async
       transaction.set(leadRef, removeUndefinedDeep({
         id: leadId,
         source: "Public",
+        leadSource: firstText(payload.leadSource, payload.marketingSource, payload.sourceName, "Website"),
+        marketingSource: firstText(payload.leadSource, payload.marketingSource, payload.sourceName, "Website"),
         sourceType: "publicNoAccount",
         requestOrigin: "publicNoAccount",
         publicLead: true,

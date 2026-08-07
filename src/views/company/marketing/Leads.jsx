@@ -1,27 +1,90 @@
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getFirestore, collection, query, where, onSnapshot } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext'; // Adjust path if necessary
 import { ClipLoader } from 'react-spinners';
-import { subDays, startOfDay } from 'date-fns';
 import toast from 'react-hot-toast';
-import { ClipboardDocumentIcon, UserPlusIcon } from '@heroicons/react/24/outline';
+import {
+    ArrowPathIcon,
+    CalendarDaysIcon,
+    CheckCircleIcon,
+    ClipboardDocumentIcon,
+    ClockIcon,
+    DocumentTextIcon,
+    NoSymbolIcon,
+    UserPlusIcon,
+} from '@heroicons/react/24/outline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { getLeadSourceLabel } from '../../../utils/customerPipeline';
+import { appConfirm } from '../../../utils/appDialog';
 
 // StatCard component for displaying header stats
-const StatCard = ({ title, count, icon, color }) => (
-    <div className="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+const StatCard = ({ title, count, Icon, color, selected, selectedClass, onClick }) => (
+    <button
+        type="button"
+        onClick={onClick}
+        aria-pressed={selected}
+        aria-label={`Show ${title} leads`}
+        className={`flex w-full items-start justify-between gap-3 rounded-lg border p-4 text-left shadow-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${selected ? selectedClass : 'border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50'}`}
+    >
         <div>
             <p className="text-xs font-bold uppercase tracking-wide text-slate-500">{title}</p>
             <p className="mt-1 text-xl font-bold text-slate-950">{count}</p>
         </div>
         <div className={`rounded-md p-2 ${color}`}>
-            {icon}
+            <Icon className="h-6 w-6" />
         </div>
-    </div>
+    </button>
 );
 
+const statusCardConfigs = [
+    {
+        key: 'pending',
+        title: 'Pending',
+        value: 'Pending',
+        Icon: ClockIcon,
+        color: 'bg-blue-50 text-blue-600',
+        selectedClass: 'border-blue-500 bg-blue-50 ring-2 ring-blue-100',
+    },
+    {
+        key: 'inProgress',
+        title: 'In Progress',
+        value: 'In Progress',
+        Icon: ArrowPathIcon,
+        color: 'bg-amber-50 text-amber-600',
+        selectedClass: 'border-amber-500 bg-amber-50 ring-2 ring-amber-100',
+    },
+    {
+        key: 'completed',
+        title: 'Completed',
+        value: 'Completed',
+        Icon: CheckCircleIcon,
+        color: 'bg-emerald-50 text-emerald-600',
+        selectedClass: 'border-emerald-500 bg-emerald-50 ring-2 ring-emerald-100',
+    },
+    {
+        key: 'cancelled',
+        title: 'Cancelled',
+        value: 'Cancelled',
+        Icon: NoSymbolIcon,
+        color: 'bg-red-50 text-red-600',
+        selectedClass: 'border-red-500 bg-red-50 ring-2 ring-red-100',
+    },
+];
+
+const leadStatusCountKeys = statusCardConfigs.reduce((keys, card) => ({
+    ...keys,
+    [card.value]: card.key,
+}), {});
+
+const actionButtonClass = 'inline-flex items-center justify-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-50';
+
+const normalizeLeadStatusKey = (status = '') => String(status || '').trim().toLowerCase();
+
 const getNormalizedLeadSource = (lead = {}) => {
+    const explicitSource = String(lead.leadSource || lead.marketingSource || lead.sourceLabel || '').trim();
+    if (explicitSource) return explicitSource;
+
     const source = String(lead.source || '').trim().toLowerCase();
 
     if (source === 'manual') return 'Manual';
@@ -33,10 +96,10 @@ const getNormalizedLeadSource = (lead = {}) => {
 export default function Leads() {
     const [leads, setLeads] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [stats, setStats] = useState({ pending: 0, inProgress: 0, completed: 0, cancelled: 0 });
     const [searchTerm, setSearchTerm] = useState('');
     const [statusFilter, setStatusFilter] = useState('Pending');
     const [sourceFilter, setSourceFilter] = useState('All');
+    const [cancellingLeadId, setCancellingLeadId] = useState('');
     const { recentlySelectedCompany } = useContext(Context);
     const { can } = useCompanyPermissions();
     const db = getFirestore();
@@ -46,6 +109,17 @@ export default function Leads() {
             ? `${window.location.origin}/request-service/${recentlySelectedCompany}`
             : ''
     ), [recentlySelectedCompany]);
+    const sourceOptions = useMemo(() => (
+        [...new Set(leads.map((lead) => getNormalizedLeadSource(lead)).filter(Boolean))]
+            .sort((left, right) => left.localeCompare(right))
+    ), [leads]);
+    const statusCounts = useMemo(() => (
+        leads.reduce((counts, lead) => {
+            const countKey = leadStatusCountKeys[lead.status];
+            if (countKey) counts[countKey] += 1;
+            return counts;
+        }, { pending: 0, inProgress: 0, completed: 0, cancelled: 0 })
+    ), [leads]);
 
     const toDate = (value) => {
         if (!value) return null;
@@ -61,21 +135,6 @@ export default function Leads() {
         }
 
         const companyId = recentlySelectedCompany;
-        const thirtyDaysAgo = subDays(startOfDay(new Date()), 30);
-
-        // Queries for stats
-        const queries = {
-            pending: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Pending")),
-            inProgress: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "In Progress")),
-            completed: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Completed"), where("dateCompleted", ">=", thirtyDaysAgo)),
-            cancelled: query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId), where("status", "==", "Cancelled"), where("dateCompleted", ">=", thirtyDaysAgo)),
-        };
-
-        const unsubscribes = Object.keys(queries).map(key =>
-            onSnapshot(queries[key], snapshot => {
-                setStats(prev => ({ ...prev, [key]: snapshot.size }));
-            }, err => console.error(`Error fetching ${key} stats:`, err))
-        );
 
         // Query for leads list
         const leadsQuery = query(collection(db, "homeownerServiceRequests"), where("companyId", "==", companyId));
@@ -89,7 +148,6 @@ export default function Leads() {
         });
 
         return () => {
-            unsubscribes.forEach(unsub => unsub());
             unsubscribeLeads();
         };
 
@@ -113,6 +171,7 @@ export default function Leads() {
                 lead.serviceLocationAddress?.streetAddress,
                 lead.serviceLocationAddress?.city,
                 lead.status,
+                getLeadSourceLabel(lead),
                 lead.source,
                 lead.id,
             ].some((value) => String(value || '').toLowerCase().includes(term));
@@ -140,6 +199,11 @@ export default function Leads() {
             Manual: 'bg-violet-50 text-violet-700',
             Public: 'bg-orange-50 text-orange-700',
             Customer: 'bg-cyan-50 text-cyan-700',
+            Website: 'bg-blue-50 text-blue-700',
+            Referral: 'bg-emerald-50 text-emerald-700',
+            Google: 'bg-amber-50 text-amber-700',
+            Yelp: 'bg-rose-50 text-rose-700',
+            Facebook: 'bg-indigo-50 text-indigo-700',
         };
 
         return <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${colors[source] || colors.Customer}`}>{source}</span>;
@@ -162,6 +226,7 @@ export default function Leads() {
 
     const getLinkedCustomerId = (lead = {}) => lead.customerId || lead.companyCustomerId || '';
     const getLinkedServiceLocationId = (lead = {}) => lead.companyServiceLocationId || lead.serviceLocationId || '';
+    const isLeadCancelled = (lead = {}) => ['cancelled', 'canceled'].includes(normalizeLeadStatusKey(lead.status || lead.leadStatus));
 
     const renderLinkStatus = (lead) => {
         const linkedCustomerId = getLinkedCustomerId(lead);
@@ -196,6 +261,86 @@ export default function Leads() {
         if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
 
         return `/company/sales/agreements/new?${params.toString()}`;
+    };
+
+    const buildLeadServiceEstimatePath = (lead) => {
+        const params = new URLSearchParams({
+            leadId: lead.id,
+            category: 'serviceAgreementEstimate',
+        });
+        const linkedCustomerId = getLinkedCustomerId(lead);
+        const linkedServiceLocationId = getLinkedServiceLocationId(lead);
+
+        if (linkedCustomerId) params.set('customerId', linkedCustomerId);
+        if (linkedServiceLocationId) params.set('serviceLocationId', linkedServiceLocationId);
+
+        return `/company/serviceStops/createNew?${params.toString()}`;
+    };
+
+    const stopRowNavigation = (event) => event.stopPropagation();
+
+    const navigateToCustomerConversion = (lead, event) => {
+        stopRowNavigation(event);
+        navigate(`/company/customers/create-from-lead/${lead.id}`);
+    };
+
+    const navigateToScheduleEstimate = (lead, event) => {
+        stopRowNavigation(event);
+        if (!getLinkedCustomerId(lead)) {
+            toast.error('Convert or link the lead to a customer before scheduling an estimate.');
+            return;
+        }
+
+        navigate(buildLeadServiceEstimatePath(lead));
+    };
+
+    const navigateToServiceAgreement = (lead, event) => {
+        stopRowNavigation(event);
+        if (!getLinkedCustomerId(lead)) {
+            toast.error('Convert or link the lead to a customer before sending a service agreement.');
+            return;
+        }
+
+        navigate(lead.serviceAgreementId
+            ? `/company/sales/agreements/${lead.serviceAgreementId}`
+            : buildLeadServiceAgreementPath(lead));
+    };
+
+    const markLeadCancelled = async (lead, event) => {
+        stopRowNavigation(event);
+        if (isLeadCancelled(lead) || !can("614")) return;
+
+        const confirmed = await appConfirm({
+            title: 'Mark lead cancelled?',
+            message: `Mark ${lead.homeownerName || lead.customerName || 'this lead'} as cancelled?`,
+            confirmLabel: 'Mark Cancelled',
+            cancelLabel: 'Keep Lead',
+            variant: 'danger',
+        });
+
+        if (!confirmed) return;
+
+        const reason = lead.lostReason || lead.cancelReason || lead.statusChangeReason || 'Marked cancelled from leads list.';
+        setCancellingLeadId(lead.id);
+
+        try {
+            await updateDoc(doc(db, 'homeownerServiceRequests', lead.id), {
+                status: 'Cancelled',
+                leadStatus: 'Cancelled',
+                lostReason: reason,
+                cancelReason: reason,
+                statusChangeReason: reason,
+                lostAt: serverTimestamp(),
+                dateCompleted: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            });
+            toast.success('Lead marked cancelled.');
+        } catch (error) {
+            console.error('Unable to cancel lead', error);
+            toast.error('Failed to mark lead cancelled.');
+        } finally {
+            setCancellingLeadId('');
+        }
     };
 
     return (
@@ -258,10 +403,15 @@ export default function Leads() {
 
                 {/* Header Stats */}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                    <StatCard title="Pending" count={stats.pending} color="bg-blue-50" icon={<svg className="h-6 w-6 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
-                    <StatCard title="In Progress" count={stats.inProgress} color="bg-amber-50" icon={<svg className="h-6 w-6 text-amber-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h5" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.5 9.5a9 9 0 101.7 -5.2" /></svg>} />
-                    <StatCard title="Completed (30d)" count={stats.completed} color="bg-emerald-50" icon={<svg className="h-6 w-6 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>} />
-                    <StatCard title="Cancelled (30d)" count={stats.cancelled} color="bg-red-50" icon={<svg className="h-6 w-6 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18.36 6.64a9 9 0 11-12.73 0M12 9v4m0 4h.01" /></svg>} />
+                    {statusCardConfigs.map(({ key, value, ...card }) => (
+                        <StatCard
+                            key={value}
+                            {...card}
+                            count={statusCounts[key]}
+                            selected={statusFilter === value}
+                            onClick={() => setStatusFilter(value)}
+                        />
+                    ))}
                 </div>
 
                 <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -282,9 +432,9 @@ export default function Leads() {
                         </select>
                         <select value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100">
                             <option value="All">All sources</option>
-                            <option value="Customer">Customer</option>
-                            <option value="Public">Public</option>
-                            <option value="Manual">Manual</option>
+                            {sourceOptions.map((source) => (
+                                <option key={source} value={source}>{source}</option>
+                            ))}
                         </select>
                     </div>
                     <div className="flex flex-col gap-1 border-b border-slate-200 px-5 py-3 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
@@ -319,7 +469,7 @@ export default function Leads() {
                                         <tr key={lead.id} className="cursor-pointer transition hover:bg-slate-50"
                                             onClick={() => navigate(`/company/leads/${lead.id}`)}
                                         >
-                                            <td className="whitespace-nowrap px-5 py-3">
+                                            <td className="whitespace-nowrap px-5 py-3" onClick={stopRowNavigation}>
                                                 <div className="text-sm font-semibold text-slate-900">{lead.homeownerName}</div>
                                             </td>
                                             <td className="whitespace-nowrap px-5 py-3 text-sm text-slate-700">{lead.serviceLocationAddress?.streetAddress || 'No address'}</td>
@@ -330,23 +480,54 @@ export default function Leads() {
                                             <td className="whitespace-nowrap px-5 py-3">{renderSource(lead)}</td>
                                             <td className="whitespace-nowrap px-5 py-3">{renderLinkStatus(lead)}</td>
                                             <td className="whitespace-nowrap px-5 py-3">
-                                                {can("612") && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={(event) => {
-                                                            event.stopPropagation();
-                                                            if (!getLinkedCustomerId(lead)) {
-                                                                toast.error('Convert or link the lead to a customer before creating a service agreement.');
-                                                                return;
-                                                            }
-                                                            navigate(buildLeadServiceAgreementPath(lead));
-                                                        }}
-                                                        className="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                                                        disabled={!getLinkedCustomerId(lead)}
-                                                    >
-                                                        Create Estimate
-                                                    </button>
-                                                )}
+                                                <div className="flex flex-wrap gap-2">
+                                                    {!getLinkedCustomerId(lead) && can("612") && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => navigateToCustomerConversion(lead, event)}
+                                                            className={`${actionButtonClass} border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100`}
+                                                        >
+                                                            <UserPlusIcon className="h-3.5 w-3.5" />
+                                                            Convert
+                                                        </button>
+                                                    )}
+                                                    {can("242") && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => navigateToScheduleEstimate(lead, event)}
+                                                            className={`${actionButtonClass} border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100`}
+                                                            disabled={!getLinkedCustomerId(lead)}
+                                                            title={!getLinkedCustomerId(lead) ? 'Convert or link the lead to a customer first.' : 'Schedule estimate'}
+                                                        >
+                                                            <CalendarDaysIcon className="h-3.5 w-3.5" />
+                                                            Schedule Estimate
+                                                        </button>
+                                                    )}
+                                                    {can("612") && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => navigateToServiceAgreement(lead, event)}
+                                                            className={`${actionButtonClass} border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100`}
+                                                            disabled={!getLinkedCustomerId(lead)}
+                                                            title={!getLinkedCustomerId(lead) ? 'Convert or link the lead to a customer first.' : 'Send service agreement'}
+                                                        >
+                                                            <DocumentTextIcon className="h-3.5 w-3.5" />
+                                                            Send Service Agreement
+                                                        </button>
+                                                    )}
+                                                    {can("614") && (
+                                                        <button
+                                                            type="button"
+                                                            onClick={(event) => markLeadCancelled(lead, event)}
+                                                            className={`${actionButtonClass} border-red-200 bg-red-50 text-red-700 hover:bg-red-100`}
+                                                            disabled={isLeadCancelled(lead) || cancellingLeadId === lead.id}
+                                                            title={isLeadCancelled(lead) ? 'Lead is already cancelled.' : 'Mark cancelled'}
+                                                        >
+                                                            <NoSymbolIcon className="h-3.5 w-3.5" />
+                                                            {cancellingLeadId === lead.id ? 'Cancelling...' : 'Mark Cancelled'}
+                                                        </button>
+                                                    )}
+                                                </div>
                                             </td>
                                         </tr>
                                     ))}

@@ -4,7 +4,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { doc, getDoc } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from '../../../context/AuthContext';
-import { ArrowLeftIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, BuildingOffice2Icon, ChatBubbleLeftRightIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { createClientCompanyChat, findVisibleChatWithParticipant } from '../../../utils/chatMessaging';
 
 const NewCompanyChat = () => {
@@ -69,7 +69,7 @@ const NewCompanyChat = () => {
                 company,
                 message,
             });
-            if (!chatId) throw new Error("Unable to create chat.");
+            if (!chatId) throw new Error("Unable to create message.");
 
             navigate(`/client/chat/details/${chatId}`);
 
@@ -81,55 +81,105 @@ const NewCompanyChat = () => {
     };
 
     if (loading) {
-        return <div className="p-8 text-center">Loading...</div>;
+        return (
+            <div className="min-h-screen bg-slate-50 px-4 py-6 text-sm text-slate-500">
+                Loading message...
+            </div>
+        );
     }
 
     if (error) {
-        return <div className="p-8 text-center text-red-500">{error}</div>;
+        return (
+            <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-950 sm:px-4 lg:px-5">
+                <div className="mx-auto w-full max-w-3xl space-y-5">
+                    <Header companyName="New Message" onBack={() => navigate(-1)} />
+                    <div className="rounded-lg border border-red-200 bg-red-50 p-5 text-center text-sm font-semibold text-red-700">
+                        {error}
+                    </div>
+                </div>
+            </div>
+        );
     }
 
     return (
-        <div className="px-4 md:px-8 py-6 bg-gray-50 min-h-screen">
-            <div className="max-w-4xl mx-auto">
+        <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-950 sm:px-4 lg:px-5">
+            <div className="mx-auto w-full max-w-3xl space-y-5">
                 <Header companyName={company?.name} onBack={() => navigate(-1)} />
 
-                <div className="bg-white rounded-lg shadow-md mt-8">
-                    <div className="p-6">
-                        <p className="text-center text-gray-500">You are starting a new conversation with <strong>{company?.name}</strong>.</p>
+                <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="flex items-center gap-3 border-b border-slate-100 px-4 py-4 sm:px-5">
+                        <CompanyAvatar company={company} />
+                        <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-slate-950">{company?.name || 'Company'}</p>
+                            <p className="truncate text-sm text-slate-500">{company?.email || company?.ownerEmail || 'Message recipient'}</p>
+                        </div>
                     </div>
-                    <div className="p-4 border-t">
-                        <form onSubmit={handleSendMessage} className="flex items-center gap-2">
-                            <input
-                                type="text"
+                    <form onSubmit={handleSendMessage} className="p-4 sm:p-5">
+                        <label className="block">
+                            <span className="text-sm font-semibold text-slate-700">First message</span>
+                            <textarea
+                                rows={5}
                                 value={message}
                                 onChange={(e) => setMessage(e.target.value)}
                                 placeholder="Type your message..."
-                                className="flex-grow px-4 py-2 bg-white border border-gray-300 rounded-full focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                className="mt-2 min-h-[132px] w-full resize-none rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
                                 disabled={isSending}
                             />
+                        </label>
+                        <div className="mt-4 flex justify-end">
                             <button
                                 type="submit"
                                 disabled={isSending || !message.trim()}
-                                className="p-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+                                className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 sm:w-auto"
+                                aria-label="Send first message"
                             >
-                                <PaperAirplaneIcon className="w-6 h-6" />
+                                <PaperAirplaneIcon className="h-5 w-5" />
+                                <span>{isSending ? 'Sending...' : 'Send Message'}</span>
                             </button>
-                        </form>
-                    </div>
-                </div>
+                        </div>
+                    </form>
+                </section>
             </div>
         </div>
     );
 };
 
 const Header = ({ companyName, onBack }) => (
-    <div className="flex flex-col gap-2">
-        <button onClick={onBack} className="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 w-fit">
-            <ArrowLeftIcon className="w-5 h-5" />
-            Back
+    <header className="flex min-w-0 items-center gap-3">
+        <button
+            type="button"
+            onClick={onBack}
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-slate-600 transition hover:bg-slate-100 hover:text-slate-950"
+            aria-label="Back to messages"
+        >
+            <ArrowLeftIcon className="h-5 w-5" />
         </button>
-        <h1 className="text-3xl font-bold text-gray-900 truncate">New Message to {companyName || '...'}</h1>
-    </div>
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+            <ChatBubbleLeftRightIcon className="h-6 w-6" />
+        </span>
+        <div className="min-w-0">
+            <h1 className="truncate text-3xl font-bold tracking-tight text-slate-950">Messages</h1>
+            <p className="truncate text-sm font-medium text-slate-500">New message to {companyName || '...'}</p>
+        </div>
+    </header>
 );
+
+const CompanyAvatar = ({ company }) => {
+    if (company?.logoUrl || company?.photoUrl) {
+        return (
+            <img
+                src={company.logoUrl || company.photoUrl}
+                alt=""
+                className="h-11 w-11 shrink-0 rounded-md object-cover"
+            />
+        );
+    }
+
+    return (
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+            <BuildingOffice2Icon className="h-6 w-6" />
+        </span>
+    );
+};
 
 export default NewCompanyChat;

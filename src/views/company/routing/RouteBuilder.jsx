@@ -18,6 +18,7 @@ import {
   suggestCompanyServiceStopType,
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { appConfirm } from '../../../utils/appDialog';
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from '../../../utils/companyUsers';
 
 const functions = getFunctions();
 // Reusable form components
@@ -529,7 +530,14 @@ const RouteBuilder = () => {
       getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'recurringServiceStop')))
     ])
       .then(async ([techSnapshot, stopsSnapshot, serviceStopTypesSnapshot, recurringStopsSnapshot]) => {
-        const techList = techSnapshot.docs.map(doc => ({ value: doc.data().userId, label: doc.data().userName, ...doc.data() }));
+        const techList = sortCompanyUsersByName(techSnapshot.docs.map(doc => {
+          const data = doc.data();
+          return {
+            value: data.userId || data.id || doc.id,
+            label: getCompanyUserDisplayName(data, "Technician"),
+            ...data,
+          };
+        }));
         setTechnicians(techList);
 
         const stopList = stopsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));

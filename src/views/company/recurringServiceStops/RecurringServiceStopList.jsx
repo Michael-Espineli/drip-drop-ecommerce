@@ -1,9 +1,12 @@
 
 import React, { useState, useEffect, useContext, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { collection, query, onSnapshot } from 'firebase/firestore';
+import { collection, getDocs, query, onSnapshot } from 'firebase/firestore';
 import { db } from '../../../utils/config';
 import { Context } from "../../../context/AuthContext";
+import { reportAppError } from '../../../utils/errorReporting';
+import { filterRecordsByCustomerTags } from '../../../utils/customerTags';
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 
 const dayOrder = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
@@ -34,14 +37,64 @@ const stopStatus = (stop) => {
 };
 
 const RecurringServiceStopList = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        recentlySelectedCompanyName,
+        user,
+        dataBaseUser,
+        accountType,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const navigate = useNavigate();
     const [stops, setStops] = useState([]);
+    const [customersById, setCustomersById] = useState(new Map());
     const [isLoading, setIsLoading] = useState(true);
     const [searchTerm, setSearchTerm] = useState("");
     const [dayFilter, setDayFilter] = useState("all");
     const [frequencyFilter, setFrequencyFilter] = useState("all");
     const [techFilter, setTechFilter] = useState("all");
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
+    const errorContext = useMemo(() => ({
+        userId: user?.uid || dataBaseUser?.id || dataBaseUser?.uid || '',
+        userEmail: user?.email || dataBaseUser?.email || '',
+        accountType: accountType || dataBaseUser?.accountType || '',
+        companyId: recentlySelectedCompany || '',
+        companyName: recentlySelectedCompanyName || '',
+    }), [accountType, dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, user]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setCustomersById(new Map());
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchCustomers = async () => {
+            try {
+                const customerSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers'));
+                if (cancelled) return;
+
+                setCustomersById(new Map(customerSnapshot.docs.map((customerDoc) => [
+                    customerDoc.id,
+                    { id: customerDoc.id, ...customerDoc.data() },
+                ])));
+            } catch (error) {
+                console.error("Error loading customer access for recurring stops:", error);
+                if (!cancelled) setCustomersById(new Map());
+            }
+        };
+
+        fetchCustomers();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany]);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -64,27 +117,49 @@ const RecurringServiceStopList = () => {
             setIsLoading(false);
         }, (error) => {
             console.error("Error fetching recurring service stops:", error);
+            reportAppError(error, {
+                context: errorContext,
+                source: "recurring-service-stop-list",
+                where: "RecurringServiceStopList.onSnapshot",
+                title: "Recurring service stop list failed to load",
+                description: "The recurring service stop list snapshot listener failed.",
+                data: {
+                    companyId: recentlySelectedCompany,
+                },
+            });
             setIsLoading(false);
         });
 
         return () => unsubscribe();
 
-    }, [recentlySelectedCompany]);
+    }, [errorContext, recentlySelectedCompany]);
+
+    const regionVisibleStops = useMemo(
+        () => filterRecordsByCustomerTags({
+            records: stops,
+            customersById,
+            role: companyRole,
+            userAccess: companyUserAccess,
+            selectedRegionTag: selectedCustomerRegionTag,
+            regionalAccessEnabled: customerAreaFilteringEnabled,
+        }),
+        [companyRole, companyUserAccess, customersById, selectedCustomerRegionTag, stops, customerAreaFilteringEnabled]
+    );
 
     const frequencyOptions = useMemo(
-        () => Array.from(new Set(stops.map((stop) => stop.frequency).filter(Boolean))).sort(),
-        [stops]
+        () => Array.from(new Set(regionVisibleStops.map((stop) => stop.frequency).filter(Boolean))).sort(),
+        [regionVisibleStops]
     );
 
     const techOptions = useMemo(
-        () => Array.from(new Map(stops.map((stop) => [stop.techId || stop.tech || "unassigned", stop.tech || "Unassigned"]))).sort((a, b) => a[1].localeCompare(b[1])),
-        [stops]
+        () => Array.from(new Map(regionVisibleStops.map((stop) => [stop.techId || stop.tech || "unassigned", stop.tech || "Unassigned"]))).sort((a, b) => a[1].localeCompare(b[1])),
+        [regionVisibleStops]
     );
 
     const visibleStops = useMemo(() => {
         const term = searchTerm.trim().toLowerCase();
 
-        return stops.filter((stop) => {
+        return regionVisibleStops.filter((stop) => {
             const matchesSearch = !term || [
                 stop.internalId,
                 stop.customerName,
@@ -103,14 +178,14 @@ const RecurringServiceStopList = () => {
 
             return matchesSearch && matchesDay && matchesFrequency && matchesTech;
         });
-    }, [dayFilter, frequencyFilter, searchTerm, stops, techFilter]);
+    }, [dayFilter, frequencyFilter, regionVisibleStops, searchTerm, techFilter]);
 
     const stats = useMemo(() => {
-        const active = stops.filter((stop) => stopStatus(stop).label === "Active").length;
-        const ended = stops.filter((stop) => stopStatus(stop).label === "Ended").length;
-        const routeLinked = stops.filter((stop) => stop.serviceLocationId && stop.techId && stop.day).length;
+        const active = regionVisibleStops.filter((stop) => stopStatus(stop).label === "Active").length;
+        const ended = regionVisibleStops.filter((stop) => stopStatus(stop).label === "Ended").length;
+        const routeLinked = regionVisibleStops.filter((stop) => stop.serviceLocationId && stop.techId && stop.day).length;
         return { active, ended, routeLinked };
-    }, [stops]);
+    }, [regionVisibleStops]);
 
     const handleCreateNew = () => {
         navigate('/company/recurring-service-stops/create');

@@ -169,6 +169,9 @@ export default function ProfilePage() {
         companyUserAccess,
         hasCompanyPermission,
     } = useContext(Context);
+    const canViewPayrollInformation = typeof hasCompanyPermission === "function"
+        ? hasCompanyPermission("420")
+        : false;
     
     const [editMode, setEditMode] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -244,9 +247,6 @@ export default function ProfilePage() {
                 const companyRef = doc(db, "companies", recentlySelectedCompany);
                 const companyUsersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
                 const activeRoutesRef = collection(db, "companies", recentlySelectedCompany, "activeRoutes");
-                const lineItemsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems");
-                const statementsRef = collection(db, "companies", recentlySelectedCompany, "technicianPayStatements");
-
                 const [
                     companySnap,
                     companyUserSnap,
@@ -263,12 +263,16 @@ export default function ProfilePage() {
                         orderBy("date", "desc"),
                         limit(25)
                     )),
-                    getDocs(query(
-                        lineItemsRef,
-                        where("completedDate", ">=", startDate),
-                        where("completedDate", "<=", endDate)
-                    )),
-                    getDocs(statementsRef),
+                    canViewPayrollInformation
+                        ? getDocs(query(
+                            collection(db, "companies", recentlySelectedCompany, "technicianPayLineItems"),
+                            where("completedDate", ">=", startDate),
+                            where("completedDate", "<=", endDate)
+                        ))
+                        : Promise.resolve({ docs: [] }),
+                    canViewPayrollInformation
+                        ? getDocs(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"))
+                        : Promise.resolve({ docs: [] }),
                 ]);
 
                 if (cancelled) return;
@@ -330,7 +334,7 @@ export default function ProfilePage() {
         return () => {
             cancelled = true;
         };
-    }, [recentlySelectedCompany, user?.uid]);
+    }, [canViewPayrollInformation, recentlySelectedCompany, user?.uid]);
 
     const workSummary = useMemo(() => {
         const activeLineItems = companyProfile.lineItems.filter((item) => !item.voidedAt);
@@ -655,12 +659,10 @@ export default function ProfilePage() {
     const renderWorkHistory = () => {
         if (!recentlySelectedCompany) return null;
 
-        const canOpenPayroll = typeof hasCompanyPermission === "function" ? hasCompanyPermission("400") : false;
-
         return (
             <ProfileCard
                 title="My Work History"
-                actions={canOpenPayroll ? <ActionLink to="/company/payroll?tab=statements">Open Paysheet</ActionLink> : null}
+                actions={canViewPayrollInformation ? <ActionLink to="/company/payroll?tab=statements">Open Paysheet</ActionLink> : null}
             >
                 {companyProfile.loading ? (
                     <p className="text-sm text-gray-500">Loading work history...</p>
@@ -673,30 +675,30 @@ export default function ProfilePage() {
                             />
                             <SummaryTile label="Stops" value={workSummary.totalStops.toLocaleString()} />
                             <SummaryTile label="Work Items" value={workSummary.workItems.toLocaleString()} />
-                            <SummaryTile
-                                label="Unpaid"
-                                value={moneyFromCents(workSummary.unpaidPayCents)}
-                                helper={`${moneyFromCents(workSummary.totalPayCents)} total`}
-                            />
+                            {canViewPayrollInformation ? (
+                                <SummaryTile
+                                    label="Unpaid"
+                                    value={moneyFromCents(workSummary.unpaidPayCents)}
+                                    helper={`${moneyFromCents(workSummary.totalPayCents)} total`}
+                                />
+                            ) : null}
                         </div>
 
-                        <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
-                            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                                <div>
-                                    <p className="font-semibold text-gray-900">Paysheet</p>
-                                    <p className="text-sm text-gray-600">
-                                        {companyProfile.statements.length > 0
-                                            ? `${companyProfile.statements.length} statement(s) in the last 180 days.`
-                                            : "No recent pay statements found."}
-                                    </p>
-                                </div>
-                                {canOpenPayroll ? (
+                        {canViewPayrollInformation ? (
+                            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div>
+                                        <p className="font-semibold text-gray-900">Paysheet</p>
+                                        <p className="text-sm text-gray-600">
+                                            {companyProfile.statements.length > 0
+                                                ? `${companyProfile.statements.length} statement(s) in the last 180 days.`
+                                                : "No recent pay statements found."}
+                                        </p>
+                                    </div>
                                     <ActionLink to="/company/payroll?tab=statements">Review</ActionLink>
-                                ) : (
-                                    <p className="text-sm font-semibold text-gray-600">Visible here from your profile.</p>
-                                )}
+                                </div>
                             </div>
-                        </div>
+                        ) : null}
 
                         <div>
                             <div className="mb-3 flex items-center justify-between">

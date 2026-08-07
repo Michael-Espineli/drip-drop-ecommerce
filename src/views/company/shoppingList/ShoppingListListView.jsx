@@ -7,10 +7,12 @@ import {
     FunnelIcon,
     PencilSquareIcon,
     ShoppingCartIcon,
+    TrashIcon,
 } from "@heroicons/react/24/outline";
 import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
+import { appConfirm } from "../../../utils/appDialog";
 import {
     getItemPhotoUrl,
     itemPhotoFieldsFromSource,
@@ -23,6 +25,12 @@ import {
     shoppingItemNeedsAction,
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import {
+    deleteShoppingListItemWithLinks,
+    getShoppingItemPartApprovalId,
+    isShoppingItemFromPartApproval,
+} from "../../../utils/shoppingListDelete";
+import { compareCompanyUsersByName, getCompanyUserDisplayName } from "../../../utils/companyUsers";
 
 const statusOptions = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Customer Rejected", "Purchased", "Delivered", "Installed", SHOPPING_LIST_INVOICED_STATUS];
 const recentActiveStatuses = ["Need to Purchase", "Needs Customer Approval", "Ready to Purchase", "Purchased"];
@@ -247,6 +255,7 @@ const ShoppingListListView = () => {
     const [purchaseConnectionItem, setPurchaseConnectionItem] = useState(null);
     const [purchasedItemSearch, setPurchasedItemSearch] = useState("");
     const [connectingPurchasedItemId, setConnectingPurchasedItemId] = useState("");
+    const [deletingItemId, setDeletingItemId] = useState("");
 
     const [search, setSearch] = useState("");
     const [categoryFilter, setCategoryFilter] = useState("All");
@@ -284,10 +293,7 @@ const ShoppingListListView = () => {
             const allCompanyUsers = companyUsersSnap.docs
                 .map((docSnap) => {
                     const data = docSnap.data();
-                    const label =
-                        userDisplayName(data) ||
-                        data.email ||
-                        "Unnamed Technician";
+                    const label = getCompanyUserDisplayName(data, "Unnamed Technician");
                     const id = data.userId || data.id || docSnap.id;
 
                     return {
@@ -299,7 +305,7 @@ const ShoppingListListView = () => {
                         value: id,
                     };
                 })
-                .sort((left, right) => left.label.localeCompare(right.label));
+                .sort(compareCompanyUsersByName);
 
             setCompanyUserOptions(allCompanyUsers);
 
@@ -738,6 +744,43 @@ const ShoppingListListView = () => {
         }
     };
 
+    const deleteShoppingItem = async (item) => {
+        closeActionMenu();
+        if (!recentlySelectedCompany || !item?.id || deletingItemId) return;
+
+        const linkedApprovalId = getShoppingItemPartApprovalId(item);
+        const confirmed = await appConfirm({
+            title: "Delete Shopping Item",
+            message: linkedApprovalId
+                ? "Delete this shopping list item and its connected part approval request? This cannot be undone."
+                : "Delete this shopping list item? This cannot be undone.",
+            confirmLabel: "Delete",
+            variant: "danger",
+        });
+
+        if (!confirmed) return;
+
+        try {
+            setDeletingItemId(item.id);
+            await deleteShoppingListItemWithLinks({
+                db,
+                companyId: recentlySelectedCompany,
+                itemId: item.id,
+                item,
+            });
+
+            setShoppingList((prev) => prev.filter((shoppingItem) => shoppingItem.id !== item.id));
+            if (item.purchasedItem) {
+                updatePurchasedItemOptionLinks(item.purchasedItem, "", item.id);
+            }
+        } catch (error) {
+            console.log("Error deleting shopping list item");
+            console.log(error);
+        } finally {
+            setDeletingItemId("");
+        }
+    };
+
     const handleEditPhotoFileChange = (event) => {
         const file = event.target.files?.[0] || null;
         const validationMessage = validateItemPhotoFile(file);
@@ -881,6 +924,7 @@ const ShoppingListListView = () => {
                 item.userName.toLowerCase().includes(searchText) ||
                 item.jobName.toLowerCase().includes(searchText) ||
                 item.linkedTaskName.toLowerCase().includes(searchText) ||
+                item.partApprovalRequestId.toLowerCase().includes(searchText) ||
                 item.serviceLocationName.toLowerCase().includes(searchText) ||
                 item.serviceLocationAddress.toLowerCase().includes(searchText) ||
                 item.contextLines.some((line) =>
@@ -1038,6 +1082,11 @@ const ShoppingListListView = () => {
                                             {item.customerApprovalRequired ? (
                                                 <span className="rounded-md bg-amber-50 px-2 py-0.5 font-semibold text-amber-700">
                                                     Approval: {item.customerApprovalStatus || "pending"}
+                                                </span>
+                                            ) : null}
+                                            {isShoppingItemFromPartApproval(item) ? (
+                                                <span className="rounded-md bg-indigo-50 px-2 py-0.5 font-semibold text-indigo-700">
+                                                    From Part Approval
                                                 </span>
                                             ) : null}
                                         </div>
@@ -1267,6 +1316,15 @@ const ShoppingListListView = () => {
                         >
                             <ShoppingCartIcon className="h-4 w-4" />
                             {openActionItem.purchasedItem ? "Change Purchased Item" : "Connect Purchased Item"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => deleteShoppingItem(openActionItem)}
+                            disabled={deletingItemId === openActionItem.id}
+                            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-60"
+                        >
+                            <TrashIcon className="h-4 w-4" />
+                            {deletingItemId === openActionItem.id ? "Deleting..." : "Delete"}
                         </button>
                     </div>
                 </>

@@ -427,6 +427,13 @@ const PartApprovalCreateModal = ({
         ? itemPhotoFieldsFromSource(selectedDbItem, itemName || 'Part photo')
         : {};
       const now = serverTimestamp();
+      const historyNow = new Date();
+      const requestedByName =
+        `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
+        dataBaseUser?.userName ||
+        user?.displayName ||
+        user?.email ||
+        '';
 
       const payload = {
         id: approvalId,
@@ -467,12 +474,7 @@ const PartApprovalCreateModal = ({
         createdAt: now,
         updatedAt: now,
         requestedByUserId: user?.uid || dataBaseUser?.id || '',
-        requestedByUserName:
-          `${dataBaseUser?.firstName || ''} ${dataBaseUser?.lastName || ''}`.trim() ||
-          dataBaseUser?.userName ||
-          user?.displayName ||
-          user?.email ||
-          '',
+        requestedByUserName: requestedByName,
         jobId: workflowContext?.jobId || '',
         jobName: workflowContext?.jobName || workflowContext?.jobInternalId || '',
         jobInternalId: workflowContext?.jobInternalId || '',
@@ -494,6 +496,38 @@ const PartApprovalCreateModal = ({
         assignedTechNames: techName ? [techName] : [],
         purchaserId: techId,
         purchaserName: techName,
+        history: [
+          {
+            id: `cpa_hist_${uuidv4()}`,
+            action: 'requested',
+            status: approvedInPerson ? 'approved' : 'pending',
+            note: itemDescription,
+            source: 'companyWeb',
+            sourceLabel: 'Company web app',
+            actorUserId: user?.uid || dataBaseUser?.id || '',
+            actorUserName: requestedByName,
+            actorEmail: user?.email || '',
+            customerId: selectedCustomer.id,
+            customerName: selectedCustomer.name || getCustomerName(selectedCustomer),
+            createdAt: historyNow,
+          },
+          ...(approvedInPerson
+            ? [{
+              id: `cpa_hist_${uuidv4()}`,
+              action: 'technicianApproved',
+              status: 'approved',
+              note: 'Approved in person',
+              source: 'technicianOnBehalfOfCustomer',
+              sourceLabel: 'Technician on behalf of customer',
+              actorUserId: user?.uid || dataBaseUser?.id || '',
+              actorUserName: requestedByName,
+              actorEmail: user?.email || '',
+              customerId: selectedCustomer.id,
+              customerName: selectedCustomer.name || getCustomerName(selectedCustomer),
+              createdAt: historyNow,
+            }]
+            : []),
+        ],
         prepKeys: [
           workflowContext?.jobId ? `job:${workflowContext.jobId}` : '',
           selectedCustomer?.id ? `customer:${selectedCustomer.id}` : '',

@@ -9,9 +9,11 @@ import { format } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
+import { isFilterEquipment } from "../../../utils/models/Equipment";
 
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-blue-500 focus:border-blue-500";
+const WATER_TYPE_OPTIONS = ["Fresh Water", "Salt Water"];
 
 const Field = ({ label, children }) => (
   <div className="space-y-1">
@@ -65,6 +67,7 @@ const BodiesOfWaterDetails = () => {
   const [name, setName] = useState("");
   const [gallons, setGallons] = useState("");
   const [material, setMaterial] = useState("");
+  const [waterType, setWaterType] = useState("");
   const [notes, setNotes] = useState("");
 
   const loadWaterHistory = useCallback(async () => {
@@ -104,6 +107,7 @@ const BodiesOfWaterDetails = () => {
           setName(bowData.name || "");
           setGallons(bowData.gallons || "");
           setMaterial(bowData.material || "");
+          setWaterType(bowData.waterType || "");
           setNotes(bowData.notes || "");
         } else {
           setError("Body of Water not found.");
@@ -125,6 +129,7 @@ const BodiesOfWaterDetails = () => {
       setName(bodyOfWater.name || "");
       setGallons(bodyOfWater.gallons || "");
       setMaterial(bodyOfWater.material || "");
+      setWaterType(bodyOfWater.waterType || "");
       setNotes(bodyOfWater.notes || "");
     }
   };
@@ -137,6 +142,7 @@ const BodiesOfWaterDetails = () => {
       name,
       gallons,
       material,
+      waterType,
       notes,
     };
 
@@ -287,8 +293,9 @@ const BodiesOfWaterDetails = () => {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <InfoCard label="Name" value={bodyOfWater.name} />
                 <InfoCard label="Gallons" value={bodyOfWater.gallons} />
-                <InfoCard label="Material" value={bodyOfWater.material} />
-                <InfoCard
+	                <InfoCard label="Material" value={bodyOfWater.material} />
+	                <InfoCard label="Water Type" value={bodyOfWater.waterType} />
+	                <InfoCard
                   label="Last Filled"
                   value={bodyOfWater.lastFilled ? format(bodyOfWater.lastFilled, "MMM d, yyyy") : "—"}
                 />
@@ -322,14 +329,30 @@ const BodiesOfWaterDetails = () => {
                   />
                 </Field>
 
-                <Field label="Material">
+	                <Field label="Material">
                   <input
                     type="text"
                     value={material}
                     onChange={(e) => setMaterial(e.target.value)}
                     className={inputBase}
                   />
-                </Field>
+	                </Field>
+
+	                <Field label="Water Type">
+	                  <select
+	                    value={waterType}
+	                    onChange={(e) => setWaterType(e.target.value)}
+	                    className={inputBase}
+	                  >
+	                    <option value="">Select water type</option>
+	                    {waterType && !WATER_TYPE_OPTIONS.includes(waterType) && (
+	                      <option value={waterType}>{waterType}</option>
+	                    )}
+	                    {WATER_TYPE_OPTIONS.map((option) => (
+	                      <option key={option} value={option}>{option}</option>
+	                    ))}
+	                  </select>
+	                </Field>
 
                 <div className="md:col-span-2">
                   <Field label="Notes">
@@ -383,12 +406,14 @@ const BodiesOfWaterDetails = () => {
                     </span>
                   </div>
 
-                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
-                    <InfoCard label="Make" value={item.make || "—"} />
-                    <InfoCard label="Model" value={item.model || "—"} />
-                    <InfoCard label="Pressure" value={`${item.currentPressure ?? "—"} PSI`} />
-                    <InfoCard label="Last Service" value={toDisplayDate(item.lastServiceDate) ? format(toDisplayDate(item.lastServiceDate), "MMM d, yyyy") : "—"} />
-                  </div>
+	                  <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
+	                    <InfoCard label="Make" value={item.make || "—"} />
+	                    <InfoCard label="Model" value={item.model || "—"} />
+	                    {isFilterEquipment(item) && (
+	                      <InfoCard label="Pressure" value={`${item.currentPressure ?? "—"} PSI`} />
+	                    )}
+	                    <InfoCard label="Last Service" value={toDisplayDate(item.lastServiceDate) ? format(toDisplayDate(item.lastServiceDate), "MMM d, yyyy") : "—"} />
+	                  </div>
                 </Link>
               ))}
             </div>

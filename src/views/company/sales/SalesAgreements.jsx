@@ -1,10 +1,12 @@
-import React, { useContext, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { collection, getDocs, onSnapshot, query, where } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, query, serverTimestamp, updateDoc, where } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import {
   FaArrowLeft,
   FaCheckCircle,
   FaEdit,
+  FaEllipsisV,
   FaEnvelope,
   FaFileSignature,
   FaPlus,
@@ -13,11 +15,17 @@ import {
   FaSort,
   FaSortAmountDown,
   FaSortAmountUp,
+  FaTimesCircle,
+  FaUserCheck,
 } from 'react-icons/fa';
 import toast from 'react-hot-toast';
 import { Context } from '../../../context/AuthContext';
-import { db } from '../../../utils/config';
+import { db, functions } from '../../../utils/config';
 import { SalesAgreementStatus, salesCollectionNames } from '../../../utils/models/Sales';
+import { getCallableAuthPayload } from '../../../utils/callableAuth';
+import { appConfirm } from '../../../utils/appDialog';
+import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
+import { billingFrequencyForAgreement } from '../../../utils/sales/agreementCadence';
 import {
   AgreementBillingType,
   agreementNeedsRecurringRouting,
@@ -87,7 +95,7 @@ const defaultSortDirectionForKey = (sortKey) => (
 
 const defaultAgreementFilters = {
   searchTerm: '',
-  statusFilter: 'all',
+  statusFilter: SalesAgreementStatus.draft,
   sortKey: 'updated',
 };
 
@@ -107,7 +115,108 @@ const agreementAmountCents = (agreement = {}) => (
   Number(agreement.totalAmountCents || agreement.rateAmountCents || 0) || 0
 );
 
+const agreementSubtotalAmountCents = (agreement = {}) => {
+  const directAmount = Number(agreement.subtotalAmountCents || agreement.totalAmountCents || agreement.rateAmountCents || 0);
+  if (directAmount) return directAmount;
+
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  return lineItems.reduce((total, item) => {
+    const quantity = Number(item.quantity || 1) || 1;
+    const lineTotal = Number(item.totalAmountCents || 0);
+    if (lineTotal) return total + lineTotal;
+    return total + (Number(item.unitAmountCents || 0) * quantity);
+  }, 0);
+};
+
 const sortText = (value) => String(value || '').trim().toLowerCase();
+
+const finalAgreementStatusKeys = new Set(['accepted', 'canceled', 'cancelled', 'rejected', 'expired', 'superseded']);
+
+const terminalAgreementStatusKeys = new Set(['canceled', 'cancelled', 'rejected', 'expired', 'superseded']);
+
+const renewalPreviousAgreementId = (agreement = {}) => (
+  agreement.supersedesAgreementId ||
+  agreement.previousAgreementId ||
+  agreement.renewalSourceAgreementId ||
+  ''
+);
+
+const agreementHistoryGroupId = (agreement = {}) => (
+  agreement.agreementHistoryGroupId ||
+  renewalPreviousAgreementId(agreement) ||
+  agreement.id ||
+  ''
+);
+
+const linkedJobIdForAgreement = (agreement = {}) => {
+  if (agreement.jobId) return agreement.jobId;
+  if (agreement.workOrderId) return agreement.workOrderId;
+  if (normalizeStatus(agreement.sourceType) === 'oneoffjob' && agreement.sourceId) {
+    return agreement.sourceId;
+  }
+  return '';
+};
+
+const linkedLeadIdForAgreement = (agreement = {}) => {
+  if (agreement.leadId) return agreement.leadId;
+  if (agreement.homeownerServiceRequestId) return agreement.homeownerServiceRequestId;
+  if (normalizeStatus(agreement.sourceType) === 'lead' && agreement.sourceId) {
+    return agreement.sourceId;
+  }
+  return '';
+};
+
+const agreementHasTerms = (agreement = {}) => (
+  Boolean(String(agreement.terms || '').trim()) ||
+  (Array.isArray(agreement.termsList) && agreement.termsList.length > 0)
+);
+
+const agreementSendDisabledReason = ({ agreement, activeUser, selectedCompanyId }) => {
+  if (!agreement?.id) return 'Agreement is still loading.';
+  if (!activeUser?.uid && !activeUser?.id) return 'You must be signed in to send this agreement.';
+  if (selectedCompanyId && agreement.companyId && agreement.companyId !== selectedCompanyId) {
+    return 'Select the company that owns this agreement before sending.';
+  }
+  if (normalizeStatus(agreement.status) === normalizeStatus(SalesAgreementStatus.accepted)) {
+    return 'Accepted agreements cannot be sent again from this action.';
+  }
+  if (terminalAgreementStatusKeys.has(normalizeStatus(agreement.status))) {
+    return `Agreement status is ${labelize(agreement.status)}.`;
+  }
+  if (!agreement.email) return 'Add a customer email before sending.';
+  if (!Array.isArray(agreement.lineItems) || agreement.lineItems.length === 0) {
+    return 'Add at least one line item before sending.';
+  }
+  if (!agreementHasTerms(agreement)) return 'Add terms before sending.';
+  return '';
+};
+
+const agreementAcceptanceDisabledReason = ({ agreement, activeUser, selectedCompanyId }) => {
+  if (!agreement?.id) return 'Agreement is still loading.';
+  if (!activeUser?.uid && !activeUser?.id) return 'You must be signed in to mark this agreement accepted.';
+  if (selectedCompanyId && agreement.companyId && agreement.companyId !== selectedCompanyId) {
+    return 'Select the company that owns this agreement before marking it accepted.';
+  }
+  if (normalizeStatus(agreement.status) === normalizeStatus(SalesAgreementStatus.accepted)) {
+    return 'Agreement is already accepted.';
+  }
+  if (terminalAgreementStatusKeys.has(normalizeStatus(agreement.status))) {
+    return `Agreement status is ${labelize(agreement.status)}.`;
+  }
+  return '';
+};
+
+const agreementRejectionDisabledReason = ({ agreement, activeUser, selectedCompanyId }) => {
+  if (!agreement?.id) return 'Agreement is still loading.';
+  if (!activeUser?.uid && !activeUser?.id) return 'You must be signed in to mark this agreement rejected.';
+  if (selectedCompanyId && agreement.companyId && agreement.companyId !== selectedCompanyId) {
+    return 'Select the company that owns this agreement before marking it rejected.';
+  }
+  if (finalAgreementStatusKeys.has(normalizeStatus(agreement.status))) {
+    return `Agreement status is already ${labelize(agreement.status)}.`;
+  }
+  return '';
+};
 
 const compareAgreementValues = (left = {}, right = {}, sortKey = 'updated') => {
   if (sortKey === 'amount') {
@@ -252,7 +361,8 @@ const normalizeAgreementSortDirection = (value, sortKey) => {
 
 const normalizeAgreementStatusFilter = (value) => {
   const normalized = normalizeStatus(value);
-  if (!normalized || normalized === 'all') return defaultAgreementFilters.statusFilter;
+  if (!normalized) return defaultAgreementFilters.statusFilter;
+  if (normalized === 'all') return 'all';
 
   return Object.values(SalesAgreementStatus).find((status) => normalizeStatus(status) === normalized)
     || defaultAgreementFilters.statusFilter;
@@ -360,6 +470,37 @@ const StatTile = ({ icon: Icon, label, value, helper }) => (
   </div>
 );
 
+const AgreementActionMenuItem = ({
+  label,
+  icon: Icon,
+  tone = 'slate',
+  loading = false,
+  disabled = false,
+  title = '',
+  onClick,
+}) => {
+  const toneClasses = {
+    blue: 'text-blue-700 hover:bg-blue-50',
+    green: 'text-emerald-700 hover:bg-emerald-50',
+    rose: 'text-rose-700 hover:bg-rose-50',
+    slate: 'text-slate-800 hover:bg-slate-50',
+  };
+
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      disabled={disabled || loading}
+      title={title}
+      className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400 ${toneClasses[tone] || toneClasses.slate}`}
+    >
+      <Icon className="h-4 w-4 shrink-0" />
+      <span>{loading ? `${label}...` : label}</span>
+    </button>
+  );
+};
+
 const SalesAgreements = ({
   routingQueueOnly = false,
   agreementTypes = AgreementBillingType.recurring,
@@ -372,6 +513,7 @@ const SalesAgreements = ({
     user,
     currentuser,
     dataBaseUser,
+    stripeConnectedAccountId,
   } = useContext(Context);
   const activeUser = currentUser || user || currentuser || {};
   const activeUserId = activeUser?.uid || activeUser?.id || dataBaseUser?.id || '';
@@ -381,6 +523,9 @@ const SalesAgreements = ({
   const [error, setError] = useState('');
   const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
   const [editingAgreementId, setEditingAgreementId] = useState('');
+  const [openActionAgreementId, setOpenActionAgreementId] = useState('');
+  const [actionMenuPosition, setActionMenuPosition] = useState(null);
+  const [actionLoadingKey, setActionLoadingKey] = useState('');
 
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -396,6 +541,10 @@ const SalesAgreements = ({
     routingQueueOnly,
   }), [allowedBillingTypes, initialBillingTypeFilter, routingQueueOnly]);
   const searchParamsString = searchParams.toString();
+  const hasExplicitStatusFilter = useMemo(() => {
+    const params = new URLSearchParams(searchParamsString);
+    return agreementFilterParamAliases.statusFilter.some((key) => params.has(key));
+  }, [searchParamsString]);
   const {
     searchTerm,
     statusFilter,
@@ -434,7 +583,7 @@ const SalesAgreements = ({
     statusFilter,
   ]);
 
-  const setAgreementFilters = (nextFilters = {}) => {
+  const setAgreementFilters = useCallback((nextFilters = {}) => {
     const nextParams = agreementFilterParamsFromState(
       new URLSearchParams(searchParamsString),
       {
@@ -449,11 +598,34 @@ const SalesAgreements = ({
     );
 
     setSearchParams(nextParams, { replace: true });
-  };
+  }, [
+    billingTypeFilter,
+    filterOptions,
+    searchParamsString,
+    searchTerm,
+    setSearchParams,
+    sortDirection,
+    sortKey,
+    statusFilter,
+  ]);
+
   const editingAgreement = useMemo(
     () => agreements.find((agreement) => agreement.id === editingAgreementId) || null,
     [agreements, editingAgreementId]
   );
+  const openActionAgreement = useMemo(
+    () => agreements.find((agreement) => agreement.id === openActionAgreementId) || null,
+    [agreements, openActionAgreementId]
+  );
+  const actorName = [
+    dataBaseUser?.firstName,
+    dataBaseUser?.lastName,
+  ].filter(Boolean).join(' ').trim()
+    || dataBaseUser?.userName
+    || dataBaseUser?.name
+    || activeUser?.displayName
+    || activeUser?.email
+    || 'Company user';
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -567,6 +739,22 @@ const SalesAgreements = ({
     };
   }, [recurringRoutingIndex, typeScopedAgreements]);
 
+  useEffect(() => {
+    if (routingQueueOnly || loading || hasExplicitStatusFilter) return;
+    if (statusFilter !== SalesAgreementStatus.draft) return;
+    if (summary.draftCount === 0 && summary.sentCount > 0) {
+      setAgreementFilters({ statusFilter: SalesAgreementStatus.sent });
+    }
+  }, [
+    hasExplicitStatusFilter,
+    loading,
+    routingQueueOnly,
+    setAgreementFilters,
+    statusFilter,
+    summary.draftCount,
+    summary.sentCount,
+  ]);
+
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
   const statusOptions = ['all', ...Object.values(SalesAgreementStatus)];
   const billingTypeOptions = useMemo(() => {
@@ -596,6 +784,279 @@ const SalesAgreements = ({
     }
 
     handleSortKeyChange(nextSortKey);
+  };
+
+  const closeAgreementActions = () => {
+    setOpenActionAgreementId('');
+    setActionMenuPosition(null);
+  };
+
+  const toggleAgreementActions = (agreementId, event) => {
+    event.stopPropagation();
+
+    if (openActionAgreementId === agreementId) {
+      closeAgreementActions();
+      return;
+    }
+
+    const buttonRect = event.currentTarget.getBoundingClientRect();
+    const menuWidth = 224;
+    const menuHeight = 184;
+    const maxLeft = Math.max(8, window.innerWidth - menuWidth - 8);
+    const maxTop = Math.max(8, window.innerHeight - menuHeight - 8);
+    const left = Math.min(
+      Math.max(8, buttonRect.right - menuWidth),
+      maxLeft
+    );
+    const top = Math.min(
+      Math.max(8, buttonRect.bottom + 8),
+      maxTop
+    );
+
+    setOpenActionAgreementId(agreementId);
+    setActionMenuPosition({ top, left });
+  };
+
+  const syncLinkedJobForAgreementStatus = async (agreement, status) => {
+    const linkedJobId = linkedJobIdForAgreement(agreement);
+    const companyId = agreement?.companyId || recentlySelectedCompany;
+    if (!companyId || !linkedJobId) return;
+
+    try {
+      const jobRef = doc(db, 'companies', companyId, 'workOrders', linkedJobId);
+      const jobSnap = await getDoc(jobRef);
+      if (!jobSnap.exists()) return;
+
+      const jobData = jobSnap.data() || {};
+      const statusKey = normalizeStatus(status);
+      const timestamp = serverTimestamp();
+      const updatePayload = {
+        salesAgreementId: agreement.id,
+        salesAgreementStatus: status,
+        salesAgreementStatusUpdatedAt: timestamp,
+        salesAgreementStatusUpdatedByUserId: activeUserId,
+        salesAgreementStatusUpdatedByUserName: actorName,
+        updatedAt: timestamp,
+      };
+
+      if (statusKey === normalizeStatus(SalesAgreementStatus.accepted)) {
+        updatePayload.billingStatus = 'Accepted';
+        updatePayload.salesAgreementAcceptedAt = timestamp;
+        if (!jobData.operationStatus || ['Estimate Pending', 'Unscheduled'].includes(jobData.operationStatus)) {
+          updatePayload.operationStatus = 'Unscheduled';
+        }
+      }
+
+      if (statusKey === normalizeStatus(SalesAgreementStatus.rejected)) {
+        updatePayload.billingStatus = 'Rejected';
+        updatePayload.salesAgreementRejectedAt = timestamp;
+      }
+
+      await updateDoc(jobRef, updatePayload);
+    } catch (syncError) {
+      console.warn('Unable to sync linked job after agreement status update', syncError);
+    }
+  };
+
+  const syncLinkedLeadForAgreementStatus = async (agreement, status) => {
+    const linkedLeadId = linkedLeadIdForAgreement(agreement);
+    if (!linkedLeadId) return;
+
+    try {
+      const statusKey = normalizeStatus(status);
+      const timestamp = serverTimestamp();
+      const updatePayload = {
+        serviceAgreementId: agreement.id,
+        serviceAgreementTitle: agreement.title || 'Service Agreement',
+        serviceAgreementStatus: status,
+        updatedAt: timestamp,
+      };
+
+      if (statusKey === normalizeStatus(SalesAgreementStatus.accepted)) {
+        updatePayload.status = 'Completed';
+        updatePayload.leadStatus = 'Completed';
+        updatePayload.serviceAgreementAcceptedAt = timestamp;
+        updatePayload.dateCompleted = timestamp;
+        updatePayload.lostReason = '';
+        updatePayload.cancelReason = '';
+      }
+
+      if (statusKey === normalizeStatus(SalesAgreementStatus.rejected)) {
+        updatePayload.status = 'Cancelled';
+        updatePayload.leadStatus = 'Cancelled';
+        updatePayload.serviceAgreementRejectedAt = timestamp;
+        updatePayload.lostReason = 'Service agreement rejected.';
+        updatePayload.cancelReason = 'Service agreement rejected.';
+      }
+
+      await updateDoc(doc(db, 'homeownerServiceRequests', linkedLeadId), updatePayload);
+    } catch (syncError) {
+      console.warn('Unable to sync linked lead after agreement status update', syncError);
+    }
+  };
+
+  const sendAgreementEmailFromList = async (agreement) => {
+    const disabledReason = agreementSendDisabledReason({
+      agreement,
+      activeUser,
+      selectedCompanyId: recentlySelectedCompany,
+    });
+    if (disabledReason) {
+      toast.error(disabledReason);
+      return;
+    }
+
+    closeAgreementActions();
+    setActionLoadingKey(`${agreement.id}:send`);
+
+    try {
+      const sendCallable = httpsCallable(functions, 'sendServiceAgreementEmail');
+      const authPayload = await getCallableAuthPayload();
+      const result = await sendCallable({
+        companyId: agreement.companyId,
+        agreementId: agreement.id,
+        agreementBaseUrl: window.location.origin,
+        includeInspectionReport: agreement.emailDelivery?.includeInspectionReport === true || agreement.includeInspectionReport === true,
+        ...authPayload,
+      });
+
+      if (result.data?.testMode) {
+        toast.success(`Test email sent to ${result.data.to}. Customer email saved as ${result.data.intendedTo}.`);
+      } else if (result.data?.includeInspectionReport && !result.data?.hasInspectionReport) {
+        toast.success('Service agreement sent. No linked inspection report was found yet.');
+      } else {
+        toast.success(result.data?.message || 'Service agreement email sent.');
+      }
+    } catch (sendError) {
+      console.error('Unable to send service agreement email from list', sendError);
+      toast.error(sendError.message || 'Failed to send service agreement email.');
+    } finally {
+      setActionLoadingKey('');
+    }
+  };
+
+  const markAgreementAcceptedFromList = async (agreement) => {
+    const disabledReason = agreementAcceptanceDisabledReason({
+      agreement,
+      activeUser,
+      selectedCompanyId: recentlySelectedCompany,
+    });
+    if (disabledReason) {
+      toast.error(disabledReason);
+      return;
+    }
+
+    closeAgreementActions();
+    const confirmed = await appConfirm({
+      title: 'Mark Agreement Accepted',
+      message: `Mark "${agreement.title || 'Service Agreement'}" accepted and create the billing setup record?`,
+      confirmLabel: 'Mark Accepted',
+    });
+    if (!confirmed) return;
+
+    setActionLoadingKey(`${agreement.id}:accept`);
+
+    try {
+      const totalAmountCents = agreementAmountCents(agreement) || agreementSubtotalAmountCents(agreement);
+      const billingSubscriptionDraft = await ensureBillingSubscriptionForAgreement(db, agreement, {
+        stripeConnectedAccountId,
+        agreementUpdates: {
+          status: SalesAgreementStatus.accepted,
+          acceptedAt: serverTimestamp(),
+          acceptedByUserId: activeUserId,
+          acceptedByUserName: actorName,
+          acceptedByEmail: activeUser?.email || dataBaseUser?.email || '',
+          acceptedSource: 'internalManual',
+          acceptedNote: '',
+          acceptedSnapshot: {
+            agreementId: agreement.id,
+            title: agreement.title || 'Service Agreement',
+            customerName: agreement.customerName || 'Customer',
+            customerId: agreement.customerId || '',
+            email: agreement.email || '',
+            totalAmountCents: String(totalAmountCents || 0),
+            serviceCadence: agreement.serviceCadence || '',
+            serviceCadenceCount: String(agreement.serviceCadenceCount || 1),
+            serviceFrequencyLabel: agreement.serviceFrequencyLabel || '',
+            billingFrequency: billingFrequencyForAgreement(agreement),
+            billingFrequencyCount: String(agreement.billingFrequencyCount || 1),
+            rateType: agreement.rateType || '',
+            termsTemplateId: agreement.termsTemplateId || '',
+            termsTemplateName: agreement.termsTemplateName || '',
+            revisionNumber: String(agreement.revisionNumber || 0),
+            previousAgreementId: agreement.previousAgreementId || agreement.supersedesAgreementId || '',
+            supersedesAgreementId: agreement.supersedesAgreementId || agreement.previousAgreementId || '',
+            agreementHistoryGroupId: agreementHistoryGroupId(agreement),
+            agreementVersion: String(agreement.agreementVersion || 1),
+          },
+          statusChangedAt: serverTimestamp(),
+          statusChangedByUserId: activeUserId,
+          statusChangedByUserName: actorName,
+          statusChangeReason: 'Agreement manually accepted from the service agreement list.',
+        },
+      });
+
+      await syncLinkedJobForAgreementStatus(agreement, SalesAgreementStatus.accepted);
+      await syncLinkedLeadForAgreementStatus(agreement, SalesAgreementStatus.accepted);
+
+      toast.success(billingSubscriptionDraft.customerCanPayImmediately
+        ? 'Agreement accepted and billing subscription is ready for payment setup.'
+        : 'Agreement accepted and billing subscription was created.');
+    } catch (acceptError) {
+      console.error('Unable to mark service agreement accepted from list', acceptError);
+      toast.error(acceptError.message || 'Failed to mark service agreement accepted.');
+    } finally {
+      setActionLoadingKey('');
+    }
+  };
+
+  const markAgreementRejectedFromList = async (agreement) => {
+    const disabledReason = agreementRejectionDisabledReason({
+      agreement,
+      activeUser,
+      selectedCompanyId: recentlySelectedCompany,
+    });
+    if (disabledReason) {
+      toast.error(disabledReason);
+      return;
+    }
+
+    closeAgreementActions();
+    const confirmed = await appConfirm({
+      title: 'Mark Agreement Rejected',
+      message: `Mark "${agreement.title || 'Service Agreement'}" rejected? This keeps the agreement in history and removes it from active follow-up.`,
+      confirmLabel: 'Mark Rejected',
+      variant: 'danger',
+    });
+    if (!confirmed) return;
+
+    setActionLoadingKey(`${agreement.id}:reject`);
+
+    try {
+      const timestamp = serverTimestamp();
+      await updateDoc(doc(db, salesCollectionNames.agreements, agreement.id), {
+        status: SalesAgreementStatus.rejected,
+        rejectedAt: timestamp,
+        rejectedByUserId: activeUserId,
+        rejectedByUserName: actorName,
+        rejectedByEmail: activeUser?.email || dataBaseUser?.email || '',
+        statusChangedAt: timestamp,
+        statusChangedByUserId: activeUserId,
+        statusChangedByUserName: actorName,
+        statusChangeReason: 'Agreement marked rejected from the service agreement list.',
+        updatedAt: timestamp,
+      });
+
+      await syncLinkedJobForAgreementStatus(agreement, SalesAgreementStatus.rejected);
+      await syncLinkedLeadForAgreementStatus(agreement, SalesAgreementStatus.rejected);
+
+      toast.success('Agreement marked rejected.');
+    } catch (rejectError) {
+      console.error('Unable to mark service agreement rejected from list', rejectError);
+      toast.error(rejectError.message || 'Failed to mark service agreement rejected.');
+    } finally {
+      setActionLoadingKey('');
+    }
   };
 
   const handleGenerateFromRoutes = async () => {
@@ -893,15 +1354,15 @@ const SalesAgreements = ({
                       <td className="px-5 py-4 text-right">
                         <button
                           type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setEditingAgreementId(agreement.id);
-                          }}
-                          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          aria-label={`Edit ${agreement.title || 'service agreement'}`}
+                          onClick={(event) => toggleAgreementActions(agreement.id, event)}
+                          disabled={Boolean(actionLoadingKey && actionLoadingKey.startsWith(`${agreement.id}:`))}
+                          className="inline-flex h-9 w-9 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-700 transition hover:bg-slate-50 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+                          aria-haspopup="menu"
+                          aria-expanded={openActionAgreementId === agreement.id}
+                          aria-label={`Actions for ${agreement.title || 'service agreement'}`}
+                          title="Actions"
                         >
-                          <FaEdit className="text-xs" />
-                          Edit
+                          <FaEllipsisV className="text-sm" />
                         </button>
                       </td>
                     </tr>
@@ -912,6 +1373,86 @@ const SalesAgreements = ({
           </div>
         </section>
       </div>
+
+      {openActionAgreement && actionMenuPosition && (
+        <>
+          <button
+            type="button"
+            className="fixed inset-0 z-40 cursor-default"
+            aria-label="Close agreement actions"
+            onClick={closeAgreementActions}
+          />
+          <div
+            role="menu"
+            style={{
+              top: actionMenuPosition.top,
+              left: actionMenuPosition.left,
+            }}
+            className="fixed z-50 w-56 overflow-hidden rounded-lg border border-slate-200 bg-white py-1 shadow-xl"
+          >
+            <AgreementActionMenuItem
+              label="Edit"
+              icon={FaEdit}
+              tone="blue"
+              onClick={() => {
+                setEditingAgreementId(openActionAgreement.id);
+                closeAgreementActions();
+              }}
+            />
+            <AgreementActionMenuItem
+              label="Mark as accepted"
+              icon={FaUserCheck}
+              tone="green"
+              loading={actionLoadingKey === `${openActionAgreement.id}:accept`}
+              disabled={Boolean(agreementAcceptanceDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              }))}
+              title={agreementAcceptanceDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              })}
+              onClick={() => markAgreementAcceptedFromList(openActionAgreement)}
+            />
+            <AgreementActionMenuItem
+              label="Send email"
+              icon={FaEnvelope}
+              tone="blue"
+              loading={actionLoadingKey === `${openActionAgreement.id}:send`}
+              disabled={Boolean(agreementSendDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              }))}
+              title={agreementSendDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              })}
+              onClick={() => sendAgreementEmailFromList(openActionAgreement)}
+            />
+            <AgreementActionMenuItem
+              label="Mark as rejected"
+              icon={FaTimesCircle}
+              tone="rose"
+              loading={actionLoadingKey === `${openActionAgreement.id}:reject`}
+              disabled={Boolean(agreementRejectionDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              }))}
+              title={agreementRejectionDisabledReason({
+                agreement: openActionAgreement,
+                activeUser,
+                selectedCompanyId: recentlySelectedCompany,
+              })}
+              onClick={() => markAgreementRejectedFromList(openActionAgreement)}
+            />
+          </div>
+        </>
+      )}
 
       <SalesAgreementEditorModal
         agreement={editingAgreement}

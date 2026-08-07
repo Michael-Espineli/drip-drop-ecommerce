@@ -26,6 +26,7 @@ import {
     shoppingItemNeedsAction,
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const categoryOptions = [
     { value: "Personal", label: "Personal" },
@@ -188,15 +189,12 @@ const ShoppingListCreateView = () => {
                     itemsPromise,
                 ]);
 
-            const companyUsers = companyUsersSnap.docs.map((docSnap) => {
+            const companyUsers = sortCompanyUsersByName(companyUsersSnap.docs.map((docSnap) => {
                 const data = docSnap.data();
-                const name =
-                    data.displayName ||
-                    `${data.userName || ""}`.trim() ||
-                    data.name ||
-                    "Unnamed User";
+                const name = getCompanyUserDisplayName(data, "Unnamed User");
 
                 return {
+                    ...data,
                     id: data.id || docSnap.id,
                     name,
                     customerId: data.customerId || "",
@@ -206,7 +204,7 @@ const ShoppingListCreateView = () => {
                     label: name,
                     value: data.id || docSnap.id,
                 };
-            });
+            }));
 
             const customers = customersSnap.docs.map((docSnap) => {
                 const data = docSnap.data();

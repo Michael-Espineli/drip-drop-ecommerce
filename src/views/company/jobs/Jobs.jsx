@@ -30,6 +30,8 @@ import {
     normalizeIssuePriority,
 } from "../../../utils/models/JobPlan";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
+import { filterRecordsByCustomerTags } from "../../../utils/customerTags";
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const OPERATIONS_QUICK_OPERATION_STATUSES = [
     "Estimate Pending",
@@ -313,7 +315,14 @@ const Jobs = () => {
     const [jobTemplates, setJobTemplates] = useState([]);
     const [commentCounts, setCommentCounts] = useState({});
 
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const { can, requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
@@ -327,6 +336,7 @@ const Jobs = () => {
     const [bulkBillingStatus, setBulkBillingStatus] = useState("");
     const [bulkUpdating, setBulkUpdating] = useState(false);
     const [customFiltersActive, setCustomFiltersActive] = useState(false);
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     // Filter and Sort States
     const [operationStatusFilter, setOperationStatusFilter] = useState([
@@ -380,6 +390,19 @@ const Jobs = () => {
 
         try {
             const workOrdersRef = collection(db, "companies", recentlySelectedCompany, "workOrders");
+            const customerSnapshot = await getDocs(collection(db, "companies", recentlySelectedCompany, "customers"));
+            const customersById = new Map(customerSnapshot.docs.map((customerDoc) => [
+                customerDoc.id,
+                { id: customerDoc.id, ...customerDoc.data() },
+            ]));
+            const filterJobsForRegionalAccess = (records) => filterRecordsByCustomerTags({
+                records,
+                customersById,
+                role: companyRole,
+                userAccess: companyUserAccess,
+                selectedRegionTag: selectedCustomerRegionTag,
+                regionalAccessEnabled: customerAreaFilteringEnabled,
+            });
 
             if (!customFiltersActive && currentJobListView === "billing") {
                 const finishedSnapshot = await getDocs(
@@ -387,9 +410,9 @@ const Jobs = () => {
                 );
 
                 setJobs(
-                    finishedSnapshot.docs
+                    filterJobsForRegionalAccess(finishedSnapshot.docs
                         .map(doc => Job.fromFirestore(doc))
-                        .filter(isFinishedOutstandingJob)
+                        .filter(isFinishedOutstandingJob))
                 );
                 return;
             }
@@ -407,7 +430,7 @@ const Jobs = () => {
                     statusInFilter(job.operationStatus, operationStatusFilter) &&
                     statusInFilter(job.billingStatus, billingStatusFilter)
                 ));
-            setJobs(jobsList);
+            setJobs(filterJobsForRegionalAccess(jobsList));
         } catch (error) {
             console.error("Error fetching jobs: ", error);
         }
@@ -416,7 +439,11 @@ const Jobs = () => {
         operationStatusFilter,
         billingStatusFilter,
         currentJobListView,
-        customFiltersActive
+        customFiltersActive,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        customerAreaFilteringEnabled
     ]);
 
     useEffect(() => {
@@ -516,14 +543,27 @@ const Jobs = () => {
         }
 
         try {
-            const querySnapshot = await getDocs(
-                collection(db, "companies", recentlySelectedCompany, "workOrders")
-            );
+            const [querySnapshot, customerSnapshot] = await Promise.all([
+                getDocs(collection(db, "companies", recentlySelectedCompany, "workOrders")),
+                getDocs(collection(db, "companies", recentlySelectedCompany, "customers")),
+            ]);
             const rawJobs = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            const customersById = new Map(customerSnapshot.docs.map((customerDoc) => [
+                customerDoc.id,
+                { id: customerDoc.id, ...customerDoc.data() },
+            ]));
+            const visibleJobsForCounts = filterRecordsByCustomerTags({
+                records: rawJobs,
+                customersById,
+                role: companyRole,
+                userAccess: companyUserAccess,
+                selectedRegionTag: selectedCustomerRegionTag,
+                regionalAccessEnabled: customerAreaFilteringEnabled,
+            });
             setJobQueueCounts({
-                draftOperations: rawJobs.filter(isDraftOperationJob).length,
-                acceptedNotScheduled: rawJobs.filter(isAcceptedNotScheduledJob).length,
-                finishedOutstanding: rawJobs.filter(isFinishedOutstandingJob).length,
+                draftOperations: visibleJobsForCounts.filter(isDraftOperationJob).length,
+                acceptedNotScheduled: visibleJobsForCounts.filter(isAcceptedNotScheduledJob).length,
+                finishedOutstanding: visibleJobsForCounts.filter(isFinishedOutstandingJob).length,
             });
         } catch (error) {
             console.error("Error fetching job summary data: ", error);
@@ -533,7 +573,7 @@ const Jobs = () => {
                 finishedOutstanding: 0,
             });
         }
-    }, [recentlySelectedCompany]);
+    }, [recentlySelectedCompany, companyRole, companyUserAccess, selectedCustomerRegionTag, customerAreaFilteringEnabled]);
 
     useEffect(() => {
         fetchAllJobs();

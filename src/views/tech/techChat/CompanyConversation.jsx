@@ -5,7 +5,7 @@ import ParticipantInfoModal from './ParticipantInfoModal';
 const CompanyConversation = () => (
   <ChatConversationView
     audience="company"
-    backPath="/companies-chat"
+    backPath="/company/messages"
     ParticipantInfoModal={ParticipantInfoModal}
   />
 );

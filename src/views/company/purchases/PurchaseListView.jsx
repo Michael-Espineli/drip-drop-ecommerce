@@ -9,6 +9,7 @@ import * as XLSX from "xlsx";
 import { appAlert } from "../../../utils/appDialog";
 import Select from "react-select";
 import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import {
   ArrowsRightLeftIcon,
   ArrowsPointingInIcon,
@@ -248,6 +249,9 @@ const mergePurchaseUpdate = (purchase, updates) =>
 const getFirestoreDocId = (record = {}) =>
   record.firestoreId || record.docId || record.id || "";
 
+const technicianDisplayName = (user = {}) =>
+  getCompanyUserDisplayName(user, user.userId || "");
+
 const selectStyles = {
   control: (provided) => ({
     ...provided,
@@ -262,6 +266,22 @@ const selectStyles = {
     zIndex: 60,
     borderRadius: "0.75rem",
     overflow: "hidden",
+  }),
+};
+
+const customerSelectStyles = {
+  ...selectStyles,
+  menu: (provided) => ({
+    ...selectStyles.menu(provided),
+    zIndex: 80,
+  }),
+  menuPortal: (provided) => ({
+    ...provided,
+    zIndex: 80,
+  }),
+  menuList: (provided) => ({
+    ...provided,
+    maxHeight: "560px",
   }),
 };
 
@@ -394,7 +414,7 @@ const PurchaseListView = () => {
         // Assuming you want active users based on the Swift code example
         const q = query(usersRef, where("status", "==", "Active"));
         const querySnapshot = await getDocs(q);
-        const usersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const usersData = sortCompanyUsersByName(querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
         setCompanyUsers(usersData);
         setTechIds(usersData.map(user => user.userId));
       } catch (err) {
@@ -1613,8 +1633,12 @@ const PurchaseListView = () => {
                 }
                 isClearable
                 isSearchable
+                maxMenuHeight={560}
+                menuPlacement="auto"
+                menuPosition="fixed"
+                menuPortalTarget={typeof document !== "undefined" ? document.body : null}
                 placeholder="Select a customer"
-                styles={selectStyles}
+                styles={customerSelectStyles}
               />
             </div>
           </label>

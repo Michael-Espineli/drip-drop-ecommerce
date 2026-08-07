@@ -10,6 +10,7 @@ const ConnectToCompany = lazy(()=> import("../../views/client/ConnectToCompany")
 const Messages = lazy(()=> import("../../views/client/Messages/Messages"))
 const NewCompanyChat = lazy(()=> import("../../views/client/Messages/NewCompanyChat"))
 const CompanyConversation = lazy(()=> import("../../views/client/Messages/CompanyConversation"))
+const ClientNotifications = lazy(() => import("../../views/client/Notifications"))
 
 const Companies = lazy(()=> import("../../views/client/companies/Companies"))
 const SavedCompanies = lazy(()=> import("../../views/client/companies/SavedCompanies"))
@@ -142,6 +143,13 @@ export const clientRoutes = [
         ability :['Admin','Client'], 
         role:'Client',
         featureFlagId: 'feature_flag_001',
+    },
+    {
+        path:'/client/notifications',
+        element: <ClientNotifications/>,
+        ability :['Admin','Client'],
+        role:'Client',
+        featureFlagId: 'feature_flag_011',
     },
     {
         path:'/client/chat/details/:chatId',

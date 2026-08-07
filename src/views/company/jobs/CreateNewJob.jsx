@@ -37,6 +37,7 @@ import {
 } from "../../../utils/models/JobPlan";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { itemPhotoFieldsFromSource } from "../../../utils/itemPhotos";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const StatCard = ({ title, value, subtitle, tone = "gray" }) => {
     const toneClass =
@@ -721,13 +722,9 @@ const CreateNewJob = () => {
                     getDocs(query(collection(db, "companies", recentlySelectedCompany, "jobTemplates"))),
                 ]);
 
-                const admins = adminsSnap.docs.map((docSnap) => {
+                const admins = sortCompanyUsersByName(adminsSnap.docs.map((docSnap) => {
                     const data = docSnap.data();
-                    const name =
-                        data.userName ||
-                        data.name ||
-                        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
-                        "Admin";
+                    const name = getCompanyUserDisplayName(data, "Admin");
 
                     return {
                         ...data,
@@ -737,7 +734,7 @@ const CreateNewJob = () => {
                         label: `${name}${data.roleName ? ` — ${data.roleName}` : ""}`,
                         value: data.id || docSnap.id,
                     };
-                });
+                }));
 
                 setAdminList(admins);
 

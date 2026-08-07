@@ -32,6 +32,51 @@ const toDateValue = (value) => {
 const stopDataIdFor = ({ serviceStopId = "", bodyOfWaterId = "" }) =>
   `com_sd_${cleanId(serviceStopId || "manual")}_${cleanId(bodyOfWaterId || "general")}`;
 
+const recordKey = (record = {}) =>
+  record.id ||
+  stopDataIdFor({
+    serviceStopId: record.serviceStopId || "",
+    bodyOfWaterId: record.bodyOfWaterId || "",
+  });
+
+const dateMillis = (value) => {
+  if (!value) return 0;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.toDate === "function") return value.toDate().getTime();
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 0 : parsed.getTime();
+};
+
+const mergeStopDataRecords = (records = []) => {
+  const merged = new Map();
+
+  records.forEach((record) => {
+    const key = recordKey(record);
+    const current = merged.get(key) || {};
+    merged.set(key, {
+      ...current,
+      ...record,
+      id: record.id || current.id || key,
+      readings: Array.isArray(record.readings) ? record.readings : current.readings || [],
+      dosages: Array.isArray(record.dosages) ? record.dosages : current.dosages || [],
+      observation: Array.isArray(record.observation)
+        ? record.observation
+        : Array.isArray(record.observations)
+          ? record.observations
+          : current.observation || [],
+      equipmentMeasurements: Array.isArray(record.equipmentMeasurements)
+        ? record.equipmentMeasurements
+        : current.equipmentMeasurements || [],
+      testerStripScans: Array.isArray(record.testerStripScans)
+        ? record.testerStripScans
+        : current.testerStripScans || [],
+    });
+  });
+
+  return Array.from(merged.values()).sort((left, right) => dateMillis(right.date) - dateMillis(left.date));
+};
+
 export const normalizeReadingForStopData = (template = {}, amount = "", bodyOfWaterId = "") => ({
   id: template.stopDataReadingId || `reading_${cleanId(template.id || template.readingsTemplateId || fallbackId())}`,
   templateId: template.templateId || template.id || "",
@@ -126,14 +171,35 @@ export const saveStopDataRecord = async ({
 
   await setDoc(doc(db, "companies", companyId, "stopData", stopData.id), stopData, { merge: true });
 
+  const compatibilityWrites = [];
+
+  if (stopData.serviceStopId) {
+    compatibilityWrites.push(
+      setDoc(
+        doc(db, "companies", companyId, "serviceStops", stopData.serviceStopId, "stores", stopData.id),
+        stopData,
+        { merge: true }
+      )
+    );
+  }
+
   if (writeHomeownerCopies) {
     const customerVisibleStopData = { ...stopData };
     delete customerVisibleStopData.testerStripScans;
 
-    await Promise.allSettled([
+    compatibilityWrites.push(
       setDoc(doc(db, "homeownerStopData", stopData.id), customerVisibleStopData, { merge: true }),
-      setDoc(doc(db, "stopData", stopData.id), customerVisibleStopData, { merge: true }),
-    ]);
+      setDoc(doc(db, "stopData", stopData.id), customerVisibleStopData, { merge: true })
+    );
+  }
+
+  if (compatibilityWrites.length) {
+    const results = await Promise.allSettled(compatibilityWrites);
+    results.forEach((result) => {
+      if (result.status === "rejected") {
+        console.warn("Stop data compatibility copy failed:", result.reason);
+      }
+    });
   }
 
   return stopData;
@@ -142,15 +208,36 @@ export const saveStopDataRecord = async ({
 export const fetchStopDataForServiceStop = async ({ db, companyId, serviceStopId } = {}) => {
   if (!db || !companyId || !serviceStopId) return [];
 
-  const snapshot = await getDocs(
-    query(
-      collection(db, "companies", companyId, "stopData"),
-      where("serviceStopId", "==", serviceStopId)
-    )
-  );
+  const [companyStopDataResult, serviceStopStoreResult] = await Promise.allSettled([
+    getDocs(
+      query(
+        collection(db, "companies", companyId, "stopData"),
+        where("serviceStopId", "==", serviceStopId)
+      )
+    ),
+    getDocs(collection(db, "companies", companyId, "serviceStops", serviceStopId, "stores")),
+  ]);
 
-  return snapshot.docs.map((stopDataDoc) => ({
-    id: stopDataDoc.id,
-    ...stopDataDoc.data(),
-  }));
+  const companyRecords = companyStopDataResult.status === "fulfilled"
+    ? companyStopDataResult.value.docs.map((stopDataDoc) => ({
+      id: stopDataDoc.id,
+      ...stopDataDoc.data(),
+    }))
+    : [];
+
+  const storeRecords = serviceStopStoreResult.status === "fulfilled"
+    ? serviceStopStoreResult.value.docs.map((storeDoc) => ({
+      id: storeDoc.id,
+      serviceStopId,
+      ...storeDoc.data(),
+    }))
+    : [];
+
+  [companyStopDataResult, serviceStopStoreResult].forEach((result) => {
+    if (result.status === "rejected") {
+      console.warn("Failed to load service stop data:", result.reason);
+    }
+  });
+
+  return mergeStopDataRecords([...storeRecords, ...companyRecords]);
 };

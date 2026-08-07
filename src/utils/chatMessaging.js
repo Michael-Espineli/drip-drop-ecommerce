@@ -2,23 +2,39 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromCache,
   getDocs,
+  getDocsFromCache,
   onSnapshot,
   query,
   serverTimestamp,
-  setDoc,
   updateDoc,
   where,
   writeBatch,
 } from 'firebase/firestore';
 import { v4 as uuidv4 } from 'uuid';
 import { salesCollectionNames } from './models/Sales';
+import { isFirebaseNetworkError } from './firebaseNetwork';
+import { sortCompanyUsersByName } from './companyUsers';
 
 export const CHAT_VISIBILITY = {
   direct: 'direct',
   company: 'company',
   customer: 'customer',
   companyToCompany: 'companyToCompany',
+  companyInternal: 'companyInternal',
+  companyExternal: 'companyExternal',
+};
+
+export const CHAT_AUDIENCE = {
+  internal: 'internal',
+  external: 'external',
+};
+
+export const CHAT_TARGET_TYPE = {
+  companyUser: 'companyUser',
+  customer: 'customer',
+  company: 'company',
 };
 
 export const CHAT_MESSAGE_KIND = {
@@ -37,7 +53,15 @@ export const CONVERSATION_LINK_TYPES = {
   job: 'job',
   customer: 'customer',
   serviceLocation: 'serviceLocation',
+  bodyOfWater: 'bodyOfWater',
   equipment: 'equipment',
+  purchase: 'purchase',
+  shoppingListItem: 'shoppingListItem',
+  databaseItem: 'databaseItem',
+  receipt: 'receipt',
+  vendor: 'vendor',
+  companyUser: 'companyUser',
+  todo: 'todo',
 };
 
 export const COMPANY_CONVERSATION_LINK_OPTIONS = [
@@ -51,7 +75,15 @@ export const COMPANY_CONVERSATION_LINK_OPTIONS = [
   { value: CONVERSATION_LINK_TYPES.recurringServiceStop, label: 'Recurring Stop' },
   { value: CONVERSATION_LINK_TYPES.customer, label: 'Customer' },
   { value: CONVERSATION_LINK_TYPES.serviceLocation, label: 'Service Location' },
+  { value: CONVERSATION_LINK_TYPES.bodyOfWater, label: 'Body of Water' },
   { value: CONVERSATION_LINK_TYPES.equipment, label: 'Equipment' },
+  { value: CONVERSATION_LINK_TYPES.purchase, label: 'Purchase' },
+  { value: CONVERSATION_LINK_TYPES.receipt, label: 'Receipt' },
+  { value: CONVERSATION_LINK_TYPES.shoppingListItem, label: 'Shopping Item' },
+  { value: CONVERSATION_LINK_TYPES.databaseItem, label: 'Database Item' },
+  { value: CONVERSATION_LINK_TYPES.vendor, label: 'Vendor' },
+  { value: CONVERSATION_LINK_TYPES.companyUser, label: 'Company User' },
+  { value: CONVERSATION_LINK_TYPES.todo, label: 'Todo' },
 ];
 
 export const CLIENT_CONVERSATION_LINK_OPTIONS = [
@@ -61,11 +93,30 @@ export const CLIENT_CONVERSATION_LINK_OPTIONS = [
   { value: CONVERSATION_LINK_TYPES.invoice, label: 'Invoice' },
   { value: CONVERSATION_LINK_TYPES.equipment, label: 'Equipment' },
   { value: CONVERSATION_LINK_TYPES.serviceLocation, label: 'Service Location' },
+  { value: CONVERSATION_LINK_TYPES.bodyOfWater, label: 'Body of Water' },
 ];
 
 const noop = () => {};
 
 const cleanString = (value) => String(value || '').trim();
+
+const normalizeLinkType = (value) => {
+  const aliases = {
+    purchasedItem: CONVERSATION_LINK_TYPES.purchase,
+    purchasedItems: CONVERSATION_LINK_TYPES.purchase,
+    purchaseItem: CONVERSATION_LINK_TYPES.purchase,
+    dataBaseItem: CONVERSATION_LINK_TYPES.databaseItem,
+    databaseItems: CONVERSATION_LINK_TYPES.databaseItem,
+    dbItem: CONVERSATION_LINK_TYPES.databaseItem,
+    shoppingItem: CONVERSATION_LINK_TYPES.shoppingListItem,
+    shoppingList: CONVERSATION_LINK_TYPES.shoppingListItem,
+    bodyOfWaterDetail: CONVERSATION_LINK_TYPES.bodyOfWater,
+    company_user: CONVERSATION_LINK_TYPES.companyUser,
+  };
+  const type = cleanString(value);
+
+  return aliases[type] || type || CONVERSATION_LINK_TYPES.serviceRequest;
+};
 
 const uniqueStrings = (values = []) => (
   [...new Set(values.map(cleanString).filter(Boolean))]
@@ -191,6 +242,40 @@ export const getOtherParticipant = (chat = {}, userId, { companyId = '', audienc
   return participants.find((participant) => participant.userId !== userId) || null;
 };
 
+export const getChatAudience = (chat = {}) => {
+  const explicitAudience = cleanString(chat.audience || chat.chatAudience).toLowerCase();
+  if (explicitAudience === CHAT_AUDIENCE.internal) return CHAT_AUDIENCE.internal;
+  if (explicitAudience === CHAT_AUDIENCE.external || explicitAudience === 'customer' || explicitAudience === 'client') {
+    return CHAT_AUDIENCE.external;
+  }
+
+  const targetType = cleanString(chat.targetType || chat.participantType).toLowerCase();
+  if (targetType === 'companyuser' || targetType === 'company_user' || targetType === 'team' || targetType === 'employee') {
+    return CHAT_AUDIENCE.internal;
+  }
+
+  if (chat.visibility === CHAT_VISIBILITY.companyInternal) return CHAT_AUDIENCE.internal;
+  if (
+    chat.visibility === CHAT_VISIBILITY.customer
+    || chat.visibility === CHAT_VISIBILITY.companyExternal
+    || chat.visibility === CHAT_VISIBILITY.companyToCompany
+    || targetType === 'customer'
+    || targetType === 'company'
+    || chat.customerId
+    || chat.customerUserId
+  ) {
+    return CHAT_AUDIENCE.external;
+  }
+
+  return CHAT_AUDIENCE.external;
+};
+
+export const getChatAudienceLabel = (chat = {}) => {
+  if (getChatAudience(chat) === CHAT_AUDIENCE.internal) return 'Internal';
+  if (chat.visibility === CHAT_VISIBILITY.companyToCompany || chat.targetType === CHAT_TARGET_TYPE.company) return 'External';
+  return 'Customer';
+};
+
 export const getChatDisplayTitle = (chat = {}, userId, { companyId = '', audience = 'client' } = {}) => {
   if (audience === 'client') {
     return chat.companyName || getOtherParticipant(chat, userId, { companyId, audience })?.userName || chat.title || 'Conversation';
@@ -205,14 +290,40 @@ export const getChatAvatarText = (chat = {}, userId, options = {}) => (
 );
 
 export const getConversationLinkLabel = (type) => {
+  const normalizedType = normalizeLinkType(type);
   const option = [...COMPANY_CONVERSATION_LINK_OPTIONS, ...CLIENT_CONVERSATION_LINK_OPTIONS]
-    .find((candidate) => candidate.value === type);
+    .find((candidate) => candidate.value === normalizedType);
 
   return option?.label || 'Linked Item';
 };
 
+export const getConversationLinkMobileRoute = (type) => {
+  const routes = {
+    [CONVERSATION_LINK_TYPES.customer]: 'customer',
+    [CONVERSATION_LINK_TYPES.serviceLocation]: 'customers',
+    [CONVERSATION_LINK_TYPES.bodyOfWater]: 'customers',
+    [CONVERSATION_LINK_TYPES.equipment]: 'equipmentDetailView',
+    [CONVERSATION_LINK_TYPES.serviceStop]: 'serviceStop',
+    [CONVERSATION_LINK_TYPES.repairRequest]: 'repairRequest',
+    [CONVERSATION_LINK_TYPES.serviceRequest]: 'serviceRequest',
+    [CONVERSATION_LINK_TYPES.estimate]: 'serviceAgreementDetail',
+    [CONVERSATION_LINK_TYPES.serviceAgreement]: 'serviceAgreementDetail',
+    [CONVERSATION_LINK_TYPES.invoice]: 'accountsReceivableDetail',
+    [CONVERSATION_LINK_TYPES.job]: 'job',
+    [CONVERSATION_LINK_TYPES.purchase]: 'purchase',
+    [CONVERSATION_LINK_TYPES.receipt]: 'receipt',
+    [CONVERSATION_LINK_TYPES.shoppingListItem]: 'shoppingListDetail',
+    [CONVERSATION_LINK_TYPES.databaseItem]: 'dataBaseItem',
+    [CONVERSATION_LINK_TYPES.vendor]: 'vender',
+    [CONVERSATION_LINK_TYPES.companyUser]: 'companyUserDetailView',
+    [CONVERSATION_LINK_TYPES.todo]: 'toDoList',
+  };
+
+  return routes[normalizeLinkType(type)] || '';
+};
+
 export const normalizeConversationLink = (link = {}) => {
-  const type = link.type || link.linkType || CONVERSATION_LINK_TYPES.serviceRequest;
+  const type = normalizeLinkType(link.type || link.linkType || link.relatedEntity?.type || CONVERSATION_LINK_TYPES.serviceRequest);
   const recordId = cleanString(link.recordId || link.id || link.sourceId);
 
   return {
@@ -228,9 +339,53 @@ export const normalizeConversationLink = (link = {}) => {
     webPath: link.webPath || '',
     clientWebPath: link.clientWebPath || '',
     companyWebPath: link.companyWebPath || '',
+    mobileRoute: link.mobileRoute || getConversationLinkMobileRoute(type),
+    deeplinkUrl: link.deeplinkUrl || link.deepLinkUrl || '',
+    sharePath: link.sharePath || '',
+    shareUrl: link.shareUrl || '',
+    audience: link.audience || '',
     createdAt: link.createdAt || null,
   };
 };
+
+const sharedRecordParams = (link = {}, options = {}) => {
+  const normalizedLink = normalizeConversationLink(link);
+  const params = new URLSearchParams();
+  const recordId = normalizedLink.recordId || options.recordId || '';
+
+  params.set('type', normalizedLink.type);
+  params.set('id', recordId);
+
+  const companyId = options.companyId || normalizedLink.companyId || '';
+  const customerId = options.customerId || normalizedLink.customerId || '';
+  const customerUserId = options.customerUserId || normalizedLink.customerUserId || '';
+  const audience = options.audience || normalizedLink.audience || '';
+  const chatId = options.chatId || '';
+
+  if (companyId) params.set('companyId', companyId);
+  if (customerId) params.set('customerId', customerId);
+  if (customerUserId) params.set('customerUserId', customerUserId);
+  if (audience) params.set('audience', audience);
+  if (chatId) params.set('chatId', chatId);
+
+  return params;
+};
+
+export const buildSharedRecordPath = (link = {}, options = {}) => (
+  `/share?${sharedRecordParams(link, options).toString()}`
+);
+
+export const buildSharedRecordUrl = (link = {}, options = {}) => {
+  const path = buildSharedRecordPath(link, options);
+  const origin = options.origin
+    || (typeof window !== 'undefined' && window.location?.origin ? window.location.origin : '');
+
+  return origin ? `${origin}${path}` : path;
+};
+
+export const buildAppDeepLink = (link = {}, options = {}) => (
+  `dripdrop://share?${sharedRecordParams(link, options).toString()}`
+);
 
 const getChatCustomerContext = (chat = {}) => {
   const participants = Array.isArray(chat.participants) ? chat.participants.map(normalizeParticipant) : [];
@@ -277,6 +432,15 @@ const safeGetDocs = async (queryRef) => {
     return snapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }));
   } catch (error) {
     console.error('Unable to load conversation link picker records:', error);
+    if (isFirebaseNetworkError(error)) {
+      try {
+        const cacheSnapshot = await getDocsFromCache(queryRef);
+        return cacheSnapshot.docs.map((itemDoc) => ({ id: itemDoc.id, ...itemDoc.data() }));
+      } catch (cacheError) {
+        console.warn('Unable to load cached conversation link picker records:', cacheError);
+      }
+    }
+
     return [];
   }
 };
@@ -287,6 +451,15 @@ const safeGetDoc = async (docRef) => {
     return snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null;
   } catch (error) {
     console.error('Unable to load conversation link picker record:', error);
+    if (isFirebaseNetworkError(error)) {
+      try {
+        const cacheSnapshot = await getDocFromCache(docRef);
+        return cacheSnapshot.exists() ? { id: cacheSnapshot.id, ...cacheSnapshot.data() } : null;
+      } catch (cacheError) {
+        console.warn('Unable to load cached conversation link picker record:', cacheError);
+      }
+    }
+
     return null;
   }
 };
@@ -326,6 +499,8 @@ const recordTitle = (type, record = {}) => {
       return record.name || [record.make, record.model].filter(Boolean).join(' ') || record.type || record.category || 'Equipment';
     case CONVERSATION_LINK_TYPES.serviceLocation:
       return record.nickName || record.name || buildAddressLine(record.address) || 'Service Location';
+    case CONVERSATION_LINK_TYPES.bodyOfWater:
+      return record.nickName || record.name || record.type || record.bodyOfWaterType || 'Body of Water';
     case CONVERSATION_LINK_TYPES.repairRequest:
       return record.description || record.notes || 'Repair Request';
     case CONVERSATION_LINK_TYPES.serviceRequest:
@@ -344,6 +519,20 @@ const recordTitle = (type, record = {}) => {
       return record.title || record.name || record.description || 'Job';
     case CONVERSATION_LINK_TYPES.customer:
       return record.customerName || [record.firstName, record.lastName].filter(Boolean).join(' ') || record.name || 'Customer';
+    case CONVERSATION_LINK_TYPES.purchase:
+      return record.name || record.itemName || record.description || record.invoiceNum || 'Purchase';
+    case CONVERSATION_LINK_TYPES.receipt:
+      return record.vendorName || record.venderName || record.storeName || record.invoiceNum || record.name || 'Receipt';
+    case CONVERSATION_LINK_TYPES.shoppingListItem:
+      return record.name || record.itemName || record.description || record.dataBaseItemName || 'Shopping Item';
+    case CONVERSATION_LINK_TYPES.databaseItem:
+      return record.name || record.commonName || record.itemName || [record.make, record.model].filter(Boolean).join(' ') || 'Database Item';
+    case CONVERSATION_LINK_TYPES.vendor:
+      return record.name || record.vendorName || record.venderName || record.companyName || 'Vendor';
+    case CONVERSATION_LINK_TYPES.companyUser:
+      return record.userName || [record.firstName, record.lastName].filter(Boolean).join(' ') || record.name || record.email || 'Company User';
+    case CONVERSATION_LINK_TYPES.todo:
+      return record.title || record.name || record.description || 'Todo';
     default:
       return record.name || record.title || 'Linked Item';
   }
@@ -361,6 +550,8 @@ const recordSubtitle = (type, record = {}) => {
       ].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.serviceLocation:
       return buildAddressLine(record.address) || record.customerName || '';
+    case CONVERSATION_LINK_TYPES.bodyOfWater:
+      return [record.customerName, record.serviceLocationName, record.status].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.repairRequest:
     case CONVERSATION_LINK_TYPES.serviceRequest:
       return [record.status, record.customerName || record.requesterName || record.companyName, date].filter(Boolean).join(' - ');
@@ -386,6 +577,31 @@ const recordSubtitle = (type, record = {}) => {
       return [record.customerName, record.operationStatus || record.status, date].filter(Boolean).join(' - ');
     case CONVERSATION_LINK_TYPES.customer:
       return [record.email || record.customerEmail, record.phoneNumber || record.phone].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.purchase:
+      return [
+        record.customerName,
+        record.techName || record.technicianName,
+        record.vendorName || record.venderName,
+        formatMoney(record.totalCents || record.amountCents || record.priceCents),
+        date,
+      ].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.receipt:
+      return [
+        record.vendorName || record.venderName || record.storeName,
+        record.invoiceNum || record.receiptNumber,
+        formatMoney(record.totalCents || record.amountCents),
+        date,
+      ].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.shoppingListItem:
+      return [record.customerName, record.jobTitle || record.jobName, record.status, date].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.databaseItem:
+      return [record.category || record.equipmentType || record.type, record.make, record.model].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.vendor:
+      return [record.email, record.phoneNumber || record.phone, buildAddressLine(record.address || record)].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.companyUser:
+      return [record.roleName || record.role, record.status, record.email].filter(Boolean).join(' - ');
+    case CONVERSATION_LINK_TYPES.todo:
+      return [record.status, record.assignedToName, date].filter(Boolean).join(' - ');
     default:
       return [record.status, date].filter(Boolean).join(' - ');
   }
@@ -394,22 +610,40 @@ const recordSubtitle = (type, record = {}) => {
 const buildPickerItem = ({ type, record, audience, companyId = '', collectionPath = '', webPath = '' }) => {
   const title = recordTitle(type, record);
   const subtitle = recordSubtitle(type, record);
+  const normalizedType = normalizeLinkType(type);
+  const recordId = cleanString(record.id);
+  const resolvedCompanyId = record.companyId || companyId || '';
+  const customerId = record.customerId || record.relationshipCustomerId || record.customerCompanyRelationshipId || '';
+  const customerUserId = record.customerUserId || record.homeownerId || record.userId || '';
+  const resolvedWebPath = webPath || getConversationLinkRoute({ type: normalizedType, recordId }, audience);
+  const linkSeed = {
+    type: normalizedType,
+    recordId,
+    companyId: resolvedCompanyId,
+    customerId,
+    customerUserId,
+  };
 
   return {
-    id: record.id,
-    type,
-    recordId: record.id,
+    id: recordId,
+    type: normalizedType,
+    recordId,
     title,
     subtitle,
-    companyId: record.companyId || companyId || '',
-    customerId: record.customerId || record.relationshipCustomerId || record.customerCompanyRelationshipId || '',
-    customerUserId: record.customerUserId || record.homeownerId || record.userId || '',
+    companyId: resolvedCompanyId,
+    customerId,
+    customerUserId,
     collectionPath,
-    webPath: webPath || getConversationLinkRoute({ type, recordId: record.id }, audience),
+    webPath: resolvedWebPath,
+    companyWebPath: audience === 'company' ? resolvedWebPath : '',
+    clientWebPath: audience === 'client' ? resolvedWebPath : '',
+    mobileRoute: getConversationLinkMobileRoute(normalizedType),
+    sharePath: buildSharedRecordPath(linkSeed, { audience, companyId: resolvedCompanyId, customerId, customerUserId }),
+    deeplinkUrl: buildAppDeepLink(linkSeed, { audience, companyId: resolvedCompanyId, customerId, customerUserId }),
     searchText: [
       title,
       subtitle,
-      record.id,
+      recordId,
       record.customerName,
       record.email,
       record.status,
@@ -454,8 +688,9 @@ export const getChatPreview = (chat = {}) => {
 export const getConversationLinkRoute = (link = {}, audience = 'company') => {
   const normalizedLink = normalizeConversationLink(link);
   const id = encodeURIComponent(normalizedLink.recordId || '');
+  const routeAudience = audience === 'client' ? 'client' : 'company';
 
-  const explicitAudiencePath = audience === 'client'
+  const explicitAudiencePath = routeAudience === 'client'
     ? normalizedLink.clientWebPath
     : normalizedLink.companyWebPath;
   if (explicitAudiencePath) return explicitAudiencePath;
@@ -465,8 +700,8 @@ export const getConversationLinkRoute = (link = {}, audience = 'company') => {
     const isCompanyPath = path.startsWith('/company') || path.startsWith('/Company') || path.includes('/company/');
     const isClientPath = path.startsWith('/client') || path.startsWith('/customer') || path.includes('/client/') || path.includes('/customer/');
 
-    if (audience === 'company' && !isClientPath) return path;
-    if (audience === 'client' && !isCompanyPath) return path;
+    if (routeAudience === 'company' && !isClientPath) return path;
+    if (routeAudience === 'client' && !isCompanyPath) return path;
   }
 
   if (!id) return '';
@@ -482,7 +717,15 @@ export const getConversationLinkRoute = (link = {}, audience = 'company') => {
     [CONVERSATION_LINK_TYPES.job]: `/company/jobs/detail/${id}`,
     [CONVERSATION_LINK_TYPES.customer]: `/company/customers/details/${id}`,
     [CONVERSATION_LINK_TYPES.serviceLocation]: `/company/serviceLocations/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.bodyOfWater]: `/company/bodiesOfWater/detail/${id}`,
     [CONVERSATION_LINK_TYPES.equipment]: `/company/equipment/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.purchase]: `/company/purchased-items/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.receipt]: `/company/receipts/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.shoppingListItem]: `/company/shopping-list/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.databaseItem]: `/company/items/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.vendor]: `/company/vendors/detail/${id}`,
+    [CONVERSATION_LINK_TYPES.companyUser]: `/company/companyUsers/${id}/general`,
+    [CONVERSATION_LINK_TYPES.todo]: `/company/todo-list?todoId=${id}`,
   };
 
   const clientRoutes = {
@@ -493,10 +736,51 @@ export const getConversationLinkRoute = (link = {}, audience = 'company') => {
     [CONVERSATION_LINK_TYPES.invoice]: `/client/billing/invoices/${id}`,
     [CONVERSATION_LINK_TYPES.equipment]: `/client/equipment/${id}`,
     [CONVERSATION_LINK_TYPES.serviceLocation]: '/client/my-pool',
+    [CONVERSATION_LINK_TYPES.bodyOfWater]: `/client/pools-spas/${id}`,
     [CONVERSATION_LINK_TYPES.estimate]: `/client/service-agreements/${id}`,
   };
 
-  return audience === 'client' ? (clientRoutes[normalizedLink.type] || '') : (companyRoutes[normalizedLink.type] || '');
+  return routeAudience === 'client' ? (clientRoutes[normalizedLink.type] || '') : (companyRoutes[normalizedLink.type] || '');
+};
+
+export const buildConversationLinkSharePayload = (link = {}, { chat = {}, audience = 'company', origin = '' } = {}) => {
+  const normalizedLink = normalizeConversationLink(link);
+  const chatAudience = getChatAudience(chat);
+  const routeAudience = audience === 'client' ? 'client' : 'company';
+  const notificationAudience = routeAudience === 'client' ? 'client' : chatAudience;
+  const companyId = normalizedLink.companyId || chat.companyId || chat.senderCompanyId || chat.receiverCompanyId || '';
+  const customerId = normalizedLink.customerId || chat.customerId || '';
+  const customerUserId = normalizedLink.customerUserId || chat.customerUserId || '';
+  const chatId = chat.id || chat.chatId || '';
+  const route = getConversationLinkRoute({
+    ...normalizedLink,
+    companyId,
+    customerId,
+    customerUserId,
+  }, routeAudience);
+  const shareOptions = {
+    audience: notificationAudience,
+    companyId,
+    customerId,
+    customerUserId,
+    chatId,
+    origin,
+  };
+
+  return {
+    ...normalizedLink,
+    companyId,
+    customerId,
+    customerUserId,
+    webPath: normalizedLink.webPath || route,
+    companyWebPath: normalizedLink.companyWebPath || (routeAudience === 'company' ? route : ''),
+    clientWebPath: normalizedLink.clientWebPath || (routeAudience === 'client' ? route : ''),
+    mobileRoute: normalizedLink.mobileRoute || getConversationLinkMobileRoute(normalizedLink.type),
+    audience: notificationAudience,
+    sharePath: normalizedLink.sharePath || buildSharedRecordPath(normalizedLink, shareOptions),
+    shareUrl: normalizedLink.shareUrl || buildSharedRecordUrl(normalizedLink, shareOptions),
+    deeplinkUrl: normalizedLink.deeplinkUrl || buildAppDeepLink(normalizedLink, shareOptions),
+  };
 };
 
 const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) => {
@@ -524,6 +808,17 @@ const loadClientConversationLinkRecords = async ({ db, type, user, chat = {} }) 
       audience: 'client',
       collectionPath: 'homeownerServiceLocations',
       webPath: '/client/my-pool',
+    }));
+  }
+
+  if (type === CONVERSATION_LINK_TYPES.bodyOfWater) {
+    const records = await safeGetDocs(query(collection(db, 'homeownerBodiesOfWater'), where('userId', '==', uid)));
+    return records.map((record) => buildPickerItem({
+      type,
+      record,
+      audience: 'client',
+      collectionPath: 'homeownerBodiesOfWater',
+      webPath: `/client/pools-spas/${record.id}`,
     }));
   }
 
@@ -609,15 +904,17 @@ const loadCompanyCustomerRecord = async ({ db, companyId, context }) => {
 const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId }) => {
   if (!db || !companyId) return [];
 
+  const normalizedType = normalizeLinkType(type);
   const context = getChatCustomerContext(chat);
   const hasCustomerContext = Boolean(context.customerId || context.customerUserId || context.customerEmail);
 
-  if (!hasCustomerContext && type !== CONVERSATION_LINK_TYPES.customer) return [];
+  if (normalizedType === CONVERSATION_LINK_TYPES.customer) {
+    const records = hasCustomerContext
+      ? await loadCompanyCustomerRecord({ db, companyId, context })
+      : await safeGetDocs(collection(db, 'companies', companyId, 'customers'));
 
-  if (type === CONVERSATION_LINK_TYPES.customer) {
-    const records = await loadCompanyCustomerRecord({ db, companyId, context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -626,10 +923,10 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.equipment) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.equipment) {
     const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'equipment', context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -638,10 +935,10 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.serviceLocation) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.serviceLocation) {
     const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'serviceLocations', context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -650,10 +947,22 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.serviceStop) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.bodyOfWater) {
+    const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'bodiesOfWater', context });
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/bodiesOfWater`,
+      webPath: `/company/bodiesOfWater/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.serviceStop) {
     const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'serviceStops', context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -662,10 +971,10 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.recurringServiceStop) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.recurringServiceStop) {
     const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'recurringServiceStop', context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -674,10 +983,10 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.job) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.job) {
     const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'workOrders', context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -686,7 +995,7 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.repairRequest) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.repairRequest) {
     const [internal, external] = await Promise.all([
       loadCompanySubcollectionRecords({ db, companyId, collectionName: 'repairRequests', context }),
       loadCompanyRootRecords({ db, collectionName: 'homeownerRepairRequests', companyId, context }),
@@ -696,7 +1005,7 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
       ...internal.map((record) => ({ ...record, source: 'internal' })),
       ...external.map((record) => ({ ...record, source: 'homeowner' })),
     ].map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -705,10 +1014,10 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.serviceRequest) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.serviceRequest) {
     const records = await loadCompanyRootRecords({ db, collectionName: 'homeownerServiceRequests', companyId, context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -717,9 +1026,9 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.serviceAgreement || type === CONVERSATION_LINK_TYPES.estimate) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.serviceAgreement || normalizedType === CONVERSATION_LINK_TYPES.estimate) {
     const records = await loadCompanyRootRecords({ db, collectionName: salesCollectionNames.agreements, companyId, context });
-    const filteredRecords = type === CONVERSATION_LINK_TYPES.estimate
+    const filteredRecords = normalizedType === CONVERSATION_LINK_TYPES.estimate
       ? records.filter((record) => {
         const sourceType = String(record.sourceType || '').toLowerCase();
         const title = String(record.title || '').toLowerCase();
@@ -728,7 +1037,7 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
       : records;
 
     return filteredRecords.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
@@ -737,15 +1046,113 @@ const loadCompanyConversationLinkRecords = async ({ db, type, chat, companyId })
     }));
   }
 
-  if (type === CONVERSATION_LINK_TYPES.invoice) {
+  if (normalizedType === CONVERSATION_LINK_TYPES.invoice) {
     const records = await loadCompanyRootRecords({ db, collectionName: salesCollectionNames.invoices, companyId, context });
     return records.map((record) => buildPickerItem({
-      type,
+      type: normalizedType,
       record,
       audience: 'company',
       companyId,
       collectionPath: salesCollectionNames.invoices,
       webPath: `/company/sales/invoices/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.purchase) {
+    const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'purchasedItems', context });
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/purchasedItems`,
+      webPath: `/company/purchased-items/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.receipt) {
+    const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'receipts', context });
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/receipts`,
+      webPath: `/company/receipts/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.shoppingListItem) {
+    const [current, legacy] = await Promise.all([
+      loadCompanySubcollectionRecords({ db, companyId, collectionName: 'shoppingList', context }),
+      loadCompanySubcollectionRecords({ db, companyId, collectionName: 'shoppingListItems', context }),
+    ]);
+
+    return [
+      ...current.map((record) => ({ ...record, sourceCollection: 'shoppingList' })),
+      ...legacy.map((record) => ({ ...record, sourceCollection: 'shoppingListItems' })),
+    ].map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/${record.sourceCollection}`,
+      webPath: `/company/shopping-list/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.databaseItem) {
+    const records = await safeGetDocs(collection(db, 'companies', companyId, 'settings', 'dataBase', 'dataBase'));
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/settings/dataBase/dataBase`,
+      webPath: `/company/items/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.vendor) {
+    const [vendors, legacyVendors] = await Promise.all([
+      safeGetDocs(collection(db, 'companies', companyId, 'settings', 'vendors', 'vendor')),
+      safeGetDocs(collection(db, 'companies', companyId, 'settings', 'venders', 'vender')),
+    ]);
+
+    return [
+      ...vendors.map((record) => ({ ...record, sourceCollection: 'settings/vendors/vendor' })),
+      ...legacyVendors.map((record) => ({ ...record, sourceCollection: 'settings/venders/vender' })),
+    ].map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/${record.sourceCollection}`,
+      webPath: `/company/vendors/detail/${record.id}`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.companyUser) {
+    const records = await safeGetDocs(collection(db, 'companies', companyId, 'companyUsers'));
+    return sortCompanyUsersByName(records).map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/companyUsers`,
+      webPath: `/company/companyUsers/${record.userId || record.id}/general`,
+    }));
+  }
+
+  if (normalizedType === CONVERSATION_LINK_TYPES.todo) {
+    const records = await loadCompanySubcollectionRecords({ db, companyId, collectionName: 'todoItems', context });
+    return records.map((record) => buildPickerItem({
+      type: normalizedType,
+      record,
+      audience: 'company',
+      companyId,
+      collectionPath: `companies/${companyId}/todoItems`,
+      webPath: `/company/todo-list?todoId=${record.id}`,
     }));
   }
 
@@ -797,23 +1204,23 @@ export const listenVisibleChats = ({ db, userId, companyId = '', onChange, onErr
   };
 
   const chatsRef = collection(db, 'chats');
-  const directQuery = query(chatsRef, where('participantIds', 'array-contains', userId));
+  if (!companyId) {
+    const directQuery = query(chatsRef, where('participantIds', 'array-contains', userId));
 
-  unsubscribers.push(onSnapshot(
-    directQuery,
-    (snapshot) => {
-      buckets.set('direct', docsFromSnapshot(snapshot));
-      emit();
-    },
-    (error) => {
-      console.error('Error listening to direct chats:', error);
-      buckets.set('direct', []);
-      onError(error);
-      emit();
-    },
-  ));
-
-  if (companyId) {
+    unsubscribers.push(onSnapshot(
+      directQuery,
+      (snapshot) => {
+        buckets.set('direct', docsFromSnapshot(snapshot));
+        emit();
+      },
+      (error) => {
+        console.error('Error listening to direct chats:', error);
+        buckets.set('direct', []);
+        onError(error);
+        emit();
+      },
+    ));
+  } else {
     const companyOwnerQuery = query(chatsRef, where('companyId', '==', companyId));
     const companyReceiverQuery = query(chatsRef, where('receiverCompanyId', '==', companyId));
 
@@ -875,16 +1282,20 @@ const getUnreadTargets = ({ chat = {}, senderId, senderCompanyId = '' }) => {
   const participantByUserId = new Map(participants.map((participant) => [participant.userId, participant]));
   const participantIds = Array.isArray(chat.participantIds) ? chat.participantIds : [];
   const participantCompanyIds = Array.isArray(chat.participantCompanyIds) ? chat.participantCompanyIds : [];
+  const isInternalChat = getChatAudience(chat) === CHAT_AUDIENCE.internal;
 
   const userTargets = participantIds.filter((participantId) => {
     if (!participantId || participantId === senderId) return false;
+    if (isInternalChat) return true;
     if (!senderCompanyId) return true;
 
     const participant = participantByUserId.get(participantId);
     return participant?.companyId !== senderCompanyId;
   });
 
-  const companyTargets = senderCompanyId
+  const companyTargets = isInternalChat
+    ? []
+    : senderCompanyId
     ? participantCompanyIds.filter((companyId) => companyId && companyId !== senderCompanyId)
     : participantCompanyIds;
 
@@ -892,6 +1303,243 @@ const getUnreadTargets = ({ chat = {}, senderId, senderCompanyId = '' }) => {
     userTargets: uniqueStrings(userTargets),
     companyTargets: uniqueStrings(companyTargets),
   };
+};
+
+const notificationRouteFor = ({ chatId, link, audience }) => {
+  if (link) {
+    const route = getConversationLinkRoute(link, audience);
+    if (route) return route;
+  }
+
+  return audience === 'client' ? `/client/chat/details/${chatId}` : `/companies-chat/detail/${chatId}`;
+};
+
+const notificationTargetScope = ({ recipientUserId = '', recipientCompanyId = '' }) => (
+  recipientUserId ? 'specific' : (recipientCompanyId ? 'company' : 'team')
+);
+
+const buildChatNotificationPayload = ({
+  alertId,
+  chatId,
+  chat,
+  messageId,
+  preview,
+  normalizedLink,
+  senderId,
+  senderName,
+  senderCompanyId,
+  senderCompanyName,
+  recipientUserId = '',
+  recipientCompanyId = '',
+  recipientAudience = 'company',
+}) => {
+  const label = normalizedLink ? getConversationLinkLabel(normalizedLink.type) : '';
+  const title = normalizedLink
+    ? `${senderName || 'Someone'} shared ${label}`
+    : `New message from ${senderName || 'User'}`;
+  const companyId = recipientCompanyId
+    || normalizedLink?.companyId
+    || chat.companyId
+    || chat.senderCompanyId
+    || chat.receiverCompanyId
+    || senderCompanyId
+    || '';
+  const route = notificationRouteFor({
+    chatId,
+    link: normalizedLink,
+    audience: recipientAudience,
+  });
+  const payload = {
+    id: alertId,
+    companyId,
+    title,
+    name: title,
+    message: preview || '',
+    description: preview || '',
+    status: 'unread',
+    read: false,
+    severity: 'info',
+    type: normalizedLink ? 'chat_shared_record' : 'chat_message',
+    source: 'chat',
+    sourceId: messageId,
+    chatId,
+    conversationId: chatId,
+    route,
+    audience: getChatAudience(chat),
+    targetScope: notificationTargetScope({ recipientUserId, recipientCompanyId }),
+    assignedToUserId: recipientUserId,
+    recipientUserId,
+    recipientCompanyId,
+    deliveryTargets: ['web', 'ios'],
+    channels: {
+      dashboard: true,
+      ios: true,
+      push: true,
+    },
+    createdByUserId: senderId || '',
+    createdByName: senderName || 'User',
+    createdByCompanyId: senderCompanyId || '',
+    createdByCompanyName: senderCompanyName || '',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (normalizedLink) {
+    payload.hasItem = true;
+    payload.itemId = normalizedLink.recordId || '';
+    payload.itemName = normalizedLink.title || label;
+    payload.relatedEntity = {
+      type: normalizedLink.type,
+      id: normalizedLink.recordId || '',
+      label: normalizedLink.title || label,
+      companyId,
+      collectionPath: normalizedLink.collectionPath || '',
+      webPath: route,
+      deeplinkUrl: normalizedLink.deeplinkUrl || '',
+    };
+    payload.share = {
+      type: normalizedLink.type,
+      id: normalizedLink.recordId || '',
+      recordId: normalizedLink.recordId || '',
+      companyId,
+      customerId: normalizedLink.customerId || chat.customerId || '',
+      customerUserId: normalizedLink.customerUserId || chat.customerUserId || '',
+      title: normalizedLink.title || label,
+      subtitle: normalizedLink.subtitle || '',
+      collectionPath: normalizedLink.collectionPath || '',
+      webPath: route,
+      sharePath: normalizedLink.sharePath || buildSharedRecordPath(normalizedLink, { audience: recipientAudience, companyId, chatId }),
+      shareUrl: normalizedLink.shareUrl || buildSharedRecordUrl(normalizedLink, { audience: recipientAudience, companyId, chatId }),
+      deeplinkUrl: normalizedLink.deeplinkUrl || buildAppDeepLink(normalizedLink, { audience: recipientAudience, companyId, chatId }),
+      mobileRoute: normalizedLink.mobileRoute || getConversationLinkMobileRoute(normalizedLink.type),
+      audience: recipientAudience,
+    };
+  } else {
+    payload.hasItem = false;
+    payload.itemId = '';
+    payload.itemName = '';
+    payload.relatedEntity = {
+      type: 'chat',
+      id: chatId,
+      label: chat.title || 'Conversation',
+      companyId,
+    };
+  }
+
+  return payload;
+};
+
+const addMessageNotificationWrites = ({
+  batch,
+  db,
+  chatId,
+  chat,
+  messageId,
+  preview,
+  normalizedLink,
+  senderId,
+  senderName,
+  senderCompanyId = '',
+  senderCompanyName = '',
+  userTargets = [],
+  companyTargets = [],
+}) => {
+  if (!batch || !db) return;
+
+  const participants = Array.isArray(chat.participants) ? chat.participants.map(normalizeParticipant) : [];
+  const participantByUserId = new Map(participants.map((participant) => [participant.userId, participant]));
+  const uniqueUserTargets = uniqueStrings(userTargets);
+  const uniqueCompanyTargets = uniqueStrings(companyTargets);
+
+  uniqueUserTargets.forEach((recipientUserId) => {
+    const participant = participantByUserId.get(recipientUserId);
+    const recipientAudience = (
+      getChatAudience(chat) === CHAT_AUDIENCE.internal
+      || participant?.companyId
+      || participant?.accountType === 'Company'
+    ) ? 'company' : 'client';
+    const alertId = `alert_${messageId}_${recipientUserId}`;
+    const alertRef = doc(db, 'users', recipientUserId, 'alerts', alertId);
+
+    batch.set(alertRef, buildChatNotificationPayload({
+      alertId,
+      chatId,
+      chat,
+      messageId,
+      preview,
+      normalizedLink,
+      senderId,
+      senderName,
+      senderCompanyId,
+      senderCompanyName,
+      recipientUserId,
+      recipientAudience,
+    }));
+  });
+
+  uniqueCompanyTargets.forEach((recipientCompanyId) => {
+    const alertId = `alert_${messageId}_${recipientCompanyId}`;
+    const alertRef = doc(db, 'companies', recipientCompanyId, 'alerts', alertId);
+
+    batch.set(alertRef, buildChatNotificationPayload({
+      alertId,
+      chatId,
+      chat,
+      messageId,
+      preview,
+      normalizedLink,
+      senderId,
+      senderName,
+      senderCompanyId,
+      senderCompanyName,
+      recipientCompanyId,
+      recipientAudience: 'company',
+    }));
+  });
+};
+
+const commitMessageNotificationWrites = async ({
+  db,
+  chatId,
+  chat,
+  messageId,
+  preview,
+  normalizedLink,
+  senderId,
+  senderName,
+  senderCompanyId = '',
+  senderCompanyName = '',
+  userTargets = [],
+  companyTargets = [],
+}) => {
+  const uniqueUserTargets = uniqueStrings(userTargets);
+  const uniqueCompanyTargets = uniqueStrings(companyTargets);
+
+  if (!db || (!uniqueUserTargets.length && !uniqueCompanyTargets.length)) return;
+
+  const notificationBatch = writeBatch(db);
+
+  addMessageNotificationWrites({
+    batch: notificationBatch,
+    db,
+    chatId,
+    chat,
+    messageId,
+    preview,
+    normalizedLink,
+    senderId,
+    senderName,
+    senderCompanyId,
+    senderCompanyName,
+    userTargets: uniqueUserTargets,
+    companyTargets: uniqueCompanyTargets,
+  });
+
+  try {
+    await notificationBatch.commit();
+  } catch (error) {
+    console.warn('Chat message was sent, but notification alerts could not be created:', error);
+  }
 };
 
 export const sendChatMessage = async ({
@@ -906,9 +1554,8 @@ export const sendChatMessage = async ({
   senderCompanyName = '',
 }) => {
   const messageText = cleanString(text);
-  const normalizedLink = link ? normalizeConversationLink(link) : null;
 
-  if (!db || !chatId || !senderId || (!messageText && !normalizedLink)) return null;
+  if (!db || !chatId || !senderId || (!messageText && !link)) return null;
 
   let chatData = chat;
   if (!chatData) {
@@ -917,6 +1564,12 @@ export const sendChatMessage = async ({
     chatData = { id: chatSnap.id, ...chatSnap.data() };
   }
 
+  const normalizedLink = link
+    ? buildConversationLinkSharePayload(link, {
+      chat: chatData,
+      audience: senderCompanyId ? 'company' : 'client',
+    })
+    : null;
   const messageId = `msg_${uuidv4()}`;
   const messageRef = doc(db, 'messages', messageId);
   const kind = normalizedLink ? CHAT_MESSAGE_KIND.linkedRecord : CHAT_MESSAGE_KIND.text;
@@ -928,8 +1581,9 @@ export const sendChatMessage = async ({
     senderId,
     senderCompanyId,
   });
+  const batch = writeBatch(db);
 
-  await setDoc(messageRef, {
+  batch.set(messageRef, {
     id: messageId,
     chatId,
     message: messageText,
@@ -947,7 +1601,7 @@ export const sendChatMessage = async ({
     dateSent: serverTimestamp(),
   });
 
-  await updateDoc(doc(db, 'chats', chatId), {
+  batch.update(doc(db, 'chats', chatId), {
     lastMessage: preview,
     lastMessageKind: kind,
     lastConversationLink: normalizedLink,
@@ -956,6 +1610,23 @@ export const sendChatMessage = async ({
     companyIdsWhoHaveNotRead: companyTargets,
     readByUserIds: [senderId],
     updatedAt: serverTimestamp(),
+  });
+
+  await batch.commit();
+
+  await commitMessageNotificationWrites({
+    db,
+    chatId,
+    chat: chatData,
+    messageId,
+    preview,
+    normalizedLink,
+    senderId,
+    senderName: senderName || 'User',
+    senderCompanyId,
+    senderCompanyName,
+    userTargets,
+    companyTargets,
   });
 
   return messageId;
@@ -976,7 +1647,11 @@ export const createClientCompanyChat = async ({ db, user, dataBaseUser, company,
   const chatData = {
     id: chatId,
     title: `${homeownerName} / ${company.name || 'Company'}`,
-    visibility: CHAT_VISIBILITY.customer,
+    visibility: CHAT_VISIBILITY.companyExternal,
+    audience: CHAT_AUDIENCE.external,
+    targetType: CHAT_TARGET_TYPE.company,
+    companyVisibility: 'public',
+    publicToCompanyId: company.id,
     companyId: company.id,
     companyName: company.name || '',
     receiverCompanyId: company.id,
@@ -1020,8 +1695,21 @@ export const createClientCompanyChat = async ({ db, user, dataBaseUser, company,
     read: false,
     dateSent: serverTimestamp(),
   });
-
   await batch.commit();
+
+  await commitMessageNotificationWrites({
+    db,
+    chatId,
+    chat: chatData,
+    messageId,
+    preview: messageText,
+    normalizedLink: null,
+    senderId: user.uid,
+    senderName: homeownerName,
+    userTargets: ownerParticipant.userId ? [ownerParticipant.userId] : [],
+    companyTargets: [company.id],
+  });
+
   return chatId;
 };
 
@@ -1039,6 +1727,14 @@ export const createCompanyChat = async ({
 
   const chatId = `chat_${uuidv4()}`;
   const messageId = `msg_${uuidv4()}`;
+  const targetType = participant.type === CHAT_TARGET_TYPE.companyUser
+    ? CHAT_TARGET_TYPE.companyUser
+    : participant.type === CHAT_TARGET_TYPE.company
+      ? CHAT_TARGET_TYPE.company
+      : CHAT_TARGET_TYPE.customer;
+  const chatAudience = targetType === CHAT_TARGET_TYPE.companyUser
+    ? CHAT_AUDIENCE.internal
+    : CHAT_AUDIENCE.external;
   const targetCompanyId = participant.type === 'company'
     ? (participant.companyId || participant.id)
     : '';
@@ -1059,7 +1755,7 @@ export const createCompanyChat = async ({
     userImage: participant.image || participant.userImage || participant.photoUrl || participant.profileImageUrl || '',
     userEmail: participant.email || participant.userEmail || '',
     accountType: participant.type === 'company' ? 'Company' : participant.accountType || 'Client',
-    companyId: targetCompanyId,
+    companyId: targetType === CHAT_TARGET_TYPE.companyUser ? selectedCompanyId : targetCompanyId,
     companyName: participant.companyName || (participant.type === 'company' ? participant.name : ''),
     isCompany: participant.type === 'company',
   });
@@ -1067,7 +1763,15 @@ export const createCompanyChat = async ({
   const chatData = {
     id: chatId,
     title: `${participant.name || targetParticipant.userName} / ${selectedCompanyName || 'Company'}`,
-    visibility: targetCompanyId ? CHAT_VISIBILITY.companyToCompany : CHAT_VISIBILITY.company,
+    visibility: targetType === CHAT_TARGET_TYPE.companyUser
+      ? CHAT_VISIBILITY.companyInternal
+      : targetCompanyId
+        ? CHAT_VISIBILITY.companyToCompany
+        : CHAT_VISIBILITY.companyExternal,
+    audience: chatAudience,
+    targetType,
+    companyVisibility: targetType === CHAT_TARGET_TYPE.customer ? 'public' : '',
+    publicToCompanyId: targetType === CHAT_TARGET_TYPE.customer ? selectedCompanyId : '',
     companyId: selectedCompanyId,
     companyName: selectedCompanyName || '',
     senderCompanyId: selectedCompanyId,
@@ -1076,8 +1780,8 @@ export const createCompanyChat = async ({
     participantCompanyIds,
     participants: [senderParticipant, targetParticipant],
     customerId: participant.customerId || (participant.type === 'customer' ? participant.id : ''),
-    customerUserId: targetCompanyId ? '' : targetUserId,
-    customerName: targetCompanyId ? '' : (participant.customerName || targetParticipant.userName),
+    customerUserId: targetType === CHAT_TARGET_TYPE.customer ? targetUserId : '',
+    customerName: targetType === CHAT_TARGET_TYPE.customer ? (participant.customerName || targetParticipant.userName) : '',
     createdByUserId: user.uid,
     createdByCompanyId: selectedCompanyId,
     userWhoHaveNotRead: targetUserId ? [targetUserId] : [],
@@ -1110,8 +1814,23 @@ export const createCompanyChat = async ({
     read: false,
     dateSent: serverTimestamp(),
   });
-
   await batch.commit();
+
+  await commitMessageNotificationWrites({
+    db,
+    chatId,
+    chat: chatData,
+    messageId,
+    preview: messageText,
+    normalizedLink: null,
+    senderId: user.uid,
+    senderName,
+    senderCompanyId: selectedCompanyId,
+    senderCompanyName: selectedCompanyName || '',
+    userTargets: targetUserId ? [targetUserId] : [],
+    companyTargets: targetCompanyId ? [targetCompanyId] : [],
+  });
+
   return chatId;
 };
 

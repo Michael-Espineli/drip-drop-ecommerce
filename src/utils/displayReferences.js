@@ -15,19 +15,20 @@ export const displayReferenceValue = (value, fallbackLabel = "Record") => {
 };
 
 export const displayRecordReference = (record = {}, fallbackLabel = "Record") => {
+  const safeRecord = record || {};
   const candidates = [
-    record.internalId,
-    record.invoiceNumber,
-    record.invoiceNum,
-    record.referenceNumber,
-    record.batchReference,
-    record.title,
-    record.name,
-    record.displayName,
-    record.customerName,
-    record.serviceLocationName,
-    record.description,
-    record.id,
+    safeRecord.internalId,
+    safeRecord.invoiceNumber,
+    safeRecord.invoiceNum,
+    safeRecord.referenceNumber,
+    safeRecord.batchReference,
+    safeRecord.title,
+    safeRecord.name,
+    safeRecord.displayName,
+    safeRecord.customerName,
+    safeRecord.serviceLocationName,
+    safeRecord.description,
+    safeRecord.id,
   ];
 
   const value = candidates.find((candidate) => String(candidate || "").trim());

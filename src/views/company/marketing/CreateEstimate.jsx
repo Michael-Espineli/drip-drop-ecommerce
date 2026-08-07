@@ -171,7 +171,15 @@ export default function CreateEstimate() {
             });
 
             const leadRef = doc(db, 'homeownerServiceRequests', leadId);
-            await updateDoc(leadRef, { estimateId: estimateRef.id });
+            await updateDoc(leadRef, {
+                estimateId: estimateRef.id,
+                status: 'In Progress',
+                leadStatus: 'In Progress',
+                dateCompleted: null,
+                lostReason: '',
+                cancelReason: '',
+                updatedAt: serverTimestamp(),
+            });
 
             toast.success('Estimate created successfully!', { id: toastId });
             navigate(`/company/leads/${lead.id}`);

@@ -1,6 +1,6 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, getDocs } from 'firebase/firestore';
+import { getFirestore, doc, addDoc, collection, serverTimestamp, getDoc, getDocs, updateDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ClipLoader } from 'react-spinners';
@@ -157,7 +157,17 @@ export default function ScheduleEstimate() {
                 context: 'ScheduleEstimate.handleSubmit',
                 payload: serviceStopPayload,
             });
-            await addDoc(collection(db, 'companies', recentlySelectedCompany, 'serviceStops'), serviceStopPayload);
+            const serviceStopRef = await addDoc(collection(db, 'companies', recentlySelectedCompany, 'serviceStops'), serviceStopPayload);
+            await updateDoc(doc(db, 'homeownerServiceRequests', lead.id), {
+                serviceEstimateServiceStopId: serviceStopRef.id,
+                initialEstimateServiceStopId: serviceStopRef.id,
+                status: 'In Progress',
+                leadStatus: 'In Progress',
+                dateCompleted: null,
+                lostReason: '',
+                cancelReason: '',
+                updatedAt: serverTimestamp(),
+            });
 
             toast.success('Estimate scheduled successfully!', { id: toastId });
             navigate(`/company/leads/${lead.id}`);

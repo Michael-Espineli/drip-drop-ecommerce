@@ -1,8 +1,20 @@
 
 import { initializeApp } from "firebase/app";
 import { getAnalytics } from "firebase/analytics";
-import { getAuth, connectAuthEmulator } from "firebase/auth";
-import { getFirestore, connectFirestoreEmulator } from "firebase/firestore";
+import {
+  browserLocalPersistence,
+  browserSessionPersistence,
+  connectAuthEmulator,
+  inMemoryPersistence,
+  initializeAuth,
+} from "firebase/auth";
+import {
+  connectFirestoreEmulator,
+  initializeFirestore,
+  memoryLocalCache,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+} from "firebase/firestore";
 import { getFunctions, connectFunctionsEmulator } from "firebase/functions";
 import { getStorage } from "firebase/storage";
 
@@ -15,12 +27,28 @@ const useProductionFirebase = ['production', 'prod'].includes(requestedFirebaseE
 const firebaseEnvironment = useProductionFirebase ? 'production' : 'development';
 const firebaseConfig = useProductionFirebase ? prodConfig : devConfig;
 const useFirebaseEmulators = process.env.REACT_APP_USE_FIREBASE_EMULATORS === 'true';
+const usePersistentFirestoreCache = process.env.REACT_APP_FIRESTORE_PERSISTENT_CACHE === 'true';
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 const analytics = process.env.NODE_ENV === 'test' ? null : getAnalytics(app);
-const auth = getAuth(app);
-const db = getFirestore(app);
+const auth = initializeAuth(app, {
+  persistence: [
+    browserLocalPersistence,
+    browserSessionPersistence,
+    inMemoryPersistence,
+  ],
+});
+const firestoreSettings = process.env.NODE_ENV === 'test'
+  ? {}
+  : {
+      localCache: usePersistentFirestoreCache
+        ? persistentLocalCache({
+            tabManager: persistentMultipleTabManager(),
+          })
+        : memoryLocalCache(),
+    };
+const db = initializeFirestore(app, firestoreSettings);
 const functions = getFunctions(app);
 const storage = getStorage(app);
 

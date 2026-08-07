@@ -1,6 +1,14 @@
 import React, { useState, useEffect, useContext, useRef, useMemo, useCallback } from "react";
 import { useParams, Link, useNavigate, useLocation } from "react-router-dom";
-import { Equipment, EQUIPMENT_STATUS, EQUIPMENT_STATUS_OPTIONS, displayEquipmentStatus } from "../../../utils/models/Equipment";
+import {
+  Equipment,
+  EQUIPMENT_STATUS,
+  EQUIPMENT_STATUS_OPTIONS,
+  buildEquipmentNickname,
+  displayEquipmentStatus,
+  equipmentDefaultsToNeedsService,
+  isFilterEquipment,
+} from "../../../utils/models/Equipment";
 import { MaintenanceHistory } from "../../../utils/models/MaintenanceHistory";
 import { RepairHistory } from "../../../utils/models/RepairHistory";
 import { EquipmentPart } from "../../../utils/models/EquipmentPart";
@@ -15,24 +23,29 @@ import {
   limit,
   orderBy,
   updateDoc,
-  deleteDoc,
   doc,
   getDoc,
   setDoc,
   onSnapshot,
+  serverTimestamp,
   where,
 } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format, addDays, addWeeks, addMonths, addYears } from "date-fns";
+import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { v4 as uuidv4 } from "uuid";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import EquipmentCatalogPicker from "../../components/equipment/EquipmentCatalogPicker";
+import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import {
   ArrowPathRoundedSquareIcon,
   BriefcaseIcon,
+  ChevronDownIcon,
   PencilSquareIcon,
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
+import { deleteEquipmentWithSubcollections } from "../../../utils/equipmentDelete";
 
 import toast from "react-hot-toast";
 
@@ -69,23 +82,35 @@ const Field = ({ label, children }) => (
   </div>
 );
 
-const DetailActionButton = ({ label, icon: Icon, tone = "blue", onClick }) => {
+const EquipmentHeaderActionMenuItem = ({
+  label,
+  icon: Icon,
+  tone = "slate",
+  onClick,
+  disabled = false,
+}) => {
   const toneClasses =
     tone === "amber"
-      ? "text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100"
+      ? "text-amber-700 hover:bg-amber-50 data-[focus]:bg-amber-50"
       : tone === "green"
-        ? "text-green-700 bg-green-50 border-green-200 hover:bg-green-100"
-        : "text-blue-700 bg-blue-50 border-blue-200 hover:bg-blue-100";
+        ? "text-emerald-700 hover:bg-emerald-50 data-[focus]:bg-emerald-50"
+        : "text-slate-700 hover:bg-slate-50 data-[focus]:bg-slate-50";
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl border text-sm font-semibold transition ${toneClasses}`}
-    >
-      <Icon className="h-5 w-5" />
-      {label}
-    </button>
+    <MenuItem disabled={disabled}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className={[
+          "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+          toneClasses,
+        ].join(" ")}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1">{label}</span>
+      </button>
+    </MenuItem>
   );
 };
 
@@ -253,6 +278,18 @@ const buildEquipmentCreatePath = (equipment = {}) => {
   return `${path}/${equipment.bodyOfWaterId}`;
 };
 
+const applyEquipmentDefaults = (current = {}, next = {}) => {
+  const merged = { ...current, ...next };
+  const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+
+  return {
+    ...merged,
+    needsService: shouldDefaultNeedsService ? true : merged.needsService,
+    serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? "6" : merged.serviceFrequency,
+    serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? "Month" : merged.serviceFrequencyEvery,
+  };
+};
+
 const EquipmentDetail = () => {
   const navigate = useNavigate();
   const location = useLocation();
@@ -349,6 +386,13 @@ const EquipmentDetail = () => {
     setShowServiceHistoryModal(true);
   }, [companyUsers, equipment?.customerName]);
 
+  const openMakeModelModal = useCallback(() => {
+    setCatalogTypeId(CUSTOM_CATALOG_VALUE);
+    setCatalogMakeId(CUSTOM_CATALOG_VALUE);
+    setCatalogEquipmentId(CUSTOM_CATALOG_VALUE);
+    setShowMakeModelModal(true);
+  }, []);
+
   const handleMaintenancePerformedByChange = (value) => {
     setMaintenancePerformedBy(value);
     if (value === "Customer") {
@@ -365,11 +409,11 @@ const EquipmentDetail = () => {
     } else if (action === "recordRepair") {
       setShowRepairHistoryModal(true);
     } else if (action === "editMakeModel") {
-      setShowMakeModelModal(true);
+      openMakeModelModal();
     }
 
     navigate(location.pathname, { replace: true, state: {} });
-  }, [location.pathname, location.state, navigate, openMaintenanceModal]);
+  }, [location.pathname, location.state, navigate, openMaintenanceModal, openMakeModelModal]);
 
   // -----------------------------
   // Load company users list
@@ -381,7 +425,7 @@ const EquipmentDetail = () => {
       try {
         const usersRef = collection(db, "companies", recentlySelectedCompany, "companyUsers");
         const snap = await getDocs(query(usersRef, orderBy("userName", "asc")));
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+        const data = sortCompanyUsersByName(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setCompanyUsers(data);
 
         if (data.length) {
@@ -692,6 +736,13 @@ const EquipmentDetail = () => {
   const computedNextServiceDate = useMemo(() => {
     return computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery);
   }, [lastServiceDate, serviceFrequency, serviceFrequencyEvery]);
+  const editingEquipmentIsFilter = isFilterEquipment({
+    name,
+    type: category,
+    category,
+    make,
+    model,
+  });
 
   const getDateValue = (value) => {
     if (!value) return null;
@@ -866,16 +917,30 @@ const EquipmentDetail = () => {
     try {
       const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
 
-      const next = computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery);
+      const finalNeedsService = needsService || equipmentDefaultsToNeedsService({
+	        name,
+	        type: category,
+	        category,
+	        make,
+	        model,
+	      });
+      const finalIsFilter = isFilterEquipment({
+        name,
+        type: category,
+        category,
+        make,
+        model,
+      });
+	      const next = finalNeedsService ? computeNextServiceDate(lastServiceDate, serviceFrequency, serviceFrequencyEvery) : null;
 
       await updateDoc(docRef, {
         type: category,
         typeId,
-        cleanFilterPressure,
-        currentPressure,
+        cleanFilterPressure: finalIsFilter ? cleanFilterPressure : null,
+        currentPressure: finalIsFilter ? currentPressure : null,
         dateInstalled,
 
-        lastServiceDate,
+        lastServiceDate: finalNeedsService ? lastServiceDate : null,
         nextServiceDate: next,
 
         make,
@@ -885,12 +950,14 @@ const EquipmentDetail = () => {
         universalEquipmentId,
         manualPdfLink,
         name,
+        createdAt: equipment?.createdAt || serverTimestamp(),
+        createdAtMillis: equipment?.createdAtMillis || Date.now(),
         isActive,
-        needsService,
+	        needsService: finalNeedsService,
 
         // ✅ save in your desired shapes:
-        serviceFrequency: serviceFrequency === "" ? null : Number(serviceFrequency),
-        serviceFrequencyEvery: serviceFrequencyEvery || "",
+	        serviceFrequency: finalNeedsService && serviceFrequency !== "" ? Number(serviceFrequency) : null,
+	        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
         notes,
@@ -900,11 +967,11 @@ const EquipmentDetail = () => {
         ...prev,
         type: category,
         typeId,
-        cleanFilterPressure,
-        currentPressure,
+        cleanFilterPressure: finalIsFilter ? cleanFilterPressure : null,
+        currentPressure: finalIsFilter ? currentPressure : null,
         dateInstalled,
 
-        lastServiceDate,
+        lastServiceDate: finalNeedsService ? lastServiceDate : null,
         nextServiceDate: next,
 
         make,
@@ -914,11 +981,13 @@ const EquipmentDetail = () => {
         universalEquipmentId,
         manualPdfLink,
         name,
+        createdAt: prev?.createdAt || new Date(),
+        createdAtMillis: prev?.createdAtMillis || Date.now(),
         isActive,
-        needsService,
+	        needsService: finalNeedsService,
 
-        serviceFrequency: serviceFrequency === "" ? null : Number(serviceFrequency),
-        serviceFrequencyEvery: serviceFrequencyEvery || "",
+	        serviceFrequency: finalNeedsService && serviceFrequency !== "" ? Number(serviceFrequency) : null,
+	        serviceFrequencyEvery: finalNeedsService ? serviceFrequencyEvery || "" : "",
 
         status,
         notes,
@@ -1029,13 +1098,15 @@ const EquipmentDetail = () => {
 
   const handleDelete = async () => {
     if (!requirePermission("66", "delete equipment")) return;
+    if (!recentlySelectedCompany || !equipmentId) return;
 
     try {
-      const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
-      await deleteDoc(docRef);
+      await deleteEquipmentWithSubcollections(db, recentlySelectedCompany, equipmentId);
+      toast.success("Equipment deleted");
       navigate("/company/equipment");
     } catch (error) {
       console.error("Error deleting equipment:", error);
+      toast.error("Failed to delete equipment");
     }
   };
 
@@ -1364,62 +1435,70 @@ const EquipmentDetail = () => {
         </div>
 
         <div className="bg-white shadow-lg rounded-xl p-4">
-          <div className="flex flex-wrap gap-2">
-            {can("64") && (
-              <>
-                <DetailActionButton
-                  label="Edit Make/Model"
-                  icon={PencilSquareIcon}
-                  onClick={() => setShowMakeModelModal(true)}
-                />
-                <DetailActionButton
-                  label="Record Maintenance"
-                  icon={WrenchScrewdriverIcon}
-                  tone="green"
-                  onClick={openMaintenanceModal}
-                />
-                <DetailActionButton
-                  label="Record Repair"
-                  icon={WrenchScrewdriverIcon}
-                  tone="amber"
-                  onClick={() => setShowRepairHistoryModal(true)}
-                />
-                {equipment?.isActive && (
-                  <DetailActionButton
-                    label="Replace Equipment"
-                    icon={ArrowPathRoundedSquareIcon}
+          <div className="flex justify-end">
+            <Menu as="div" className="relative inline-block text-left">
+              <MenuButton className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-800 shadow-sm transition hover:bg-slate-50">
+                Actions
+                <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+              </MenuButton>
+              <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-lg focus:outline-none">
+                {can("64") && (
+                  <>
+                    <EquipmentHeaderActionMenuItem
+                      label="Edit Make/Model"
+                      icon={PencilSquareIcon}
+                      onClick={openMakeModelModal}
+                    />
+                    <EquipmentHeaderActionMenuItem
+                      label="Record Maintenance"
+                      icon={WrenchScrewdriverIcon}
+                      tone="green"
+                      onClick={openMaintenanceModal}
+                    />
+                    <EquipmentHeaderActionMenuItem
+                      label="Record Repair"
+                      icon={WrenchScrewdriverIcon}
+                      tone="amber"
+                      onClick={() => setShowRepairHistoryModal(true)}
+                    />
+                    {equipment?.isActive && (
+                      <EquipmentHeaderActionMenuItem
+                        label="Replace Equipment"
+                        icon={ArrowPathRoundedSquareIcon}
+                        tone="amber"
+                        onClick={openReplaceModal}
+                      />
+                    )}
+                  </>
+                )}
+
+                {can("32") && (
+                  <EquipmentHeaderActionMenuItem
+                    label="Add Repair Request"
+                    icon={WrenchScrewdriverIcon}
                     tone="amber"
-                    onClick={openReplaceModal}
+                    onClick={createEquipmentRepairRequest}
                   />
                 )}
-              </>
-            )}
 
-            {can("32") && (
-              <DetailActionButton
-                label="Add Repair Request"
-                icon={WrenchScrewdriverIcon}
-                tone="amber"
-                onClick={createEquipmentRepairRequest}
-              />
-            )}
-
-            {can("22") && (
-              <>
-                <DetailActionButton
-                  label="Create Maintenance Job"
-                  icon={BriefcaseIcon}
-                  tone="green"
-                  onClick={() => createEquipmentJob("maintenance")}
-                />
-                <DetailActionButton
-                  label="Create Repair Job"
-                  icon={BriefcaseIcon}
-                  tone="amber"
-                  onClick={() => createEquipmentJob("repair")}
-                />
-              </>
-            )}
+                {can("22") && (
+                  <>
+                    <EquipmentHeaderActionMenuItem
+                      label="Create Maintenance Job"
+                      icon={BriefcaseIcon}
+                      tone="green"
+                      onClick={() => createEquipmentJob("maintenance")}
+                    />
+                    <EquipmentHeaderActionMenuItem
+                      label="Create Repair Job"
+                      icon={BriefcaseIcon}
+                      tone="amber"
+                      onClick={() => createEquipmentJob("repair")}
+                    />
+                  </>
+                )}
+              </MenuItems>
+            </Menu>
           </div>
         </div>
 
@@ -1548,7 +1627,7 @@ const EquipmentDetail = () => {
                     {can("64") && (
                       <button
                         type="button"
-                        onClick={() => setShowMakeModelModal(true)}
+	                        onClick={openMakeModelModal}
                         className="text-xs font-bold text-blue-700 hover:text-blue-900"
                       >
                         Edit
@@ -1564,7 +1643,7 @@ const EquipmentDetail = () => {
                     {can("64") && (
                       <button
                         type="button"
-                        onClick={() => setShowMakeModelModal(true)}
+	                        onClick={openMakeModelModal}
                         className="text-xs font-bold text-blue-700 hover:text-blue-900"
                       >
                         Edit
@@ -1587,8 +1666,8 @@ const EquipmentDetail = () => {
                     </p>
                   </div>
                 )}
-                {
-                  equipment.needsService ? (<>
+                {isFilterEquipment(equipment) && (
+                  <>
                     <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Clean Filter Pressure</p>
                       <p className="mt-1 text-gray-800 font-semibold">{equipment?.cleanFilterPressure ?? "—"}</p>
@@ -1598,7 +1677,11 @@ const EquipmentDetail = () => {
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Current Pressure</p>
                       <p className="mt-1 text-gray-800 font-semibold">{equipment?.currentPressure ?? "—"}</p>
                     </div>
+                  </>
+                )}
 
+                {
+	                  equipment.needsService ? (<>
                     <div className="p-4 rounded-xl bg-gray-50 border border-gray-200">
                       <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Last Service</p>
                       <p className="mt-1 text-gray-800 font-semibold">
@@ -1653,43 +1736,63 @@ const EquipmentDetail = () => {
                   <input value={name} onChange={(e) => setName(e.target.value)} className={inputBase} />
                 </Field>
 
-                <Field label="Category">
-                  <input
-                    value={category}
-                    onChange={(e) => {
-                      setCategory(e.target.value);
-                      setTypeId("");
-                      setCatalogTypeId(CUSTOM_CATALOG_VALUE);
-                    }}
-                    className={inputBase}
-                  />
-                </Field>
-
-                <Field label="Make">
-                  <input
-                    value={make}
-                    onChange={(e) => {
-                      setMake(e.target.value);
-                      setMakeId("");
-                      setCatalogMakeId(CUSTOM_CATALOG_VALUE);
-                    }}
-                    className={inputBase}
-                  />
-                </Field>
-
-                <Field label="Model">
-                  <input
-                    value={model}
-                    onChange={(e) => {
-                      setModel(e.target.value);
-                      setModelId("");
-                      setUniversalEquipmentId("");
-                      setManualPdfLink("");
-                      setCatalogEquipmentId(CUSTOM_CATALOG_VALUE);
-                    }}
-                    className={inputBase}
-                  />
-                </Field>
+	                <div className="md:col-span-2">
+	                  <EquipmentCatalogPicker
+	                    value={{
+	                      name,
+	                      type: category,
+	                      category,
+	                      typeId,
+	                      make,
+	                      makeId,
+	                      model,
+	                      modelId,
+	                      universalEquipmentId,
+	                      manualPdfLink,
+	                      needsService,
+	                      serviceFrequency,
+	                      serviceFrequencyEvery,
+	                    }}
+	                    preferCustom
+	                    onChange={(nextEquipment) => {
+	                      const nextForm = applyEquipmentDefaults(
+	                        {
+	                          name,
+	                          type: category,
+	                          category,
+	                          typeId,
+	                          make,
+	                          makeId,
+	                          model,
+	                          modelId,
+	                          universalEquipmentId,
+	                          manualPdfLink,
+	                          needsService,
+	                          serviceFrequency,
+	                          serviceFrequencyEvery,
+	                        },
+	                        nextEquipment
+	                      );
+	                      setCategory(nextForm.type || nextForm.category || "");
+	                      setTypeId(nextForm.typeId || "");
+	                      setMake(nextForm.make || "");
+	                      setMakeId(nextForm.makeId || "");
+	                      setModel(nextForm.model || "");
+	                      setModelId(nextForm.modelId || "");
+	                      setUniversalEquipmentId(nextForm.universalEquipmentId || "");
+	                      setManualPdfLink(nextForm.manualPdfLink || "");
+	                      setCatalogTypeId(nextForm.typeId || CUSTOM_CATALOG_VALUE);
+	                      setCatalogMakeId(nextForm.makeId || CUSTOM_CATALOG_VALUE);
+	                      setCatalogEquipmentId(nextForm.universalEquipmentId || nextForm.modelId || CUSTOM_CATALOG_VALUE);
+	                      setNeedsService(!!nextForm.needsService);
+	                      setServiceFrequency(nextForm.serviceFrequency || "");
+	                      setServiceFrequencyEvery(nextForm.serviceFrequencyEvery || "");
+	                      if (!name.trim()) setName(buildEquipmentNickname(nextForm));
+	                    }}
+	                    inputClassName={inputBase}
+	                    labelClassName="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1"
+	                  />
+	                </div>
 
                 <Field label="Date Installed">
                   <DatePicker
@@ -1748,8 +1851,8 @@ const EquipmentDetail = () => {
                     ))}
                   </select>
                 </Field>
-                {
-                  needsService ? (<>
+                {editingEquipmentIsFilter && (
+                  <>
                     <Field label="Clean Filter Pressure">
                       <input value={cleanFilterPressure} onChange={(e) => setCleanFilterPressure(e.target.value)} className={inputBase} />
                     </Field>
@@ -1757,7 +1860,11 @@ const EquipmentDetail = () => {
                     <Field label="Current Pressure">
                       <input value={currentPressure} onChange={(e) => setCurrentPressure(e.target.value)} className={inputBase} />
                     </Field>
+                  </>
+                )}
 
+	                {
+	                  needsService ? (<>
                     {/* ✅ Date picker + drives nextServiceDate */}
                     {/* <Field label="Last Service Date">
                       <input
@@ -1856,10 +1963,11 @@ const EquipmentDetail = () => {
           )}
         </div>
 
-        <div className="bg-white shadow-lg rounded-xl p-6">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-            <div>
-              <h3 className="text-xl font-bold text-gray-800">Pressure Trend</h3>
+	        {isFilterEquipment(equipment) && (
+	        <div className="bg-white shadow-lg rounded-xl p-6">
+	          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+	            <div>
+	              <h3 className="text-xl font-bold text-gray-800">Pressure Trend</h3>
               <p className="mt-1 text-sm text-gray-500">Filter pressure readings captured from route stop observations.</p>
             </div>
             <Badge tone={pressureTrendPoints.length ? "blue" : "gray"}>
@@ -1898,9 +2006,10 @@ const EquipmentDetail = () => {
               No pressure readings have been recorded for this equipment yet.
             </div>
           )}
-        </div>
+	        </div>
+	        )}
 
-        {/* History Cards */}
+	        {/* History Cards */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Maintenance */}
           <div className="bg-white shadow-lg rounded-xl p-6">

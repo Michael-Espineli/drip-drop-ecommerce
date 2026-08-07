@@ -18,6 +18,10 @@ import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
+import {
+    buildEquipmentNickname,
+    equipmentDefaultsToNeedsService,
+} from '../../../utils/models/Equipment';
 
 const DEFAULT_EQUIPMENT = [
     {
@@ -54,6 +58,7 @@ const DEFAULT_EQUIPMENT = [
 
 const inputClass =
     'w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100';
+const WATER_TYPE_OPTIONS = ['Fresh Water', 'Salt Water'];
 
 const Field = ({ label, children }) => (
     <label className="space-y-1">
@@ -79,7 +84,7 @@ const CreateBodyOfWater = () => {
     const [gallons, setGallons] = useState('16000');
     const [material, setMaterial] = useState('Plaster');
     const [shape, setShape] = useState('');
-    const [waterType, setWaterType] = useState('Chlorine');
+    const [waterType, setWaterType] = useState('Fresh Water');
     const [lastFilled, setLastFilled] = useState(new Date().toISOString().split('T')[0]);
     const [notes, setNotes] = useState('');
     const [createDefaultEquipment, setCreateDefaultEquipment] = useState(true);
@@ -212,6 +217,7 @@ const CreateBodyOfWater = () => {
             if (createDefaultEquipment) {
                 await Promise.all(defaultEquipment.map((equipment) => {
                     const equipmentId = `com_equ_${uuidv4()}`;
+                    const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
                     return setDoc(
                         doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId),
                         {
@@ -233,11 +239,11 @@ const CreateBodyOfWater = () => {
                             dateInstalled: new Date(),
                             active: true,
                             isActive: true,
-                            needsService: equipment.needsService,
-                            lastServiceDate: equipment.needsService ? new Date() : null,
+                            needsService: finalNeedsService,
+                            lastServiceDate: finalNeedsService ? new Date() : null,
                             nextServiceDate: null,
-                            serviceFrequency: equipment.serviceFrequency,
-                            serviceFrequencyEvery: equipment.serviceFrequencyEvery,
+                            serviceFrequency: finalNeedsService ? (equipment.serviceFrequency || 6) : null,
+                            serviceFrequencyEvery: finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null,
                             cleanFilterPressure: null,
                             currentPressure: null,
                             status: 'Operational',
@@ -259,7 +265,19 @@ const CreateBodyOfWater = () => {
 
     const updateDefaultEquipmentCatalog = (index, nextEquipment) => {
         setDefaultEquipment((currentEquipment) => currentEquipment.map((equipment, currentIndex) => (
-            currentIndex === index ? { ...equipment, ...nextEquipment } : equipment
+            currentIndex === index
+                ? (() => {
+                    const merged = { ...equipment, ...nextEquipment };
+                    const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+                    return {
+                        ...merged,
+                        name: equipment.name?.trim() ? equipment.name : buildEquipmentNickname(merged),
+                        needsService: shouldDefaultNeedsService ? true : merged.needsService,
+                        serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? 6 : merged.serviceFrequency,
+                        serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? 'Month' : merged.serviceFrequencyEvery,
+                    };
+                })()
+                : equipment
         )));
     };
 
@@ -364,14 +382,13 @@ const CreateBodyOfWater = () => {
                                     <input value={gallons} onChange={(event) => setGallons(event.target.value)} className={inputClass} inputMode="numeric" />
                                 </Field>
 
-                                <Field label="Water Type">
-                                    <select value={waterType} onChange={(event) => setWaterType(event.target.value)} className={inputClass}>
-                                        <option value="Chlorine">Chlorine</option>
-                                        <option value="Salt">Salt</option>
-                                        <option value="Bromine">Bromine</option>
-                                        <option value="Other">Other</option>
-                                    </select>
-                                </Field>
+	                                <Field label="Water Type">
+	                                    <select value={waterType} onChange={(event) => setWaterType(event.target.value)} className={inputClass}>
+	                                        {WATER_TYPE_OPTIONS.map((option) => (
+	                                            <option key={option} value={option}>{option}</option>
+	                                        ))}
+	                                    </select>
+	                                </Field>
 
                                 <Field label="Material">
                                     <input value={material} onChange={(event) => setMaterial(event.target.value)} className={inputClass} />

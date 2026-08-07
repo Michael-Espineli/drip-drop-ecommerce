@@ -24,6 +24,7 @@ const EquipmentCatalogPicker = ({
     labelClassName = baseLabelClass,
     gridClassName = 'grid grid-cols-1 gap-4 md:grid-cols-3',
     labels = { type: 'Category', make: 'Make', model: 'Model' },
+    preferCustom = false,
 }) => {
     const [types, setTypes] = useState([]);
     const [makes, setMakes] = useState([]);
@@ -31,9 +32,9 @@ const EquipmentCatalogPicker = ({
     const [loadingTypes, setLoadingTypes] = useState(false);
     const [loadingMakes, setLoadingMakes] = useState(false);
     const [loadingModels, setLoadingModels] = useState(false);
-    const [customTypeActive, setCustomTypeActive] = useState(false);
-    const [customMakeActive, setCustomMakeActive] = useState(false);
-    const [customModelActive, setCustomModelActive] = useState(false);
+    const [customTypeActive, setCustomTypeActive] = useState(preferCustom);
+    const [customMakeActive, setCustomMakeActive] = useState(preferCustom);
+    const [customModelActive, setCustomModelActive] = useState(preferCustom);
 
     const valueTypeName = getTypeName(value);
     const valueTypeId = value.typeId || '';
@@ -42,9 +43,12 @@ const EquipmentCatalogPicker = ({
     const valueModel = value.model || '';
     const valueModelId = getCatalogModelId(value);
 
-    const typeSelectValue = valueTypeId ? valueTypeId : ((customTypeActive || valueTypeName) ? CUSTOM_VALUE : '');
-    const makeSelectValue = valueMakeId ? valueMakeId : ((customMakeActive || valueMake) ? CUSTOM_VALUE : '');
-    const modelSelectValue = valueModelId ? valueModelId : ((customModelActive || valueModel) ? CUSTOM_VALUE : '');
+    const typeSelectValue = valueTypeId ? valueTypeId : ((customTypeActive || valueTypeName || preferCustom) ? CUSTOM_VALUE : '');
+    const makeSelectValue = valueMakeId ? valueMakeId : ((customMakeActive || valueMake || preferCustom) ? CUSTOM_VALUE : '');
+    const modelSelectValue = valueModelId ? valueModelId : ((customModelActive || valueModel || preferCustom) ? CUSTOM_VALUE : '');
+    const showCustomType = typeSelectValue === CUSTOM_VALUE;
+    const showCustomMake = makeSelectValue === CUSTOM_VALUE;
+    const showCustomModel = modelSelectValue === CUSTOM_VALUE;
 
     const emit = (patch) => {
         onChange?.({
@@ -340,57 +344,58 @@ const EquipmentCatalogPicker = ({
                 <div>
                     <label className={labelClassName}>{labels.type || 'Category'}</label>
                     <select value={typeSelectValue} onChange={handleTypeChange} className={inputClassName}>
+                        <option value={CUSTOM_VALUE}>Custom category</option>
                         <option value="">{loadingTypes ? 'Loading categories...' : 'Select category'}</option>
                         {types.map(type => <option key={type.id} value={type.id}>{type.name}</option>)}
-                        <option value={CUSTOM_VALUE}>Custom category</option>
                     </select>
+                    {showCustomType && (
+                        <input
+                            value={valueTypeName}
+                            onChange={handleCustomTypeChange}
+                            className={`${inputClassName} mt-2`}
+                            placeholder="Custom category"
+                        />
+                    )}
                 </div>
 
                 <div>
                     <label className={labelClassName}>{labels.make || 'Make'}</label>
                     <select value={makeSelectValue} onChange={handleMakeChange} className={inputClassName} disabled={!typeSelectValue}>
+                        <option value={CUSTOM_VALUE}>Custom make</option>
                         <option value="">{loadingMakes ? 'Loading makes...' : 'Select make'}</option>
                         {makes.map(make => <option key={make.id} value={make.id}>{make.name}</option>)}
-                        <option value={CUSTOM_VALUE}>Custom make</option>
                     </select>
+                    {showCustomMake && (
+                        <input
+                            value={valueMake}
+                            onChange={handleCustomMakeChange}
+                            className={`${inputClassName} mt-2`}
+                            placeholder="Custom make"
+                        />
+                    )}
                 </div>
 
                 <div>
                     <label className={labelClassName}>{labels.model || 'Model'}</label>
                     <select value={modelSelectValue} onChange={handleModelChange} className={inputClassName} disabled={!makeSelectValue}>
+                        <option value={CUSTOM_VALUE}>Custom model</option>
                         <option value="">{loadingModels ? 'Loading models...' : 'Select model'}</option>
                         {models.map(model => (
                             <option key={model.id} value={model.id}>
                                 {model.model || model.name || 'Equipment model'}
                             </option>
                         ))}
-                        <option value={CUSTOM_VALUE}>Custom model</option>
                     </select>
+                    {showCustomModel && (
+                        <input
+                            value={valueModel}
+                            onChange={handleCustomModelChange}
+                            className={`${inputClassName} mt-2`}
+                            placeholder="Custom model"
+                        />
+                    )}
                 </div>
             </div>
-
-            {(typeSelectValue === CUSTOM_VALUE || makeSelectValue === CUSTOM_VALUE || modelSelectValue === CUSTOM_VALUE) && (
-                <div className={gridClassName}>
-                    {typeSelectValue === CUSTOM_VALUE && (
-                        <div>
-                            <label className={labelClassName}>Custom category</label>
-                            <input value={valueTypeName} onChange={handleCustomTypeChange} className={inputClassName} />
-                        </div>
-                    )}
-                    {makeSelectValue === CUSTOM_VALUE && (
-                        <div>
-                            <label className={labelClassName}>Custom make</label>
-                            <input value={valueMake} onChange={handleCustomMakeChange} className={inputClassName} />
-                        </div>
-                    )}
-                    {modelSelectValue === CUSTOM_VALUE && (
-                        <div>
-                            <label className={labelClassName}>Custom model</label>
-                            <input value={valueModel} onChange={handleCustomModelChange} className={inputClassName} />
-                        </div>
-                    )}
-                </div>
-            )}
 
             {selectedModel?.manualPdfLink && (
                 <a

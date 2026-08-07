@@ -1,18 +1,26 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { getFirestore, doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { getFirestore, doc, getDoc, setDoc, deleteDoc, serverTimestamp, getDocs, writeBatch } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { v4 as uuidv4 } from 'uuid';
 import AddressAutocomplete from '../../components/AddressAutocomplete';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import {
+    DEFAULT_LEAD_SOURCES,
+    leadSourceId,
+    normalizeLeadSourceItem,
+    pipelineLeadSourcesRef,
+} from '../../../utils/customerPipeline';
 
 const initialFormData = {
     homeownerName: '',
     homeownerEmail: '',
     homeownerPhone: '',
     serviceName: '',
+    privateNotes: '',
     serviceDescription: '',
+    leadSource: 'Manual',
     streetAddress: '',
     city: '',
     state: '',
@@ -32,8 +40,36 @@ const AddLead = () => {
     const [loading, setLoading] = useState(isEditing);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
     const [deletingLead, setDeletingLead] = useState(false);
+    const [leadSources, setLeadSources] = useState(DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem));
+    const [newLeadSource, setNewLeadSource] = useState("");
+    const [privateNotesDocExists, setPrivateNotesDocExists] = useState(false);
 
     const [formData, setFormData] = useState(initialFormData);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) return;
+
+        const fetchLeadSources = async () => {
+            try {
+                const sourcesSnap = await getDocs(pipelineLeadSourcesRef(recentlySelectedCompany));
+                if (sourcesSnap.empty) {
+                    setLeadSources(DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem));
+                    return;
+                }
+
+                setLeadSources(
+                    sourcesSnap.docs
+                        .map((sourceDoc, index) => normalizeLeadSourceItem({ id: sourceDoc.id, ...sourceDoc.data() }, index * 10))
+                        .filter((source) => source.active !== false)
+                        .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.name.localeCompare(right.name))
+                );
+            } catch (error) {
+                console.error('Error loading lead sources:', error);
+            }
+        };
+
+        fetchLeadSources();
+    }, [recentlySelectedCompany]);
 
     useEffect(() => {
         if (!isEditing) return;
@@ -57,12 +93,26 @@ const AddLead = () => {
 
                 const lead = leadSnap.data();
                 const address = lead.serviceLocationAddress || {};
+                const privateNotesSnap = await getDoc(
+                    doc(
+                        db,
+                        'companies',
+                        recentlySelectedCompany,
+                        'leadPrivateNotes',
+                        routeLeadId
+                    )
+                );
+                setPrivateNotesDocExists(privateNotesSnap.exists());
+                const privateNotes = privateNotesSnap.exists() ? privateNotesSnap.data().notes || '' : '';
+
                 setFormData({
                     homeownerName: lead.homeownerName || lead.customerName || '',
                     homeownerEmail: lead.homeownerEmail || '',
                     homeownerPhone: lead.homeownerPhone || '',
                     serviceName: lead.serviceName || '',
+                    privateNotes,
                     serviceDescription: lead.serviceDescription || '',
+                    leadSource: lead.leadSource || lead.marketingSource || lead.sourceLabel || lead.source || 'Manual',
                     streetAddress: address.streetAddress || '',
                     city: address.city || '',
                     state: address.state || '',
@@ -98,6 +148,36 @@ const AddLead = () => {
         }));
     };
 
+    const handleAddLeadSource = async () => {
+        const name = newLeadSource.trim();
+        if (!name || !recentlySelectedCompany) return;
+
+        const id = leadSourceId(name);
+        const payload = {
+            id,
+            name,
+            sortOrder: leadSources.length ? Math.max(...leadSources.map((source) => Number(source.sortOrder || 0))) + 10 : 10,
+            active: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        };
+
+        try {
+            await setDoc(doc(pipelineLeadSourcesRef(recentlySelectedCompany), id), payload, { merge: true });
+            setLeadSources((current) => {
+                if (current.some((source) => source.id === id)) return current;
+                return [...current, normalizeLeadSourceItem(payload)]
+                    .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.name.localeCompare(right.name));
+            });
+            setFormData((current) => ({ ...current, leadSource: name }));
+            setNewLeadSource("");
+            toast.success("Lead source added.");
+        } catch (error) {
+            console.error('Error adding lead source:', error);
+            toast.error('Could not add lead source.');
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         if (isSubmitting || !user) return;
@@ -111,7 +191,14 @@ const AddLead = () => {
         if (!isEditing && !requirePermission("612", "respond to leads")) {
             return;
         }
-        if (!formData.homeownerName || !formData.serviceDescription || !formData.serviceName) return;
+        if (!formData.homeownerName || !formData.serviceName) {
+            toast.error('Add a homeowner name and service name before saving the lead.');
+            return;
+        }
+        if (!isEditing && !formData.privateNotes.trim()) {
+            toast.error('Add company private notes before creating the lead.');
+            return;
+        }
 
         setIsSubmitting(true);
         const toastId = toast.loading(isEditing ? 'Saving lead...' : 'Adding new lead...');
@@ -122,6 +209,22 @@ const AddLead = () => {
             user?.displayName ||
             user?.email ||
             "";
+        const privateNotesPayload = (leadId, includeCreatedAt = false) => {
+            const payload = {
+                id: leadId,
+                leadId,
+                companyId: recentlySelectedCompany,
+                notes: formData.privateNotes,
+                visibility: 'companyOnly',
+                updatedAt: serverTimestamp(),
+            };
+
+            if (includeCreatedAt) {
+                payload.createdAt = serverTimestamp();
+            }
+
+            return payload;
+        };
 
         try {
             const leadPayload = {
@@ -138,22 +241,38 @@ const AddLead = () => {
                 homeownerName: formData.homeownerName,
                 homeownerEmail: formData.homeownerEmail || "",
                 homeownerPhone: formData.homeownerPhone || "",
+                leadSource: formData.leadSource || "Manual",
+                marketingSource: formData.leadSource || "Manual",
             };
 
             if (isEditing) {
-                await updateDoc(doc(db, 'homeownerServiceRequests', routeLeadId), {
+                const batch = writeBatch(db);
+                batch.update(doc(db, 'homeownerServiceRequests', routeLeadId), {
                     ...leadPayload,
                     updatedAt: serverTimestamp(),
                 });
+
+                if (formData.privateNotes.trim() || privateNotesDocExists) {
+                    batch.set(
+                        doc(db, 'companies', recentlySelectedCompany, 'leadPrivateNotes', routeLeadId),
+                        privateNotesPayload(routeLeadId, !privateNotesDocExists),
+                        { merge: true }
+                    );
+                }
+
+                await batch.commit();
                 toast.success('Lead updated successfully!', { id: toastId });
                 navigate(`/company/leads/${routeLeadId}`);
                 return;
             }
 
             const newLeadId = "hosr_" + uuidv4();
-            await setDoc(doc(db, 'homeownerServiceRequests', newLeadId), {
+            const batch = writeBatch(db);
+            batch.set(doc(db, 'homeownerServiceRequests', newLeadId), {
                 id: newLeadId,
                 source: 'Manual', //Customer or Manual
+                leadSource: formData.leadSource || "Manual",
+                marketingSource: formData.leadSource || "Manual",
                 status: 'Pending',//Pending, In Progress, Completed, Cancelled
                 createdAt: new Date(),
                 companyId: recentlySelectedCompany,
@@ -172,6 +291,12 @@ const AddLead = () => {
                 homeownerequipmentId: "", //homeowner
                 dateCompleted: null
             });
+            batch.set(
+                doc(db, 'companies', recentlySelectedCompany, 'leadPrivateNotes', newLeadId),
+                privateNotesPayload(newLeadId, true),
+                { merge: true }
+            );
+            await batch.commit();
             toast.success('New lead added successfully!', { id: toastId });
             navigate('/company/leads');
 
@@ -230,32 +355,74 @@ const AddLead = () => {
                     </div>
                 </section>
                 <form onSubmit={handleSubmit} className="grid min-h-[calc(100vh-13rem)] gap-6 xl:grid-cols-[minmax(0,1.35fr)_minmax(380px,0.65fr)]">
-                    <section className="flex min-h-[32rem] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm xl:min-h-[calc(100vh-13rem)]">
+                    <section className="flex min-h-[32rem] flex-col rounded-lg border border-amber-200 bg-amber-50 p-5 shadow-sm xl:min-h-[calc(100vh-13rem)]">
                         <div className="mb-3 flex flex-wrap items-center gap-2">
-                            <label htmlFor="serviceDescription" className="text-lg font-bold text-slate-950">Shared Description</label>
-                            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                                Visible to homeowner
+                            <label htmlFor="privateNotes" className="text-lg font-bold text-slate-950">Company Private Notes</label>
+                            <span className="rounded-full border border-amber-200 bg-white px-2 py-0.5 text-xs font-semibold text-amber-700">
+                                Company only
                             </span>
                         </div>
                         <textarea
-                            name="serviceDescription"
-                            id="serviceDescription"
-                            value={formData.serviceDescription}
+                            name="privateNotes"
+                            id="privateNotes"
+                            value={formData.privateNotes}
                             onChange={handleInputChange}
                             rows={24}
-                            className="min-h-[28rem] flex-1 resize-none rounded-md border border-slate-300 px-4 py-3 text-base leading-7 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 xl:min-h-0"
-                            placeholder="Write the customer's request here."
-                            required
+                            className="min-h-[28rem] flex-1 resize-none rounded-md border border-amber-300 bg-white px-4 py-3 text-base leading-7 text-slate-900 shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-100 xl:min-h-0"
+                            placeholder="Add internal lead notes for your team."
+                            required={!isEditing}
                             autoFocus={!isEditing}
                         ></textarea>
                     </section>
 
                     <div className="space-y-6">
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div className="mb-3 flex flex-wrap items-center gap-2">
+                                <label htmlFor="serviceDescription" className="text-lg font-bold text-slate-950">Shared Description</label>
+                                <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                                    Visible to homeowner
+                                </span>
+                            </div>
+                            <textarea
+                                name="serviceDescription"
+                                id="serviceDescription"
+                                value={formData.serviceDescription}
+                                onChange={handleInputChange}
+                                rows={5}
+                                className="w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm leading-6 text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                placeholder="Optional homeowner-facing summary."
+                            ></textarea>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h2 className="mb-4 border-b border-slate-200 pb-3 text-lg font-bold text-slate-950">Lead Info</h2>
                             <div>
                                 <label htmlFor="serviceName" className="block text-sm font-medium text-slate-700">Service Name</label>
                                 <input type="text" name="serviceName" id="serviceName" value={formData.serviceName} onChange={handleInputChange} className={textInputClasses} required />
+                            </div>
+                            <div className="mt-4">
+                                <label htmlFor="leadSource" className="block text-sm font-medium text-slate-700">Lead Source</label>
+                                <select name="leadSource" id="leadSource" value={formData.leadSource} onChange={handleInputChange} className={textInputClasses}>
+                                    {leadSources.map((source) => (
+                                        <option key={source.id || source.name} value={source.name}>{source.name}</option>
+                                    ))}
+                                </select>
+                                <div className="mt-2 flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={newLeadSource}
+                                        onChange={(event) => setNewLeadSource(event.target.value)}
+                                        className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        placeholder="Add new source"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleAddLeadSource}
+                                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+                                    >
+                                        Add
+                                    </button>
+                                </div>
                             </div>
                         </section>
 

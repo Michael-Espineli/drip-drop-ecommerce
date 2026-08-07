@@ -14,6 +14,7 @@ const {
   ensureCustomerAccountInvite,
   getCustomerAccountInvitePreview,
 } = require("../customerAccountInvites");
+const { reportCloudFunctionError } = require("../appErrorReporting");
 const { sendCompanyUserInviteEmailInternal } = require("../sendGrid/general");
 
 const db = admin.firestore();
@@ -58,6 +59,81 @@ const DEFAULT_ONBOARDING_CHECKLIST_ITEMS = [
     sortOrder: 50,
   },
 ];
+const DEFAULT_CUSTOMER_PIPELINE_ITEMS = [
+  {
+    id: "default_lead",
+    title: "Lead",
+    description: "Lead intake is captured and the source is recorded.",
+    sortOrder: 10,
+    itemType: "internal",
+    linkType: "lead",
+    isDefault: true,
+  },
+  {
+    id: "default_customer",
+    title: "Customer",
+    description: "Customer profile exists in Drip Drop.",
+    sortOrder: 20,
+    itemType: "internal",
+    linkType: "customer",
+    isDefault: true,
+  },
+  {
+    id: "default_initial_estimate",
+    title: "Initial Estimate",
+    description: "Initial estimate, site visit, or survey has been completed.",
+    sortOrder: 30,
+    itemType: "internal",
+    linkType: "initialEstimate",
+    isDefault: true,
+  },
+  {
+    id: "default_service_agreement",
+    title: "Service Agreement",
+    description: "Estimate or recurring service agreement has been created.",
+    sortOrder: 40,
+    itemType: "internal",
+    linkType: "serviceAgreement",
+    isDefault: true,
+  },
+  {
+    id: "default_routing",
+    title: "Routing",
+    description: "Recurring service route, day, order, and technician assignment are ready.",
+    sortOrder: 50,
+    itemType: "internal",
+    linkType: "routing",
+    isDefault: true,
+  },
+  {
+    id: "default_equipment",
+    title: "Customer Equipment",
+    description: "Equipment has been written down and linked to the customer.",
+    sortOrder: 60,
+    itemType: "internal",
+    linkType: "equipment",
+    isDefault: true,
+  },
+  {
+    id: "default_location_photos",
+    title: "Location Photos",
+    description: "Location, pool, or equipment photos are saved for field context.",
+    sortOrder: 70,
+    itemType: "internal",
+    linkType: "locationPhotos",
+    isDefault: true,
+  },
+];
+const DEFAULT_PIPELINE_LEAD_SOURCES = [
+  { id: "source_website", name: "Website", sortOrder: 10 },
+  { id: "source_referral", name: "Referral", sortOrder: 20 },
+  { id: "source_google", name: "Google", sortOrder: 30 },
+  { id: "source_yelp", name: "Yelp", sortOrder: 40 },
+  { id: "source_facebook", name: "Facebook", sortOrder: 50 },
+  { id: "source_manual", name: "Manual", sortOrder: 60 },
+  { id: "source_unknown", name: "Unknown", sortOrder: 999 },
+];
+const CUSTOMER_PIPELINE_COLLECTION = "customerPipeline";
 
 const isCompanyCreationEnabled = async () => {
   const flagDoc = await getFirestore()
@@ -226,6 +302,206 @@ const copyOnboardingChecklistToCompanyUser = async ({
   });
 
   return copiedCount;
+};
+
+const pipelineTemplateItemsRef = (firestore, companyId) => (
+  firestore
+    .collection("companies")
+    .doc(companyId)
+    .collection("settings")
+    .doc("customerPipeline")
+    .collection("items")
+);
+
+const pipelineLeadSourcesRef = (firestore, companyId) => (
+  firestore
+    .collection("companies")
+    .doc(companyId)
+    .collection("settings")
+    .doc("customerPipeline")
+    .collection("leadSources")
+);
+
+const customerPipelineRowsRef = (firestore, companyId) => (
+  firestore
+    .collection("companies")
+    .doc(companyId)
+    .collection(CUSTOMER_PIPELINE_COLLECTION)
+);
+
+const pipelineRowIdForLead = (leadId = "") => `lead_${leadId}`;
+
+const pipelineRowIdForCustomer = (customerId = "", customer = {}) => {
+  const leadId = customer.sourceHomeownerServiceRequestId || customer.leadId || "";
+  return leadId ? pipelineRowIdForLead(leadId) : `customer_${customerId}`;
+};
+
+const cleanPipelineText = (value = "", fallback = "") => {
+  const text = String(value || "").trim();
+  return text || fallback;
+};
+
+const pipelineCustomerName = (customer = {}) => {
+  if (customer.displayAsCompany) {
+    return cleanPipelineText(customer.company || customer.companyName || customer.businessName || customer.name, "Unnamed customer");
+  }
+
+  return cleanPipelineText(
+    customer.customerName ||
+      customer.displayName ||
+      customer.name ||
+      [customer.firstName, customer.lastName].filter(Boolean).join(" ") ||
+      customer.company ||
+      customer.companyName ||
+      customer.email,
+    "Unnamed customer"
+  );
+};
+
+const pipelineLeadName = (lead = {}) => cleanPipelineText(
+  lead.customerName ||
+    lead.homeownerName ||
+    lead.creatorName ||
+    lead.name ||
+    lead.homeownerEmail,
+  "Unnamed lead"
+);
+
+const pipelineStatusFromLead = (lead = {}) => {
+  const status = String(lead.status || "").trim().toLowerCase();
+  if (status === "cancelled" || status === "canceled") return "lost";
+  if (status === "completed") return "active";
+  return "active";
+};
+
+const ensureCompanyCustomerPipelineTemplates = async ({ firestore, companyId, now }) => {
+  if (!firestore || !companyId) return { itemCount: 0, sourceCount: 0 };
+
+  const [itemSnap, sourceSnap] = await Promise.all([
+    pipelineTemplateItemsRef(firestore, companyId).get(),
+    pipelineLeadSourcesRef(firestore, companyId).limit(1).get(),
+  ]);
+
+  const batch = firestore.batch();
+  let writes = 0;
+  let itemCount = 0;
+  let sourceCount = 0;
+
+  const existingItems = itemSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }));
+  DEFAULT_CUSTOMER_PIPELINE_ITEMS.forEach((item) => {
+    const existingItem = existingItems.find((currentItem) => (
+      currentItem.id === item.id ||
+      (
+        currentItem.isDefault === true &&
+        (currentItem.linkType === item.linkType || String(currentItem.title || "").toLowerCase() === item.title.toLowerCase())
+      )
+    ));
+
+    if (!existingItem) {
+      batch.set(pipelineTemplateItemsRef(firestore, companyId).doc(item.id), {
+        ...item,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      }, { merge: true });
+      writes += 1;
+      itemCount += 1;
+    }
+  });
+
+  if (sourceSnap.empty) {
+    DEFAULT_PIPELINE_LEAD_SOURCES.forEach((source) => {
+      batch.set(pipelineLeadSourcesRef(firestore, companyId).doc(source.id), {
+        ...source,
+        active: true,
+        createdAt: now,
+        updatedAt: now,
+      }, { merge: true });
+      writes += 1;
+      sourceCount += 1;
+    });
+  }
+
+  if (writes > 0) await batch.commit();
+  return { itemCount, sourceCount };
+};
+
+const leadSourceFromLead = (lead = {}) => cleanPipelineText(
+  lead.leadSource ||
+    lead.marketingSource ||
+    lead.sourceLabel ||
+    lead.source,
+  "Unknown"
+);
+
+const upsertPipelineRowForLead = async ({ firestore, leadId, lead, now }) => {
+  const companyId = lead?.companyId || "";
+  if (!firestore || !companyId || !leadId) return null;
+
+  await ensureCompanyCustomerPipelineTemplates({ firestore, companyId, now });
+
+  const customerId = lead.customerId || lead.companyCustomerId || "";
+  const rowId = pipelineRowIdForLead(leadId);
+  const lostReason = lead.lostReason || lead.cancelReason || lead.statusChangeReason || "";
+  const row = removeUndefinedDeep({
+    id: rowId,
+    companyId,
+    leadId,
+    customerId,
+    source: "lead",
+    leadSource: leadSourceFromLead(lead),
+    leadStatus: lead.status || "Pending",
+    pipelineStatus: pipelineStatusFromLead(lead),
+    lostReason,
+    customerName: pipelineLeadName(lead),
+    contact: [lead.homeownerEmail, lead.homeownerPhone, lead.creatorEmail, lead.creatorPhone].filter(Boolean).join(" | "),
+    serviceLocationId: lead.companyServiceLocationId || lead.serviceLocationId || "",
+    estimateId: lead.estimateId || "",
+    serviceAgreementId: lead.serviceAgreementId || "",
+    serviceEstimateServiceStopId: lead.serviceEstimateServiceStopId || "",
+    initialEstimateServiceStopId: lead.initialEstimateServiceStopId || "",
+    notes: "",
+    sourceHomeownerServiceRequestId: leadId,
+    createdAt: lead.createdAt || now,
+    updatedAt: now,
+    completedAt: lead.dateCompleted || null,
+  });
+
+  await customerPipelineRowsRef(firestore, companyId).doc(rowId).set(row, { merge: true });
+  return row;
+};
+
+const upsertPipelineRowForCustomer = async ({ firestore, companyId, customerId, customer, now }) => {
+  if (!firestore || !companyId || !customerId) return null;
+
+  await ensureCompanyCustomerPipelineTemplates({ firestore, companyId, now });
+
+  const leadId = customer.sourceHomeownerServiceRequestId || customer.leadId || "";
+  const rowId = pipelineRowIdForCustomer(customerId, customer);
+  const row = removeUndefinedDeep({
+    id: rowId,
+    companyId,
+    leadId,
+    customerId,
+    source: customer.source || customer.migrationSource?.provider || "customer",
+    leadSource: customer.leadSource || customer.marketingSource || customer.sourceName || customer.migrationSource?.provider || "",
+    leadStatus: "",
+    pipelineStatus: "active",
+    customerName: pipelineCustomerName(customer),
+    contact: [
+      customer.email,
+      customer.phoneNumber || customer.phone,
+      customer.mainContact?.email,
+      customer.mainContact?.phoneNumber,
+    ].filter(Boolean).join(" | "),
+    notes: "",
+    sourceHomeownerServiceRequestId: leadId,
+    createdAt: customer.createdAt || customer.dateCreated || now,
+    updatedAt: now,
+  });
+
+  await customerPipelineRowsRef(firestore, companyId).doc(rowId).set(row, { merge: true });
+  return row;
 };
 
 const defaultServiceStopCategoryEmailSettings = (companyName = "your pool company") => ({
@@ -1465,10 +1741,12 @@ function normalizeRecurringStopTypeFieldsForFunction(source, contextLabel) {
 // Build to replace createFirstRecurringServiceStop
 exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, context) => {
   console.log("createFirstRecurringServiceStop2 (refactored, seed 4 weeks)");
+  let companyId = "";
+  let rssData = null;
 
   try {
-    const companyId = data?.data?.companyId;
-    const rssData = data?.data?.recurringServiceStop;
+    companyId = data?.data?.companyId;
+    rssData = data?.data?.recurringServiceStop;
 
     if (!companyId) throw new Error("Missing Company Id");
     if (!rssData?.id) throw new Error("Missing Recurring Service Stop Id");
@@ -2036,11 +2314,23 @@ exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, c
     };
   } catch (error) {
     console.error("Error in createFirstRecurringServiceStop2", error);
+    await reportCloudFunctionError(error, {
+      functionName: "createFirstRecurringServiceStop2",
+      eventName: "seed-recurring-service-stop",
+      companyId,
+      recurringServiceStopId: rssData?.id || "",
+      title: "First recurring service stop build failed",
+      description: "The callable that saves a recurring service stop and seeds its first service stops failed.",
+      severity: "critical",
+      data: {
+        recurringServiceStop: rssData,
+      },
+    });
 
-    return {
-      status: 500,
-      error: error?.message ?? String(error),
-    };
+    throw new functions.https.HttpsError(
+      "internal",
+      error?.message || "Unable to create first recurring service stop."
+    );
   }
 });
 // exports.createFirstRecurringServiceStop2 = functions.https.onCall(async (data, context) => {
@@ -3169,6 +3459,13 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
       .set(companyUser);
     console.log("Finished Creating Company User")
 
+    await ensureCompanyCustomerPipelineTemplates({
+      firestore: getFirestore(),
+      companyId,
+      now: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    console.log("Finished Creating Customer Pipeline Defaults")
+
     //Create Company Settings
     //Pay Statements
     const PayStatementsIncrement = { category: "payStatements", increment: 0 }
@@ -3335,12 +3632,12 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "200", "210", "220", "230", "232", "234", "236", "240", "242", "244", "246",
         "250", "252", "254", "256", "260", "262", "264", "266", "280", "282", "284", "286",
         "290", "292", "294", "296",
-        "400", "410", "412", "414", "416",
+        "400", "410", "412", "414", "416", "420",
         "600", "610", "612", "614", "616", "620", "622", "624", "626",
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
         "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
         "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896"
+        "890", "892", "894", "896", "900", "910"
       ],
       listOfUserIdsToManage: [],
       color: "red",
@@ -3384,7 +3681,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "600", "610", "612", "614", "616", "620", "622", "624", "626",
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
         "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
-        "870", "872", "874", "876", "880", "882", "884", "886"
+        "870", "872", "874", "876", "880", "882", "884", "886", "900"
       ],
       listOfUserIdsToManage: [],
       color: "red",
@@ -3407,7 +3704,7 @@ exports.createCompanyAfterSignUp = functions.https.onCall(async (data, context) 
         "800", "810", "812", "814", "816", "820", "822", "824", "826", "830", "832", "834", "836",
         "840", "842", "844", "846", "850", "852", "854", "856", "860", "862", "864", "866",
         "870", "872", "874", "876", "880", "882", "884", "886",
-        "890", "892", "894", "896"
+        "890", "892", "894", "896", "900", "910"
       ],
       listOfUserIdsToManage: [],
       color: "red",
@@ -3865,6 +4162,20 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
   const customerName = verifiedAuth.token?.name || approval.customerName || verifiedAuth.token?.email || "Customer";
   const nextShoppingStatus = action === "approved" ? "Ready to Purchase" : "Customer Rejected";
   const nextApprovalStatus = action;
+  const responseHistoryItem = {
+    id: `cpa_hist_${uuidv4()}`,
+    action: action === "approved" ? "customerApproved" : "customerRejected",
+    status: nextApprovalStatus,
+    note: responseNote,
+    source: "customerApp",
+    sourceLabel: "Customer through app",
+    actorUserId: verifiedAuth.uid,
+    actorUserName: customerName,
+    actorEmail: verifiedAuth.token?.email || approval.customerEmail || "",
+    customerId: approval.customerId || "",
+    customerName: approval.customerName || customerName,
+    createdAt: Timestamp.now(),
+  };
   const serviceStopId = approval.serviceStopId || approval.scheduledServiceStopId || "";
   const serviceStopInternalId = approval.serviceStopInternalId || approval.scheduledServiceStopInternalId || "";
   const scheduledDate = approval.scheduledDate || approval.serviceDate || null;
@@ -3918,6 +4229,10 @@ exports.respondToCustomerPartApproval = onCall({ cors: ADMIN_CALLABLE_CORS_ORIGI
     shoppingListItemId,
     shoppingListPath: shoppingListItemId && companyId ? `companies/${companyId}/shoppingList/${shoppingListItemId}` : "",
     shoppingListGeneratedAt: generatedShoppingListItemId ? now : approval.shoppingListGeneratedAt || null,
+    responseSource: "customerApp",
+    responseSourceLabel: "Customer through app",
+    respondedOnBehalfOfCustomer: false,
+    history: admin.firestore.FieldValue.arrayUnion(responseHistoryItem),
     updatedAt: now,
   }, { merge: true });
 
@@ -4846,6 +5161,8 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
       serviceLocationData.estimatedTime ?? homeownerServiceLocation?.estimatedTime ?? 15
     );
 
+    await ensureCompanyCustomerPipelineTemplates({ firestore, companyId, now });
+
     writes.push({
       ref: companyRef.collection("customers").doc(customerId),
       data: removeUndefinedDeep({
@@ -5095,6 +5412,8 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
     writes.push({
       ref: leadRef,
       data: removeUndefinedDeep({
+        status: "In Progress",
+        leadStatus: "In Progress",
         customerId,
         companyCustomerId: customerId,
         customerName,
@@ -5114,6 +5433,39 @@ exports.convertHomeownerServiceRequestToCompanyCustomer = functions.https.onCall
         convertedAt: now,
         convertedByUserId: authUserId,
         conversionSource: "companyLeadConversion",
+        dateCompleted: null,
+        lostReason: "",
+        cancelReason: "",
+        updatedAt: now,
+      }),
+    });
+
+    writes.push({
+      ref: customerPipelineRowsRef(firestore, companyId).doc(pipelineRowIdForLead(leadId)),
+      data: removeUndefinedDeep({
+        id: pipelineRowIdForLead(leadId),
+        companyId,
+        leadId,
+        customerId,
+        source: "lead",
+        leadSource: leadSourceFromLead(lead),
+        leadStatus: "In Progress",
+        pipelineStatus: "active",
+        lostReason: "",
+        customerName,
+        contact: [email, phoneNumber].filter(Boolean).join(" | "),
+        serviceLocationId,
+        bodyOfWaterId,
+        bodyOfWaterIds,
+        equipmentIds,
+        estimateId: lead.estimateId || "",
+        serviceAgreementId: lead.serviceAgreementId || "",
+        serviceEstimateServiceStopId: lead.serviceEstimateServiceStopId || "",
+        initialEstimateServiceStopId: lead.initialEstimateServiceStopId || "",
+        relationshipId,
+        sourceHomeownerServiceRequestId: leadId,
+        createdAt: lead.createdAt || now,
+        completedAt: null,
         updatedAt: now,
       }),
     });
@@ -5365,6 +5717,99 @@ exports.populateBaseTechnicianRatesOnCompanyUserCreate = functions1.firestore
     await batch.commit();
     console.log(`Copied ${copiedCount} base technician rate(s) and ${onboardingItemsCopied} onboarding item(s) for company user ${technicianId} in company ${companyId}.`);
     return { copiedCount, onboardingItemsCopied };
+  });
+
+exports.populateCustomerPipelineOnCustomerCreate = functions1.firestore
+  .document("companies/{companyId}/customers/{customerId}")
+  .onCreate(async (snap, context) => {
+    const firestore = getFirestore();
+    const companyId = context.params.companyId;
+    const customerId = context.params.customerId;
+    const customer = snap.data() || {};
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    try {
+      const row = await upsertPipelineRowForCustomer({
+        firestore,
+        companyId,
+        customerId,
+        customer: { id: customerId, ...customer },
+        now,
+      });
+      console.log(`Created customer pipeline row ${row?.id || ""} for customer ${customerId} in company ${companyId}.`);
+      return row ? { rowId: row.id } : null;
+    } catch (error) {
+      console.error("Unable to create customer pipeline row from customer create", error);
+      return null;
+    }
+  });
+
+exports.populateCustomerPipelineOnLeadCreate = functions1.firestore
+  .document("homeownerServiceRequests/{leadId}")
+  .onCreate(async (snap, context) => {
+    const firestore = getFirestore();
+    const leadId = context.params.leadId;
+    const lead = snap.data() || {};
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    try {
+      const row = await upsertPipelineRowForLead({
+        firestore,
+        leadId,
+        lead: { id: leadId, ...lead },
+        now,
+      });
+      console.log(`Created customer pipeline row ${row?.id || ""} for lead ${leadId}.`);
+      return row ? { rowId: row.id } : null;
+    } catch (error) {
+      console.error("Unable to create customer pipeline row from lead create", error);
+      return null;
+    }
+  });
+
+exports.syncCustomerPipelineOnLeadUpdate = functions1.firestore
+  .document("homeownerServiceRequests/{leadId}")
+  .onUpdate(async (change, context) => {
+    const firestore = getFirestore();
+    const leadId = context.params.leadId;
+    const before = change.before.data() || {};
+    const after = change.after.data() || {};
+    const watchedFields = [
+      "status",
+      "leadSource",
+      "marketingSource",
+      "source",
+      "customerId",
+      "companyCustomerId",
+      "customerName",
+      "homeownerName",
+      "homeownerEmail",
+      "homeownerPhone",
+      "lostReason",
+      "cancelReason",
+      "statusChangeReason",
+      "dateCompleted",
+      "estimateId",
+      "serviceAgreementId",
+      "serviceEstimateServiceStopId",
+      "initialEstimateServiceStopId",
+    ];
+    const changed = watchedFields.some((field) => JSON.stringify(before[field] || null) !== JSON.stringify(after[field] || null));
+
+    if (!changed) return null;
+
+    try {
+      const row = await upsertPipelineRowForLead({
+        firestore,
+        leadId,
+        lead: { id: leadId, ...after },
+        now: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return row ? { rowId: row.id } : null;
+    } catch (error) {
+      console.error("Unable to sync customer pipeline row from lead update", error);
+      return null;
+    }
   });
 
 exports.migrateLegacyVendorsToCanonical = functions.https.onCall(async (data, context) => {
@@ -6044,12 +6489,29 @@ exports.deleteRecurringServiceStop = functions.https.onCall(async (data, context
     );
   }
 
-  return deleteRecurringServiceStopCascade({
-    db,
-    companyId,
-    stopId,
-    includePastServiceStops
-  });
+  try {
+    return await deleteRecurringServiceStopCascade({
+      db,
+      companyId,
+      stopId,
+      includePastServiceStops
+    });
+  } catch (error) {
+    console.error("[deleteRecurringServiceStop] Error:", error);
+    await reportCloudFunctionError(error, {
+      functionName: "deleteRecurringServiceStop",
+      eventName: "delete-recurring-service-stop",
+      companyId,
+      recurringServiceStopId: stopId,
+      title: "Recurring service stop delete failed",
+      description: "The callable that deletes a recurring service stop and linked service stops failed.",
+      severity: "critical",
+      data: {
+        includePastServiceStops,
+      },
+    });
+    throw error;
+  }
 });
 
 exports.deleteRecurringRoute = functions.https.onCall(async (data, context) => {
@@ -6654,6 +7116,19 @@ exports.updateRecurringServiceStop = functions.https.onCall(async (data, context
     };
   } catch (error) {
     console.error("[updateRecurringServiceStop] Error:", error);
+    await reportCloudFunctionError(error, {
+      functionName: "updateRecurringServiceStop",
+      eventName: "update-recurring-service-stop",
+      companyId,
+      recurringServiceStopId: recurringServiceStop?.id || "",
+      title: "Recurring service stop update failed",
+      description: "The callable that updates a recurring service stop template, future service stops, linked sales records, and planned route order failed.",
+      severity: "critical",
+      data: {
+        recurringServiceStop,
+        syncRoute: receivedData?.syncRoute,
+      },
+    });
 
     throw new functions.https.HttpsError(
       "internal",

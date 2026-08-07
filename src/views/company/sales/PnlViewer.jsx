@@ -25,10 +25,10 @@ import { db } from '../../../utils/config';
 import { salesCollectionNames } from '../../../utils/models/Sales';
 import {
   customerHasAnyTag,
-  filterCustomersByRoleTagAccess,
+  filterCustomersByRegionalAccess,
   filterRecordsByCustomerTags,
+  getCustomerRegionAccessTags,
   getCustomerTagOptions,
-  getRoleCustomerTagAccess,
 } from '../../../utils/customerTags';
 import {
   buildPnlViewerMatrix,
@@ -36,6 +36,7 @@ import {
   moneyFromCents,
   normalizeDocs,
 } from '../../../utils/sales/pnlViewerMetrics';
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 
 const emptyRawData = {
   customers: [],
@@ -313,7 +314,15 @@ const RowDetailModal = ({ row, customerRows, months, onClose }) => {
 };
 
 const PnlViewer = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName, companyRole } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    companyRole,
+    companyUserAccess,
+    selectedCustomerRegionTag,
+    featureFlagsLoaded,
+    isFeatureEnabled,
+  } = useContext(Context);
   const [dateRange, setDateRange] = useState(() => defaultYtdRange());
   const [rawData, setRawData] = useState(emptyRawData);
   const [loading, setLoading] = useState(false);
@@ -332,6 +341,7 @@ const PnlViewer = () => {
   const topScrollRef = useRef(null);
   const tableScrollRef = useRef(null);
   const resizeStateRef = useRef(null);
+  const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
   const dateRangeBounds = useMemo(() => {
     const ytd = defaultYtdRange();
@@ -354,11 +364,19 @@ const PnlViewer = () => {
   const selectedYear = dateRangeBounds.start.getFullYear();
   const rangeLabel = `${dateDisplay(dateRangeBounds.start)} - ${dateDisplay(dateRangeBounds.end)}`;
 
-  const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
+  const regionalTagAccess = useMemo(
+    () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
+    [companyUserAccess, companyRole]
+  );
 
   const visibleCustomers = useMemo(
-    () => filterCustomersByRoleTagAccess(rawData.customers, companyRole),
-    [rawData.customers, companyRole]
+    () => filterCustomersByRegionalAccess(rawData.customers, {
+      userAccess: companyUserAccess,
+      role: companyRole,
+      selectedRegionTag: selectedCustomerRegionTag,
+      regionalAccessEnabled: customerAreaFilteringEnabled,
+    }),
+    [rawData.customers, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]
   );
 
   const availableTags = useMemo(() => getCustomerTagOptions(visibleCustomers), [visibleCustomers]);
@@ -506,7 +524,14 @@ const PnlViewer = () => {
     const locationCustomerId = (serviceLocationId) => (
       serviceLocationsById.get(serviceLocationId)?.customerId || ''
     );
-    const tagFilterContext = { customersById, role: companyRole, selectedTags };
+    const tagFilterContext = {
+      customersById,
+      role: companyRole,
+      userAccess: companyUserAccess,
+      selectedRegionTag: selectedCustomerRegionTag,
+      regionalAccessEnabled: customerAreaFilteringEnabled,
+      selectedTags,
+    };
 
     const enrichStopData = rawData.stopData.map((stop) => {
       const linkedStop = serviceStopsById.get(String(stop.serviceStopId || '')) || {};
@@ -569,7 +594,7 @@ const PnlViewer = () => {
       bodiesOfWater,
       databaseItemById: new Map(rawData.databaseItems.map((item) => [item.id, item])),
     };
-  }, [companyRole, customersById, rawData, selectedTags]);
+  }, [companyRole, companyUserAccess, customersById, rawData, selectedCustomerRegionTag, selectedTags, customerAreaFilteringEnabled]);
 
   const matrixData = useMemo(() => buildPnlViewerMatrix({
     companyId: recentlySelectedCompany,
@@ -896,9 +921,9 @@ const PnlViewer = () => {
                 <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                   {recentlySelectedCompanyName || 'Selected Company'}
                 </span>
-                {roleTagAccess.length > 0 && (
+                {customerAreaFilteringEnabled && (regionalTagAccess.length > 0 || selectedCustomerRegionTag) && (
                   <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                    {roleTagAccess.join(', ')}
+                    {selectedCustomerRegionTag || regionalTagAccess.join(', ')}
                   </span>
                 )}
               </div>

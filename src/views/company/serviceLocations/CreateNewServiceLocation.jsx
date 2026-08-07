@@ -9,6 +9,10 @@ import { toast } from 'react-hot-toast';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 import {
+    buildEquipmentNickname,
+    equipmentDefaultsToNeedsService,
+} from '../../../utils/models/Equipment';
+import {
     normalizeAddress,
     normalizeContact,
     normalizeServiceLocationForFirestore,
@@ -32,6 +36,20 @@ const nextServiceDate = (date, amount, unit) => {
             break;
     }
     return next;
+};
+
+const WATER_TYPE_OPTIONS = ['Fresh Water', 'Salt Water'];
+
+const applyEquipmentDefaults = (current = {}, next = {}) => {
+    const merged = { ...current, ...next };
+    const shouldDefaultNeedsService = equipmentDefaultsToNeedsService(merged);
+
+    return {
+        ...merged,
+        needsService: shouldDefaultNeedsService ? true : merged.needsService,
+        serviceFrequency: shouldDefaultNeedsService && !merged.serviceFrequency ? 6 : merged.serviceFrequency,
+        serviceFrequencyEvery: shouldDefaultNeedsService && !merged.serviceFrequencyEvery ? 'Month' : merged.serviceFrequencyEvery,
+    };
 };
 
 const InfoSection = ({ title, children }) => (
@@ -91,7 +109,7 @@ const CreateNewServiceLocation = () => {
     const [mainContact, setMainContact] = useState({ id: "com_cus_con_"+uuidv4(), name: '', email: '', phoneNumber: '', notes: '' });
     
     const [bodiesOfWater, setBodiesOfWater] = useState([
-        { id: uuidv4(), name: 'Main', gallons: '16000', material: 'Plaster', notes: '', shape: '', length: ['', ''], depth: ['', ''], width: ['', ''] }
+        { id: uuidv4(), name: 'Main', gallons: '16000', material: 'Plaster', waterType: 'Fresh Water', notes: '', shape: '', length: ['', ''], depth: ['', ''], width: ['', ''] }
     ]);
     const [equipment, setEquipment] = useState([
         { id: uuidv4(), name: 'Pump 1', category: 'Pump', typeId: 'qr1d9eefis1VNdIyX6Xq', make: '', makeId: '', model: '', modelId: '', notes: '', needsService: false, serviceFrequency: '', serviceFrequencyEvery: '' },
@@ -205,6 +223,7 @@ const CreateNewServiceLocation = () => {
                     name: bow.name,
                     gallons: bow.gallons || '',
                     material: bow.material || '',
+                    waterType: bow.waterType || '',
                     customerId: selectedCustomer,
                     serviceLocationId,
                     notes: bow.notes || '',
@@ -220,16 +239,17 @@ const CreateNewServiceLocation = () => {
 
             for (const eq of equipment) {
                 if (eq.name) {
-                     const equipmentId = 'com_equ_' + uuidv4();
-                     const finalType = eq.type || eq.category || '';
-                     const lastServiceDate = eq.needsService ? new Date() : null;
-                     const serviceFrequency = eq.needsService ? Number(eq.serviceFrequency || 6) : null;
-                     const serviceFrequencyEvery = eq.needsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+	                     const equipmentId = 'com_equ_' + uuidv4();
+	                     const finalType = eq.type || eq.category || '';
+	                     const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalType });
+	                     const lastServiceDate = finalNeedsService ? new Date() : null;
+	                     const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency || 6) : null;
+	                     const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
                      await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
                          id: equipmentId,
                          name: eq.name,
                          notes: eq.notes || '',
-                         needsService: !!eq.needsService,
+	                         needsService: finalNeedsService,
                          type: finalType,
                          typeId: eq.typeId || '',
                          make: eq.make || '',
@@ -301,7 +321,7 @@ const CreateNewServiceLocation = () => {
 
     // Functions to add new body of water or equipment item
     const addBodyOfWater = () => {
-        setBodiesOfWater([...bodiesOfWater, { id: uuidv4(), name: 'Main', gallons: '16000', material: 'Plaster', notes: '', shape: '', length: ['', ''], depth: ['', ''], width: ['', ''] }]);
+        setBodiesOfWater([...bodiesOfWater, { id: uuidv4(), name: 'Main', gallons: '16000', material: 'Plaster', waterType: 'Fresh Water', notes: '', shape: '', length: ['', ''], depth: ['', ''], width: ['', ''] }]);
     };
 
     const addEquipment = () => {
@@ -309,7 +329,11 @@ const CreateNewServiceLocation = () => {
     };
     const updateEquipmentCatalog = (index, nextEquipment) => {
         const next = [...equipment];
-        next[index] = nextEquipment;
+        const nextItem = applyEquipmentDefaults(next[index], nextEquipment);
+        next[index] = {
+            ...nextItem,
+            name: next[index].name?.trim() ? next[index].name : buildEquipmentNickname(nextItem),
+        };
         setEquipment(next);
     };
     const inputClasses = "w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md placeholder-gray-500 text-gray-900 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm";
@@ -379,10 +403,16 @@ const CreateNewServiceLocation = () => {
                         {bodiesOfWater.map((bow, index) => (
                             <div key={bow.id} className="p-4 border rounded-lg mt-4 space-y-3 bg-gray-50">
                                 <FormInput label="Name" value={bow.name} onChange={e => { const next = [...bodiesOfWater]; next[index].name = e.target.value; setBodiesOfWater(next); }} />
-                                <div className="grid md:grid-cols-2 gap-4">
-                                    <FormInput label="Volume (gallons)" type="number" value={bow.gallons} onChange={e => { const next = [...bodiesOfWater]; next[index].gallons = e.target.value; setBodiesOfWater(next); }} />
-                                    <FormInput label="Material" value={bow.material} onChange={e => { const next = [...bodiesOfWater]; next[index].material = e.target.value; setBodiesOfWater(next); }} />
-                                    <FormInput label="Shape" value={bow.shape} onChange={e => { const next = [...bodiesOfWater]; next[index].shape = e.target.value; setBodiesOfWater(next); }} />
+	                                <div className="grid md:grid-cols-2 gap-4">
+	                                    <FormInput label="Volume (gallons)" type="number" value={bow.gallons} onChange={e => { const next = [...bodiesOfWater]; next[index].gallons = e.target.value; setBodiesOfWater(next); }} />
+	                                    <FormInput label="Material" value={bow.material} onChange={e => { const next = [...bodiesOfWater]; next[index].material = e.target.value; setBodiesOfWater(next); }} />
+	                                    <FormSelect label="Water Type" value={bow.waterType || ''} onChange={e => { const next = [...bodiesOfWater]; next[index].waterType = e.target.value; setBodiesOfWater(next); }}>
+	                                        <option value="">Select water type</option>
+	                                        {WATER_TYPE_OPTIONS.map((option) => (
+	                                            <option key={option} value={option}>{option}</option>
+	                                        ))}
+	                                    </FormSelect>
+	                                    <FormInput label="Shape" value={bow.shape} onChange={e => { const next = [...bodiesOfWater]; next[index].shape = e.target.value; setBodiesOfWater(next); }} />
                                     <FormInput label="Length" value={bow.length?.[0] || ''} onChange={e => { const next = [...bodiesOfWater]; next[index].length = [e.target.value, next[index].length?.[1] || '']; setBodiesOfWater(next); }} />
                                     <FormInput label="Depth" value={bow.depth?.[0] || ''} onChange={e => { const next = [...bodiesOfWater]; next[index].depth = [e.target.value, next[index].depth?.[1] || '']; setBodiesOfWater(next); }} />
                                     <FormInput label="Width" value={bow.width?.[0] || ''} onChange={e => { const next = [...bodiesOfWater]; next[index].width = [e.target.value, next[index].width?.[1] || '']; setBodiesOfWater(next); }} />

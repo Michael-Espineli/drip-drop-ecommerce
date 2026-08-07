@@ -472,6 +472,13 @@ const linkedJobIdForAgreement = (agreement = {}) => {
     return "";
 };
 
+const linkedLeadIdForAgreement = (agreement = {}) => {
+    if (agreement.leadId) return agreement.leadId;
+    if (agreement.homeownerServiceRequestId) return agreement.homeownerServiceRequestId;
+    if (normalizeStatusKey(agreement.sourceType) === "lead" && agreement.sourceId) return agreement.sourceId;
+    return "";
+};
+
 const linkedInspectionServiceStopIdForAgreement = (agreement = {}) => {
     if (agreement.inspectionServiceStopId) return agreement.inspectionServiceStopId;
     if (agreement.serviceAgreementEstimateServiceStopId) return agreement.serviceAgreementEstimateServiceStopId;
@@ -558,6 +565,42 @@ const syncLinkedJobForAgreementStatus = async ({
     }
 
     await jobRef.set(update, { merge: true });
+};
+
+const syncLinkedLeadForAgreementStatus = async ({
+    agreement,
+    status,
+    timestamp = admin.firestore.FieldValue.serverTimestamp(),
+}) => {
+    const leadId = linkedLeadIdForAgreement(agreement);
+    if (!leadId) return;
+
+    const statusKey = normalizeStatusKey(status);
+    const update = {
+        serviceAgreementId: agreement.id || agreement.agreementId || "",
+        serviceAgreementTitle: agreement.title || "Service Agreement",
+        serviceAgreementStatus: status,
+        updatedAt: timestamp,
+    };
+
+    if (statusKey === "sent") {
+        update.status = "In Progress";
+        update.leadStatus = "In Progress";
+        update.dateCompleted = null;
+        update.lostReason = "";
+        update.cancelReason = "";
+    }
+
+    if (statusKey === "accepted") {
+        update.status = "Completed";
+        update.leadStatus = "Completed";
+        update.serviceAgreementAcceptedAt = timestamp;
+        update.dateCompleted = timestamp;
+        update.lostReason = "";
+        update.cancelReason = "";
+    }
+
+    await db.collection("homeownerServiceRequests").doc(leadId).set(update, { merge: true });
 };
 
 const escapeHtml = (value) => String(value || "")
@@ -1623,6 +1666,11 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         status: "sent",
         actorUserId: callableAuth.uid,
         actorUserName: callableAuth.token?.name || callableAuth.token?.email || "Company user",
+        timestamp: sentAt,
+    });
+    await syncLinkedLeadForAgreementStatus({
+        agreement,
+        status: "sent",
         timestamp: sentAt,
     });
 

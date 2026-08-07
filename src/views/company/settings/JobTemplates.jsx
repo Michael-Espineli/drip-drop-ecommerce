@@ -5,6 +5,7 @@ import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { v4 as uuidv4 } from "uuid";
 import { appConfirm } from "../../../utils/appDialog";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const moneyFromCents = (value) =>
   new Intl.NumberFormat("en-US", {
@@ -125,19 +126,19 @@ const JobTemplates = () => {
         const companyData = companySnap.exists() ? companySnap.data() : {};
         setDefaultAdminId(companyData.defaultAdminId || "");
         setCompanyUsers(
-          companyUsersSnap.docs
+          sortCompanyUsersByName(companyUsersSnap.docs
             .map((userDoc) => {
               const data = userDoc.data();
               return {
                 ...data,
                 id: data.id || userDoc.id,
                 userId: data.userId || userDoc.id,
-                userName: data.userName || data.name || "Unnamed User",
+                userName: getCompanyUserDisplayName(data, "Unnamed User"),
                 roleName: data.roleName || "",
               };
             })
             .filter((companyUser) => String(companyUser.status || "Active").toLowerCase() !== "inactive")
-            .sort((a, b) => String(a.userName || "").localeCompare(String(b.userName || "")))
+          )
         );
 
         const templatesWithCounts = await Promise.all(

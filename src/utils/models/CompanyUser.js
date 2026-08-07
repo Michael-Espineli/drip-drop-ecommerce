@@ -12,6 +12,53 @@ export const WorkerTypeEnum = {
     notAssigned: ""
 };
 
+export const RouteVehicleAccess = {
+    personal: "personal",
+    company: "company",
+    both: "both"
+};
+
+export const routeVehicleAccessOptions = [
+    {
+        value: RouteVehicleAccess.personal,
+        label: "Personal only",
+        description: "Can use their saved personal vehicle, but not company fleet vehicles."
+    },
+    {
+        value: RouteVehicleAccess.company,
+        label: "Company vehicles",
+        description: "Can use company fleet vehicles, but not a personal vehicle."
+    },
+    {
+        value: RouteVehicleAccess.both,
+        label: "Both",
+        description: "Can use either company fleet vehicles or their saved personal vehicle."
+    }
+];
+
+export const normalizeRouteVehicleAccess = (companyUser = {}) => {
+    const rawValue = typeof companyUser === "string" ? companyUser : companyUser?.routeVehicleAccess;
+    const normalizedValue = String(rawValue || "").trim().toLowerCase();
+
+    if (Object.values(RouteVehicleAccess).includes(normalizedValue)) {
+        return normalizedValue;
+    }
+
+    return companyUser?.allowPersonalVehicle ? RouteVehicleAccess.both : RouteVehicleAccess.company;
+};
+
+export const canUsePersonalRouteVehicle = (companyUser = {}) => (
+    [RouteVehicleAccess.personal, RouteVehicleAccess.both].includes(normalizeRouteVehicleAccess(companyUser))
+);
+
+export const canUseCompanyRouteVehicle = (companyUser = {}) => (
+    [RouteVehicleAccess.company, RouteVehicleAccess.both].includes(normalizeRouteVehicleAccess(companyUser))
+);
+
+export const routeVehicleAccessLabel = (companyUser = {}) => (
+    routeVehicleAccessOptions.find((option) => option.value === normalizeRouteVehicleAccess(companyUser))?.label || "Company vehicles"
+);
+
 export class CompanyUser {
     constructor(
         id,
@@ -25,7 +72,8 @@ export class CompanyUser {
         linkedCompanyId = null,
         linkedCompanyName = null,
         allowPersonalVehicle = false,
-        personalVehicle = null
+        personalVehicle = null,
+        routeVehicleAccess = null
     ) {
         this.id = id;
         this.userId = userId;
@@ -37,7 +85,8 @@ export class CompanyUser {
         this.workerType = workerType;
         this.linkedCompanyId = linkedCompanyId;
         this.linkedCompanyName = linkedCompanyName;
-        this.allowPersonalVehicle = allowPersonalVehicle;
+        this.routeVehicleAccess = normalizeRouteVehicleAccess({ routeVehicleAccess, allowPersonalVehicle });
+        this.allowPersonalVehicle = canUsePersonalRouteVehicle(this.routeVehicleAccess);
         this.personalVehicle = personalVehicle;
     }
 
@@ -56,7 +105,8 @@ export class CompanyUser {
             data.linkedCompanyId,
             data.linkedCompanyName,
             Boolean(data.allowPersonalVehicle),
-            data.personalVehicle || null
+            data.personalVehicle || null,
+            data.routeVehicleAccess
         );
     }
 
@@ -73,7 +123,8 @@ export class CompanyUser {
             linkedCompanyId: this.linkedCompanyId,
             linkedCompanyName: this.linkedCompanyName,
             allowPersonalVehicle: this.allowPersonalVehicle,
-            personalVehicle: this.personalVehicle
+            personalVehicle: this.personalVehicle,
+            routeVehicleAccess: this.routeVehicleAccess
         };
     }
 }

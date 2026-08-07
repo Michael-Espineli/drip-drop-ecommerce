@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useState } from "react";
-import { addDoc, collection, doc, getDoc, getDocs, query, serverTimestamp, Timestamp, where } from "firebase/firestore";
+import { addDoc, collection, doc, getDoc, getDocs, orderBy, query, serverTimestamp, Timestamp, where } from "firebase/firestore";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import { endOfMonth, endOfWeek, format, startOfMonth, startOfWeek, subDays, subMonths } from "date-fns";
 import * as XLSX from "xlsx";
@@ -16,20 +16,23 @@ import toast from "react-hot-toast";
 import { Context } from "../../../context/AuthContext";
 import { db, storage } from "../../../utils/config";
 import { estimateServiceStopPaySummary } from "../../../utils/payroll/payEstimate";
+import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import {
   customerHasAnyTag,
-  filterCustomersByRoleTagAccess,
+  filterCustomersByRegionalAccess,
   filterRecordsByCustomerTags,
+  getCustomerRegionAccessTags,
   getCustomerTagOptions,
-  getRoleCustomerTagAccess,
 } from "../../../utils/customerTags";
 import {
   ChemicalBillingTreatment,
   classifyAgreementChemicalBilling,
 } from "../../../utils/sales/chemicalBilling";
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const reportCategories = [
   { value: "operations", label: "Operations" },
+  { value: "marketing", label: "Marketing" },
   { value: "performance", label: "Performance" },
   { value: "finance", label: "Finance / Accounting" },
 ];
@@ -40,6 +43,7 @@ const reportCatalog = [
   { value: "readingHealth", label: "Reading Health", status: "Ready", source: "reading thresholds by pool", category: "operations" },
   { value: "readingPerformance", label: "Reading Performance", status: "Ready", source: "stopData standards by user or customer", category: "performance" },
   { value: "pnlPerPool", label: "PNL Per Pool", status: "Ready", source: "service agreements, labor, chemicals", category: "performance" },
+  { value: "pipeline", label: "Pipeline", status: "Ready", source: "customerPipeline, lead sources, lost and fired reasons", category: "marketing" },
   { value: "chemicals", label: "Chemicals", status: "Ready", source: "stopData dosages", category: "operations" },
   { value: "waste", label: "Waste", status: "Ready", source: "linked dosages and purchased items", category: "performance" },
   { value: "users", label: "Users", status: "Ready", source: "users, stops, jobs, purchases, payroll", category: "operations" },
@@ -52,7 +56,8 @@ const reportCatalog = [
   { value: "tax", label: "Tax", status: "Ready", source: "purchases and invoiced jobs", category: "finance" },
 ];
 
-const fixedGroupingReportTypes = new Set(["funReadingsDosages", "readingHealth", "readingPerformance", "pnlPerPool"]);
+const fixedGroupingReportTypes = new Set(["funReadingsDosages", "readingHealth", "readingPerformance", "pnlPerPool", "pipeline"]);
+const payrollOnlyReportTypes = new Set(["payroll", "futurePayroll"]);
 
 const readingPerformanceViewOptions = [
   { value: "users", label: "User" },
@@ -3575,6 +3580,217 @@ const buildUsersReport = ({ users, serviceStops, jobs, purchases, payrollLines }
   };
 };
 
+const normalizePipelineChecklist = (checklist = {}, rowData = {}) => {
+  const mergedChecklist = { ...(checklist || {}) };
+  Object.entries(rowData || {}).forEach(([key, value]) => {
+    if (!key.startsWith("checklist.")) return;
+    const stageId = key.slice("checklist.".length);
+    if (stageId && !Object.prototype.hasOwnProperty.call(mergedChecklist, stageId)) {
+      mergedChecklist[stageId] = value;
+    }
+  });
+
+  return Object.fromEntries(
+    Object.entries(mergedChecklist).map(([key, value]) => [
+      key,
+      {
+        complete: !!(value?.complete || value?.isComplete),
+        completedAt: value?.completedAt || value?.dateCompleted || null,
+        completedByName: value?.completedByName || value?.completedByUserName || "",
+      },
+    ])
+  );
+};
+
+const pipelineRowName = (row = {}) => (
+  row.customerName ||
+  row.homeownerName ||
+  row.name ||
+  row.contactName ||
+  row.customerId ||
+  row.leadId ||
+  "Unnamed pipeline"
+);
+
+const pipelineRowSource = (row = {}) => (
+  row.leadSource ||
+  row.marketingSource ||
+  row.sourceLabel ||
+  row.source ||
+  "Unknown"
+);
+
+const pipelineStatus = (row = {}) => {
+  const raw = reportStatusKey(row.pipelineStatus || row.lifecycleStatus || row.status || row.leadStatus || "");
+  const safeRaw = raw.replace(/[\s-]+/g, "_");
+  if (["fired", "fired_us", "customer_fired", "terminated", "churned"].includes(raw) || row.firedUs === true) return "Fired";
+  if (["inactive", "ended_inactive", "customer_inactive"].includes(safeRaw) || row.inactiveAt) return "Inactive";
+  if (["lost", "cancelled", "canceled"].includes(raw)) return "Lost";
+  if (["one_off", "oneoff", "hired_one_off", "hired_for_one_off", "won_one_off"].includes(safeRaw) || row.hiredForOneOff === true) return "Hired for one off";
+  if (["complete", "completed", "done"].includes(raw)) return "Complete";
+  return "Active";
+};
+
+const pipelineStageAppliesToRow = (row = {}, stage = {}) => {
+  const customerId = row.customerId || row.companyCustomerId || "";
+  const leadId = row.leadId || row.sourceHomeownerServiceRequestId || "";
+  if (stage.linkType === "lead" && customerId && !leadId) return false;
+  return true;
+};
+
+const pipelineStageIsComplete = (row = {}, stage = {}) => {
+  const checklist = normalizePipelineChecklist(row.checklist, row);
+  if (checklist[stage.id]?.complete) return true;
+  if (stage.linkType === "lead") return Boolean(row.leadId || row.sourceHomeownerServiceRequestId);
+  if (stage.linkType === "customer") return Boolean(row.customerId || row.companyCustomerId);
+  if (stage.linkType === "initialEstimate") return Boolean(row.estimateId || row.serviceEstimateServiceStopId || row.initialEstimateServiceStopId);
+  if (stage.linkType === "serviceAgreement") return Boolean(row.agreementId || row.serviceAgreementId);
+  if (stage.linkType === "routing") return Boolean(row.recurringServiceStopId || row.routeId);
+  if (stage.linkType === "equipment") return Array.isArray(row.equipmentIds) && row.equipmentIds.length > 0;
+  if (stage.linkType === "locationPhotos") return Number(row.locationPhotoCount || 0) > 0;
+  return false;
+};
+
+const buildCustomerPipelineReport = ({ pipelineRows = [], pipelineItems = [], mode }) => {
+  const activeItems = pipelineItems
+    .filter((item) => item.active !== false)
+    .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || String(left.title || left.name || "").localeCompare(String(right.title || right.name || "")));
+  const stages = activeItems.length
+    ? activeItems
+    : [
+      { id: "default_lead", title: "Lead", linkType: "lead" },
+      { id: "default_customer", title: "Customer", linkType: "customer" },
+      { id: "default_initial_estimate", title: "Initial Estimate", linkType: "initialEstimate" },
+      { id: "default_service_agreement", title: "Service Agreement", linkType: "serviceAgreement" },
+      { id: "default_routing", title: "Routing", linkType: "routing" },
+    ];
+
+  const rows = pipelineRows.map((row) => {
+    const applicableStages = stages.filter((stage) => pipelineStageAppliesToRow(row, stage));
+    const completedStages = applicableStages.filter((stage) => pipelineStageIsComplete(row, stage));
+    const nextOpenStage = applicableStages.find((stage) => !pipelineStageIsComplete(row, stage));
+    const totalStages = applicableStages.length;
+    const status = pipelineStatus(row);
+    const ended = ["Complete", "Hired for one off", "Lost", "Fired"].includes(status);
+    const completedCount = ended ? totalStages : completedStages.length;
+    const percent = totalStages ? Math.round((completedCount / totalStages) * 100) : ended ? 100 : 0;
+
+    return {
+      id: row.id,
+      name: pipelineRowName(row),
+      source: pipelineRowSource(row),
+      leadStatus: row.leadStatus || row.status || "-",
+      pipelineStatus: status,
+      completed: completedCount,
+      total: totalStages,
+      percent,
+      nextOpenStage: status === "Lost" ? "Lost / cancelled" : status === "Fired" ? "Fired us" : status === "Hired for one off" ? "Hired for one off" : nextOpenStage?.title || "Complete",
+      lostReason: row.firedReason || row.customerFiredReason || row.lostReason || row.cancelReason || row.statusChangeReason || "",
+      customerId: row.customerId || row.companyCustomerId || "",
+      leadId: row.leadId || row.sourceHomeownerServiceRequestId || "",
+      notes: row.notes || "",
+      createdAt: row.createdAt || row.dateCreated || null,
+      updatedAt: row.updatedAt || null,
+      stageDetail: stages.map((stage) => (
+        `${stage.title}: ${pipelineStageAppliesToRow(row, stage) ? (pipelineStageIsComplete(row, stage) ? "Complete" : "Open") : "Optional"}`
+      )).join(" | "),
+    };
+  }).sort((left, right) => left.source.localeCompare(right.source) || left.name.localeCompare(right.name));
+
+  const sourceGroups = new Map();
+  rows.forEach((row) => {
+    if (!sourceGroups.has(row.source)) {
+      sourceGroups.set(row.source, {
+        source: row.source,
+        total: 0,
+        active: 0,
+        won: 0,
+        oneOff: 0,
+        lost: 0,
+        fired: 0,
+        totalPercent: 0,
+      });
+    }
+    const group = sourceGroups.get(row.source);
+    group.total += 1;
+    group.totalPercent += row.percent;
+    if (row.pipelineStatus === "Lost") group.lost += 1;
+    else if (row.pipelineStatus === "Fired") group.fired += 1;
+    else if (row.pipelineStatus === "Inactive") group.fired += 1;
+    else if (row.pipelineStatus === "Hired for one off") {
+      group.oneOff += 1;
+      group.won += 1;
+    }
+    else if (row.customerId || row.pipelineStatus === "Complete") group.won += 1;
+    else group.active += 1;
+  });
+
+  const sourceRows = [...sourceGroups.values()]
+    .map((group) => ({
+      ...group,
+      winRate: group.total ? `${((group.won / group.total) * 100).toFixed(1)}%` : "0.0%",
+      lossRate: group.total ? `${(((group.lost + group.fired) / group.total) * 100).toFixed(1)}%` : "0.0%",
+      averageCompletion: group.total ? `${(group.totalPercent / group.total).toFixed(1)}%` : "0.0%",
+    }))
+    .sort((left, right) => right.total - left.total || left.source.localeCompare(right.source));
+
+  const displayRows = mode === "detail"
+    ? rows
+    : rows.filter((row) => row.pipelineStatus !== "Complete" && row.pipelineStatus !== "Hired for one off" && row.pipelineStatus !== "Lost" && row.pipelineStatus !== "Fired" && row.pipelineStatus !== "Inactive");
+
+  return {
+    title: "Pipeline Report",
+    stats: [
+      numberMetric("Pipeline Rows", rows.length),
+      numberMetric("Active", rows.filter((row) => row.pipelineStatus === "Active").length),
+      numberMetric("Won / Customer", rows.filter((row) => (
+        row.pipelineStatus !== "Lost" &&
+        row.pipelineStatus !== "Fired" &&
+        row.pipelineStatus !== "Inactive" &&
+        (row.customerId || row.pipelineStatus === "Complete")
+      )).length),
+      numberMetric("Hired One Off", rows.filter((row) => row.pipelineStatus === "Hired for one off").length),
+      numberMetric("Lost", rows.filter((row) => row.pipelineStatus === "Lost").length),
+      numberMetric("Fired", rows.filter((row) => row.pipelineStatus === "Fired").length),
+      numberMetric("Inactive", rows.filter((row) => row.pipelineStatus === "Inactive").length),
+    ],
+    columns: [
+      { key: "name", label: "Lead / Customer" },
+      { key: "source", label: "Source" },
+      { key: "leadStatus", label: "Lead Status" },
+      { key: "pipelineStatus", label: "Pipeline Status" },
+      { key: "percent", label: "Complete", align: "right", render: (row) => `${row.percent}%` },
+      { key: "nextOpenStage", label: "Next Open Stage" },
+      { key: "lostReason", label: "Lost / Fired Reason" },
+      { key: "notes", label: "Notes" },
+      ...(mode === "detail" ? [{ key: "stageDetail", label: "Stage Detail" }] : []),
+    ],
+    summarySections: [
+      {
+        title: "Source Performance",
+        columns: [
+          { key: "source", label: "Source" },
+          { key: "total", label: "Total", align: "right" },
+          { key: "active", label: "Active", align: "right" },
+          { key: "won", label: "Won", align: "right" },
+          { key: "oneOff", label: "One Off", align: "right" },
+          { key: "lost", label: "Lost", align: "right" },
+          { key: "fired", label: "Fired", align: "right" },
+          { key: "winRate", label: "Win Rate", align: "right" },
+          { key: "lossRate", label: "Loss Rate", align: "right" },
+          { key: "averageCompletion", label: "Avg Completion", align: "right" },
+        ],
+        rows: sourceRows,
+      },
+    ],
+    groups: [{
+      id: "pipeline",
+      name: mode === "detail" ? "All Pipeline Rows" : "Unfinished Pipeline Rows",
+      rows: displayRows,
+    }],
+  };
+};
+
 const buildPnlPerPoolReport = ({
   companyId = "",
   stopData = [],
@@ -4968,7 +5184,19 @@ const IndividualUsersExportSection = ({
 };
 
 const Reports = () => {
-  const { recentlySelectedCompany, companyRole, user: authUser, dataBaseUser } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    companyRole,
+    companyUserAccess,
+    selectedCustomerRegionTag,
+    user: authUser,
+    dataBaseUser,
+    featureFlagsLoaded,
+    isFeatureEnabled,
+  } = useContext(Context);
+  const { can } = useCompanyPermissions();
+  const canViewPayrollInformation = can("420");
+  const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
   const [reportType, setReportType] = useState("readings");
   const [mode, setMode] = useState("summary");
   const [groupBy, setGroupBy] = useState("company");
@@ -4997,18 +5225,24 @@ const Reports = () => {
   );
 
   const filteredReportCatalog = useMemo(() => {
+    const permittedReports = canViewPayrollInformation
+      ? reportCatalog
+      : reportCatalog.filter((report) => !payrollOnlyReportTypes.has(report.value));
     const search = reportSearchTerm.trim().toLowerCase();
-    if (!search) return reportCatalog;
+    if (!search) return permittedReports;
 
-    return reportCatalog.filter((report) => {
+    return permittedReports.filter((report) => {
       const category = reportCategories.find((item) => item.value === report.category)?.label || "";
       return [report.label, report.source, category]
         .filter(Boolean)
         .some((value) => value.toLowerCase().includes(search));
     });
-  }, [reportSearchTerm]);
+  }, [canViewPayrollInformation, reportSearchTerm]);
 
-  const roleTagAccess = useMemo(() => getRoleCustomerTagAccess(companyRole), [companyRole]);
+  const regionalTagAccess = useMemo(
+    () => getCustomerRegionAccessTags({ userAccess: companyUserAccess, role: companyRole }),
+    [companyUserAccess, companyRole]
+  );
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -5020,7 +5254,12 @@ const Reports = () => {
     const fetchCustomerTags = async () => {
       try {
         const customers = await getCollection(recentlySelectedCompany, "customers");
-        const visibleCustomers = filterCustomersByRoleTagAccess(customers, companyRole);
+        const visibleCustomers = filterCustomersByRegionalAccess(customers, {
+          userAccess: companyUserAccess,
+          role: companyRole,
+          selectedRegionTag: selectedCustomerRegionTag,
+          regionalAccessEnabled: customerAreaFilteringEnabled,
+        });
         setAvailableCustomerTags(getCustomerTagOptions(visibleCustomers));
         setSelectedCustomerTags((currentTags) =>
           currentTags.filter((tag) => getCustomerTagOptions(visibleCustomers).includes(tag))
@@ -5031,7 +5270,7 @@ const Reports = () => {
     };
 
     fetchCustomerTags();
-  }, [recentlySelectedCompany, companyRole]);
+  }, [recentlySelectedCompany, companyUserAccess, companyRole, selectedCustomerRegionTag, customerAreaFilteringEnabled]);
 
   useEffect(() => {
     if (!recentlySelectedCompany) {
@@ -5071,7 +5310,18 @@ const Reports = () => {
     };
   }, [recentlySelectedCompany]);
 
+  useEffect(() => {
+    if (!canViewPayrollInformation && payrollOnlyReportTypes.has(reportType)) {
+      setReportType("readings");
+    }
+  }, [canViewPayrollInformation, reportType]);
+
   const handleReportSelect = (value) => {
+    if (payrollOnlyReportTypes.has(value) && !canViewPayrollInformation) {
+      toast.error("Payroll reports require payroll information permission.");
+      return;
+    }
+
     setReportType(value);
   };
 
@@ -5315,6 +5565,11 @@ const Reports = () => {
       return;
     }
 
+    if (payrollOnlyReportTypes.has(reportType) && !canViewPayrollInformation) {
+      toast.error("Payroll reports require payroll information permission.");
+      return;
+    }
+
     if (reportType === "readingHealth") {
       if (!availableReadingTemplates.length) {
         toast.error("No reading templates found for this company.");
@@ -5353,12 +5608,24 @@ const Reports = () => {
         getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "dosages", "dosages")),
         getCollection(recentlySelectedCompany, "customers"),
       ]);
-      const visibleCustomers = filterCustomersByRoleTagAccess(customersRaw, companyRole);
+      const visibleCustomers = filterCustomersByRegionalAccess(customersRaw, {
+        userAccess: companyUserAccess,
+        role: companyRole,
+        selectedRegionTag: selectedCustomerRegionTag,
+        regionalAccessEnabled: customerAreaFilteringEnabled,
+      });
       const reportCustomers = selectedCustomerTags.length
         ? visibleCustomers.filter((customer) => customerHasAnyTag(customer, selectedCustomerTags))
         : visibleCustomers;
       const customersById = new Map(reportCustomers.map((customer) => [customer.id, customer]));
-      const tagFilterContext = { customersById, role: companyRole, selectedTags: selectedCustomerTags };
+      const tagFilterContext = {
+        customersById,
+        role: companyRole,
+        userAccess: companyUserAccess,
+        selectedRegionTag: selectedCustomerRegionTag,
+        regionalAccessEnabled: customerAreaFilteringEnabled,
+        selectedTags: selectedCustomerTags,
+      };
 
       const stopData = filterRecordsByCustomerTags({
         records: normalizeDocs(stopDataSnap),
@@ -5369,8 +5636,8 @@ const Reports = () => {
 
       const needsPurchases = ["purchases", "waste", "pnl", "job", "tax", "users", "pnlPerPool"].includes(reportType);
       const needsJobs = ["pnl", "job", "tax", "users"].includes(reportType);
-      const needsPayroll = ["payroll", "futurePayroll", "pnl", "job", "users", "pnlPerPool"].includes(reportType);
-      const needsPayrollFallback = ["futurePayroll", "pnlPerPool"].includes(reportType);
+      const needsPayroll = canViewPayrollInformation && ["payroll", "futurePayroll", "pnl", "job", "users", "pnlPerPool"].includes(reportType);
+      const needsPayrollFallback = canViewPayrollInformation && ["futurePayroll", "pnlPerPool"].includes(reportType);
       const needsUsers = reportType === "users" || needsPayrollFallback || reportType === "readingPerformance";
       const needsFleet = reportType === "vehicle";
       const needsBodiesOfWater = ["readingHealth", "readingPerformance", "pnlPerPool"].includes(reportType);
@@ -5379,6 +5646,7 @@ const Reports = () => {
       const needsServiceAgreements = ["pnl", "pnlPerPool"].includes(reportType);
       const needsServiceLocations = reportType === "pnlPerPool";
       const needsSalesInvoices = reportType === "pnl";
+      const needsPipeline = reportType === "pipeline";
 
       const [
         purchasesRaw,
@@ -5399,6 +5667,8 @@ const Reports = () => {
         companyWorkTypesRaw,
         workTypeMappingsRaw,
         technicianRatesRaw,
+        pipelineRowsRaw,
+        pipelineItemsRaw,
       ] = await Promise.all([
         needsPurchases ? getCollection(recentlySelectedCompany, "purchasedItems") : Promise.resolve([]),
         needsPurchases ? getDatabaseItems(recentlySelectedCompany) : Promise.resolve([]),
@@ -5424,6 +5694,20 @@ const Reports = () => {
         needsPayrollFallback ? getCollection(recentlySelectedCompany, "companyWorkTypes") : Promise.resolve([]),
         needsPayrollFallback ? getCollection(recentlySelectedCompany, "workTypeMappings") : Promise.resolve([]),
         needsPayrollFallback ? getCollection(recentlySelectedCompany, "technicianRates") : Promise.resolve([]),
+        needsPipeline
+          ? Promise.all([
+              getCollection(recentlySelectedCompany, "customerPipeline"),
+              getCollection(recentlySelectedCompany, "customerMigrationTracker"),
+            ]).then(([currentRows, legacyRows]) => {
+              const rowsById = new Map();
+              legacyRows.forEach((row) => rowsById.set(row.id, row));
+              currentRows.forEach((row) => rowsById.set(row.id, row));
+              return [...rowsById.values()];
+            })
+          : Promise.resolve([]),
+        needsPipeline
+          ? getDocs(query(collection(db, "companies", recentlySelectedCompany, "settings", "customerPipeline", "items"), orderBy("sortOrder", "asc"))).then(normalizeDocs)
+          : Promise.resolve([]),
       ]);
 
       const purchases = filterRecordsByCustomerTags({
@@ -5507,6 +5791,8 @@ const Reports = () => {
         companyWorkTypes: companyWorkTypesRaw,
         workTypeMappings: workTypeMappingsRaw,
         technicianRates: technicianRatesRaw,
+        pipelineRows: pipelineRowsRaw,
+        pipelineItems: pipelineItemsRaw,
         serviceStopTasksById,
         vehicles: vehiclesRaw,
         activeRoutes,
@@ -5527,6 +5813,7 @@ const Reports = () => {
         payroll: buildPayrollReport,
         futurePayroll: buildFuturePayrollReport,
         users: buildUsersReport,
+        pipeline: buildCustomerPipelineReport,
         pnlPerPool: buildPnlPerPoolReport,
         pnl: buildPnlReport,
         job: buildJobReport,
@@ -5543,7 +5830,14 @@ const Reports = () => {
         stats: [
           ...(nextReport.stats || []),
           { label: "Date Range", value: displayDateRange(dateRange) },
-          { label: "Customer Tags", value: selectedCustomerTags.length ? selectedCustomerTags.join(", ") : roleTagAccess.length ? roleTagAccess.join(", ") : "All" },
+          {
+            label: "Customer Tags",
+            value: selectedCustomerTags.length
+              ? selectedCustomerTags.join(", ")
+              : (customerAreaFilteringEnabled && (selectedCustomerRegionTag || regionalTagAccess.length))
+                ? [selectedCustomerRegionTag, ...regionalTagAccess.filter((tag) => tag !== selectedCustomerRegionTag)].filter(Boolean).join(", ")
+                : "All",
+          },
         ],
       });
       toast.success(`${selectedReport.label} report generated.`, { id: toastId });
@@ -5764,9 +6058,10 @@ const Reports = () => {
                       </button>
                     ) : null}
                   </div>
-                  {roleTagAccess.length > 0 ? (
+                  {customerAreaFilteringEnabled && regionalTagAccess.length > 0 ? (
                     <p className="mt-1 text-xs text-blue-700">
-                      Role limited to {roleTagAccess.join(", ")}.
+                      Access limited to {regionalTagAccess.join(", ")}.
+                      {selectedCustomerRegionTag ? ` Current area: ${selectedCustomerRegionTag}.` : ""}
                     </p>
                   ) : null}
                   <div className="mt-2 flex flex-wrap gap-2">

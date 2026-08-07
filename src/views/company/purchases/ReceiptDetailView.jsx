@@ -18,6 +18,7 @@ import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
 import { appConfirm } from "../../../utils/appDialog";
+import { compareCompanyUsersByName } from "../../../utils/companyUsers";
 
 const ReceiptDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -154,7 +155,7 @@ const ReceiptDetailView = () => {
                 const snapshot = await getDocs(query(usersRef));
                 const users = snapshot.docs
                     .map((docSnap) => buildCompanyUserOption(docSnap.data(), docSnap.id))
-                    .sort((left, right) => getCompanyUserDisplayName(left).localeCompare(getCompanyUserDisplayName(right)));
+                    .sort(compareCompanyUsersByName);
 
                 setCompanyUserList(users);
             } catch (error) {

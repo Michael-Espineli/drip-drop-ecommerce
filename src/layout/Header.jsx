@@ -1,23 +1,30 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useMemo, useState } from "react";
 import { Link } from 'react-router-dom';
 import { Context } from "../context/AuthContext";
 import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/outline";
 import { FaClipboardList, FaMoon, FaSun, FaUserPlus } from "react-icons/fa";
 import { MdNotificationsActive } from "react-icons/md";
-import { collection, onSnapshot } from "firebase/firestore";
+import { collection, getDocs, onSnapshot } from "firebase/firestore";
 import CompanyCommandSearch from "./CompanyCommandSearch";
 import StartChatModal from "../views/components/chat/StartChatModal";
 import { useTheme } from "../context/ThemeContext";
 import { db } from "../utils/config";
 import {
+    getCustomerTagOptions,
+    getEffectiveCustomerRegionAccess,
+} from "../utils/customerTags";
+import {
     ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
     alertNeedsAttention,
     normalizeAlertNotification,
 } from "../utils/models/AlertNotification";
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../utils/models/FeatureFlag";
  
 const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     const [isStartChatOpen, setIsStartChatOpen] = useState(false);
     const [alertCount, setAlertCount] = useState(0);
+    const [customerRegionOptions, setCustomerRegionOptions] = useState([]);
+    const [isRegionLoading, setIsRegionLoading] = useState(false);
     const { isDarkMode, toggleTheme } = useTheme();
     const {
         name,
@@ -26,16 +33,29 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         photoUrl,
         recentlySelectedCompany,
         recentlySelectedCompanyName,
+        companyUserAccess,
+        companyRole,
         companyRoleLoading,
         hasCompanyPermission,
+        selectedCustomerRegionTag,
+        setSelectedCustomerRegionTag,
         featureFlagsLoaded,
         isFeatureEnabled,
     } = useContext(Context);
+
+    const customerRegionAccess = useMemo(
+        () => getEffectiveCustomerRegionAccess({ userAccess: companyUserAccess, role: companyRole }),
+        [companyUserAccess, companyRole]
+    );
 
     const alertsEnabled = accountType === 'Company'
         && recentlySelectedCompany
         && featureFlagsLoaded
         && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+    const customerAreaFilteringEnabled = accountType === 'Company'
+        && recentlySelectedCompany
+        && featureFlagsLoaded
+        && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     useEffect(() => {
         if (!alertsEnabled || !user) {
@@ -59,6 +79,71 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
             }
         );
     }, [alertsEnabled, recentlySelectedCompany, user]);
+
+    useEffect(() => {
+        let isActive = true;
+
+        if (!customerAreaFilteringEnabled || companyRoleLoading) {
+            setCustomerRegionOptions([]);
+            setIsRegionLoading(false);
+            return () => {
+                isActive = false;
+            };
+        }
+
+        const loadCustomerRegions = async () => {
+            if (!customerRegionAccess.fullAccess) {
+                if (!isActive) return;
+                setCustomerRegionOptions(customerRegionAccess.tags);
+                setIsRegionLoading(false);
+                if (
+                    selectedCustomerRegionTag &&
+                    !customerRegionAccess.tags.some((tag) => tag.toLowerCase() === selectedCustomerRegionTag.toLowerCase())
+                ) {
+                    setSelectedCustomerRegionTag("");
+                }
+                return;
+            }
+
+            setIsRegionLoading(true);
+            try {
+                const customersSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "customers"));
+                if (!isActive) return;
+
+                const tags = getCustomerTagOptions(customersSnap.docs.map((customerDoc) => ({
+                    id: customerDoc.id,
+                    ...customerDoc.data(),
+                })));
+                setCustomerRegionOptions(tags);
+
+                if (
+                    selectedCustomerRegionTag &&
+                    !tags.some((tag) => tag.toLowerCase() === selectedCustomerRegionTag.toLowerCase())
+                ) {
+                    setSelectedCustomerRegionTag("");
+                }
+            } catch (error) {
+                console.error("Error loading customer region tags:", error);
+                if (isActive) setCustomerRegionOptions([]);
+            } finally {
+                if (isActive) setIsRegionLoading(false);
+            }
+        };
+
+        loadCustomerRegions();
+
+        return () => {
+            isActive = false;
+        };
+    }, [
+        accountType,
+        recentlySelectedCompany,
+        customerAreaFilteringEnabled,
+        companyRoleLoading,
+        customerRegionAccess,
+        selectedCustomerRegionTag,
+        setSelectedCustomerRegionTag,
+    ]);
 
     // Do not render the header for Admin or if the account type is not set
     if (accountType === 'Admin' || !accountType) {
@@ -110,6 +195,23 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
 
                     {/* Profile Section */}
                     <div className='relative flex shrink-0 items-center justify-center gap-3'>
+                        {customerAreaFilteringEnabled && customerRegionOptions.length > 0 && (
+                            <label className="app-header-action hidden h-10 items-center gap-2 rounded-md px-2 text-xs font-semibold transition lg:flex">
+                                <span className="hidden xl:inline">Area</span>
+                                <select
+                                    value={selectedCustomerRegionTag || ""}
+                                    onChange={(event) => setSelectedCustomerRegionTag(event.target.value)}
+                                    disabled={isRegionLoading}
+                                    className="h-8 max-w-[150px] rounded-md border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                    aria-label="Customer area filter"
+                                >
+                                    <option value="">{customerRegionAccess.fullAccess ? "All areas" : "All assigned"}</option>
+                                    {customerRegionOptions.map((tag) => (
+                                        <option key={tag} value={tag}>{tag}</option>
+                                    ))}
+                                </select>
+                            </label>
+                        )}
                         {canAddLead && (
                             <Link
                                 to="/company/leads/new"

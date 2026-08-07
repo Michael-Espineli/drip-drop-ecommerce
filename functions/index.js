@@ -96,6 +96,9 @@ exports.acceptTechInvite = callableGeneral.acceptTechInvite;
 exports.createCompanyUserInvite = callableGeneral.createCompanyUserInvite;
 exports.manageCompanyUserInvite = callableGeneral.manageCompanyUserInvite;
 exports.populateBaseTechnicianRatesOnCompanyUserCreate = callableGeneral.populateBaseTechnicianRatesOnCompanyUserCreate;
+exports.populateCustomerPipelineOnCustomerCreate = callableGeneral.populateCustomerPipelineOnCustomerCreate;
+exports.populateCustomerPipelineOnLeadCreate = callableGeneral.populateCustomerPipelineOnLeadCreate;
+exports.syncCustomerPipelineOnLeadUpdate = callableGeneral.syncCustomerPipelineOnLeadUpdate;
 exports.migrateLegacyVendorsToCanonical = callableGeneral.migrateLegacyVendorsToCanonical;
 exports.acceptLinkedInvite = callableGeneral.acceptLinkedInvite;
 exports.createCustomerAccountInvite = callableGeneral.createCustomerAccountInvite;
@@ -184,6 +187,14 @@ exports.hourlySalesManualInvoiceSend = timeBasedGeneral.hourlySalesManualInvoice
 exports.onRssCreated = timeBasedGeneral.onRssCreated;
 exports.onRssUpdated = timeBasedGeneral.onRssUpdated;
 exports.onRssDeleted = timeBasedGeneral.onRssDeleted;
+
+const serviceStopDurationAverages = require('./serviceStopDurationAverages');
+exports.onServiceStopDurationCompleted = serviceStopDurationAverages.onServiceStopDurationCompleted;
+exports.onServiceStopDurationDeleted = serviceStopDurationAverages.onServiceStopDurationDeleted;
+exports.deleteRecurringServiceStopDurationPoint = serviceStopDurationAverages.deleteRecurringServiceStopDurationPoint;
+exports.clearRecurringServiceStopDurationHistory = serviceStopDurationAverages.clearRecurringServiceStopDurationHistory;
+exports.recalculateRecurringServiceStopDurationEstimate = serviceStopDurationAverages.recalculateRecurringServiceStopDurationEstimate;
+exports.setRecurringServiceStopEstimatedDuration = serviceStopDurationAverages.setRecurringServiceStopEstimatedDuration;
 
 
 

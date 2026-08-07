@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { reportAppError } from '../utils/errorReporting';
+import { isFirebaseClientStorageError } from '../utils/firebaseNetwork';
 
 const normalizeUnhandledReason = (reason) => {
   if (reason instanceof Error) return reason;
@@ -16,8 +17,20 @@ function AppErrorReporter({ context }) {
   }, [context]);
 
   useEffect(() => {
+    const reportSafely = (error, options) => {
+      reportAppError(error, options).catch((reportingError) => {
+        console.warn('Unable to queue app error report:', reportingError);
+      });
+    };
+
     const handleWindowError = (event) => {
-      reportAppError(event.error || event.message, {
+      const error = event.error || event.message;
+
+      if (isFirebaseClientStorageError(error)) {
+        event.preventDefault();
+      }
+
+      reportSafely(error, {
         context: contextRef.current,
         source: 'window-error',
         where: event.filename
@@ -32,7 +45,13 @@ function AppErrorReporter({ context }) {
     };
 
     const handleUnhandledRejection = (event) => {
-      reportAppError(normalizeUnhandledReason(event.reason), {
+      const reason = normalizeUnhandledReason(event.reason);
+
+      if (isFirebaseClientStorageError(event.reason) || isFirebaseClientStorageError(reason)) {
+        event.preventDefault();
+      }
+
+      reportSafely(reason, {
         context: contextRef.current,
         source: 'unhandled-rejection',
         where: 'Unhandled promise rejection',

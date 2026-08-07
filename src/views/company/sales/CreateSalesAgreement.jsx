@@ -1,7 +1,7 @@
 import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import Select from 'react-select';
-import { collection, doc, getDoc, onSnapshot, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, serverTimestamp, updateDoc } from 'firebase/firestore';
 import toast from 'react-hot-toast';
 import {
   FaFileSignature,
@@ -177,6 +177,17 @@ const leadServiceLocationId = (lead = {}) => (
   lead.serviceLocationId ||
   ''
 );
+
+const normalizeLeadStatusKey = (value = '') => (
+  String(value || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+);
+
+const shouldMoveLeadToInProgress = (lead = {}) => {
+  const statusKey = normalizeLeadStatusKey(lead.status || lead.leadStatus);
+  const agreementStatusKey = normalizeLeadStatusKey(lead.serviceAgreementStatus);
+
+  return !['cancelled', 'canceled'].includes(statusKey) && agreementStatusKey !== SalesAgreementStatus.accepted;
+};
 
 const locationAddress = (location = {}) => {
   const address = location.address || location.billingAddress || {};
@@ -930,12 +941,22 @@ const CreateSalesAgreement = () => {
 
       const linkUpdates = [];
       if (sourceLeadId) {
-        linkUpdates.push(updateDoc(doc(db, 'homeownerServiceRequests', sourceLeadId), {
+        const leadUpdate = {
           serviceAgreementId: agreement.id,
           serviceAgreementTitle: agreement.title,
           serviceAgreementStatus: agreement.status,
-          updatedAt: new Date(),
-        }));
+          updatedAt: serverTimestamp(),
+        };
+
+        if (shouldMoveLeadToInProgress(sourceLead || {})) {
+          leadUpdate.status = 'In Progress';
+          leadUpdate.leadStatus = 'In Progress';
+          leadUpdate.dateCompleted = null;
+          leadUpdate.lostReason = '';
+          leadUpdate.cancelReason = '';
+        }
+
+        linkUpdates.push(updateDoc(doc(db, 'homeownerServiceRequests', sourceLeadId), leadUpdate));
       }
       if (sourceServiceStopId) {
         linkUpdates.push(updateDoc(doc(db, 'companies', recentlySelectedCompany, 'serviceStops', sourceServiceStopId), {

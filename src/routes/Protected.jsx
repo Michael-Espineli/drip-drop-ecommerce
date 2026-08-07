@@ -68,17 +68,24 @@ export function Protected({ route, children }) {
                     return <Navigate to='/company/dashboard' replace />
                 }
                 if (routeRole === 'company') {
-                    const requiredPermissionId = route.permissionId || getCompanyPermissionForPath(route.path);
+                    const requiredPermissionIds = [
+                        ...(Array.isArray(route.permissionIds) ? route.permissionIds : []),
+                        ...(route.permissionId ? [route.permissionId] : []),
+                    ];
+                    if (requiredPermissionIds.length === 0) {
+                        const mappedPermissionId = getCompanyPermissionForPath(route.path);
+                        if (mappedPermissionId) requiredPermissionIds.push(mappedPermissionId);
+                    }
 
-                    if (requiredPermissionId && !recentlySelectedCompany) {
+                    if (requiredPermissionIds.length > 0 && !recentlySelectedCompany) {
                         return <Navigate to='/company/selection' replace />
                     }
 
-                    if (requiredPermissionId && (companyRoleLoading || !companyRoleLoaded)) {
+                    if (requiredPermissionIds.length > 0 && (companyRoleLoading || !companyRoleLoaded)) {
                         return null;
                     }
 
-                    if (requiredPermissionId && !hasCompanyPermission(requiredPermissionId)) {
+                    if (requiredPermissionIds.length > 0 && !requiredPermissionIds.some((permissionId) => hasCompanyPermission(permissionId))) {
                         return <Navigate to='/company/dashboard' replace />
                     }
 

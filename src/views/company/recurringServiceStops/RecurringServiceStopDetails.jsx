@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useContext, useMemo } from "react";
+import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { Link, useParams, useNavigate, useSearchParams } from "react-router-dom";
 import {
   query,
@@ -11,6 +11,7 @@ import {
   updateDoc,
   setDoc,
   serverTimestamp,
+  orderBy,
 } from "firebase/firestore";
 import { getFunctions, httpsCallable } from "firebase/functions";
 import { db } from "../../../utils/config";
@@ -18,11 +19,11 @@ import { Context } from "../../../context/AuthContext";
 import Select from "react-select";
 import { format } from "date-fns";
 import toast from "react-hot-toast";
-import { Description } from "@headlessui/react";
 import { removeRecurringServiceStopFromPlannedRoutes } from "../../../utils/recurringRouteSync";
 import { salesCollectionNames } from "../../../utils/models/Sales";
 import { recurringFrequencyToAgreementService } from "../../../utils/sales/agreementCadence";
 import { appConfirm } from "../../../utils/appDialog";
+import { reportAppError } from "../../../utils/errorReporting";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
@@ -41,10 +42,41 @@ const jobTaskTypeOptions = [
   "Replace",
 ];
 
-const taskStatusOptions = ["Not Finished", "Finished", "Skipped"];
+const getDateValue = (value) => {
+  if (!value) return null;
+  if (typeof value?.toDate === "function") return value.toDate();
+  if (value instanceof Date) return value;
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatDateValue = (value, dateFormat = "MMM d, yyyy") => {
+  const date = getDateValue(value);
+  return date ? format(date, dateFormat) : "—";
+};
+
+const normalizeDurationHistoryPoint = (docSnap) => {
+  const data = docSnap.data() || {};
+  return {
+    id: docSnap.id,
+    ...data,
+    durationMinutes: Number(data.durationMinutes || 0),
+    completedAt: getDateValue(data.completedAt),
+    serviceDate: getDateValue(data.serviceDate),
+    createdAt: getDateValue(data.createdAt),
+    updatedAt: getDateValue(data.updatedAt),
+  };
+};
 
 const RecurringServiceStopDetails = () => {
-  const { recentlySelectedCompany } = useContext(Context);
+  const {
+    recentlySelectedCompany,
+    recentlySelectedCompanyName,
+    user,
+    dataBaseUser,
+    accountType,
+  } = useContext(Context);
   const { recurringServiceStopId } = useParams();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -60,7 +92,10 @@ const RecurringServiceStopDetails = () => {
   const [serviceStopList, setServiceStopList] = useState([]);
   const [pastServiceStopList, setPastServiceStopList] = useState([]);
   const [recurringServiceStopTasks, setRecurringServiceStopTasks] = useState([]);
-  const [recurringTaskFieldName, setRecurringTaskFieldName] = useState("tasks");
+  const [durationHistory, setDurationHistory] = useState([]);
+  const [loadingDurationHistory, setLoadingDurationHistory] = useState(false);
+  const [durationAction, setDurationAction] = useState("");
+  const [estimatedTimeInput, setEstimatedTimeInput] = useState("");
 
   const [showAddTask, setShowAddTask] = useState(false);
   const [savingTask, setSavingTask] = useState(false);
@@ -102,6 +137,11 @@ const RecurringServiceStopDetails = () => {
 
     serviceLocationId: "",
     estimatedTime: "",
+    estimatedDuration: "",
+    adaptiveEstimatedDuration: "",
+    durationStats: {},
+    durationEstimateSource: "",
+    durationEstimateUpdatedAt: "",
     otherCompany: "",
     laborContractId: "",
     contractedCompanyId: "",
@@ -129,6 +169,37 @@ const RecurringServiceStopDetails = () => {
 
   const [selectedFrequency, setSelectedFrequency] = useState(null);
   const [selectedDays, setSelectedDays] = useState([]);
+  const errorContext = useMemo(() => ({
+    userId: user?.uid || dataBaseUser?.id || dataBaseUser?.uid || "",
+    userEmail: user?.email || dataBaseUser?.email || "",
+    accountType: accountType || dataBaseUser?.accountType || "",
+    companyId: recentlySelectedCompany || "",
+    companyName: recentlySelectedCompanyName || "",
+  }), [accountType, dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, user]);
+
+  const reportDetailsError = useCallback((error, options = {}) => (
+    reportAppError(error, {
+      context: errorContext,
+      source: "recurring-service-stop-detail-page",
+      where: options.where || "RecurringServiceStopDetails",
+      title: options.title,
+      description: options.description,
+      severity: options.severity || "error",
+      data: {
+        recurringServiceStopId,
+        recurringServiceStopInternalId: recurringServiceStop.internalId || "",
+        customerId: recurringServiceStop.customerId || "",
+        technicianId: recurringServiceStop.techId || "",
+        ...options.data,
+      },
+    })
+  ), [
+    errorContext,
+    recurringServiceStop.customerId,
+    recurringServiceStop.internalId,
+    recurringServiceStop.techId,
+    recurringServiceStopId,
+  ]);
 
   const selectTheme = (theme) => ({
     ...theme,
@@ -154,6 +225,74 @@ const RecurringServiceStopDetails = () => {
     }),
     menu: (base) => ({ ...base, borderRadius: 12, overflow: "hidden" }),
   };
+
+  const loadDurationHistory = useCallback(async () => {
+    if (!recentlySelectedCompany || !recurringServiceStopId) return;
+
+    try {
+      setLoadingDurationHistory(true);
+      const historyQuery = query(
+        collection(
+          db,
+          "companies",
+          recentlySelectedCompany,
+          "recurringServiceStop",
+          recurringServiceStopId,
+          "durationHistory"
+        ),
+        orderBy("completedAt", "desc"),
+        limit(50)
+      );
+      const historySnap = await getDocs(historyQuery);
+      setDurationHistory(
+        historySnap.docs
+          .map(normalizeDurationHistoryPoint)
+          .filter((point) => point.includedInAverage !== false)
+      );
+    } catch (error) {
+      console.error("Failed to load duration history:", error);
+      await reportDetailsError(error, {
+        where: "RecurringServiceStopDetails.loadDurationHistory",
+        title: "Recurring service stop duration history failed to load",
+        description: "The recurring service stop detail page could not load duration history.",
+      });
+      toast.error("Failed to load duration history");
+    } finally {
+      setLoadingDurationHistory(false);
+    }
+  }, [recentlySelectedCompany, recurringServiceStopId, reportDetailsError]);
+
+  const refreshDurationSummary = useCallback(async () => {
+    if (!recentlySelectedCompany || !recurringServiceStopId) return;
+
+    const rssRef = doc(
+      db,
+      "companies",
+      recentlySelectedCompany,
+      "recurringServiceStop",
+      recurringServiceStopId
+    );
+    const rssSnap = await getDoc(rssRef);
+    if (!rssSnap.exists()) return;
+
+    const rssData = rssSnap.data() || {};
+    const nextEstimatedTime = rssData.estimatedTime ?? rssData.estimatedDuration ?? "";
+
+    setRecurringServiceStop((prev) => ({
+      ...prev,
+      estimatedTime: nextEstimatedTime,
+      estimatedDuration: rssData.estimatedDuration ?? nextEstimatedTime,
+      adaptiveEstimatedDuration: rssData.adaptiveEstimatedDuration ?? "",
+      durationStats: rssData.durationStats || {},
+      durationEstimateSource: rssData.durationEstimateSource || "",
+      durationEstimateUpdatedAt: rssData.durationEstimateUpdatedAt || "",
+    }));
+    setEstimatedTimeInput(nextEstimatedTime === "" || nextEstimatedTime === null ? "" : String(nextEstimatedTime));
+  }, [recentlySelectedCompany, recurringServiceStopId]);
+
+  useEffect(() => {
+    loadDurationHistory();
+  }, [loadDurationHistory]);
 
   useEffect(() => {
     if (!recentlySelectedCompany || !recurringServiceStopId) return;
@@ -208,29 +347,31 @@ const RecurringServiceStopDetails = () => {
           lastCreated: rssData.lastCreated,
 
           serviceLocationId: rssData.serviceLocationId,
-          estimatedTime: rssData.estimatedTime,
+          estimatedTime: rssData.estimatedTime ?? rssData.estimatedDuration ?? "",
+          estimatedDuration: rssData.estimatedDuration ?? rssData.estimatedTime ?? "",
+          adaptiveEstimatedDuration: rssData.adaptiveEstimatedDuration ?? "",
+          durationStats: rssData.durationStats || {},
+          durationEstimateSource: rssData.durationEstimateSource || "",
+          durationEstimateUpdatedAt: rssData.durationEstimateUpdatedAt || "",
           otherCompany: rssData.otherCompany,
           laborContractId: rssData.laborContractId,
           contractedCompanyId: rssData.contractedCompanyId,
           salesAgreementId: rssData.salesAgreementId || "",
           salesBillingSubscriptionId: rssData.salesBillingSubscriptionId || "",
         }));
+        const loadedEstimatedTime = rssData.estimatedTime ?? rssData.estimatedDuration ?? "";
+        setEstimatedTimeInput(loadedEstimatedTime === "" || loadedEstimatedTime === null ? "" : String(loadedEstimatedTime));
 
         let tasks = [];
-        let fieldName = "tasks";
 
         if (Array.isArray(rssData.tasks)) {
           tasks = rssData.tasks;
-          fieldName = "tasks";
         } else if (Array.isArray(rssData.serviceTasks)) {
           tasks = rssData.serviceTasks;
-          fieldName = "serviceTasks";
         } else if (Array.isArray(rssData.recurringServiceStopTasks)) {
           tasks = rssData.recurringServiceStopTasks;
-          fieldName = "recurringServiceStopTasks";
         }
 
-        setRecurringTaskFieldName(fieldName);
         setRecurringServiceStopTasks(tasks);
 
         const start = rssData.startDate?.toDate?.()
@@ -314,12 +455,18 @@ const RecurringServiceStopDetails = () => {
         );
       } catch (error) {
         console.error(error);
+        await reportDetailsError(error, {
+          where: "RecurringServiceStopDetails.loadRecurringServiceStop",
+          title: "Recurring service stop detail failed to load",
+          description: "The recurring service stop detail page failed while loading the template, upcoming stops, past stops, or schedule metadata.",
+          severity: "critical",
+        });
         toast.error("Failed to load recurring service stop");
       } finally {
         setLoading(false);
       }
     })();
-  }, [recentlySelectedCompany, recurringServiceStopId]);
+  }, [recentlySelectedCompany, recurringServiceStopId, reportDetailsError]);
 
   const deleteRSS = async (e) => {
     e.preventDefault();
@@ -348,6 +495,12 @@ const RecurringServiceStopDetails = () => {
       navigate("/company/recurringServiceStop");
     } catch (err) {
       console.error(err);
+      await reportDetailsError(err, {
+        where: "RecurringServiceStopDetails.deleteRSS",
+        title: "Recurring service stop delete failed",
+        description: "Deleting the recurring service stop or removing it from planned routes failed.",
+        severity: "critical",
+      });
       toast.error("Failed to delete");
     }
   };
@@ -374,6 +527,11 @@ const RecurringServiceStopDetails = () => {
         ? daysRaw.split(",").map((s) => s.trim()).filter(Boolean)
         : [];
     setSelectedDays(daysArr.map((d) => ({ value: d, label: d })));
+    setEstimatedTimeInput(
+      recurringServiceStop.estimatedTime === undefined || recurringServiceStop.estimatedTime === null
+        ? ""
+        : String(recurringServiceStop.estimatedTime)
+    );
   };
 
   const saveEdits = async (e) => {
@@ -457,8 +615,116 @@ const RecurringServiceStopDetails = () => {
       setEdit(false);
     } catch (err) {
       console.error(err);
+      await reportDetailsError(err, {
+        where: "RecurringServiceStopDetails.saveEdits",
+        title: "Recurring service stop schedule save failed",
+        description: "Saving recurring service stop schedule changes or linked sales records failed.",
+        data: {
+          selectedFrequency: selectedFrequency?.value || "",
+          selectedDays: (selectedDays || []).map((day) => day.value || day).join(","),
+        },
+      });
       toast.error("Failed to save changes");
     }
+  };
+
+  const runDurationAction = async (actionName, callback) => {
+    if (!recentlySelectedCompany || !recurringServiceStopId) return;
+
+    try {
+      setDurationAction(actionName);
+      await callback();
+      await Promise.all([refreshDurationSummary(), loadDurationHistory()]);
+    } catch (error) {
+      console.error(`Failed duration action ${actionName}:`, error);
+      await reportDetailsError(error, {
+        where: `RecurringServiceStopDetails.runDurationAction.${actionName}`,
+        title: "Recurring service stop duration action failed",
+        description: `The recurring service stop duration action "${actionName}" failed.`,
+        data: {
+          actionName,
+          estimatedTimeInput,
+        },
+      });
+      toast.error(error?.message || "Duration update failed");
+    } finally {
+      setDurationAction("");
+    }
+  };
+
+  const saveManualEstimatedDuration = async () => {
+    const estimateMinutes = Math.round(Number(estimatedTimeInput));
+    if (!Number.isFinite(estimateMinutes) || estimateMinutes <= 0) {
+      toast.error("Estimated duration must be greater than 0 minutes");
+      return;
+    }
+
+    await runDurationAction("saveEstimate", async () => {
+      const callable = httpsCallable(functions, "setRecurringServiceStopEstimatedDuration");
+      await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStopId,
+        estimatedMinutes: estimateMinutes,
+      });
+      toast.success("Estimated duration saved");
+    });
+  };
+
+  const resetDurationToAverage = async () => {
+    await runDurationAction("resetAverage", async () => {
+      const callable = httpsCallable(functions, "recalculateRecurringServiceStopDurationEstimate");
+      const result = await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStopId,
+      });
+      const sampleCount = Number(result.data?.sampleCount || 0);
+      if (sampleCount > 0) {
+        toast.success("Estimate reset to historic average");
+      } else {
+        toast.error("No completed stop durations found");
+      }
+    });
+  };
+
+  const clearDurationHistory = async () => {
+    if (!durationHistory.length) return;
+
+    const ok = await appConfirm({
+      title: "Clear Duration History",
+      message: "Clear every duration data point for this recurring service stop? The current estimate will stay as the manual estimate.",
+      confirmLabel: "Clear History",
+      variant: "danger",
+    });
+    if (!ok) return;
+
+    await runDurationAction("clearHistory", async () => {
+      const callable = httpsCallable(functions, "clearRecurringServiceStopDurationHistory");
+      await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStopId,
+      });
+      toast.success("Duration history cleared");
+    });
+  };
+
+  const deleteDurationPoint = async (point) => {
+    const ok = await appConfirm({
+      title: "Delete Duration Point",
+      message: `Delete the ${formatMinutes(point.durationMinutes)} duration data point?`,
+      confirmLabel: "Delete Point",
+      variant: "danger",
+    });
+    if (!ok) return;
+
+    await runDurationAction(`delete-${point.id}`, async () => {
+      const callable = httpsCallable(functions, "deleteRecurringServiceStopDurationPoint");
+      await callable({
+        companyId: recentlySelectedCompany,
+        recurringServiceStopId,
+        durationPointId: point.id,
+      });
+      toast.success("Duration point deleted");
+    });
   };
 
   const openInMaps = () => {
@@ -478,24 +744,6 @@ const RecurringServiceStopDetails = () => {
   const formatMinutes = (minutes) => {
     if (!minutes && minutes !== 0) return "—";
     return `${minutes} min`;
-  };
-
-  const getTaskStatusClasses = (status) => {
-    const normalized = String(status || "").toLowerCase();
-
-    if (["completed", "done", "complete", "finished"].includes(normalized)) {
-      return "bg-green-100 text-green-700";
-    }
-
-    if (["inprogress", "in progress", "active", "not finished"].includes(normalized)) {
-      return "bg-blue-100 text-blue-700";
-    }
-
-    if (["cancelled", "canceled", "skipped"].includes(normalized)) {
-      return "bg-red-100 text-red-700";
-    }
-
-    return "bg-gray-100 text-gray-700";
   };
 
   const Field = ({ label, value, children }) => (
@@ -640,11 +888,31 @@ const RecurringServiceStopDetails = () => {
       );
     } catch (error) {
       console.error(error);
+      await reportDetailsError(error, {
+        where: "RecurringServiceStopDetails.saveNewRecurringTask",
+        title: "Recurring service stop task creation failed",
+        description: "Adding a task to the recurring service stop and its future service stops failed.",
+        data: {
+          newTaskName: newTask.name,
+          newTaskType: newTask.type,
+        },
+      });
       toast.error("Failed to add recurring task");
     } finally {
       setSavingTask(false);
     }
   };
+
+  const durationStats = recurringServiceStop.durationStats || {};
+  const currentEstimateMinutes = recurringServiceStop.estimatedTime ?? recurringServiceStop.estimatedDuration ?? "";
+  const historicAverageMinutes = durationStats.averageMinutes ?? recurringServiceStop.historicalAverageDuration ?? null;
+  const durationSampleCount = Number(durationStats.sampleCount ?? recurringServiceStop.historicalDurationSampleCount ?? durationHistory.length ?? 0);
+  const durationSourceLabel = recurringServiceStop.durationEstimateSource === "durationHistory"
+    ? "Historic Average"
+    : recurringServiceStop.durationEstimateSource === "manual"
+      ? "Manual"
+      : "Default";
+  const durationActionInProgress = Boolean(durationAction);
 
   if (loading) {
     return (
@@ -781,6 +1049,139 @@ const RecurringServiceStopDetails = () => {
             </Field>
 
             <Field label="Estimated Time" value={formatMinutes(recurringServiceStop.estimatedTime)} />
+          </div>
+        </div>
+
+        <div className="bg-white shadow-lg rounded-xl p-6">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+              <h3 className="text-xl font-bold text-gray-800">Adaptive Duration</h3>
+              <p className="text-sm text-gray-600">Historic stop timing and current estimate</p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={resetDurationToAverage}
+                disabled={durationActionInProgress}
+                className="px-4 py-2 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 transition disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Reset to Average
+              </button>
+              <button
+                type="button"
+                onClick={clearDurationHistory}
+                disabled={durationActionInProgress || durationHistory.length === 0}
+                className="px-4 py-2 text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Clear History
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <Field label="Current Estimate" value={formatMinutes(currentEstimateMinutes)} />
+            <Field label="Historic Average" value={formatMinutes(historicAverageMinutes)} />
+            <Field label="Data Points" value={String(durationSampleCount)} />
+            <Field label="Estimate Source" value={durationSourceLabel} />
+          </div>
+
+          <div className="mt-5 grid grid-cols-1 gap-3 border-y border-gray-200 py-4 md:grid-cols-[minmax(180px,260px)_auto] md:items-end">
+            <div>
+              <label className="block text-sm font-semibold text-gray-600 mb-1">
+                Estimated Duration (mins)
+              </label>
+              <input
+                type="number"
+                min="1"
+                value={estimatedTimeInput}
+                onChange={(e) => setEstimatedTimeInput(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={saveManualEstimatedDuration}
+              disabled={durationActionInProgress}
+              className="w-fit px-4 py-2 text-sm font-semibold text-white bg-blue-600 rounded-lg hover:bg-blue-700 transition disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {durationAction === "saveEstimate" ? "Saving..." : "Save Estimate"}
+            </button>
+          </div>
+
+          <div className="mt-5 overflow-x-auto">
+            <table className="min-w-full bg-white">
+              <thead className="bg-gray-100">
+                <tr>
+                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                    Service Stop
+                  </th>
+                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                    Completed
+                  </th>
+                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                    Tech
+                  </th>
+                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                    Duration
+                  </th>
+                  <th className="p-4 text-left text-sm font-semibold text-gray-600 uppercase tracking-wider">
+                    Action
+                  </th>
+                </tr>
+              </thead>
+
+              <tbody className="divide-y divide-gray-200">
+                {loadingDurationHistory ? (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-gray-500">
+                      Loading duration history...
+                    </td>
+                  </tr>
+                ) : durationHistory.length ? (
+                  durationHistory.map((point) => (
+                    <tr key={point.id} className="hover:bg-gray-50 transition-colors">
+                      <td className="p-4 whitespace-nowrap text-gray-700">
+                        {point.serviceStopId ? (
+                          <Link
+                            to={`/company/serviceStops/detail/${point.serviceStopId}`}
+                            className="font-medium text-blue-600 hover:underline"
+                          >
+                            {point.serviceStopInternalId || point.serviceStopId}
+                          </Link>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">
+                        {formatDateValue(point.completedAt || point.serviceDate, "MMM d, yyyy h:mm a")}
+                      </td>
+                      <td className="p-4 whitespace-nowrap text-gray-700">{point.techName || "—"}</td>
+                      <td className="p-4 whitespace-nowrap text-gray-800 font-medium">
+                        {formatMinutes(point.durationMinutes)}
+                      </td>
+                      <td className="p-4 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => deleteDurationPoint(point)}
+                          disabled={durationActionInProgress}
+                          className="px-3 py-1.5 text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition disabled:cursor-not-allowed disabled:opacity-50"
+                        >
+                          {durationAction === `delete-${point.id}` ? "Deleting..." : "Delete"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td colSpan={5} className="p-6 text-gray-500">
+                      No duration history found.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 

@@ -19,6 +19,7 @@ import { Context } from "../../../context/AuthContext";
 import { Link, useNavigate } from "react-router-dom";
 import { format, subDays } from "date-fns";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const getRequestDateValue = (request) => (
     request.date || request.dateCreated || request.createdAt || null
@@ -82,10 +83,10 @@ const RepairRequests = () => {
                 )
             );
 
-            const activeUsers = usersSnap.docs.map((docSnap) => ({
+            const activeUsers = sortCompanyUsersByName(usersSnap.docs.map((docSnap) => ({
                 id: docSnap.id,
                 ...docSnap.data(),
-            }));
+            })));
 
             setCompanyUsers(activeUsers);
 

@@ -162,6 +162,42 @@ export const todoIsDone = (todo = {}) => (
 
 export const todoIsOpen = (todo = {}) => !todoIsDone(todo);
 
+const normalizeTodoUserId = (value) => String(value || "").trim();
+
+export const todoUserIdSet = (values = []) => {
+  const sourceValues = values instanceof Set ? Array.from(values) : values;
+  const list = Array.isArray(sourceValues) ? sourceValues : [sourceValues];
+
+  return new Set(list.map(normalizeTodoUserId).filter(Boolean));
+};
+
+export const todoAssigneeIds = (todo = {}) => [
+  todo.assignedToUserId,
+  todo.assignedToCompanyUserDocId,
+  todo.assignedTechId,
+  todo.techId,
+].map(normalizeTodoUserId).filter(Boolean);
+
+export const todoCreatorIds = (todo = {}) => [
+  todo.createdByUserId,
+  todo.createdById,
+  todo.createdByUid,
+].map(normalizeTodoUserId).filter(Boolean);
+
+export const todoAssignedToUser = (todo = {}, userIds = new Set()) => {
+  const normalizedUserIds = todoUserIdSet(userIds);
+  if (!normalizedUserIds.size) return false;
+
+  return todoAssigneeIds(todo).some((assignedId) => normalizedUserIds.has(assignedId));
+};
+
+export const todoCreatedByUser = (todo = {}, userIds = new Set()) => {
+  const normalizedUserIds = todoUserIdSet(userIds);
+  if (!normalizedUserIds.size) return false;
+
+  return todoCreatorIds(todo).some((creatorId) => normalizedUserIds.has(creatorId));
+};
+
 export const todoDueState = (todo = {}, now = new Date()) => {
   if (!todoIsOpen(todo)) return "complete";
 

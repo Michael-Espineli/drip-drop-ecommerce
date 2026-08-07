@@ -22,8 +22,21 @@ import { db, functions } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import { format } from "date-fns";
 import Select from "react-select";
+import { Menu, MenuButton, MenuItem, MenuItems } from "@headlessui/react";
 import { GoHistory } from "react-icons/go";
-import { ChevronDownIcon, PlusIcon, XMarkIcon } from "@heroicons/react/24/outline";
+import {
+  ChatBubbleLeftRightIcon,
+  CheckCircleIcon,
+  ChevronDownIcon,
+  CurrencyDollarIcon,
+  DocumentDuplicateIcon,
+  DocumentTextIcon,
+  EllipsisVerticalIcon,
+  EnvelopeIcon,
+  PencilSquareIcon,
+  PlusIcon,
+  XMarkIcon,
+} from "@heroicons/react/24/outline";
 import { v4 as uuidv4 } from "uuid";
 import toast from "react-hot-toast";
 import {
@@ -87,9 +100,11 @@ import {
   itemPhotoFieldsFromSource,
 } from "../../../utils/itemPhotos";
 import {
+  SHOPPING_LIST_INVOICED_STATUS,
   isShoppingListStatusClosed,
   syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 /**
  * JobDetailView
@@ -176,6 +191,42 @@ const EMPTY_TASK_EDIT_FORM = {
   dataBaseItemId: "",
   quantity: "1",
   customerApproval: false,
+};
+
+const JobHeaderActionMenuItem = ({
+  label,
+  icon: Icon,
+  tone = "slate",
+  onClick,
+  disabled = false,
+}) => {
+  const toneClasses =
+    tone === "amber"
+      ? "text-amber-700 hover:bg-amber-50 data-[focus]:bg-amber-50"
+      : tone === "emerald"
+        ? "text-emerald-700 hover:bg-emerald-50 data-[focus]:bg-emerald-50"
+        : tone === "blue"
+          ? "text-blue-700 hover:bg-blue-50 data-[focus]:bg-blue-50"
+          : tone === "violet"
+            ? "text-violet-700 hover:bg-violet-50 data-[focus]:bg-violet-50"
+            : "text-slate-700 hover:bg-slate-50 data-[focus]:bg-slate-50";
+
+  return (
+    <MenuItem disabled={disabled}>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        className={[
+          "flex w-full items-center gap-3 px-3 py-2.5 text-left text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50",
+          toneClasses,
+        ].join(" ")}
+      >
+        <Icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+        <span className="flex-1">{label}</span>
+      </button>
+    </MenuItem>
+  );
 };
 
 const createEmptyShoppingDbItemForm = (vendor = null) => ({
@@ -495,6 +546,7 @@ const JobDetailView = () => {
   const [purchasedItemInvoicedFilter, setPurchasedItemInvoicedFilter] = useState("Not Invoiced");
   const [purchasedItemSearchTerm, setPurchasedItemSearchTerm] = useState("");
   const [purchasedItemSortBy, setPurchasedItemSortBy] = useState("date-desc");
+  const [removingPurchasedItemId, setRemovingPurchasedItemId] = useState("");
   const [actualPayLineItems, setActualPayLineItems] = useState([]);
   const [paySettings, setPaySettings] = useState(null);
   const [companyServiceStopTypes, setCompanyServiceStopTypes] = useState([]);
@@ -702,6 +754,8 @@ const JobDetailView = () => {
   const [selectedSalesAgreementId, setSelectedSalesAgreementId] = useState("");
   const [sendingEstimateEmail, setSendingEstimateEmail] = useState(false);
   const [sendingInvoiceEmail, setSendingInvoiceEmail] = useState(false);
+  const [markingJobFinished, setMarkingJobFinished] = useState(false);
+  const [markingJobInvoiced, setMarkingJobInvoiced] = useState(false);
   const [linkedSalesAgreement, setLinkedSalesAgreement] = useState(null);
   const [linkedSalesInvoice, setLinkedSalesInvoice] = useState(null);
   const [jobHistory, setJobHistory] = useState([]);
@@ -966,13 +1020,7 @@ const JobDetailView = () => {
     return value.id || value.value || value.docId || "";
   };
 
-  const companyUserDisplayName = (user = {}) => (
-    user.displayName ||
-    `${user.firstName || ""} ${user.lastName || ""}`.trim() ||
-    user.userName ||
-    user.name ||
-    "Admin"
-  );
+  const companyUserDisplayName = (user = {}) => getCompanyUserDisplayName(user, "Admin");
 
   const companyUserRoleName = (user = {}) => user.roleName || user.role || "";
 
@@ -3487,6 +3535,34 @@ const JobDetailView = () => {
     jobInvoicedAt: new Date(),
   });
 
+  const shoppingItemInvoiceUpdates = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
+    invoiced: true,
+    invoiceStatus: "Invoiced",
+    jobBillingStatus: "invoiced",
+    status: SHOPPING_LIST_INVOICED_STATUS,
+    needsAction: false,
+    invoiceId: invoiceId || "",
+    invoiceRef: invoiceId || "",
+    invoiceType,
+    invoicedAt: serverTimestamp(),
+    jobInvoicedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+
+  const shoppingItemInvoiceState = ({ invoiceId = "", invoiceType = "job" } = {}) => ({
+    invoiced: true,
+    invoiceStatus: "Invoiced",
+    jobBillingStatus: "invoiced",
+    status: SHOPPING_LIST_INVOICED_STATUS,
+    needsAction: false,
+    invoiceId: invoiceId || "",
+    invoiceRef: invoiceId || "",
+    invoiceType,
+    invoicedAt: new Date(),
+    jobInvoicedAt: new Date(),
+    updatedAt: new Date(),
+  });
+
   const markPurchasedItemsInvoicedForJob = async ({ invoiceId = "", invoiceType = "job" } = {}) => {
     if (!recentlySelectedCompany || !jobId) return 0;
 
@@ -3539,6 +3615,71 @@ const JobDetailView = () => {
 
     setPurchasedItems((prev) =>
       (prev || []).map((item) => (itemsById.has(getFirestoreDocId(item)) ? { ...item, ...stateUpdates } : item))
+    );
+
+    return items.length;
+  };
+
+  const markShoppingItemsInvoicedForJob = async ({ invoiceId = "", invoiceType = "job" } = {}) => {
+    if (!recentlySelectedCompany || !jobId) return 0;
+
+    const itemsById = new Map((shoppingList || []).map((item) => [getFirestoreDocId(item), item]));
+
+    const addSnapDocs = (snap) => {
+      snap.docs.forEach((itemDoc) => {
+        const item = withFirestoreDocId(itemDoc);
+        itemsById.set(getFirestoreDocId(item), item);
+      });
+    };
+
+    const [jobIdSnap, workOrderIdSnap, assignedJobIdSnap] = await Promise.all([
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("jobId", "==", jobId))),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("workOrderId", "==", jobId))),
+      getDocs(query(collection(db, "companies", recentlySelectedCompany, "shoppingList"), where("assignedJobId", "==", jobId))),
+    ]);
+
+    addSnapDocs(jobIdSnap);
+    addSnapDocs(workOrderIdSnap);
+    addSnapDocs(assignedJobIdSnap);
+
+    const items = Array.from(itemsById.values()).filter((item) => getFirestoreDocId(item));
+    if (!items.length) return 0;
+
+    const updates = shoppingItemInvoiceUpdates({ invoiceId, invoiceType });
+    const stateUpdates = shoppingItemInvoiceState({ invoiceId, invoiceType });
+    const linkedPurchaseUpdates = purchasedItemInvoiceUpdates({ invoiceId, invoiceType });
+
+    await Promise.all(
+      items.map(async (item) => {
+        const shoppingItemId = getFirestoreDocId(item);
+        const purchasedItemId = item.purchasedItem || item.purchasedItemId || "";
+        await updateDoc(doc(db, "companies", recentlySelectedCompany, "shoppingList", shoppingItemId), updates);
+
+        if (purchasedItemId) {
+          try {
+            await updateDoc(doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchasedItemId), linkedPurchaseUpdates);
+          } catch (error) {
+            console.warn(`Could not mark linked purchased item ${purchasedItemId} as invoiced`, error);
+          }
+
+          await syncLinkedShoppingPurchase({
+            db,
+            companyId: recentlySelectedCompany,
+            shoppingItemId,
+            purchasedItemId,
+            shoppingItemData: {
+              ...item,
+              ...stateUpdates,
+              id: shoppingItemId,
+            },
+            invoiced: true,
+          });
+        }
+      })
+    );
+
+    setShoppingList((current) =>
+      (current || []).map((item) => (itemsById.has(getFirestoreDocId(item)) ? { ...item, ...stateUpdates } : item))
     );
 
     return items.length;
@@ -4423,9 +4564,12 @@ const JobDetailView = () => {
   }, [contractTotalCents, job.rate]);
 
   const markJobAsFinished = async () => {
+    if (markingJobFinished) return;
+
     try {
       if (!recentlySelectedCompany || !jobId) return;
 
+      setMarkingJobFinished(true);
       const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
       const previousBillingStatus = job.billingStatus || "—";
       const nextBillingStatus =
@@ -4535,6 +4679,8 @@ const JobDetailView = () => {
     } catch (err) {
       console.error(err);
       toast.error("Failed to mark job as finished");
+    } finally {
+      setMarkingJobFinished(false);
     }
   };
 
@@ -5312,14 +5458,9 @@ const JobDetailView = () => {
           orderBy("firstName")
         );
         const companyUsersSnap = await getDocs(companyUsersQ);
-        const companyUsers = companyUsersSnap.docs.map((docSnap) => {
+        const companyUsers = sortCompanyUsersByName(companyUsersSnap.docs.map((docSnap) => {
           const data = docSnap.data();
-          const name =
-            data.displayName ||
-            `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
-            data.userName ||
-            data.name ||
-            "Unnamed User";
+          const name = getCompanyUserDisplayName(data, "Unnamed User");
 
           return {
             ...data,
@@ -5330,7 +5471,7 @@ const JobDetailView = () => {
             label: name,
             value: data.id || docSnap.id,
           };
-        });
+        }));
         setCompanyUserList(companyUsers);
 
         const [
@@ -5811,7 +5952,7 @@ const JobDetailView = () => {
 
       const userQuery = query(collection(db, "companies", recentlySelectedCompany, "companyUsers"));
       const userSnap = await getDocs(userQuery);
-      const admins = userSnap.docs.map(buildAdminOption);
+      const admins = sortCompanyUsersByName(userSnap.docs.map(buildAdminOption));
       setAdminList(admins);
 
       const current = admins.find((a) => adminMatchesJob(a, job)) || currentAdminOption(job);
@@ -5906,11 +6047,12 @@ const JobDetailView = () => {
       if (Object.keys(updates).length) {
         await updateDoc(jobRef, updates);
         let invoicedPurchasedItemCount = 0;
+        let invoicedShoppingItemCount = 0;
         if (updates.billingStatus && jobBillingIsInvoiced(updates.billingStatus)) {
-          invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({
-            invoiceId: job.salesInvoiceId || job.invoiceRef || job.invoiceId || "",
-            invoiceType: job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job"),
-          });
+          const invoiceId = job.salesInvoiceId || job.invoiceRef || job.invoiceId || "";
+          const invoiceType = job.invoiceType || (job.salesInvoiceId ? "salesInvoice" : "job");
+          invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({ invoiceId, invoiceType });
+          invoicedShoppingItemCount = await markShoppingItemsInvoicedForJob({ invoiceId, invoiceType });
         }
         await recordJobHistory({
           title: "Job details updated",
@@ -5921,7 +6063,9 @@ const JobDetailView = () => {
             buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", updates.operationStatus ?? job.operationStatus),
             buildHistoryChange("issuePriority", "Issue Priority", getIssuePriorityLabel(job.issuePriorityLevel || job.priorityLevel || job.solutionTier), getIssuePriorityLabel(updates.issuePriorityLevel ?? job.issuePriorityLevel ?? job.priorityLevel ?? job.solutionTier)),
           ],
-          metadata: invoicedPurchasedItemCount ? { invoicedPurchasedItemCount } : {},
+          metadata: invoicedPurchasedItemCount || invoicedShoppingItemCount
+            ? { invoicedPurchasedItemCount, invoicedShoppingItemCount }
+            : {},
         });
 
         if (updates.billingStatus === "Expired") {
@@ -7690,6 +7834,121 @@ const JobDetailView = () => {
     return invoiceStatus === "invoiced" || invoiceStatus === "paid" || Boolean(item.invoiceId || item.invoiceDocId);
   };
 
+  const getPurchasedItemStandaloneStatus = (item = {}) => {
+    if (item.returned) return "Returned";
+    if (item.billable) return item.invoiced ? "Invoiced" : "Needs invoice";
+    return "Non-billable";
+  };
+
+  const removePurchasedItemFromJob = async (item) => {
+    const purchasedItemId = getFirestoreDocId(item);
+    if (!recentlySelectedCompany || !jobId || !purchasedItemId) return;
+
+    const ok = await appConfirm({
+      title: "Remove Purchased Material",
+      message: "Remove this purchased material from the job? The purchased item and receipt will stay in Purchases.",
+      confirmLabel: "Remove Material",
+      variant: "danger",
+    });
+
+    if (!ok) return;
+
+    const linkedShoppingListItemId =
+      item.shoppingListItemId || item.shoppingItemId || item.sourceShoppingListItemId || "";
+    const nextStatus = getPurchasedItemStandaloneStatus(item);
+    const purchaseStateUpdates = {
+      jobId: "",
+      workOrderId: "",
+      assignedJobId: "",
+      assignedToJob: false,
+      assignmentStatus: "unassigned",
+      billingOwner: "purchasedItem",
+      jobBillingStatus: "",
+      jobBillable: false,
+      jobBillingRate: 0,
+      jobInternalId: "",
+      jobName: "",
+      shoppingListItemId: "",
+      status: nextStatus,
+      updatedAt: new Date(),
+    };
+    const purchaseFirestoreUpdates = {
+      ...purchaseStateUpdates,
+      updatedAt: serverTimestamp(),
+    };
+
+    try {
+      setRemovingPurchasedItemId(purchasedItemId);
+
+      await updateDoc(
+        doc(db, "companies", recentlySelectedCompany, "purchasedItems", purchasedItemId),
+        purchaseFirestoreUpdates
+      );
+
+      await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), {
+        purchasedItemsIds: arrayRemove(purchasedItemId),
+        ...(linkedShoppingListItemId ? { shoppingListItemIds: arrayRemove(linkedShoppingListItemId) } : {}),
+      });
+
+      if (linkedShoppingListItemId) {
+        try {
+          await updateDoc(
+            doc(db, "companies", recentlySelectedCompany, "shoppingList", linkedShoppingListItemId),
+            {
+              purchasedItem: "",
+              purchasedItemId: "",
+              updatedAt: serverTimestamp(),
+            }
+          );
+        } catch (shoppingItemError) {
+          console.warn("Could not clear linked planned material purchase reference:", shoppingItemError);
+        }
+      }
+
+      setPurchasedItems((prev) =>
+        (prev || []).filter((purchase) => getFirestoreDocId(purchase) !== purchasedItemId)
+      );
+
+      if (linkedShoppingListItemId) {
+        setShoppingList((prev) =>
+          (prev || []).map((shoppingItem) =>
+            getFirestoreDocId(shoppingItem) === linkedShoppingListItemId
+              ? {
+                ...shoppingItem,
+                purchasedItem: "",
+                purchasedItemId: "",
+                updatedAt: new Date(),
+              }
+              : shoppingItem
+          )
+        );
+      }
+
+      await recordJobHistory({
+        eventType: "Purchased Material",
+        title: "Purchased material removed",
+        description: item.name || purchasedItemId,
+        changes: [
+          buildHistoryChange("purchasedItemsIds", "Purchased Material", item.name || purchasedItemId, "Removed"),
+          buildHistoryChange("actualMaterialCost", "Actual Material Cost", moneyFromCents(getPurchasedItemTotalCents(item)), "—"),
+          buildHistoryChange("status", "Purchase Status", item.status || "Connected to Job", nextStatus),
+        ],
+        metadata: {
+          purchasedItemIds: [purchasedItemId],
+          shoppingListItemId: linkedShoppingListItemId,
+        },
+        severity: "warning",
+      });
+
+      toast.success("Purchased material removed from job.");
+    } catch (error) {
+      console.error("Error removing purchased item from job:", error);
+      toast.error("Failed to remove purchased material.");
+    } finally {
+      setRemovingPurchasedItemId("");
+    }
+  };
+
   const purchasedItemCategoryOptions = useMemo(() => {
     const categories = new Set(
       (availablePurchasedItems || [])
@@ -7901,7 +8160,8 @@ const JobDetailView = () => {
     const billableTotalCents = getPurchasedItemBillableTotalCents(item);
     const databaseItemId =
       item.itemId || item.dataBaseItemId || item.databaseItemId || item.dbItemId || item.genericItemId || "";
-    const purchasedItemPath = item.id ? `/company/purchased-items/detail/${item.id}` : "";
+    const purchasedItemId = getFirestoreDocId(item);
+    const purchasedItemPath = purchasedItemId ? `/company/purchased-items/detail/${purchasedItemId}` : "";
     const databaseItemPath = databaseItemId ? `/company/items/detail/${databaseItemId}` : "";
     const salesInvoiceId = item.invoiceId || item.invoiceRef || item.invoiceDocId || "";
     const invoicePath = item.receiptId
@@ -7911,6 +8171,7 @@ const JobDetailView = () => {
         : "";
     const invoiceLabel = item.invoiceNum || item.invoiceNumber || salesInvoiceId;
     const billingRateLabel = moneyFromCents(billableTotalCents);
+    const isRemoving = removingPurchasedItemId === purchasedItemId;
 
     return (
       <div
@@ -7956,6 +8217,17 @@ const JobDetailView = () => {
             <span className="px-3 py-1 text-xs font-bold rounded-full border bg-emerald-50 text-emerald-700 border-emerald-200">
               Billing By Job
             </span>
+
+            <button
+              type="button"
+              onClick={() => removePurchasedItemFromJob(item)}
+              disabled={isRemoving}
+              title="Remove purchased material from this job"
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
+              {isRemoving ? "Removing..." : "Remove"}
+            </button>
           </div>
         </div>
 
@@ -9314,159 +9586,222 @@ const JobDetailView = () => {
     </div>
   );
 
-  const handleMarkAsInvoiced = async () => {
-    if (salesWorkflowEnabled) {
-      if (sendingInvoiceEmail) return;
-
-      try {
-        if (!recentlySelectedCompany || !jobId) return;
-
-        setSendingInvoiceEmail(true);
-        const salesAgreement = await ensureJobSalesAgreement();
-        const salesInvoice = await ensureJobSalesInvoice(salesAgreement.id);
-        const sendCallable = httpsCallable(functions, "sendSalesInvoiceEmail");
-        const authPayload = await getCallableAuthPayload();
-        const sendResult = await sendCallable({
-          companyId: recentlySelectedCompany,
-          invoiceId: salesInvoice.id,
-          invoiceBaseUrl: window.location.origin,
-          ...authPayload,
-        });
-
-        if (selectedContract?.id) {
-          await updateDoc(doc(db, "contracts", selectedContract.id), {
-            status: "Invoiced",
-            invoicedAt: serverTimestamp(),
-            salesAgreementId: salesAgreement.id,
-            salesInvoiceId: salesInvoice.id,
-            updatedAt: serverTimestamp(),
-          });
-        }
-
-        const nextOperationStatus = suggestOperationForBilling(
-          "Invoiced",
-          job.operationStatus || "Estimate Pending"
-        );
-        const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
-
-        await updateDoc(jobRef, {
-          billingStatus: "Invoiced",
-          operationStatus: nextOperationStatus,
-          salesAgreementId: salesAgreement.id,
-          salesInvoiceId: salesInvoice.id,
-          invoiceDate: serverTimestamp(),
-          invoiceRef: salesInvoice.id,
-          invoiceType: "salesInvoice",
-        });
-
-        const invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({
-          invoiceId: salesInvoice.id,
-          invoiceType: "salesInvoice",
-        });
-
-        setJob((prev) => ({
-          ...prev,
-          billingStatus: "Invoiced",
-          operationStatus: nextOperationStatus,
-          salesAgreementId: salesAgreement.id,
-          salesInvoiceId: salesInvoice.id,
-          invoiceRef: salesInvoice.id,
-          invoiceType: "salesInvoice",
-        }));
-        setSelectedBillingStatus({ value: "Invoiced", label: "Invoiced" });
-        setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
-        await recordJobHistory({
-          eventType: "Billing",
-          title: "Invoice emailed through Sales",
-          description: sendResult.data?.testMode
-            ? `Test email sent to ${sendResult.data.to}. Intended customer: ${sendResult.data.intendedTo}.`
-            : `Invoice sent to ${sendResult.data?.to || getCustomerEmail()}.`,
-          changes: [
-            buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Invoiced"),
-            buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", nextOperationStatus),
-          ],
-          metadata: {
-            salesAgreementId: salesAgreement.id,
-            salesInvoiceId: salesInvoice.id,
-            contractId: selectedContract?.id || "",
-            emailResult: sendResult.data || {},
-            featureFlagId: "feature_flag_004",
-            invoicedPurchasedItemCount,
-          },
-        });
-
-        if (sendResult.data?.testMode) {
-          toast.success(`Sales invoice test email sent to ${sendResult.data.to}.`);
-        } else {
-          toast.success("Sales invoice email sent to customer.");
-        }
-      } catch (err) {
-        console.error(err);
-        toast.error(err.message || "Failed to send sales invoice email");
-      } finally {
-        setSendingInvoiceEmail(false);
-      }
-      return;
+  const markJobAndRelatedItemsInvoiced = async ({
+    salesAgreement = null,
+    salesInvoice = null,
+    contract = selectedContract,
+    invoiceId = "",
+    invoiceType = "",
+    historyTitle = "Job marked as invoiced",
+    historyDescription = "",
+    historyMetadata = {},
+  } = {}) => {
+    if (!recentlySelectedCompany || !jobId) {
+      return { invoicedPurchasedItemCount: 0, invoicedShoppingItemCount: 0 };
     }
 
-    try {
-      if (!recentlySelectedCompany || !jobId) return;
-      if (!selectedContract) return toast.error("Select a contract first");
+    const resolvedInvoiceId =
+      invoiceId ||
+      salesInvoice?.id ||
+      contract?.salesInvoiceId ||
+      contract?.invoiceId ||
+      job.salesInvoiceId ||
+      job.invoiceRef ||
+      job.invoiceId ||
+      "";
+    const resolvedInvoiceType =
+      invoiceType ||
+      (salesInvoice?.id ? "salesInvoice" : "") ||
+      (contract?.salesInvoiceId ? "salesInvoice" : "") ||
+      (contract?.id ? "contract" : "") ||
+      job.invoiceType ||
+      "job";
+    const resolvedSalesAgreementId =
+      salesAgreement?.id ||
+      selectedSalesAgreement?.id ||
+      linkedSalesAgreement?.id ||
+      job.salesAgreementId ||
+      "";
+    const resolvedSalesInvoiceId =
+      salesInvoice?.id ||
+      (resolvedInvoiceType === "salesInvoice" ? resolvedInvoiceId : "") ||
+      job.salesInvoiceId ||
+      "";
+    const nextOperationStatus = suggestOperationForBilling(
+      "Invoiced",
+      job.operationStatus || "Estimate Pending"
+    );
 
-      const contractRef = doc(
-        db,
-        "contracts",
-        selectedContract.id
-      );
-      const jobRef = doc(db, "companies", recentlySelectedCompany, "workOrders", jobId);
-
-      await updateDoc(contractRef, {
+    if (contract?.id) {
+      const contractUpdates = {
         status: "Invoiced",
         invoicedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
+      };
+
+      if (resolvedSalesAgreementId) contractUpdates.salesAgreementId = resolvedSalesAgreementId;
+      if (resolvedSalesInvoiceId) contractUpdates.salesInvoiceId = resolvedSalesInvoiceId;
+
+      await updateDoc(doc(db, "contracts", contract.id), contractUpdates);
+    }
+
+    const jobUpdates = {
+      billingStatus: "Invoiced",
+      operationStatus: nextOperationStatus,
+      invoiceDate: serverTimestamp(),
+      invoiceRef: resolvedInvoiceId,
+      invoiceType: resolvedInvoiceType,
+    };
+
+    if (resolvedSalesAgreementId) jobUpdates.salesAgreementId = resolvedSalesAgreementId;
+    if (resolvedSalesInvoiceId) jobUpdates.salesInvoiceId = resolvedSalesInvoiceId;
+
+    await updateDoc(doc(db, "companies", recentlySelectedCompany, "workOrders", jobId), jobUpdates);
+
+    const invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({
+      invoiceId: resolvedInvoiceId,
+      invoiceType: resolvedInvoiceType,
+    });
+    const invoicedShoppingItemCount = await markShoppingItemsInvoicedForJob({
+      invoiceId: resolvedInvoiceId,
+      invoiceType: resolvedInvoiceType,
+    });
+
+    setJob((prev) => ({
+      ...prev,
+      billingStatus: "Invoiced",
+      operationStatus: nextOperationStatus,
+      invoiceDate: new Date(),
+      invoiceRef: resolvedInvoiceId,
+      invoiceType: resolvedInvoiceType,
+      ...(resolvedSalesAgreementId ? { salesAgreementId: resolvedSalesAgreementId } : {}),
+      ...(resolvedSalesInvoiceId ? { salesInvoiceId: resolvedSalesInvoiceId } : {}),
+    }));
+    setSelectedBillingStatus({ value: "Invoiced", label: "Invoiced" });
+    setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
+
+    if (salesInvoice?.id) setLinkedSalesInvoice(salesInvoice);
+    if (salesAgreement?.id) {
+      setLinkedSalesAgreement(salesAgreement);
+      setSelectedSalesAgreementId(salesAgreement.id);
+    }
+
+    await recordJobHistory({
+      eventType: "Billing",
+      title: historyTitle,
+      description: historyDescription,
+      changes: [
+        buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Invoiced"),
+        buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", nextOperationStatus),
+      ],
+      metadata: {
+        salesAgreementId: resolvedSalesAgreementId,
+        salesInvoiceId: resolvedSalesInvoiceId,
+        contractId: contract?.id || "",
+        invoiceId: resolvedInvoiceId,
+        invoiceType: resolvedInvoiceType,
+        invoicedPurchasedItemCount,
+        invoicedShoppingItemCount,
+        ...historyMetadata,
+      },
+    });
+
+    return {
+      invoicedPurchasedItemCount,
+      invoicedShoppingItemCount,
+      invoiceId: resolvedInvoiceId,
+      invoiceType: resolvedInvoiceType,
+    };
+  };
+
+  const handleEmailInvoice = async () => {
+    if (sendingInvoiceEmail) return;
+
+    if (!salesWorkflowEnabled) return;
+
+    try {
+      if (!recentlySelectedCompany || !jobId) return;
+
+      setSendingInvoiceEmail(true);
+      const salesAgreement = await ensureJobSalesAgreement();
+      const salesInvoice = await ensureJobSalesInvoice(salesAgreement.id);
+      const sendCallable = httpsCallable(functions, "sendSalesInvoiceEmail");
+      const authPayload = await getCallableAuthPayload();
+      const sendResult = await sendCallable({
+        companyId: recentlySelectedCompany,
+        invoiceId: salesInvoice.id,
+        invoiceBaseUrl: window.location.origin,
+        ...authPayload,
       });
 
-      const nextOperationStatus = suggestOperationForBilling(
-        "Invoiced",
-        job.operationStatus || "Estimate Pending"
+      await markJobAndRelatedItemsInvoiced({
+        salesAgreement,
+        salesInvoice,
+        invoiceId: salesInvoice.id,
+        invoiceType: "salesInvoice",
+        historyTitle: "Invoice emailed through Sales",
+        historyDescription: sendResult.data?.testMode
+          ? `Test email sent to ${sendResult.data.to}. Intended customer: ${sendResult.data.intendedTo}.`
+          : `Invoice sent to ${sendResult.data?.to || getCustomerEmail()}.`,
+        historyMetadata: {
+          emailResult: sendResult.data || {},
+          featureFlagId: "feature_flag_004",
+        },
+      });
+
+      if (sendResult.data?.testMode) {
+        toast.success(`Sales invoice test email sent to ${sendResult.data.to}.`);
+      } else {
+        toast.success("Sales invoice email sent to customer.");
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error(err.message || "Failed to send sales invoice email");
+    } finally {
+      setSendingInvoiceEmail(false);
+    }
+  };
+
+  const handleMarkAsInvoiced = async () => {
+    if (markingJobInvoiced || sendingInvoiceEmail) return;
+
+    try {
+      if (!recentlySelectedCompany || !jobId) return;
+
+      setMarkingJobInvoiced(true);
+      const existingSalesInvoice = salesWorkflowEnabled ? await findLinkedSalesInvoice() : null;
+      const invoiceId =
+        existingSalesInvoice?.id ||
+        selectedContract?.salesInvoiceId ||
+        selectedContract?.invoiceId ||
+        selectedContract?.id ||
+        job.salesInvoiceId ||
+        job.invoiceRef ||
+        job.invoiceId ||
+        "";
+      const invoiceType =
+        existingSalesInvoice?.id || selectedContract?.salesInvoiceId || job.salesInvoiceId
+          ? "salesInvoice"
+          : selectedContract?.id
+            ? "contract"
+            : job.invoiceType || "job";
+
+      const result = await markJobAndRelatedItemsInvoiced({
+        salesInvoice: existingSalesInvoice,
+        invoiceId,
+        invoiceType,
+        historyTitle: "Job marked as invoiced",
+        historyMetadata: { manual: true },
+      });
+
+      toast.success(
+        `Job marked as invoiced. ${result.invoicedPurchasedItemCount} purchased item(s) and ${result.invoicedShoppingItemCount} shopping item(s) updated.`
       );
-
-      await updateDoc(jobRef, {
-        billingStatus: "Invoiced",
-        operationStatus: nextOperationStatus,
-        invoiceDate: serverTimestamp(),
-        invoiceRef: selectedContract.id,
-        invoiceType: "contract",
-      });
-
-      const invoicedPurchasedItemCount = await markPurchasedItemsInvoicedForJob({
-        invoiceId: selectedContract.id,
-        invoiceType: "contract",
-      });
-
-      setJob((prev) => ({
-        ...prev,
-        billingStatus: "Invoiced",
-        operationStatus: nextOperationStatus,
-        invoiceRef: selectedContract.id,
-        invoiceType: "contract",
-      }));
-      setSelectedBillingStatus({ value: "Invoiced", label: "Invoiced" });
-      setSelectedOperationStatus({ value: nextOperationStatus, label: nextOperationStatus });
-      await recordJobHistory({
-        eventType: "Billing",
-        title: "Job marked as invoiced",
-        changes: [
-          buildHistoryChange("billingStatus", "Billing Status", job.billingStatus || "—", "Invoiced"),
-          buildHistoryChange("operationStatus", "Operation Status", job.operationStatus || "—", nextOperationStatus),
-        ],
-        metadata: { contractId: selectedContract.id, invoicedPurchasedItemCount },
-      });
-
-      toast.success("Job marked as invoiced");
     } catch (err) {
       console.error(err);
       toast.error("Failed to mark as invoiced");
+    } finally {
+      setMarkingJobInvoiced(false);
     }
   };
   const renderPlannedServiceStopCard = (stop) => {
@@ -10064,6 +10399,67 @@ const JobDetailView = () => {
   );
   const plannedMaterialsToPurchase = (shoppingList || []).filter((item) => !isShoppingListItemPurchased(item));
   const acceptedWorkflowIsReady = Boolean(acceptedPlan) || isJobAcceptedForMaterials();
+  const canUpdateJobs = can("24");
+  const headerActionItems = [
+    {
+      label: salesWorkflowEnabled
+        ? (sendingEstimateEmail ? "Sending Estimate..." : "Email Estimate")
+        : "Send Estimate",
+      icon: EnvelopeIcon,
+      tone: "amber",
+      onClick: handleSendEstimate,
+      disabled: sendingEstimateEmail,
+    },
+    {
+      label: "Mark Accepted",
+      icon: CheckCircleIcon,
+      tone: "emerald",
+      onClick: handleMarkEstimateAccepted,
+    },
+    {
+      label: markingJobFinished ? "Marking Finished..." : "Mark As Finished",
+      icon: CheckCircleIcon,
+      tone: "emerald",
+      onClick: markJobAsFinished,
+      disabled: markingJobFinished,
+    },
+    ...(salesWorkflowEnabled
+      ? [{
+        label: sendingInvoiceEmail ? "Sending Invoice..." : "Email Invoice",
+        icon: DocumentTextIcon,
+        tone: "blue",
+        onClick: handleEmailInvoice,
+        disabled: sendingInvoiceEmail,
+      }]
+      : []),
+    {
+      label: markingJobInvoiced ? "Marking Invoiced..." : "Mark As Invoiced",
+      icon: CurrencyDollarIcon,
+      onClick: handleMarkAsInvoiced,
+      disabled: markingJobInvoiced || sendingInvoiceEmail,
+    },
+    ...(canUpdateJobs
+      ? [{
+        label: "Create Template",
+        icon: DocumentDuplicateIcon,
+        tone: "emerald",
+        onClick: openCreateTemplateModal,
+      }]
+      : []),
+    {
+      label: "Create Customer Notes",
+      icon: ChatBubbleLeftRightIcon,
+      tone: "violet",
+      onClick: openCreateCustomerNoteModal,
+    },
+    ...(canUpdateJobs
+      ? [{
+        label: "Edit",
+        icon: PencilSquareIcon,
+        onClick: editJob,
+      }]
+      : []),
+  ];
 
   return (
     <div className="job-detail-view min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
@@ -10182,56 +10578,29 @@ const JobDetailView = () => {
                 </>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
+            <div className="flex justify-start lg:justify-end lg:pl-4">
               {!edit ? (
-                <>
-                  <button
-                    onClick={handleSendEstimate}
-                    disabled={sendingEstimateEmail}
-                    className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingEstimateEmail ? "Sending..." : "Email Estimate") : "Send Estimate"}
-                  </button>
-                  <button
-                    onClick={handleMarkEstimateAccepted}
-                    className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                  >
-                    Mark Accepted
-                  </button>
-                  <button
-                    onClick={handleMarkAsInvoiced}
-                    disabled={sendingInvoiceEmail}
-                    className="rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark As Invoiced"}
-                  </button>
-                  {can("24") && (
-                    <button
-                      type="button"
-                      onClick={openCreateTemplateModal}
-                      className="rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                    >
-                      Create Template
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={openCreateCustomerNoteModal}
-                    className="rounded-md border border-violet-200 bg-violet-50 px-4 py-2 text-sm font-semibold text-violet-700 transition hover:bg-violet-100"
-                  >
-                    Create Customer Notes
-                  </button>
-                  {can("24") && (
-                    <button
-                      onClick={editJob}
-                      className="rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-                    >
-                      Edit
-                    </button>
-                  )}
-                </>
+                <Menu as="div" className="relative inline-block text-left">
+                  <MenuButton className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">
+                    <EllipsisVerticalIcon className="h-4 w-4" aria-hidden="true" />
+                    <span>Actions</span>
+                    <ChevronDownIcon className="h-4 w-4" aria-hidden="true" />
+                  </MenuButton>
+                  <MenuItems className="absolute right-0 z-30 mt-2 w-64 origin-top-right overflow-hidden rounded-md border border-slate-200 bg-white py-1 shadow-lg ring-1 ring-black/5 focus:outline-none">
+                    {headerActionItems.map((action) => (
+                      <JobHeaderActionMenuItem
+                        key={action.label}
+                        label={action.label}
+                        icon={action.icon}
+                        tone={action.tone}
+                        onClick={action.onClick}
+                        disabled={action.disabled}
+                      />
+                    ))}
+                  </MenuItems>
+                </Menu>
               ) : (
-                <>
+                <div className="flex flex-wrap gap-2">
                   <button
                     onClick={saveEditChanges}
                     className="rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
@@ -10244,7 +10613,7 @@ const JobDetailView = () => {
                   >
                     Cancel
                   </button>
-                </>
+                </div>
               )}
             </div>
           </div>
@@ -11739,9 +12108,10 @@ const JobDetailView = () => {
                         <button
                           type="button"
                           onClick={markJobAsFinished}
-                          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100"
+                          disabled={markingJobFinished}
+                          className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
                         >
-                          Mark Job as Finished
+                          {markingJobFinished ? "Marking..." : "Mark Job as Finished"}
                         </button>
                         <Link
                           to={`/company/serviceStops/createNew/${jobId}?category=jobEstimate`}
@@ -12307,12 +12677,21 @@ const JobDetailView = () => {
                         >
                           Mark Accepted
                         </button>
+                        {salesWorkflowEnabled && (
+                          <button
+                            onClick={handleEmailInvoice}
+                            disabled={sendingInvoiceEmail}
+                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                          >
+                            {sendingInvoiceEmail ? "Sending..." : "Email Invoice"}
+                          </button>
+                        )}
                         <button
                           onClick={handleMarkAsInvoiced}
-                          disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
-                          className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                          disabled={markingJobInvoiced || sendingInvoiceEmail}
+                          className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                         >
-                          {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
+                          {markingJobInvoiced ? "Marking..." : "Mark As Invoiced"}
                         </button>
                       </div>
 
@@ -12338,7 +12717,7 @@ const JobDetailView = () => {
                         </div>
                       </div>
 
-                      <div className="mt-5 grid grid-cols-1 md:grid-cols-4 gap-3">
+                      <div className={`mt-5 grid grid-cols-1 gap-3 md:grid-cols-2 ${salesWorkflowEnabled ? "xl:grid-cols-5" : "xl:grid-cols-4"}`}>
                         <button
                           type="button"
                           onClick={openCreateContractModal}
@@ -12365,13 +12744,24 @@ const JobDetailView = () => {
                           Mark Accepted
                         </button>
 
+                        {salesWorkflowEnabled && (
+                          <button
+                            type="button"
+                            onClick={handleEmailInvoice}
+                            disabled={sendingInvoiceEmail}
+                            className="px-4 py-3 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                          >
+                            {sendingInvoiceEmail ? "Sending..." : "Email Invoice"}
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={handleMarkAsInvoiced}
-                          disabled={sendingInvoiceEmail || (!salesWorkflowEnabled && !selectedContract)}
-                          className="px-4 py-3 text-sm font-semibold text-blue-700 bg-blue-50 border border-blue-200 rounded-xl hover:bg-blue-100 transition disabled:opacity-50"
+                          disabled={markingJobInvoiced || sendingInvoiceEmail}
+                          className="px-4 py-3 text-sm font-semibold text-slate-700 bg-white border border-slate-300 rounded-xl hover:bg-slate-50 transition disabled:opacity-50"
                         >
-                          {salesWorkflowEnabled ? (sendingInvoiceEmail ? "Sending..." : "Email Invoice") : "Mark Invoiced"}
+                          {markingJobInvoiced ? "Marking..." : "Mark As Invoiced"}
                         </button>
                       </div>
                     </div>

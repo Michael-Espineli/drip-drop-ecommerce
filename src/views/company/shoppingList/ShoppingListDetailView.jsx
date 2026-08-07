@@ -1,6 +1,6 @@
 import React, { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { collection, deleteDoc, doc, getDoc, getDocs, updateDoc, Timestamp } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, updateDoc, Timestamp } from "firebase/firestore";
 import Select from "react-select";
 import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
@@ -19,6 +19,12 @@ import {
     shoppingItemNeedsAction,
     syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
+import {
+    deleteShoppingListItemWithLinks,
+    getShoppingItemPartApprovalId,
+    isShoppingItemFromPartApproval,
+} from "../../../utils/shoppingListDelete";
+import { compareCompanyUsersByName } from "../../../utils/companyUsers";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
@@ -199,7 +205,7 @@ const ShoppingListDetailView = () => {
                             value: id,
                         };
                     })
-                    .sort((left, right) => left.label.localeCompare(right.label));
+                    .sort(compareCompanyUsersByName);
 
                 const purchaseOptions = purchasedItemsSnap.docs
                     .map((docSnap) => {
@@ -805,9 +811,12 @@ const ShoppingListDetailView = () => {
     };
 
     const deleteJob = async () => {
+        const linkedApprovalId = getShoppingItemPartApprovalId(item);
         const confirmed = await appConfirm({
             title: "Delete Item",
-            message: "Are you sure you want to delete this item?",
+            message: linkedApprovalId
+                ? "Delete this shopping list item and its connected part approval request? This cannot be undone."
+                : "Are you sure you want to delete this item?",
             confirmLabel: "Delete Item",
             variant: "danger",
         });
@@ -816,15 +825,13 @@ const ShoppingListDetailView = () => {
         try {
             setUpdating(true);
 
-            const docRef = doc(
+            await deleteShoppingListItemWithLinks({
                 db,
-                "companies",
-                recentlySelectedCompany,
-                sourceCollection,
-                shoppingItemId
-            );
-
-            await deleteDoc(docRef);
+                companyId: recentlySelectedCompany,
+                itemId: shoppingItemId,
+                item,
+                collectionName: sourceCollection,
+            });
             navigate("/company/shopping-list");
         } catch (error) {
             console.log("Error deleting shopping list item");
@@ -838,6 +845,7 @@ const ShoppingListDetailView = () => {
         ? format(new Date(item.datePurchased), "MM / d / yyyy")
         : "—";
     const displayName = item.name || item.dbItemName || "—";
+    const partApprovalRequestId = getShoppingItemPartApprovalId(item);
     const displayPhotoUrl = edit ? photoPreviewUrl || editForm.photoUrl : item.photoUrl;
     const connectedPurchasedItemOption = purchasedItemOptions.find((option) => option.id === item.purchasedItem);
     const purchasedItemDisplayName = connectedPurchasedItemOption?.label || item.purchasedItem;
@@ -874,12 +882,20 @@ const ShoppingListDetailView = () => {
                     </div>
 
                     {!edit ? (
-                        <button
-                            onClick={editJob}
-                            className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700"
-                        >
-                            Edit
-                        </button>
+                        <div className="flex gap-2">
+                            <button
+                                onClick={editJob}
+                                className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700"
+                            >
+                                Edit
+                            </button>
+                            <button
+                                onClick={deleteJob}
+                                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                                Delete
+                            </button>
+                        </div>
                     ) : (
                         <div className="flex gap-2">
                             <button
@@ -908,6 +924,15 @@ const ShoppingListDetailView = () => {
                     <div className="lg:col-span-2 space-y-6">
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <h3 className="text-xl font-bold mb-4 text-gray-800">Item Information</h3>
+
+                            {isShoppingItemFromPartApproval(item) ? (
+                                <div className="mb-4 rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2 text-sm font-semibold text-indigo-800">
+                                    Created from Part Approval{" "}
+                                    <Link to="/company/part-approvals" className="text-indigo-700 underline underline-offset-2">
+                                        {partApprovalRequestId}
+                                    </Link>
+                                </div>
+                            ) : null}
 
                             <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
                                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
@@ -1064,7 +1089,7 @@ const ShoppingListDetailView = () => {
                                 </div>
 
                                 <div>
-                                    <p className="text-sm font-semibold text-gray-500 mb-1">Approval Request</p>
+                                    <p className="text-sm font-semibold text-gray-500 mb-1">Created From Part Approval</p>
                                     {edit ? (
                                         <input
                                             type="text"
@@ -1072,9 +1097,9 @@ const ShoppingListDetailView = () => {
                                             onChange={(e) => handleEditFieldChange("partApprovalRequestId", e.target.value)}
                                             className="w-full rounded-md border border-slate-300 p-3"
                                         />
-                                    ) : item.partApprovalRequestId ? (
+                                    ) : partApprovalRequestId ? (
                                         <Link to="/company/part-approvals" className="font-semibold text-blue-600 hover:underline">
-                                            {item.partApprovalRequestId}
+                                            {partApprovalRequestId}
                                         </Link>
                                     ) : (
                                         <p>—</p>

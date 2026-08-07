@@ -9,6 +9,7 @@ import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import toast from 'react-hot-toast';
 import { fetchCompanyVendors } from '../../../utils/vendors';
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from '../../../utils/companyUsers';
 
 const CreateNewPurchase = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -181,22 +182,22 @@ const CreateNewPurchase = () => {
             try {
                 let q = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
                 const querySnapshot = await getDocs(q);
-                setCompanyUserList([]);
-                querySnapshot.forEach((docSnap) => {
+                const users = sortCompanyUsersByName(querySnapshot.docs.map((docSnap) => {
                     const companyUserData = docSnap.data();
-                    const companyUser = {
-                        id: companyUserData.id,
-                        userId: companyUserData.userId,
-                        userName: companyUserData.userName,
+                    const id = companyUserData.id || docSnap.id;
+                    return {
+                        id,
+                        userId: companyUserData.userId || id,
+                        userName: getCompanyUserDisplayName(companyUserData, "Unnamed User"),
                         roleName: companyUserData.roleName,
                         status: companyUserData.status,
                         workerType: companyUserData.workerType,
                         linkedCompanyId: companyUserData.linkedCompanyId,
                         linkedCompanyName: companyUserData.linkedCompanyName,
-                        label: companyUserData.userName
+                        label: getCompanyUserDisplayName(companyUserData, "Unnamed User"),
                     };
-                    setCompanyUserList(prev => [...prev, companyUser]);
-                });
+                }));
+                setCompanyUserList(users);
 
                 let genericItemQuery = query(
                     collection(db, "companies", recentlySelectedCompany, 'settings', 'dataBase', 'dataBase'),

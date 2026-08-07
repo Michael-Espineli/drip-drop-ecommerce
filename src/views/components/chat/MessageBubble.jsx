@@ -18,12 +18,12 @@ const MessageBubble = ({ message, userId, companyId = '', audience = 'company' }
   return (
     <div className={`flex ${outgoing ? 'justify-end' : 'justify-start'}`}>
       <div
-        className={`max-w-xs break-words rounded-lg px-4 py-2 lg:max-w-md ${
-          outgoing ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-800'
+        className={`max-w-[82%] break-words rounded-lg px-3.5 py-2.5 text-sm shadow-sm sm:max-w-md ${
+          outgoing ? 'bg-blue-600 text-white' : 'border border-slate-200 bg-white text-slate-800'
         }`}
       >
         {message.message ? (
-          <p className="whitespace-pre-wrap text-sm">{message.message}</p>
+          <p className="whitespace-pre-wrap leading-5">{message.message}</p>
         ) : null}
         {links.map((link) => (
           <ConversationLinkCard
@@ -33,7 +33,9 @@ const MessageBubble = ({ message, userId, companyId = '', audience = 'company' }
             inverted={outgoing}
           />
         ))}
-        <p className="mt-1 text-right text-xs opacity-70">{formatMessageTime(message.dateSent)}</p>
+        <p className={`mt-1 text-right text-[11px] font-medium ${outgoing ? 'text-blue-100' : 'text-slate-400'}`}>
+          {formatMessageTime(message.dateSent)}
+        </p>
       </div>
     </div>
   );

@@ -33,6 +33,7 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
     normalizeServiceStopTypeBucket,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import PartApprovalCreateModal from "../partApprovals/PartApprovalCreateModal";
 import { getItemPhotoUrl } from "../../../utils/itemPhotos";
 import {
@@ -41,6 +42,7 @@ import {
     isShoppingItemDelivered,
     partApprovalTotalPriceCents,
 } from "../../../utils/partApprovalShopping";
+import { isFilterEquipment } from "../../../utils/models/Equipment";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -134,13 +136,7 @@ const minutesBetween = (start, end) => {
 
 const normalizeCompanyUser = (docSnap) => {
     const data = docSnap.data();
-    const label =
-        data.userName ||
-        data.displayName ||
-        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
-        data.name ||
-        data.email ||
-        "Unnamed User";
+    const label = getCompanyUserDisplayName(data, "Unnamed User");
     const userId = data.userId || data.id || docSnap.id;
 
     return {
@@ -685,9 +681,7 @@ const ServiceStopDetails = () => {
                         }))
                     );
                     setCompanyUsers(
-                        userSnapshot.docs
-                            .map(normalizeCompanyUser)
-                            .sort((a, b) => a.label.localeCompare(b.label))
+                        sortCompanyUsersByName(userSnapshot.docs.map(normalizeCompanyUser))
                     );
                     setStopDataRecords(loadedStopData);
 
@@ -985,6 +979,14 @@ const ServiceStopDetails = () => {
         serviceStop?.description ||
         ""
     ), [serviceLocation, serviceStop]);
+    const technicianServiceNotes = useMemo(() => displayText(
+        serviceStop?.serviceNotes ||
+        serviceStop?.technicianServiceNotes ||
+        serviceStop?.fieldNotes ||
+        serviceStop?.notes ||
+        "",
+        ""
+    ), [serviceStop]);
     const equipmentSurveyFindings = useMemo(() => getEquipmentSurveyFindings(equipmentList), [equipmentList]);
 
     const buildEquipmentMeasurementsForStopData = (overrideMeasurement = null) => {
@@ -2355,6 +2357,15 @@ const ServiceStopDetails = () => {
                                 />
                                 <Field label="Description" value={serviceStop.description || "None"} />
                             </div>
+
+                            {!isServiceAgreementEstimate && (
+                                <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Technician Service Notes</h3>
+                                    <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">
+                                        {technicianServiceNotes || "No technician service notes captured."}
+                                    </p>
+                                </div>
+                            )}
                         </div>
 
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -2553,6 +2564,13 @@ const ServiceStopDetails = () => {
                                     <Field label="Survey Date" value={formatDateText(serviceStop.serviceDate)} />
                                     <Field label="Customer" value={serviceStop.customerName} />
                                     <Field label="Address" value={`${serviceStop.address?.streetAddress || ""}${serviceStop.address?.city ? `, ${serviceStop.address.city}` : ""}${serviceStop.address?.state ? `, ${serviceStop.address.state}` : ""}`} />
+                                </div>
+
+                                <div className="mt-5">
+                                    <h4 className="text-sm font-bold uppercase tracking-wide text-slate-500">Technician Service Notes</h4>
+                                    <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">
+                                        {technicianServiceNotes || "No technician service notes captured."}
+                                    </p>
                                 </div>
 
                                 <div className="mt-5">
@@ -2957,18 +2975,21 @@ const ServiceStopDetails = () => {
                                             </div>
                                             {selectedBodyEquipment.length ? (
                                                 <div className="grid grid-cols-1 gap-3">
-                                                    {selectedBodyEquipment.map((equipment) => {
-                                                        const draft = equipmentMeasurementDrafts[equipment.id] || {};
-                                                        const savingThisEquipment = savingEquipmentObservationId === equipment.id;
-                                                        return (
-                                                            <div key={equipment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                                                                    <div>
-                                                                        <p className="font-semibold text-slate-800">{getEquipmentTitle(equipment)}</p>
-                                                                        <p className="mt-1 text-xs text-slate-500">
-                                                                            Current: {displayText(equipment.currentPressure ?? equipment.currentFilterPressure, "—")} PSI
-                                                                        </p>
-                                                                    </div>
+	                                                    {selectedBodyEquipment.map((equipment) => {
+	                                                        const draft = equipmentMeasurementDrafts[equipment.id] || {};
+	                                                        const savingThisEquipment = savingEquipmentObservationId === equipment.id;
+	                                                        const filterEquipment = isFilterEquipment(equipment);
+	                                                        return (
+	                                                            <div key={equipment.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+	                                                                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+	                                                                    <div>
+	                                                                        <p className="font-semibold text-slate-800">{getEquipmentTitle(equipment)}</p>
+	                                                                        {filterEquipment && (
+	                                                                            <p className="mt-1 text-xs text-slate-500">
+	                                                                                Current: {displayText(equipment.currentPressure ?? equipment.currentFilterPressure, "—")} PSI
+	                                                                            </p>
+	                                                                        )}
+	                                                                    </div>
                                                                     {(equipment.needsService || String(equipment.status || "").toLowerCase().includes("repair") || String(equipment.status || "").toLowerCase().includes("maintenance")) && (
                                                                         <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-800">
                                                                             Needs attention
@@ -2976,24 +2997,26 @@ const ServiceStopDetails = () => {
                                                                     )}
                                                                 </div>
                                                                 <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-                                                                    <label className="block">
-                                                                        <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Pressure</span>
-                                                                        <input
-                                                                            type="number"
-                                                                            value={draft.pressure || ""}
-                                                                            onChange={(event) =>
-                                                                                setEquipmentMeasurementDrafts((current) => ({
-                                                                                    ...current,
-                                                                                    [equipment.id]: {
-                                                                                        ...(current[equipment.id] || {}),
-                                                                                        pressure: event.target.value,
-                                                                                    },
-                                                                                }))
-                                                                            }
-                                                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
-                                                                            placeholder="PSI"
-                                                                        />
-                                                                    </label>
+	                                                                    {filterEquipment && (
+	                                                                        <label className="block">
+	                                                                            <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">Pressure</span>
+	                                                                            <input
+	                                                                                type="number"
+	                                                                                value={draft.pressure || ""}
+	                                                                                onChange={(event) =>
+	                                                                                    setEquipmentMeasurementDrafts((current) => ({
+	                                                                                        ...current,
+	                                                                                        [equipment.id]: {
+	                                                                                            ...(current[equipment.id] || {}),
+	                                                                                            pressure: event.target.value,
+	                                                                                        },
+	                                                                                    }))
+	                                                                                }
+	                                                                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-sm"
+	                                                                                placeholder="PSI"
+	                                                                            />
+	                                                                        </label>
+	                                                                    )}
                                                                     <label className="block">
                                                                         <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500">RPM</span>
                                                                         <input

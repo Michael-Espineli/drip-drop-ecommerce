@@ -9,8 +9,13 @@ import { Link } from 'react-router-dom';
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import toast from "react-hot-toast";
 import {
+    canUsePersonalRouteVehicle,
+    routeVehicleAccessLabel,
+} from "../../../utils/models/CompanyUser";
+import {
     MdAdd,
     MdHistory,
+    MdChecklist,
     MdMailOutline,
     MdManageAccounts,
     MdNoteAdd,
@@ -168,6 +173,7 @@ const UserAvatar = ({ user, displayName }) => {
 
 const UserRow = ({ user, onClick }) => {
     const displayName = getUserDisplayName(user);
+    const hasPersonalVehicleAccess = canUsePersonalRouteVehicle(user);
 
     return (
         <tr onClick={onClick} className="cursor-pointer border-b border-gray-100 transition hover:bg-blue-50/60">
@@ -189,11 +195,9 @@ const UserRow = ({ user, onClick }) => {
             <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{user.workerType || 'N/A'}</td>
             <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{user.linkedCompanyName || 'N/A'}</td>
             <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">
-                {user.allowPersonalVehicle ? (
-                    <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                        Personal vehicle allowed
-                    </span>
-                ) : 'N/A'}
+                <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${hasPersonalVehicleAccess ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-700'}`}>
+                    {routeVehicleAccessLabel(user)}
+                </span>
             </td>
             <td className="whitespace-nowrap px-4 py-4 text-sm text-gray-700">{formatDate(user.dateCreated || user.createdAt)}</td>
             <td className="whitespace-nowrap px-4 py-4 text-right text-sm font-semibold text-blue-600">View</td>
@@ -400,6 +404,9 @@ const CompanyUsers = () => {
                         </ActionLink>
                         <ActionLink to="/company/settings" icon={MdSettings}>
                             Settings
+                        </ActionLink>
+                        <ActionLink to="/company/settings/onboarding-checklist" icon={MdChecklist}>
+                            User Onboarding Checklist
                         </ActionLink>
                         <ActionLink to="/company/payroll" icon={MdPayment}>
                             Payroll

@@ -9,6 +9,14 @@ import { ArrowLeftIcon } from '@heroicons/react/24/outline';
 import { EquipmentHO } from '../../../utils/models/EquipmentHO';
 import EquipmentCatalogPicker from '../../components/equipment/EquipmentCatalogPicker';
 
+const dateInputToLocalDate = (value) => {
+    if (!value) return null;
+    const [year, month, day] = String(value).split('-').map(Number);
+    if (!year || !month || !day) return null;
+
+    return new Date(year, month - 1, day);
+};
+
 const NewEquipment = () => {
     const { user } = useContext(Context);
     const navigate = useNavigate();
@@ -65,16 +73,18 @@ const NewEquipment = () => {
         try {
             const equipmentId = 'hoe_' + uuidv4();
             const equipmentRef = doc(db, 'homeownerEquipment', equipmentId);
+            const createdAt = new Date();
 
             await setDoc(equipmentRef, {
                 ...equipment.toFirestore(),
                 id: equipmentId,
+                dateInstalled: dateInputToLocalDate(equipment.dateInstalled),
                 serviceLocationId: selectedLocation,
                 bodyOfWaterId: selectedBodyOfWater,
                 userId: user.uid,
                 customerName: user.firstName + " " + user.lastName,
                 customerId: user.uid,
-                createdAt: new Date(),
+                createdAt,
             });
             navigate('/client/my-pool');
         } catch (err) {
@@ -125,6 +135,7 @@ const NewEquipment = () => {
                         <input type="text" placeholder="Equipment Name (e.g., Main Filter)" value={equipment.name} onChange={(e) => handleEquipmentChange('name', e.target.value)} className={formInputClasses} />
                         <EquipmentCatalogPicker
                             value={equipment}
+                            preferCustom
                             onChange={handleEquipmentCatalogChange}
                             onModelSelected={(selectedModel) => {
                                 if (!equipment.name?.trim()) {
@@ -140,7 +151,7 @@ const NewEquipment = () => {
                             }}
                         />
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <input type="date" placeholder="Date Installed" value={equipment.dateInstalled} onChange={(e) => handleEquipmentChange('dateInstalled', e.target.value)} className={formInputClasses} />
+                            <input type="date" placeholder="Date Installed" value={equipment.dateInstalled || ''} onChange={(e) => handleEquipmentChange('dateInstalled', e.target.value)} className={formInputClasses} />
                         </div>
                         <textarea placeholder="Notes" value={equipment.notes} onChange={(e) => handleEquipmentChange('notes', e.target.value)} className={`${formInputClasses} h-20`}></textarea>
                     </div>

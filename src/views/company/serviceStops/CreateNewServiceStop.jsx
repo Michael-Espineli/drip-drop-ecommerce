@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where } from "firebase/firestore";
+import { doc, getDoc, collection, getDocs, query, setDoc, Timestamp, updateDoc, arrayUnion, where, serverTimestamp } from "firebase/firestore";
 import { db } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import Select from 'react-select';
@@ -22,6 +22,7 @@ import {
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
 import { jobTaskTypeOptionsFromDocs } from "../../../utils/jobTaskTypes";
 import { appAlert } from "../../../utils/appDialog";
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 
 const SERVICE_STOP_CATEGORY_OPTIONS = [
     {
@@ -72,6 +73,19 @@ const normalizeCategory = (value = "") =>
         .toLowerCase()
         .replace(/\s+/g, "")
         .replace(/[_/-]/g, "");
+
+const normalizeLeadStatusKey = (value = "") =>
+    String(value || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "");
+
+const shouldKeepLeadTerminal = (lead = {}) => {
+    const statusKey = normalizeLeadStatusKey(lead.status || lead.leadStatus);
+    const agreementStatusKey = normalizeLeadStatusKey(lead.serviceAgreementStatus);
+
+    return ["cancelled", "canceled"].includes(statusKey) || agreementStatusKey === "accepted";
+};
 
 const categoryOptionForParam = (value, hasJob = false) => {
     const normalized = normalizeCategory(value);
@@ -507,14 +521,9 @@ const CreateNewServiceStop = () => {
                     getDocs(collection(db, "companies", recentlySelectedCompany, "settings", "taskGroups", "taskGroups")),
                 ]);
 
-                setUserList(usersSnapshot.docs.map(docSnap => {
+                setUserList(sortCompanyUsersByName(usersSnapshot.docs.map(docSnap => {
                     const data = docSnap.data();
-                    const label =
-                        data.userName ||
-                        data.displayName ||
-                        `${data.firstName || ""} ${data.lastName || ""}`.trim() ||
-                        data.name ||
-                        "Unnamed User";
+                    const label = getCompanyUserDisplayName(data, "Unnamed User");
 
                     return {
                         ...data,
@@ -524,7 +533,7 @@ const CreateNewServiceStop = () => {
                         value: data.userId || data.id || docSnap.id,
                         label,
                     };
-                }));
+                })));
 
                 setPaySettings(paySettingsSnap.exists() ? paySettingsSnap.data() : null);
                 setCompanyServiceStopTypes(serviceStopTypesSnap.docs.map(docSnap => ({ id: docSnap.id, ...docSnap.data() })));
@@ -1234,21 +1243,31 @@ const CreateNewServiceStop = () => {
             const jobRef = doc(db, 'companies', recentlySelectedCompany, "workOrders", jobId);
             const jobUpdates = {
                 serviceStopIds: arrayUnion(serviceStopId),
-                operationStatus: "Scheduled",
             };
 
-            if (!job.billingStatus || job.billingStatus === "Draft") {
-                jobUpdates.billingStatus = "In Progress";
+            if (selectedCategory.id !== "jobEstimate") {
+                jobUpdates.operationStatus = "Scheduled";
             }
 
             await updateDoc(jobRef, jobUpdates);
         }
 
         if (leadContext?.id || queryLeadId) {
-            await updateDoc(doc(db, "homeownerServiceRequests", leadContext?.id || queryLeadId), {
+            const leadUpdates = {
                 serviceEstimateServiceStopId: serviceStopId,
                 initialEstimateServiceStopId: serviceStopId,
-            }).catch((error) => {
+                updatedAt: serverTimestamp(),
+            };
+
+            if (!shouldKeepLeadTerminal(leadContext)) {
+                leadUpdates.status = "In Progress";
+                leadUpdates.leadStatus = "In Progress";
+                leadUpdates.dateCompleted = null;
+                leadUpdates.lostReason = "";
+                leadUpdates.cancelReason = "";
+            }
+
+            await updateDoc(doc(db, "homeownerServiceRequests", leadContext?.id || queryLeadId), leadUpdates).catch((error) => {
                 console.warn("Unable to update lead with service stop id.", error);
             });
         }

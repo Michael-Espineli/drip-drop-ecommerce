@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ArrowTopRightOnSquareIcon, LinkIcon } from '@heroicons/react/24/outline';
+import { ArrowTopRightOnSquareIcon, ClipboardDocumentIcon, LinkIcon } from '@heroicons/react/24/outline';
 import {
+  buildSharedRecordUrl,
   getConversationLinkLabel,
   getConversationLinkRoute,
   normalizeConversationLink,
@@ -11,6 +12,8 @@ const ConversationLinkCard = ({ link, audience = 'company', inverted = false }) 
   const navigate = useNavigate();
   const normalizedLink = normalizeConversationLink(link);
   const route = getConversationLinkRoute(normalizedLink, audience);
+  const shareUrl = normalizedLink.shareUrl || buildSharedRecordUrl(normalizedLink, { audience });
+  const canCopy = Boolean(shareUrl && typeof navigator !== 'undefined' && navigator.clipboard);
   const label = getConversationLinkLabel(normalizedLink.type);
 
   const cardClasses = inverted
@@ -20,6 +23,16 @@ const ConversationLinkCard = ({ link, audience = 'company', inverted = false }) 
 
   const handleOpen = () => {
     if (route) navigate(route);
+  };
+
+  const handleCopy = async () => {
+    if (!canCopy) return;
+
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+    } catch (error) {
+      console.error('Unable to copy shared record link:', error);
+    }
   };
 
   return (
@@ -38,16 +51,30 @@ const ConversationLinkCard = ({ link, audience = 'company', inverted = false }) 
             <p className="mt-2 truncate font-mono text-[11px] text-slate-400">{normalizedLink.recordId}</p>
           ) : null}
         </div>
-        {route ? (
-          <button
-            type="button"
-            onClick={handleOpen}
-            className="shrink-0 rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-            aria-label={`Open ${label}`}
-          >
-            <ArrowTopRightOnSquareIcon className="h-5 w-5" />
-          </button>
-        ) : null}
+        <div className="flex shrink-0 items-center gap-1">
+          {canCopy ? (
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label={`Copy ${label} link`}
+              title={`Copy ${label} link`}
+            >
+              <ClipboardDocumentIcon className="h-5 w-5" />
+            </button>
+          ) : null}
+          {route ? (
+            <button
+              type="button"
+              onClick={handleOpen}
+              className="rounded-full p-2 text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+              aria-label={`Open ${label}`}
+              title={`Open ${label}`}
+            >
+              <ArrowTopRightOnSquareIcon className="h-5 w-5" />
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

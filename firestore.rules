@@ -6,9 +6,21 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isSuperMaster() {
+      return signedIn()
+        && request.auth.uid == "yRV5Ie18rrUSxT6UkWctPc99lMJ2";
+    }
+
     function isDripDropAdmin() {
       return signedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountType == "Admin";
+        && (
+          isSuperMaster()
+          || request.auth.token.admin == true
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.accountType in ["Admin", "admin"]
+          )
+        );
     }
 
     function appLaunchEnabled() {
@@ -293,6 +305,38 @@ service cloud.firestore {
         && canReadChatData(getAfter(chatPath(chatId)).data);
     }
 
+    function chatIncludesUserById(chatId, userId) {
+      return chatId is string
+        && userId is string
+        && exists(chatPath(chatId))
+        && get(chatPath(chatId)).data.participantIds is list
+        && userId in get(chatPath(chatId)).data.participantIds;
+    }
+
+    function chatIncludesUserByIdAfter(chatId, userId) {
+      return chatId is string
+        && userId is string
+        && existsAfter(chatPath(chatId))
+        && getAfter(chatPath(chatId)).data.participantIds is list
+        && userId in getAfter(chatPath(chatId)).data.participantIds;
+    }
+
+    function chatIncludesCompanyById(chatId, companyId) {
+      return chatId is string
+        && companyId is string
+        && exists(chatPath(chatId))
+        && get(chatPath(chatId)).data.participantCompanyIds is list
+        && companyId in get(chatPath(chatId)).data.participantCompanyIds;
+    }
+
+    function chatIncludesCompanyByIdAfter(chatId, companyId) {
+      return chatId is string
+        && companyId is string
+        && existsAfter(chatPath(chatId))
+        && getAfter(chatPath(chatId)).data.participantCompanyIds is list
+        && companyId in getAfter(chatPath(chatId)).data.participantCompanyIds;
+    }
+
     match /users/{userId} {
       allow create: if isSelf(userId)
         && request.resource.data.id == request.auth.uid;
@@ -311,6 +355,24 @@ service cloud.firestore {
       match /recentActivity/{activityId} {
         allow read, write: if isSelf(userId);
       }
+
+      match /alerts/{alertId} {
+        allow read, update, delete: if isSelf(userId);
+        allow create: if isSelf(userId)
+          || (
+            signedIn()
+            && request.resource.data.recipientUserId == userId
+            && request.resource.data.chatId is string
+            && (
+              canReadChatById(request.resource.data.chatId)
+              || canReadChatByIdAfter(request.resource.data.chatId)
+            )
+            && (
+              chatIncludesUserById(request.resource.data.chatId, userId)
+              || chatIncludesUserByIdAfter(request.resource.data.chatId, userId)
+            )
+          );
+      }
     }
 
     match /companies/{companyId} {
@@ -320,6 +382,25 @@ service cloud.firestore {
         && request.resource.data.ownerId == request.auth.uid;
       allow update: if isCompanyAdmin(companyId);
       allow delete: if false;
+
+      match /alerts/{alertId} {
+        allow create: if hasCompanyAccess(companyId)
+          || (
+            signedIn()
+            && request.resource.data.recipientCompanyId == companyId
+            && request.resource.data.chatId is string
+            && request.resource.data.source == "chat"
+            && (
+              canReadChatById(request.resource.data.chatId)
+              || canReadChatByIdAfter(request.resource.data.chatId)
+            )
+            && (
+              chatIncludesCompanyById(request.resource.data.chatId, companyId)
+              || chatIncludesCompanyByIdAfter(request.resource.data.chatId, companyId)
+            )
+          );
+        allow read, update, delete: if hasCompanyAccess(companyId);
+      }
 
       match /{document=**} {
         allow read, write: if hasCompanyAccess(companyId);
@@ -369,8 +450,9 @@ service cloud.firestore {
     }
 
     match /chats/{chatId} {
-      allow create: if canReadChatData(request.resource.data);
-      allow read, update, delete: if canReadChatData(resource.data);
+      allow list: if isDripDropAdmin();
+      allow create: if isDripDropAdmin() || canReadChatData(request.resource.data);
+      allow read, update, delete: if isDripDropAdmin() || canReadChatData(resource.data);
     }
 
     match /messages/{messageId} {
@@ -517,6 +599,26 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    match /universal/equipment/equipmentTypes/{typeId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isDripDropAdmin();
+    }
+
+    match /universal/equipment/equipmentMakes/{makeId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isDripDropAdmin();
+    }
+
+    match /universal/equipment/equipment/{equipmentId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isDripDropAdmin();
+
+      match /parts/{partId} {
+        allow get, list: if signedIn();
+        allow create, update, delete: if isDripDropAdmin();
+      }
+    }
+
     match /universal/{document=**} {
       allow read: if signedIn();
       allow create, update, delete: if isDripDropAdmin();
@@ -527,7 +629,18 @@ service cloud.firestore {
         && request.resource.data.companyId is string
         && hasCompanyAccess(request.resource.data.companyId)
         && request.resource.data.status == "New";
-      allow read, update, delete: if isDripDropAdmin();
+      allow get, list: if isDripDropAdmin()
+        || (
+          resource.data.companyId is string
+          && hasCompanyAccess(resource.data.companyId)
+        );
+      allow update: if isDripDropAdmin()
+        || (
+          resource.data.companyId is string
+          && hasCompanyAccess(resource.data.companyId)
+          && request.resource.data.companyId == resource.data.companyId
+        );
+      allow delete: if isDripDropAdmin();
     }
 
     match /featureFlags/{flagId} {
@@ -552,7 +665,7 @@ service cloud.firestore {
     }
 
     match /{document=**} {
-      allow read, write: if false;
+      allow read, write: if isSuperMaster();
     }
   }
 }

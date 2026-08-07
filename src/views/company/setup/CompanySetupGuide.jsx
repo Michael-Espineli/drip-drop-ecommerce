@@ -42,6 +42,7 @@ const emptyCounts = {
   activeBillingSubscriptions: 0,
   invoices: 0,
   payments: 0,
+  customerPipelineRows: 0,
   customerMigrationRows: 0,
 };
 
@@ -298,6 +299,7 @@ const CompanySetupGuide = () => {
           billingSubscriptionCounts,
           invoices,
           payments,
+          customerPipelineRows,
           customerMigrationRows,
         ] = await Promise.all([
           safeGetDoc(doc(db, "companies", companyId), "company"),
@@ -322,6 +324,7 @@ const CompanySetupGuide = () => {
           getBillingSubscriptionCounts(companyId),
           countSnapshot(query(collection(db, salesCollectionNames.invoices), where("companyId", "==", companyId)), "sales invoices"),
           countSnapshot(query(collection(db, salesCollectionNames.payments), where("companyId", "==", companyId)), "sales payments"),
+          countSnapshot(collection(db, "companies", companyId, "customerPipeline"), "customer pipeline"),
           countSnapshot(collection(db, "companies", companyId, "customerMigrationTracker"), "customer migration tracker"),
         ]);
 
@@ -351,6 +354,7 @@ const CompanySetupGuide = () => {
           activeBillingSubscriptions: billingSubscriptionCounts.activeBillingSubscriptions,
           invoices,
           payments,
+          customerPipelineRows,
           customerMigrationRows,
         });
       } catch (err) {
@@ -439,12 +443,12 @@ const CompanySetupGuide = () => {
             sectionId: "customer_setup",
             sectionTitle: "Customer Setup",
             sortOrder: 115,
-            title: "Customer migration tracker",
-            description: "Check each customer through site info, routing, billing, and custom transition signoffs so nobody is missed.",
-            completed: counts.customerMigrationRows > 0,
-            metric: `${counts.customerMigrationRows} tracked customers`,
-            to: "/company/migration",
-            actionLabel: "Tracker",
+            title: "Customer pipeline",
+            description: "Check each lead and customer through setup, service agreement, routing, equipment, photos, and custom follow-up.",
+            completed: (counts.customerPipelineRows || counts.customerMigrationRows) > 0,
+            metric: `${counts.customerPipelineRows || counts.customerMigrationRows} pipeline rows`,
+            to: "/company/pipeline",
+            actionLabel: "Pipeline",
           },
           {
             id: "service_locations",

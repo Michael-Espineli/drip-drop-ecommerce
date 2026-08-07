@@ -1412,6 +1412,17 @@ function normalizeDay(day) {
   return null;
 }
 
+function comparableRssRouteField(rss = {}, field) {
+  if (field === "day") return normalizeDay(rss.day) || "";
+  return String(rss[field] ?? "").trim();
+}
+
+function didRouteRelevantRssChange(before = {}, after = {}) {
+  return ["customerId", "customerName", "serviceLocationId", "techId", "tech", "day"].some(
+    (field) => comparableRssRouteField(before, field) !== comparableRssRouteField(after, field)
+  );
+}
+
 // Build a patch for one route based on current RSS docs.
 // This keeps route.order entries consistent and removes missing references.
 async function reconcileRouteForRssChange({ db, companyId, routeRef, routeData, changedRssId }) {
@@ -1940,6 +1951,13 @@ exports.onRssUpdated = onDocumentUpdated(
     const companyId = event.params.companyId;
     const rssId = event.params.rssId;
     console.log("Called onRssUpdated ", rssId)
+
+    const before = event.data?.before?.data() || {};
+    const after = event.data?.after?.data() || {};
+    if (!didRouteRelevantRssChange(before, after)) {
+      console.log("Skipping recurring route reconciliation for non-route RSS update", rssId);
+      return null;
+    }
 
     const routeDocs = await findRoutesContainingRss({ db, companyId, rssId });
     for (const routeDoc of routeDocs) {

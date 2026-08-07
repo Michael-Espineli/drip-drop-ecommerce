@@ -18,6 +18,13 @@ import { ClipLoader } from 'react-spinners';
 import { format } from 'date-fns';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { SERVICE_STOP_TYPE_USE_CASES } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
+import {
+    DEFAULT_LEAD_SOURCES,
+    LEAD_STAGE_OPTIONS,
+    leadSourceId,
+    normalizeLeadSourceItem,
+    pipelineLeadSourcesRef,
+} from '../../../utils/customerPipeline';
 
 const SERVICE_STOP_OPERATION_STATUS = {
     finished: 'Finished',
@@ -28,6 +35,12 @@ const SERVICE_STOP_OPERATION_STATUS = {
 const SERVICE_ESTIMATE_VISIT_LABEL = 'Service Estimate';
 const panelClass = 'rounded-lg border border-gray-200 bg-white p-5 shadow-sm';
 const actionButtonClass = 'inline-flex w-full items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50';
+const leadStageButtonClasses = {
+    Pending: 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100',
+    'In Progress': 'border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100',
+    Completed: 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100',
+    Cancelled: 'border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100',
+};
 
 const isLeadServiceEstimateVisit = (visit = {}) => {
     const useCase = String(visit.serviceStopTypeUseCaseRawValue || '').trim();
@@ -170,7 +183,7 @@ const PreEstimateVisitCard = ({ existingVisit, schedulerPath, schedulerState }) 
                         state={schedulerState}
                         className={actionButtonClass}
                     >
-                        Create Service Estimate
+                        Schedule Estimate
                     </Link>
                 </div>
             )}
@@ -221,6 +234,38 @@ export default function LeadDetail() {
     const [privateNotesDraft, setPrivateNotesDraft] = useState('');
     const [privateNotesSavedValue, setPrivateNotesSavedValue] = useState('');
     const [privateNotesDocExists, setPrivateNotesDocExists] = useState(false);
+    const [savingStatus, setSavingStatus] = useState(false);
+    const [showCancelReason, setShowCancelReason] = useState(false);
+    const [cancelReasonDraft, setCancelReasonDraft] = useState('');
+    const [leadSources, setLeadSources] = useState(DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem));
+    const [leadSourceDraft, setLeadSourceDraft] = useState('Manual');
+    const [newLeadSourceDraft, setNewLeadSourceDraft] = useState('');
+    const [savingLeadSource, setSavingLeadSource] = useState(false);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) return;
+
+        const fetchLeadSources = async () => {
+            try {
+                const sourceSnap = await getDocs(pipelineLeadSourcesRef(recentlySelectedCompany));
+                if (sourceSnap.empty) {
+                    setLeadSources(DEFAULT_LEAD_SOURCES.map(normalizeLeadSourceItem));
+                    return;
+                }
+
+                setLeadSources(
+                    sourceSnap.docs
+                        .map((sourceDoc, index) => normalizeLeadSourceItem({ id: sourceDoc.id, ...sourceDoc.data() }, index * 10))
+                        .filter((source) => source.active !== false)
+                        .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.name.localeCompare(right.name))
+                );
+            } catch (error) {
+                console.error('Error loading lead source list:', error);
+            }
+        };
+
+        fetchLeadSources();
+    }, [recentlySelectedCompany]);
 
     useEffect(() => {
         if (!leadId || !recentlySelectedCompany) {
@@ -246,6 +291,8 @@ export default function LeadDetail() {
                     const enhancedLead = { id: docSnap.id, ...leadData, ownerDetails };
                     setLead(enhancedLead);
                     setDescriptionDraft(leadData.serviceDescription || '');
+                    setLeadSourceDraft(leadData.leadSource || leadData.marketingSource || leadData.sourceLabel || leadData.source || 'Manual');
+                    setCancelReasonDraft(leadData.lostReason || leadData.cancelReason || leadData.statusChangeReason || '');
 
                     const privateNotesSnap = await getDoc(
                         doc(
@@ -321,38 +368,112 @@ export default function LeadDetail() {
         fetchLeadDetails();
     }, [leadId, recentlySelectedCompany, db, navigate]);
 
-    const handleStatusChange = async (newStatus) => {
+    const handleStatusChange = async (newStatus, options = {}) => {
         if (!requirePermission("614", "update leads")) return;
+        if (newStatus === 'Cancelled' && !options.reason && !cancelReasonDraft.trim()) {
+            setShowCancelReason(true);
+            return;
+        }
 
         const leadRef = doc(db, 'homeownerServiceRequests', leadId);
         const originalStatus = lead.status;
+        const originalReason = lead.lostReason || lead.cancelReason || lead.statusChangeReason || '';
+        const reason = options.reason || cancelReasonDraft.trim();
 
+        setSavingStatus(true);
         setLead(prev => ({ ...prev, status: newStatus }));
 
         try {
+            const updates = {
+                status: newStatus,
+                leadStatus: newStatus,
+                updatedAt: serverTimestamp(),
+            };
+
             switch (newStatus) {
                 case 'Pending':
-                    await updateDoc(leadRef, { dateCompleted: null });
+                    updates.dateCompleted = null;
+                    updates.lostReason = "";
+                    updates.cancelReason = "";
                     break;
                 case 'In Progress':
-                    await updateDoc(leadRef, { dateCompleted: null });
+                    updates.dateCompleted = null;
+                    updates.lostReason = "";
+                    updates.cancelReason = "";
                     break;
                 case 'Completed':
-
-                    await updateDoc(leadRef, { dateCompleted: new Date() });
+                    updates.dateCompleted = new Date();
+                    updates.lostReason = "";
+                    updates.cancelReason = "";
                     break;
                 case 'Cancelled':
-                    await updateDoc(leadRef, { dateCompleted: new Date() });
+                    updates.dateCompleted = new Date();
+                    updates.lostReason = reason;
+                    updates.cancelReason = reason;
+                    updates.statusChangeReason = reason;
+                    updates.lostAt = serverTimestamp();
                     break;
                 default:
                     break;
             }
-            await updateDoc(leadRef, { status: newStatus });
+            await updateDoc(leadRef, updates);
+            setLead(prev => ({ ...prev, ...updates, status: newStatus }));
+            setCancelReasonDraft(newStatus === 'Cancelled' ? reason : '');
+            setShowCancelReason(false);
             toast.success(`Status updated to ${newStatus}`);
         } catch (error) {
-            setLead(prev => ({ ...prev, status: originalStatus }));
+            setLead(prev => ({ ...prev, status: originalStatus, lostReason: originalReason }));
             toast.error('Failed to update status.');
+        } finally {
+            setSavingStatus(false);
         }
+    };
+
+    const saveLeadSource = async (nextSource = leadSourceDraft) => {
+        if (!requirePermission("614", "update leads")) return;
+        if (!lead || !recentlySelectedCompany) return;
+
+        const cleanSource = String(nextSource || '').trim();
+        if (!cleanSource || cleanSource === (lead.leadSource || lead.marketingSource || lead.sourceLabel || lead.source || '')) return;
+
+        setSavingLeadSource(true);
+        try {
+            const sourceRef = doc(pipelineLeadSourcesRef(recentlySelectedCompany), leadSourceId(cleanSource));
+            await setDoc(sourceRef, {
+                id: leadSourceId(cleanSource),
+                name: cleanSource,
+                sortOrder: leadSources.length ? Math.max(...leadSources.map((source) => Number(source.sortOrder || 0))) + 10 : 10,
+                active: true,
+                updatedAt: serverTimestamp(),
+                createdAt: serverTimestamp(),
+            }, { merge: true });
+            await updateDoc(doc(db, 'homeownerServiceRequests', leadId), {
+                leadSource: cleanSource,
+                marketingSource: cleanSource,
+                updatedAt: serverTimestamp(),
+            });
+            setLead((current) => ({ ...current, leadSource: cleanSource, marketingSource: cleanSource }));
+            setLeadSourceDraft(cleanSource);
+            setLeadSources((current) => {
+                const id = leadSourceId(cleanSource);
+                if (current.some((source) => source.id === id)) return current;
+                return [...current, normalizeLeadSourceItem({ id, name: cleanSource, sortOrder: current.length * 10 + 10 })]
+                    .sort((left, right) => Number(left.sortOrder || 0) - Number(right.sortOrder || 0) || left.name.localeCompare(right.name));
+            });
+            toast.success('Lead source saved.');
+        } catch (error) {
+            console.error('Error saving lead source:', error);
+            toast.error('Could not save lead source.');
+        } finally {
+            setSavingLeadSource(false);
+        }
+    };
+
+    const handleAddLeadSource = async () => {
+        const nextSource = newLeadSourceDraft.trim();
+        if (!nextSource) return;
+        setNewLeadSourceDraft('');
+        await saveLeadSource(nextSource);
     };
 
     const savePrivateNotes = async () => {
@@ -457,6 +578,7 @@ export default function LeadDetail() {
         homeownerEmail,
         homeownerPhone
     } = lead;
+    const activeLeadSource = lead.leadSource || lead.marketingSource || lead.sourceLabel || source || 'N/A';
     const publicIntake = lead.publicLeadIntake || lead.leadIntake || {};
     const publicBodiesOfWater = Array.isArray(publicIntake.bodiesOfWater) ? publicIntake.bodiesOfWater : [];
     const publicEquipment = [
@@ -569,7 +691,7 @@ export default function LeadDetail() {
                             onClick={handleScheduleEstimateVisitFromLead}
                             className={actionButtonClass}
                         >
-                            Schedule Service Estimate
+                            Schedule Estimate
                         </button>
                     )}
                     {can("612") && (
@@ -577,7 +699,7 @@ export default function LeadDetail() {
                             onClick={handleCreateServiceAgreementFromLead}
                             className={actionButtonClass}
                         >
-                            Send Estimate
+                            Send Service Agreement
                         </button>
                     )}
                 </>
@@ -740,7 +862,7 @@ export default function LeadDetail() {
                                 </div>
                                 <div>
                                     <dt className="text-sm font-medium text-gray-500">Lead Source</dt>
-                                    <dd className="mt-1 text-lg text-gray-900">{source || 'N/A'}</dd>
+                                    <dd className="mt-1 text-lg text-gray-900">{activeLeadSource}</dd>
                                 </div>
                                 {creatorName && (
                                     <div>
@@ -931,17 +1053,85 @@ export default function LeadDetail() {
                     <div className="space-y-6">
                         {can("614") && (
                             <div className={panelClass}>
-                                <h3 className="text-lg font-semibold text-gray-800 mb-4">Manage Status</h3>
+                                <h3 className="text-lg font-semibold text-gray-800">Lead Stage</h3>
+                                <div className="mt-4 grid grid-cols-2 gap-2">
+                                    {LEAD_STAGE_OPTIONS.map((option) => {
+                                        const selected = status === option.value;
+                                        return (
+                                            <button
+                                                key={option.value}
+                                                type="button"
+                                                onClick={() => handleStatusChange(option.value)}
+                                                disabled={savingStatus}
+                                                className={[
+                                                    'min-h-[68px] rounded-md border px-3 py-2 text-left transition disabled:cursor-not-allowed disabled:opacity-60',
+                                                    selected
+                                                        ? leadStageButtonClasses[option.value]
+                                                        : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50',
+                                                ].join(' ')}
+                                            >
+                                                <span className="block text-sm font-bold">{option.label}</span>
+                                                <span className="mt-1 block text-xs opacity-80">{option.helper}</span>
+                                            </button>
+                                        );
+                                    })}
+                                </div>
+                                {showCancelReason || status === 'Cancelled' ? (
+                                    <div className="mt-4 rounded-md border border-rose-200 bg-rose-50 p-3">
+                                        <label className="block text-sm font-semibold text-rose-800">Lost / cancelled reason</label>
+                                        <textarea
+                                            value={cancelReasonDraft}
+                                            onChange={(event) => setCancelReasonDraft(event.target.value)}
+                                            rows={3}
+                                            className="mt-2 w-full rounded-md border border-rose-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-rose-400 focus:ring-2 focus:ring-rose-100"
+                                            placeholder="Price, timing, no response, wrong fit..."
+                                        />
+                                        <button
+                                            type="button"
+                                            onClick={() => handleStatusChange('Cancelled', { reason: cancelReasonDraft.trim() || 'No reason provided' })}
+                                            disabled={savingStatus}
+                                            className="mt-2 w-full rounded-md bg-rose-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:opacity-60"
+                                        >
+                                            {savingStatus ? 'Saving...' : 'Save Cancelled Stage'}
+                                        </button>
+                                    </div>
+                                ) : null}
+                            </div>
+                        )}
+
+                        {can("614") && (
+                            <div className={panelClass}>
+                                <h3 className="text-lg font-semibold text-gray-800">Lead Source</h3>
                                 <select
-                                    value={status}
-                                    onChange={(e) => handleStatusChange(e.target.value)}
-                                    className="w-full p-2 border rounded-md focus:ring-blue-500 focus:border-blue-500"
+                                    value={leadSourceDraft}
+                                    onChange={(event) => {
+                                        setLeadSourceDraft(event.target.value);
+                                        saveLeadSource(event.target.value);
+                                    }}
+                                    disabled={savingLeadSource}
+                                    className="mt-4 w-full rounded-md border border-slate-300 bg-white p-2 text-sm text-slate-900 focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100"
                                 >
-                                    <option value="Pending">Pending</option>
-                                    <option value="In Progress">In Progress</option>
-                                    <option value="Completed">Completed</option>
-                                    <option value="Cancelled">Cancelled</option>
+                                    {leadSources.map((sourceItem) => (
+                                        <option key={sourceItem.id || sourceItem.name} value={sourceItem.name}>{sourceItem.name}</option>
+                                    ))}
                                 </select>
+                                <div className="mt-3 flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={newLeadSourceDraft}
+                                        onChange={(event) => setNewLeadSourceDraft(event.target.value)}
+                                        className="min-w-0 flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        placeholder="Add new source"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={handleAddLeadSource}
+                                        disabled={savingLeadSource}
+                                        className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                        Add
+                                    </button>
+                                </div>
                             </div>
                         )}
 

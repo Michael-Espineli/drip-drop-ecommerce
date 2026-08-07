@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useContext, useMemo } from 'react';
+import React, { useState, useEffect, useContext, useMemo, useCallback } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { collection, query, getDocs, where, doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -8,6 +8,7 @@ import { Context } from "../../../context/AuthContext";
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 import { salesCollectionNames } from '../../../utils/models/Sales';
 import { recurringFrequencyToAgreementService } from '../../../utils/sales/agreementCadence';
+import { reportAppError } from '../../../utils/errorReporting';
 import Select from 'react-select';
 import DatePicker from "react-datepicker";
 import { v4 as uuidv4 } from 'uuid';
@@ -23,6 +24,7 @@ import {
 } from '../../../utils/serviceStopTypes/serviceStopTypeResolver';
 import { addRecurringServiceStopToPlannedRoute } from '../../../utils/recurringRouteSync';
 import MapComponent from '../../components/MapComponent';
+import { getCompanyUserDisplayName, sortCompanyUsersByName } from '../../../utils/companyUsers';
 
 const functions = getFunctions();
 
@@ -56,7 +58,13 @@ const getMapCoordinate = (value) => {
 };
 
 const CreateNewRecurringServiceStop = () => {
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        recentlySelectedCompanyName,
+        user,
+        dataBaseUser,
+        accountType,
+    } = useContext(Context);
     const { customerId } = useParams(); // Capture customerId from URL
     const navigate = useNavigate();
     const [searchParams] = useSearchParams();
@@ -123,6 +131,44 @@ const CreateNewRecurringServiceStop = () => {
     const hasSelectedLocationMap = selectedLocationLatitude !== null
         && selectedLocationLongitude !== null
         && (selectedLocationLatitude !== 0 || selectedLocationLongitude !== 0);
+    const errorContext = useMemo(() => ({
+        userId: user?.uid || dataBaseUser?.id || dataBaseUser?.uid || '',
+        userEmail: user?.email || dataBaseUser?.email || '',
+        accountType: accountType || dataBaseUser?.accountType || '',
+        companyId: recentlySelectedCompany || '',
+        companyName: recentlySelectedCompanyName || '',
+    }), [accountType, dataBaseUser, recentlySelectedCompany, recentlySelectedCompanyName, user]);
+
+    const reportRecurringPageError = useCallback((error, options = {}) => (
+        reportAppError(error, {
+            context: errorContext,
+            source: 'recurring-service-stop-page',
+            where: options.where || 'CreateNewRecurringServiceStop',
+            title: options.title,
+            description: options.description,
+            severity: options.severity || 'error',
+            data: {
+                customerRouteParam: customerId || '',
+                selectedCustomerId: customer?.id || customer?.value || '',
+                selectedServiceLocationId: serviceLocation?.id || serviceLocation?.value || requestedServiceLocationId || '',
+                selectedTechnicianId: tech?.userId || tech?.value || tech?.id || '',
+                agreementId,
+                billingSubscriptionId,
+                returnTo,
+                ...options.data,
+            },
+        })
+    ), [
+        agreementId,
+        billingSubscriptionId,
+        customer,
+        customerId,
+        errorContext,
+        requestedServiceLocationId,
+        returnTo,
+        serviceLocation,
+        tech,
+    ]);
 
     // =============================
     // iOS helper -> React helper
@@ -130,7 +176,6 @@ const CreateNewRecurringServiceStop = () => {
     const ms = (d) => (d ? Math.floor(new Date(d).getTime()) : null);
 
     const createFirstRecurringServiceStop = async (companyId, recurringServiceStop) => {
-        const functions = getFunctions();
         const callable = httpsCallable(functions, "createFirstRecurringServiceStop2");
 
         const payload = {
@@ -190,8 +235,16 @@ const CreateNewRecurringServiceStop = () => {
             throw new Error("unable_to_read_function_response");
         }
 
+        if (result.data.status && Number(result.data.status) >= 400) {
+            throw new Error(result.data.error || "createFirstRecurringServiceStop2 failed");
+        }
+
+        if (result.data.success === false) {
+            throw new Error(result.data.error || "createFirstRecurringServiceStop2 returned success false");
+        }
+
         // Swift returns recurringServiceStop.id
-        return recurringServiceStop.id;
+        return result.data.rssId || recurringServiceStop.id;
     };
 
     useEffect(() => {
@@ -209,15 +262,16 @@ const CreateNewRecurringServiceStop = () => {
                 // Fetch Technicians
                 const techQuery = query(collection(db, 'companies', recentlySelectedCompany, 'companyUsers'));
                 const techSnapshot = await getDocs(techQuery);
-                const techs = techSnapshot.docs.map(doc => {
+                const techs = sortCompanyUsersByName(techSnapshot.docs.map(doc => {
                     const data = doc.data();
+                    const label = getCompanyUserDisplayName(data, "Technician");
                     return {
                         ...data,
                         id: data.userId || data.id || doc.id,
                         value: data.userId || data.id || doc.id,
-                        label: data.userName || data.name || "Technician",
+                        label,
                     };
-                });
+                }));
                 setTechList(techs);
 
                 const serviceStopTypesSnapshot = await getDocs(collection(db, 'companies', recentlySelectedCompany, 'companyServiceStopTypes'));
@@ -283,6 +337,21 @@ const CreateNewRecurringServiceStop = () => {
                 }
             } catch (error) {
                 console.error("Error fetching initial data: ", error);
+                await reportAppError(error, {
+                    context: errorContext,
+                    source: "recurring-service-stop-page",
+                    where: "CreateNewRecurringServiceStop.fetchData",
+                    title: "Recurring service stop create page failed to load",
+                    description: "The Add New Recurring Service Stop page could not load its customers, technicians, service types, or linked sales context.",
+                    data: {
+                        customerRouteParam: customerId || "",
+                        companyId: recentlySelectedCompany || "",
+                        routeCustomerId: customerId || "",
+                        agreementId,
+                        billingSubscriptionId,
+                        requestedServiceLocationId,
+                    },
+                });
                 toast.error("Failed to load necessary data.");
             } finally {
                 setIsLoading(false);
@@ -290,7 +359,7 @@ const CreateNewRecurringServiceStop = () => {
         };
 
         fetchData();
-    }, [recentlySelectedCompany, customerId, agreementId, billingSubscriptionId, requestedServiceLocationId]);
+    }, [recentlySelectedCompany, customerId, agreementId, billingSubscriptionId, requestedServiceLocationId, errorContext]);
 
     useEffect(() => {
         if (selectedServiceStopType || !serviceStopTypeOptions.length) return;
@@ -308,15 +377,29 @@ const CreateNewRecurringServiceStop = () => {
     const handleCustomerChange = async (selectedCustomer) => {
         setCustomer(selectedCustomer);
         setServiceLocation(null); // Reset location on customer change
+        setServiceLocationList([]);
 
         if (selectedCustomer) {
-            const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', selectedCustomer.id));
-            const locSnapshot = await getDocs(locQuery);
-            const locations = locSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
-            const locationOptions = locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress }));
-            setServiceLocationList(locationOptions);
-            if (locationOptions.length > 0) {
-                setServiceLocation(locationOptions[0])
+            try {
+                const locQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'), where('customerId', '==', selectedCustomer.id));
+                const locSnapshot = await getDocs(locQuery);
+                const locations = locSnapshot.docs.map(doc => ServiceLocation.fromFirestore(doc));
+                const locationOptions = locations.map(loc => ({ ...loc, value: loc.id, label: loc.address.streetAddress }));
+                setServiceLocationList(locationOptions);
+                if (locationOptions.length > 0) {
+                    setServiceLocation(locationOptions[0])
+                }
+            } catch (error) {
+                console.error("Error loading customer service locations:", error);
+                await reportRecurringPageError(error, {
+                    where: "CreateNewRecurringServiceStop.handleCustomerChange",
+                    title: "Recurring service stop customer location load failed",
+                    description: "The recurring service stop create page failed while loading service locations for the selected customer.",
+                    data: {
+                        selectedCustomerId: selectedCustomer.id || selectedCustomer.value || "",
+                    },
+                });
+                toast.error("Failed to load service locations.");
             }
         }
     };
@@ -327,74 +410,76 @@ const CreateNewRecurringServiceStop = () => {
             toast.error("Please complete all required fields.");
             return;
         }
-        let recurringServiceStopCount = 0;
-
-        const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
-        const snap = await getDoc(ref);
-
-        if (snap.exists()) {
-            const data = snap.data();
-            recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
-        }
-        console.log("");
-        console.log(
-            `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
-        );
-
-        const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
-        await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
-
-        console.log("");
-        console.log(
-            `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
-        );
-        const stopId = `com_rss_${uuidv4()}`;
-        const internalId = "RSS" + String(recurringServiceStopCount)
-        const resolvedTypeFields = resolveServiceStopTypeFields({
-            companyServiceStopTypes,
-            selectedType: selectedServiceStopType,
-            fallbackName: "Recurring Service Stop",
-            useCase: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
-            context: "CreateNewRecurringServiceStop.createNewStop",
-        });
-        const newRSSData = {
-            id: stopId,
-            internalId: internalId,
-            type: resolvedTypeFields.type,
-            typeId: resolvedTypeFields.typeId,
-            typeImage: resolvedTypeFields.typeImage,
-            category: resolvedTypeFields.category,
-            serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
-            customerName: `${customer.firstName} ${customer.lastName}`,
-            customerId: customer.id,
-            address: serviceLocation.address,
-            tech: tech.userName || tech.label,
-            techId: tech.userId || tech.value || tech.id,
-            dateCreated: new Date(),
-            startDate,
-            endDate: noEndDate ? null : endDate,
-            noEndDate,
-
-            frequency: frequency.value ?? "Weekly",
-            day: dayOfWeek.value,
-            daysOfWeek: dayOfWeek.value,
-            description,
-            lastCreated: new Date(),
-            serviceLocationId: serviceLocation.id,
-            estimatedTime: 15,
-            otherCompany: false,
-            laborContractId: "",
-            contractedCompanyId: "",
-            mainCompanyId: "",
-            salesAgreementId: agreementId,
-            salesBillingSubscriptionId: billingSubscriptionId,
-        };
-
-
         let toastId;
+        let stopId = "";
+        let internalId = "";
+        let newRSSData = null;
 
         try {
             toastId = toast.loading('Creating new recurring service stop...');
+            let recurringServiceStopCount = 0;
+
+            const ref = doc(db, "companies", recentlySelectedCompany, "settings", "recurringServiceStops");
+            const snap = await getDoc(ref);
+
+            if (snap.exists()) {
+                const data = snap.data();
+                recurringServiceStopCount = typeof data.increment === "number" ? data.increment : 0;
+            }
+            console.log("");
+            console.log(
+                `[ProductionDataService][getRecurringServiceStopCount] recurringServiceStopCount: ${recurringServiceStopCount}`
+            );
+
+            const updatedRecurringServiceStopCount = recurringServiceStopCount + 1;
+            await updateDoc(ref, { increment: updatedRecurringServiceStopCount });
+
+            console.log("");
+            console.log(
+                `[ProductionDataService][getRecurringServiceStopCount] RSS Count: ${String(updatedRecurringServiceStopCount)}`
+            );
+            stopId = `com_rss_${uuidv4()}`;
+            internalId = "RSS" + String(recurringServiceStopCount)
+            const resolvedTypeFields = resolveServiceStopTypeFields({
+                companyServiceStopTypes,
+                selectedType: selectedServiceStopType,
+                fallbackName: "Recurring Service Stop",
+                useCase: SERVICE_STOP_TYPE_USE_CASES.recurringRoute,
+                context: "CreateNewRecurringServiceStop.createNewStop",
+            });
+            newRSSData = {
+                id: stopId,
+                internalId: internalId,
+                type: resolvedTypeFields.type,
+                typeId: resolvedTypeFields.typeId,
+                typeImage: resolvedTypeFields.typeImage,
+                category: resolvedTypeFields.category,
+                serviceStopTypeUseCaseRawValue: resolvedTypeFields.serviceStopTypeUseCaseRawValue,
+                customerName: `${customer.firstName} ${customer.lastName}`,
+                customerId: customer.id,
+                address: serviceLocation.address,
+                tech: tech.userName || tech.label,
+                techId: tech.userId || tech.value || tech.id,
+                dateCreated: new Date(),
+                startDate,
+                endDate: noEndDate ? null : endDate,
+                noEndDate,
+
+                frequency: frequency.value ?? "Weekly",
+                day: dayOfWeek.value,
+                daysOfWeek: dayOfWeek.value,
+                description,
+                lastCreated: new Date(),
+                serviceLocationId: serviceLocation.id,
+                estimatedTime: 15,
+                otherCompany: false,
+                laborContractId: "",
+                contractedCompanyId: "",
+                mainCompanyId: "",
+                salesAgreementId: agreementId,
+                salesBillingSubscriptionId: billingSubscriptionId,
+            };
+
             debugServiceStopTypeWrite({
                 context: "CreateNewRecurringServiceStop.createNewStop",
                 payload: newRSSData,
@@ -461,6 +546,17 @@ const CreateNewRecurringServiceStop = () => {
 
         } catch (error) {
             console.error("Error creating new stop: ", error);
+            await reportRecurringPageError(error, {
+                where: "CreateNewRecurringServiceStop.createNewStop",
+                title: "Recurring service stop creation failed",
+                description: "The recurring service stop create workflow failed before it could finish the recurring template, first service stops, sales links, or planned route sync.",
+                severity: "critical",
+                data: {
+                    recurringServiceStopId: stopId,
+                    internalId,
+                    newRSSData,
+                },
+            });
             toast.error('Failed to create stop. Please try again.', { id: toastId || internalId });
         }
     };

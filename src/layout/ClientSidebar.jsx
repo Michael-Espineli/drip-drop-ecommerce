@@ -1,7 +1,8 @@
-import React, { useContext } from 'react';
+import React, { useContext, useEffect, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
     HomeIcon,
+    BellIcon,
     ChatBubbleOvalLeftEllipsisIcon,
     BuildingStorefrontIcon,
     HeartIcon,
@@ -14,12 +15,20 @@ import {
     XMarkIcon
 } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
+import { collection, onSnapshot } from "firebase/firestore";
 import { Context } from '../context/AuthContext';
+import { db } from '../utils/config';
+import {
+    ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
+    alertNeedsAttention,
+    normalizeAlertNotification,
+} from '../utils/models/AlertNotification';
 
 const clientNavItems = {
     'Menu': [
         { title: 'Home', icon: <HomeIcon />, path: '/client/dashboard' },
         { title: 'Messages', icon: <ChatBubbleOvalLeftEllipsisIcon />, path: '/client/chat', featureFlagId: 'feature_flag_001' },
+        { title: 'Notifications', icon: <BellIcon />, path: '/client/notifications', featureFlagId: 'feature_flag_011' },
     ],
     'My Property': [
         { title: 'My Pool', icon: <WrenchScrewdriverIcon />, path: '/client/my-pool' },
@@ -46,7 +55,34 @@ const clientNavItems = {
 const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
     const auth = getAuth();
     const { pathname } = useLocation();
-    const { featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+    const { user, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
+    const [notificationCount, setNotificationCount] = useState(0);
+
+    useEffect(() => {
+        const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+        if (!user?.uid || !alertsEnabled) {
+            setNotificationCount(0);
+            return undefined;
+        }
+
+        const unsubscribe = onSnapshot(
+            collection(db, "users", user.uid, "alerts"),
+            snapshot => {
+                const count = snapshot.docs
+                    .map(normalizeAlertNotification)
+                    .filter(alertNeedsAttention)
+                    .length;
+
+                setNotificationCount(count);
+            },
+            error => {
+                console.error("Error loading client notification count:", error);
+                setNotificationCount(0);
+            }
+        );
+
+        return () => unsubscribe();
+    }, [featureFlagsLoaded, isFeatureEnabled, user]);
 
     const logout = async () => {
         try {
@@ -100,6 +136,7 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
                                             currentPath.startsWith(`${itemPath}/`) ||
                                             aliasPaths.some(alias => currentPath === alias || currentPath.startsWith(`${alias}/`))
                                         );
+                                        const count = item.title === 'Notifications' ? notificationCount : 0;
                                         return (
                                             <li key={`${item.path}-${item.title}`}>
                                                 <Link 
@@ -107,6 +144,11 @@ const ClientSidebar = ({ showSidebar, setShowSidebar }) => {
                                                     className={`w-full px-3 py-2 rounded-md flex justify-start items-center gap-3 font-medium transition-all ${isActive ? 'bg-gray-100 text-gray-900' : 'hover:bg-gray-100'}`}>
                                                     <span className={`w-6 h-6 ${isActive ? 'text-blue-600' : 'text-gray-500'}`}>{item.icon}</span>
                                                     <span>{item.title}</span>
+                                                    {count > 0 && (
+                                                        <span className="ml-auto rounded-full bg-red-500 px-2.5 py-0.5 text-xs font-semibold text-white">
+                                                            {count > 99 ? '99+' : count}
+                                                        </span>
+                                                    )}
                                                 </Link>
                                             </li>
                                         );

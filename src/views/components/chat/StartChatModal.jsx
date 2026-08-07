@@ -219,6 +219,7 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
   const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState('');
   const [targets, setTargets] = useState([]);
+  const [targetGroup, setTargetGroup] = useState('external');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -251,7 +252,7 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
         if (!cancelled) setTargets(nextTargets);
       } catch (loadError) {
         console.error('Unable to load chat targets:', loadError);
-        if (!cancelled) setError('Unable to load chat options.');
+        if (!cancelled) setError('Unable to load message options.');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -266,10 +267,18 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
 
   const filteredTargets = useMemo(() => {
     const needle = searchTerm.trim().toLowerCase();
-    if (!needle) return targets;
+    const scopedTargets = isCompanyMode
+      ? targets.filter((target) => (
+        targetGroup === 'internal'
+          ? target.kind === 'companyUser'
+          : target.kind !== 'companyUser'
+      ))
+      : targets;
 
-    return targets.filter((target) => targetSearchText(target).includes(needle));
-  }, [searchTerm, targets]);
+    if (!needle) return scopedTargets;
+
+    return scopedTargets.filter((target) => targetSearchText(target).includes(needle));
+  }, [isCompanyMode, searchTerm, targetGroup, targets]);
 
   const handleSelectTarget = (target) => {
     closeModal?.();
@@ -282,33 +291,66 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
     navigate(`/messages/newCompany/${target.routeId}`);
   };
 
-  const title = isCompanyMode ? 'Start a new chat' : 'Start a new message';
-  const placeholder = isCompanyMode ? 'Search customers or company users...' : 'Search companies...';
+  const internalCount = targets.filter((target) => target.kind === 'companyUser').length;
+  const externalCount = targets.length - internalCount;
+  const title = isCompanyMode
+    ? (targetGroup === 'internal' ? 'Internal message' : 'Customer message')
+    : 'New message';
+  const placeholder = isCompanyMode
+    ? (targetGroup === 'internal' ? 'Search company users...' : 'Search customers...')
+    : 'Search companies...';
   const emptyMessage = isCompanyMode
-    ? 'No connected customers or company users found.'
+    ? (targetGroup === 'internal' ? 'No company users found.' : 'No connected customers found.')
     : 'No companies found.';
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 px-4 py-6">
-      <div className="flex max-h-[90vh] w-full max-w-xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+    <div className="fixed inset-0 z-[80] flex items-end justify-center bg-slate-950/50 px-0 sm:items-center sm:px-4 sm:py-6">
+      <div className="flex max-h-[88vh] w-full max-w-xl flex-col overflow-hidden rounded-t-lg bg-white shadow-xl sm:rounded-lg">
+        <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 sm:px-5 sm:py-4">
           <div className="flex min-w-0 items-center gap-3">
-            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
-              <ChatBubbleLeftRightIcon className="h-6 w-6" />
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700">
+              <ChatBubbleLeftRightIcon className="h-5 w-5" />
             </span>
-            <h3 className="truncate text-xl font-semibold text-gray-900">{title}</h3>
+            <div className="min-w-0">
+              <h3 className="truncate text-lg font-bold text-slate-950">{title}</h3>
+              <p className="text-sm font-medium text-slate-500">Messages</p>
+            </div>
           </div>
           <button
             type="button"
             onClick={closeModal}
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-gray-500 transition hover:bg-gray-100 hover:text-gray-700"
-            aria-label="Close new chat"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700"
+            aria-label="Close new message"
           >
-            <XMarkIcon className="h-6 w-6" />
+            <XMarkIcon className="h-5 w-5" />
           </button>
         </div>
 
-        <div className="border-b border-gray-100 p-5">
+        <div className="border-b border-slate-100 p-4 sm:p-5">
+          {isCompanyMode && (
+            <div className="mb-4 grid grid-cols-2 gap-1 rounded-md bg-slate-100 p-1">
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetGroup('external');
+                  setSearchTerm('');
+                }}
+                className={`rounded-md px-3 py-2 text-sm font-semibold transition ${targetGroup === 'external' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+              >
+                Customers ({externalCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetGroup('internal');
+                  setSearchTerm('');
+                }}
+                className={`rounded-md px-3 py-2 text-sm font-semibold transition ${targetGroup === 'internal' ? 'bg-white text-slate-950 shadow-sm' : 'text-slate-600 hover:text-slate-950'}`}
+              >
+                Internal ({internalCount})
+              </button>
+            </div>
+          )}
           <div className="relative">
             <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-gray-400" />
             <input
@@ -317,14 +359,14 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
               placeholder={placeholder}
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
-              className="w-full rounded-md border border-gray-300 bg-gray-50 py-3 pl-10 pr-3 text-sm text-gray-900 outline-none transition focus:border-blue-500 focus:bg-white focus:ring-2 focus:ring-blue-100"
+              className="h-11 w-full rounded-md border border-slate-300 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
             />
           </div>
         </div>
 
-        <div className="min-h-[16rem] overflow-y-auto p-3">
+        <div className="min-h-[16rem] overflow-y-auto p-2 sm:p-3">
           {loading ? (
-            <div className="p-6 text-center text-sm font-medium text-gray-500">Loading chats...</div>
+            <div className="p-6 text-center text-sm font-medium text-slate-500">Loading messages...</div>
           ) : error ? (
             <div className="p-6 text-center text-sm font-medium text-red-600">{error}</div>
           ) : filteredTargets.length > 0 ? (
@@ -334,20 +376,20 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
                   <button
                     type="button"
                     onClick={() => handleSelectTarget(target)}
-                    className="flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition hover:bg-gray-50"
+                    className="flex w-full items-center gap-3 rounded-md px-3 py-3 text-left transition hover:bg-slate-50"
                   >
-                    <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-full bg-blue-50">
+                    <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-blue-50">
                       <ResultIcon target={target} />
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="flex min-w-0 items-center gap-2">
-                        <span className="truncate text-sm font-semibold text-gray-900">{target.title}</span>
-                        <span className="shrink-0 rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-semibold text-gray-600">
+                        <span className="truncate text-sm font-semibold text-slate-950">{target.title}</span>
+                        <span className="shrink-0 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
                           {target.badge}
                         </span>
                       </span>
                       {target.subtitle && (
-                        <span className="mt-0.5 block truncate text-sm text-gray-500">{target.subtitle}</span>
+                        <span className="mt-0.5 block truncate text-sm text-slate-500">{target.subtitle}</span>
                       )}
                     </span>
                   </button>
@@ -355,7 +397,7 @@ const StartChatModal = ({ mode = 'company', closeModal }) => {
               ))}
             </ul>
           ) : (
-            <div className="p-6 text-center text-sm font-medium text-gray-500">{emptyMessage}</div>
+            <div className="p-6 text-center text-sm font-medium text-slate-500">{emptyMessage}</div>
           )}
         </div>
       </div>

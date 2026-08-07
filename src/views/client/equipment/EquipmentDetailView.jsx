@@ -8,6 +8,7 @@ import { ArrowLeftIcon, TrashIcon, WrenchScrewdriverIcon, ChevronRightIcon } fro
 import { format } from 'date-fns';
 import { displayRepairRequestStatus, isOpenRepairRequestStatus } from '../../../utils/models/RepairRequest';
 import { appConfirm } from '../../../utils/appDialog';
+import { isFilterEquipment } from '../../../utils/models/Equipment';
 
 const formatEquipmentDate = (value) => {
     if (!value) return 'N/A';
@@ -160,10 +161,18 @@ const EquipmentDetailView = () => {
                         <DetailItem label="Installed On" value={formatEquipmentDate(equipment.dateInstalled)} />
                         <DetailItem label="Needs Regular Service" value={equipment.needsService ? 'Yes' : 'No'} />
                         <DetailItem label="Service Frequency" value={getServiceCadence(equipment)} />
-                        <DetailItem label="Last Service" value={formatEquipmentDate(equipment.lastServiceDate)} />
-                        <DetailItem label="Next Service" value={formatEquipmentDate(equipment.nextServiceDate)} />
-                        <DetailItem label="Clean Filter Pressure" value={equipment.cleanFilterPressure} />
-                        <DetailItem label="Current Pressure" value={equipment.currentPressure} />
+                        {equipment.needsService && (
+                            <>
+                                <DetailItem label="Last Service" value={formatEquipmentDate(equipment.lastServiceDate)} />
+                                <DetailItem label="Next Service" value={formatEquipmentDate(equipment.nextServiceDate)} />
+                            </>
+                        )}
+                        {isFilterEquipment(equipment) && (
+                            <>
+                                <DetailItem label="Clean Filter Pressure" value={equipment.cleanFilterPressure} />
+                                <DetailItem label="Current Pressure" value={equipment.currentPressure} />
+                            </>
+                        )}
                         <DetailItem label="Linked To" value={bodyOfWaterName || 'Unassigned'} />
                     </div>
                     {equipment.notes && (

@@ -20,6 +20,7 @@ import { Context } from "../../../context/AuthContext";
 import { db } from "../../../utils/config";
 import { estimateServiceStopPay } from "../../../utils/payroll/payEstimate";
 import { appConfirm } from "../../../utils/appDialog";
+import { sortCompanyUsersByName } from "../../../utils/companyUsers";
 import { v4 as uuidv4 } from "uuid";
 import {
   IoBriefcaseOutline,
@@ -813,9 +814,9 @@ const Payroll = ({ mode = "payroll" }) => {
           workTypeMappingsSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
         );
         setCompanyUsers(
-          companyUsersSnap.docs
-            .map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
-            .sort((a, b) => String(a.userName || a.name || "").localeCompare(String(b.userName || b.name || "")))
+          sortCompanyUsersByName(
+            companyUsersSnap.docs.map((docSnap) => ({ id: docSnap.id, ...docSnap.data() }))
+          )
         );
         setTechnicianRates(
           technicianRatesSnap.docs

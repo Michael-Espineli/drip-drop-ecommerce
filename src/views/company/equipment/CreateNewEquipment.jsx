@@ -5,7 +5,12 @@ import { db } from '../../../utils/config';
 import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
-import { EQUIPMENT_STATUS } from '../../../utils/models/Equipment';
+import {
+    EQUIPMENT_STATUS,
+    buildEquipmentNickname,
+    equipmentDefaultsToNeedsService,
+    isFilterEquipment,
+} from '../../../utils/models/Equipment';
 import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
@@ -16,6 +21,10 @@ const getDateFromReplacementContext = (value) => {
     const parsed = new Date(value);
     return Number.isNaN(parsed.getTime()) ? new Date() : parsed;
 };
+
+const CUSTOM_CATEGORY_OPTION = { value: 'Other', label: 'Custom Category' };
+const CUSTOM_MAKE_OPTION = { value: 'Other', label: 'Custom Make' };
+const CUSTOM_MODEL_OPTION = { value: 'Other', label: 'Custom Equipment' };
 
 const CreateNewEquipment = () => {
     const navigate = useNavigate();
@@ -31,13 +40,13 @@ const CreateNewEquipment = () => {
 
     // Form State
     const [name, setName] = useState('');
-    const [category, setCategory] = useState(null);
+    const [category, setCategory] = useState(CUSTOM_CATEGORY_OPTION);
     const [customCategory, setCustomCategory] = useState('');
-    const [make, setMake] = useState(null);
+    const [make, setMake] = useState(CUSTOM_MAKE_OPTION);
     const [customMake, setCustomMake] = useState('');
-    const [model, setModel] = useState(null);
+    const [model, setModel] = useState(CUSTOM_MODEL_OPTION);
     const [customModel, setCustomModel] = useState('');
-    const [dateInstalled, setDateInstalled] = useState(new Date().toISOString().split('T')[0]);
+    const [dateInstalled, setDateInstalled] = useState('');
     const [cleanFilterPressure, setCleanFilterPressure] = useState('');
     const [needsService, setNeedsService] = useState(false);
     const [serviceFrequency, setServiceFrequency] = useState('Month');
@@ -57,6 +66,14 @@ const CreateNewEquipment = () => {
     const [equipmentMakes, setEquipmentMakes] = useState([]);
     const [equipmentModels, setEquipmentModels] = useState([]);
     const [selectedCatalogManualLink, setSelectedCatalogManualLink] = useState('');
+
+    const selectedEquipmentDraft = {
+        name,
+        type: customCategory || category?.label || category?.value || '',
+        make: customMake || make?.label || make?.value || '',
+        model: customModel || model?.model || model?.name || model?.label || '',
+    };
+    const selectedEquipmentIsFilter = isFilterEquipment(selectedEquipmentDraft);
 
     // Fetch initial data for selects
     useEffect(() => {
@@ -139,9 +156,14 @@ const CreateNewEquipment = () => {
                 setEquipmentMakes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data(), value: doc.data().name, label: doc.data().name })));
             };
             fetchMakes();
+        } else if (category?.value === 'Other') {
+            setEquipmentMakes([]);
+            setMake((current) => current?.value === 'Other' ? current : CUSTOM_MAKE_OPTION);
+            setModel((current) => current?.value === 'Other' ? current : CUSTOM_MODEL_OPTION);
         } else {
             setEquipmentMakes([]);
             setMake(null);
+            setModel(null);
         }
     }, [category]);
 
@@ -158,6 +180,10 @@ const CreateNewEquipment = () => {
                 })));
             };
             fetchModels();
+        } else if (make?.value === 'Other') {
+            setEquipmentModels([]);
+            setModel((current) => current?.value === 'Other' ? current : CUSTOM_MODEL_OPTION);
+            setSelectedCatalogManualLink('');
         } else {
             setEquipmentModels([]);
             setModel(null);
@@ -166,21 +192,41 @@ const CreateNewEquipment = () => {
     }, [category, make]);
 
     const handleCategoryChange = (selected) => {
+        const isCustomCategory = selected?.value === 'Other';
         setCategory(selected);
-        setMake(null);
-        setModel(null);
+        setMake(isCustomCategory ? CUSTOM_MAKE_OPTION : null);
+        setModel(isCustomCategory ? CUSTOM_MODEL_OPTION : null);
         setCustomCategory('');
         setCustomMake('');
         setCustomModel('');
         setSelectedCatalogManualLink('');
+        if (!name.trim()) {
+            setName(buildEquipmentNickname({ type: selected?.label || selected?.value || '' }));
+        }
+        if (equipmentDefaultsToNeedsService({ type: selected?.label || selected?.value || '' })) {
+            setNeedsService(true);
+        }
     };
 
     const handleMakeChange = (selected) => {
+        const isCustomMake = selected?.value === 'Other';
         setMake(selected);
-        setModel(null);
+        setModel(isCustomMake ? CUSTOM_MODEL_OPTION : null);
         setCustomMake('');
         setCustomModel('');
         setSelectedCatalogManualLink('');
+        if (!name.trim()) {
+            setName(buildEquipmentNickname({
+                type: category?.label || customCategory,
+                make: selected?.label || selected?.value || '',
+            }));
+        }
+        if (equipmentDefaultsToNeedsService({
+            type: category?.label || customCategory,
+            make: selected?.label || selected?.value || '',
+        })) {
+            setNeedsService(true);
+        }
     };
 
     const handleModelChange = (selected) => {
@@ -189,11 +235,47 @@ const CreateNewEquipment = () => {
         setSelectedCatalogManualLink(selected?.manualPdfLink || '');
 
         if (selected && selected.value !== 'Other') {
-            if (!name.trim()) setName(selected.name || selected.model || selected.label || '');
+            const nickname = buildEquipmentNickname({
+                type: category?.label || customCategory,
+                make: make?.label || customMake,
+                model: selected.model || selected.name || selected.label || '',
+            });
+            if (!name.trim()) setName(nickname || selected.name || selected.model || selected.label || '');
+            if (equipmentDefaultsToNeedsService({
+                type: category?.label || customCategory,
+                make: make?.label || customMake,
+                model: selected.model || selected.name || selected.label || '',
+            })) {
+                setNeedsService(true);
+            }
             if (!selectedCatalogManualLink && selected.manualPdfLink) {
                 setSelectedCatalogManualLink(selected.manualPdfLink);
             }
         }
+    };
+
+    const handleCustomCategoryChange = (value) => {
+        setCustomCategory(value);
+        if (equipmentDefaultsToNeedsService({ type: value, name })) setNeedsService(true);
+        if (!name.trim()) setName(buildEquipmentNickname({ type: value }));
+    };
+
+    const handleCustomMakeChange = (value) => {
+        setCustomMake(value);
+        if (equipmentDefaultsToNeedsService({ type: customCategory || category?.label, make: value, name })) {
+            setNeedsService(true);
+        }
+    };
+
+    const handleCustomModelChange = (value) => {
+        setCustomModel(value);
+        const draft = {
+            type: customCategory || category?.label,
+            make: customMake || make?.label,
+            model: value,
+        };
+        if (equipmentDefaultsToNeedsService(draft)) setNeedsService(true);
+        if (!name.trim()) setName(buildEquipmentNickname(draft));
     };
 
     const copyCatalogPartsToEquipment = async (equipmentId, catalogEquipmentId) => {
@@ -276,21 +358,43 @@ const CreateNewEquipment = () => {
             const isCustomModel = model?.value === 'Other';
             const catalogEquipmentId = !isCustomModel ? (model?.id || '') : '';
 
+            const finalType = isCustomType ? customCategory : (category && category.label) || '';
+            const finalMake = isCustomMake ? customMake : (make && make.label) || '';
+            const finalModel = isCustomModel ? customModel : (model && model.label) || '';
+            const finalIsFilter = isFilterEquipment({
+                name,
+                type: finalType,
+                make: finalMake,
+                model: finalModel,
+            });
+            const numericCleanFilterPressure = Number(cleanFilterPressure);
+            const createdAt = new Date();
+            const finalDateInstalled = dateInstalled ? new Date(dateInstalled) : null;
+            const finalNeedsService = needsService || equipmentDefaultsToNeedsService({
+                name,
+                type: finalType,
+                make: finalMake,
+                model: finalModel,
+            });
             const newEquipment = {
                 id: equipmentId,
                 name,
-                type: isCustomType ? customCategory : (category && category.label) || '',
+                type: finalType,
                 typeId: isCustomType ? '' : (category && category.id) || '',
-                make: isCustomMake ? customMake : (make && make.label) || '',
+                make: finalMake,
                 makeId: isCustomMake ? '' : (make && make.id) || '',
-                model: isCustomModel ? customModel : (model && model.label) || '',
+                model: finalModel,
                 modelId: catalogEquipmentId,
                 universalEquipmentId: catalogEquipmentId,
                 manualPdfLink: isCustomModel ? '' : (model?.manualPdfLink || ''),
-                dateInstalled: new Date(dateInstalled),
-                cleanFilterPressure: cleanFilterPressure === '' ? null : Number(cleanFilterPressure),
-                serviceFrequency: needsService && serviceFrequencyEvery !== '' ? Number(serviceFrequencyEvery) : null,
-                serviceFrequencyEvery: needsService ? serviceFrequency : null,
+                createdAt,
+                createdAtMillis: createdAt.getTime(),
+                dateInstalled: finalDateInstalled,
+                cleanFilterPressure: finalIsFilter && cleanFilterPressure !== '' && Number.isFinite(numericCleanFilterPressure)
+                    ? numericCleanFilterPressure
+                    : null,
+                serviceFrequency: finalNeedsService && serviceFrequencyEvery !== '' ? Number(serviceFrequencyEvery) : null,
+                serviceFrequencyEvery: finalNeedsService ? serviceFrequency : null,
                 notes,
                 customerId: selectedCustomer?.value || '',
                 customerName: selectedCustomer?.label || '',
@@ -301,7 +405,7 @@ const CreateNewEquipment = () => {
                 isActive: true,
                 active: true,
                 dateUninstalled: null,
-                needsService,
+                needsService: finalNeedsService,
                 status: EQUIPMENT_STATUS.OPERATIONAL,
                 currentPressure: null,
                 ...(isReplacementFlow ? {
@@ -394,18 +498,18 @@ const CreateNewEquipment = () => {
                         <h3 className="text-lg font-semibold text-gray-700 md:col-span-3">Equipment Specifications</h3>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-                            <Select options={[...equipmentTypes, { value: 'Other', label: 'Custom Category' }]} value={category} onChange={handleCategoryChange} styles={selectStyles} placeholder="Select Category..." />
-                            {category?.value === 'Other' && <input type="text" value={customCategory} onChange={e => setCustomCategory(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Category Name" />}
+                            <Select options={[CUSTOM_CATEGORY_OPTION, ...equipmentTypes]} value={category} onChange={handleCategoryChange} styles={selectStyles} placeholder="Select Category..." />
+	                            {category?.value === 'Other' && <input type="text" value={customCategory} onChange={e => handleCustomCategoryChange(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Category Name" />}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Make</label>
-                            <Select options={[...equipmentMakes, { value: 'Other', label: 'Custom Make' }]} value={make} onChange={handleMakeChange} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
-                            {make?.value === 'Other' && <input type="text" value={customMake} onChange={e => setCustomMake(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Make Name" />}
+                            <Select options={[CUSTOM_MAKE_OPTION, ...equipmentMakes]} value={make} onChange={handleMakeChange} styles={selectStyles} placeholder="Select Make..." isDisabled={!category} />
+	                            {make?.value === 'Other' && <input type="text" value={customMake} onChange={e => handleCustomMakeChange(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Make Name" />}
                         </div>
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Model</label>
-                            <Select options={[...equipmentModels, { value: 'Other', label: 'Custom Equipment' }]} value={model} onChange={handleModelChange} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
-                            {model?.value === 'Other' && <input type="text" value={customModel} onChange={e => setCustomModel(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Model Name" />}
+                            <Select options={[CUSTOM_MODEL_OPTION, ...equipmentModels]} value={model} onChange={handleModelChange} styles={selectStyles} placeholder="Select Model..." isDisabled={!make} />
+	                            {model?.value === 'Other' && <input type="text" value={customModel} onChange={e => handleCustomModelChange(e.target.value)} className="mt-2 w-full p-2 border border-gray-300 rounded-lg" placeholder="Custom Model Name" />}
                             {selectedCatalogManualLink && (
                                 <a
                                     href={selectedCatalogManualLink}
@@ -430,10 +534,12 @@ const CreateNewEquipment = () => {
                             <label className="block text-sm font-medium text-gray-700 mb-1">Date Installed</label>
                             <input type="date" value={dateInstalled} onChange={e => setDateInstalled(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" />
                         </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Clean Filter Pressure (PSI)</label>
-                            <input type="text" value={cleanFilterPressure} onChange={e => setCleanFilterPressure(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., 25" />
-                        </div>
+                        {selectedEquipmentIsFilter && (
+                            <div>
+                                <label className="block text-sm font-medium text-gray-700 mb-1">Clean Filter Pressure (PSI)</label>
+                                <input type="text" value={cleanFilterPressure} onChange={e => setCleanFilterPressure(e.target.value)} className="w-full p-2 border border-gray-300 rounded-lg" placeholder="e.g., 25" />
+                            </div>
+                        )}
                         <div>
                             <label className="block text-sm font-medium text-gray-700 mb-1">Will This Equipment Need Service?</label>
                             <select

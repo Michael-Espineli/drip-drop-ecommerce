@@ -2,7 +2,7 @@ import React, { useEffect, useState, useContext } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { Context } from '../context/AuthContext';
 import { COMPANY_PINNED_CATEGORY, getNav } from '../navigation/index';
-import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, XMarkIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftOnRectangleIcon, ChevronDoubleLeftIcon, ChevronDoubleRightIcon, Cog6ToothIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
@@ -10,10 +10,18 @@ import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
-    TODO_SCOPE,
+    todoAssignedToUser,
     normalizeTodo,
     todoIsOpen,
+    todoUserIdSet,
 } from '../utils/models/TodoItem';
+import {
+    ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
+    alertBelongsToCompany,
+    alertNeedsAttention,
+    attachAlertNotificationSource,
+    mergeAlertNotifications,
+} from '../utils/models/AlertNotification';
 import {
     JOB_BILLING_STATUS,
     JOB_OPERATION_STATUS,
@@ -46,30 +54,17 @@ const getBookmarkedNavItems = (navItemsByCategory, savedBookmarks) => {
         .filter(Boolean);
 };
 
-const assignedTodoMatchesUser = (todo = {}, userIds = new Set()) => {
-    const assignedIds = [
-        todo.assignedToUserId,
-        todo.assignedToCompanyUserDocId,
-        todo.assignedTechId,
-        todo.techId,
-    ].map((value) => String(value || "").trim()).filter(Boolean);
-
-    const assignedToUser = assignedIds.some((assignedId) => userIds.has(assignedId));
-    const assignedSpecifically = (
-        todo.scope === TODO_SCOPE.specific ||
-        todo.assignmentType === TODO_SCOPE.specific ||
-        assignedIds.length > 0
-    );
-
-    return assignedToUser && assignedSpecifically;
-};
+const isFirestorePermissionDenied = (error) => (
+    error?.code === "permission-denied" ||
+    String(error?.message || "").toLowerCase().includes("insufficient permissions")
+);
 
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -139,7 +134,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
+            setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
             return;
         }
 
@@ -224,16 +219,79 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             setCounts(prev => ({ ...prev, messages: 0 }));
         }
 
+        const alertsEnabled = featureFlagsLoaded && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+        const firebaseAuthUserId = String(user?.uid || "").trim();
+        let unsubscribeNotifications = () => {};
+        let unsubscribePersonalNotifications = () => {};
+
+        if (alertsEnabled) {
+            const notificationSources = { company: [], personal: [] };
+            const updateNotificationCount = (scope, nextAlerts) => {
+                notificationSources[scope] = nextAlerts;
+                const notifications = mergeAlertNotifications([
+                    ...notificationSources.personal,
+                    ...notificationSources.company,
+                ])
+                    .filter((alert) => alertBelongsToCompany(alert, recentlySelectedCompany))
+                    .filter(alertNeedsAttention)
+                    .length;
+
+                setCounts(prev => ({ ...prev, notifications }));
+            };
+
+            unsubscribeNotifications = onSnapshot(
+                collection(db, "companies", recentlySelectedCompany, "alerts"),
+                snapshot => {
+                    updateNotificationCount(
+                        "company",
+                        snapshot.docs.map((alertDoc) => attachAlertNotificationSource(alertDoc, "company"))
+                    );
+                },
+                error => {
+                    console.error("Error loading notification count:", error);
+                    updateNotificationCount("company", []);
+                }
+            );
+
+            if (firebaseAuthUserId) {
+                unsubscribePersonalNotifications = onSnapshot(
+                    collection(db, "users", firebaseAuthUserId, "alerts"),
+                    snapshot => {
+                        updateNotificationCount(
+                            "personal",
+                            snapshot.docs
+                                .map((alertDoc) => attachAlertNotificationSource(alertDoc, "personal"))
+                                .filter((alert) => alertBelongsToCompany(alert, recentlySelectedCompany))
+                        );
+                    },
+                    error => {
+                        if (!isFirestorePermissionDenied(error)) {
+                            console.error("Error loading personal notification count:", error);
+                        }
+                        updateNotificationCount("personal", []);
+                    }
+                );
+            } else {
+                updateNotificationCount("personal", []);
+            }
+        } else {
+            setCounts(prev => ({ ...prev, notifications: 0 }));
+        }
+
         const todoListEnabled = featureFlagsLoaded && isFeatureEnabled(TODO_LIST_FEATURE_FLAG_ID);
         let unsubscribeTodos = () => {};
 
         if (todoListEnabled) {
-            const todoUserIds = new Set([
+            const todoUserIds = todoUserIdSet([
                 user.uid,
                 dataBaseUser?.id,
                 dataBaseUser?.uid,
                 dataBaseUser?.userId,
-            ].map((value) => String(value || "").trim()).filter(Boolean));
+                companyUserAccess?.uid,
+                companyUserAccess?.userId,
+                companyUserAccess?.companyUserId,
+                companyUserAccess?.companyUserDocId,
+            ]);
 
             unsubscribeTodos = onSnapshot(
                 collection(db, "companies", recentlySelectedCompany, "todoItems"),
@@ -241,7 +299,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                     const openCount = snapshot.docs
                         .map(normalizeTodo)
                         .filter(todoIsOpen)
-                        .filter((todo) => assignedTodoMatchesUser(todo, todoUserIds))
+                        .filter((todo) => todoAssignedToUser(todo, todoUserIds))
                         .length;
 
                     setCounts(prev => ({ ...prev, todoItems: openCount }));
@@ -377,6 +435,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         return () => {
             unsubscribeLeads();
             unsubscribeMessages();
+            unsubscribeNotifications();
+            unsubscribePersonalNotifications();
             unsubscribeTodos();
             unsubscribeShopping();
             unsubscribeLegacyShopping();
@@ -405,6 +465,20 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         }
         return itemPath;
     };
+
+    const settingsFooterPath = '/company/settings';
+    const settingsFooterUploadPaths = new Set([
+        '/company/migration/customer-export-import',
+        '/company/migration/equipment-import',
+        '/company/migration/skimmer-previous-dosages-upload',
+        '/company/migration/performance-history-import',
+    ]);
+    const normalizedPathname = pathname.toLowerCase();
+    const settingsFooterIsActive = (
+        normalizedPathname.startsWith(settingsFooterPath) ||
+        settingsFooterUploadPaths.has(normalizedPathname)
+    );
+    const showSettingsFooterLink = role === 'Company' && (companyRoleLoading || hasCompanyPermission('800'));
 
     return (
         <div>
@@ -475,6 +549,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                 ? counts.leads
                                                 : item.title === 'Messages'
                                                     ? counts.messages
+                                                    : item.title === 'Notifications'
+                                                        ? counts.notifications
                                                     : item.title === 'Todo List'
                                                         ? counts.todoItems
                                                         : item.title === 'Shopping List'
@@ -511,8 +587,18 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                         ))}
                     </nav>
 
-                    {/* Logout Button */}
-                    <div className="app-sidebar-footer app-sidebar-mobile-footer-safe p-4 border-t shrink-0">
+                    {/* Footer actions */}
+                    <div className="app-sidebar-footer app-sidebar-mobile-footer-safe flex flex-col gap-2 p-4 border-t shrink-0">
+                        {showSettingsFooterLink && (
+                            <Link
+                                to={getPath(settingsFooterPath)}
+                                title="Settings"
+                                className={`app-sidebar-link relative flex w-full items-center justify-start gap-3 rounded-md px-4 py-3 font-semibold transition-all ${isCollapsed ? 'lg:justify-center lg:gap-0 lg:px-2' : ''} ${settingsFooterIsActive ? 'app-sidebar-link-active' : ''}`}
+                            >
+                                <Cog6ToothIcon className={`h-6 w-6 shrink-0 ${settingsFooterIsActive ? 'app-sidebar-icon-active' : 'app-sidebar-icon'}`} />
+                                <span className={isCollapsed ? 'lg:hidden' : ''}>Settings</span>
+                            </Link>
+                        )}
                         <button
                             onClick={logout}
                             className={`app-sidebar-logout w-full flex items-center px-4 py-3 text-left rounded-lg font-semibold transition ${isCollapsed ? 'lg:justify-center lg:px-2' : ''}`}

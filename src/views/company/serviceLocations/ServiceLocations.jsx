@@ -6,6 +6,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { FaPlus, FaSearch, FaSyncAlt } from "react-icons/fa";
 import { ServiceLocation } from '../../../utils/models/ServiceLocation';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { filterRecordsByCustomerTags } from '../../../utils/customerTags';
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 
 const serviceLocationAddress = (location = {}) => {
     const address = location.address || {};
@@ -53,13 +55,22 @@ const compareSortValues = (left, right) => {
 
 export default function ServiceLocations() {
     const navigate = useNavigate();
-    const { recentlySelectedCompany } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        companyRole,
+        companyUserAccess,
+        selectedCustomerRegionTag,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const { can } = useCompanyPermissions();
     const [serviceLocationList, setServiceLocationList] = useState([]);
+    const [customersById, setCustomersById] = useState(new Map());
     const [searchTerm, setSearchTerm] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [tableSort, setTableSort] = useState({ key: "nickName", direction: "asc" });
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     const fetchServiceLocations = useCallback(async () => {
         if (!recentlySelectedCompany) {
@@ -72,11 +83,17 @@ export default function ServiceLocations() {
         setError(null);
 
         try {
-            const serviceLocationQuery = query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'));
-            const querySnapshot = await getDocs(serviceLocationQuery);
+            const [querySnapshot, customerSnapshot] = await Promise.all([
+                getDocs(query(collection(db, 'companies', recentlySelectedCompany, 'serviceLocations'))),
+                getDocs(collection(db, 'companies', recentlySelectedCompany, 'customers')),
+            ]);
             const locations = querySnapshot.docs.map((docSnap) => ServiceLocation.fromFirestore(docSnap));
 
             setServiceLocationList(locations);
+            setCustomersById(new Map(customerSnapshot.docs.map((customerDoc) => [
+                customerDoc.id,
+                { id: customerDoc.id, ...customerDoc.data() },
+            ])));
         } catch (fetchError) {
             console.error('Service location data error:', fetchError);
             setError('Failed to load service locations.');
@@ -89,34 +106,46 @@ export default function ServiceLocations() {
         fetchServiceLocations();
     }, [fetchServiceLocations]);
 
+    const regionVisibleServiceLocations = useMemo(
+        () => filterRecordsByCustomerTags({
+            records: serviceLocationList,
+            customersById,
+            role: companyRole,
+            userAccess: companyUserAccess,
+            selectedRegionTag: selectedCustomerRegionTag,
+            regionalAccessEnabled: customerAreaFilteringEnabled,
+        }),
+        [customersById, serviceLocationList, companyRole, companyUserAccess, selectedCustomerRegionTag, customerAreaFilteringEnabled]
+    );
+
     const filteredServiceLocations = useMemo(() => {
         const lowerCaseSearchTerm = searchTerm.trim().toLowerCase();
 
-        if (!lowerCaseSearchTerm) return serviceLocationList;
+        if (!lowerCaseSearchTerm) return regionVisibleServiceLocations;
 
-        return serviceLocationList.filter((location) =>
+        return regionVisibleServiceLocations.filter((location) =>
             serviceLocationSearchText(location).includes(lowerCaseSearchTerm)
         );
-    }, [serviceLocationList, searchTerm]);
+    }, [regionVisibleServiceLocations, searchTerm]);
 
     const summary = useMemo(() => {
-        const activeLocations = serviceLocationList.filter(isLocationActive);
-        const customerIds = new Set(serviceLocationList.map((location) => location.customerId).filter(Boolean));
-        const withGateCode = serviceLocationList.filter((location) => Boolean(location.gateCode)).length;
-        const withContact = serviceLocationList.filter((location) => {
+        const activeLocations = regionVisibleServiceLocations.filter(isLocationActive);
+        const customerIds = new Set(regionVisibleServiceLocations.map((location) => location.customerId).filter(Boolean));
+        const withGateCode = regionVisibleServiceLocations.filter((location) => Boolean(location.gateCode)).length;
+        const withContact = regionVisibleServiceLocations.filter((location) => {
             const contact = serviceLocationContact(location);
             return Boolean(contact.name || contact.phoneNumber || contact.email);
         }).length;
 
         return {
-            total: serviceLocationList.length,
+            total: regionVisibleServiceLocations.length,
             active: activeLocations.length,
-            inactive: serviceLocationList.length - activeLocations.length,
+            inactive: regionVisibleServiceLocations.length - activeLocations.length,
             customers: customerIds.size,
             withGateCode,
             withContact,
         };
-    }, [serviceLocationList]);
+    }, [regionVisibleServiceLocations]);
 
     const sortedServiceLocations = useMemo(() => {
         const valueForKey = (location, key) => {
@@ -216,7 +245,7 @@ export default function ServiceLocations() {
                             />
                         </label>
                         <div className="text-sm text-gray-500">
-                            Showing <span className="font-semibold text-gray-900">{filteredServiceLocations.length}</span> of <span className="font-semibold text-gray-900">{serviceLocationList.length}</span>
+                            Showing <span className="font-semibold text-gray-900">{filteredServiceLocations.length}</span> of <span className="font-semibold text-gray-900">{regionVisibleServiceLocations.length}</span>
                         </div>
                     </div>
 

@@ -31,7 +31,21 @@ import { db, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
-import { CompanyUserStatus, WorkerTypeEnum } from "../../../utils/models/CompanyUser";
+import {
+    CompanyUserStatus,
+    WorkerTypeEnum,
+    canUsePersonalRouteVehicle,
+    normalizeRouteVehicleAccess,
+    routeVehicleAccessOptions,
+} from "../../../utils/models/CompanyUser";
+import {
+    getCustomerTagAccessList,
+    getCustomerTagOptions,
+    hasFullCustomerRegionAccess,
+    normalizeCustomerTag,
+    normalizeCustomerTags,
+} from "../../../utils/customerTags";
+import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
 const MAX_COMPANY_USER_FILE_SIZE = 25 * 1024 * 1024;
@@ -555,6 +569,22 @@ const buildProfileDraft = (companyUser) => ({
     workerType: normalizeWorkerType(companyUser?.workerType),
 });
 
+const sourceHasRegionalAccessFields = (source = {}) => Boolean(
+    source &&
+    (
+        source.fullCustomerRegionAccess !== undefined ||
+        source.fullRegionalAccess !== undefined ||
+        source.regionalAccessMode ||
+        source.customerRegionAccessMode ||
+        getCustomerTagAccessList(source).length > 0
+    )
+);
+
+const buildRegionalAccessDraft = (source = {}) => ({
+    mode: hasFullCustomerRegionAccess(source) ? "all" : "limited",
+    tags: getCustomerTagAccessList(source),
+});
+
 const Section = ({ title, description, action, children }) => (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -584,7 +614,13 @@ const Badge = ({ children, className = "" }) => (
 );
 
 const CompanyUserDetails = () => {
-    const { recentlySelectedCompany, user: authUser, dataBaseUser } = useContext(Context);
+    const {
+        recentlySelectedCompany,
+        user: authUser,
+        dataBaseUser,
+        featureFlagsLoaded,
+        isFeatureEnabled,
+    } = useContext(Context);
     const { can, requirePermission, permissionsReady } = useCompanyPermissions();
     const { companyUserId, tab } = useParams();
     const [searchParams, setSearchParams] = useSearchParams();
@@ -602,7 +638,12 @@ const CompanyUserDetails = () => {
     const [isEditingProfile, setIsEditingProfile] = useState(false);
     const [profileDraft, setProfileDraft] = useState(buildProfileDraft(null));
     const [isSavingProfile, setIsSavingProfile] = useState(false);
-    const [allowPersonalVehicle, setAllowPersonalVehicle] = useState(false);
+    const [companyUserAccessDoc, setCompanyUserAccessDoc] = useState(null);
+    const [regionalAccessDraft, setRegionalAccessDraft] = useState(buildRegionalAccessDraft(null));
+    const [availableCustomerTags, setAvailableCustomerTags] = useState([]);
+    const [regionalTagInput, setRegionalTagInput] = useState("");
+    const [isSavingRegionalAccess, setIsSavingRegionalAccess] = useState(false);
+    const [routeVehicleAccess, setRouteVehicleAccess] = useState(normalizeRouteVehicleAccess());
     const [personalVehicle, setPersonalVehicle] = useState(emptyPersonalVehicle);
     const [isSavingVehicleAccess, setIsSavingVehicleAccess] = useState(false);
     const [companyWorkTypes, setCompanyWorkTypes] = useState([]);
@@ -670,12 +711,35 @@ const CompanyUserDetails = () => {
     useEffect(() => {
         if (!recentlySelectedCompany || !companyUserId) return;
 
-        const applyFetchedUser = (userDoc) => {
+        const loadRegionalAccess = async (fetchedUser) => {
+            const linkedUserId = fetchedUser?.userId || companyUserId;
+
+            if (!linkedUserId) {
+                setCompanyUserAccessDoc(null);
+                setRegionalAccessDraft(buildRegionalAccessDraft(fetchedUser));
+                return;
+            }
+
+            try {
+                const accessSnap = await getDoc(doc(db, "users", linkedUserId, "userAccess", recentlySelectedCompany));
+                const accessDoc = accessSnap.exists() ? { id: accessSnap.id, ...accessSnap.data() } : null;
+                const accessSource = sourceHasRegionalAccessFields(accessDoc) ? accessDoc : fetchedUser;
+                setCompanyUserAccessDoc(accessDoc);
+                setRegionalAccessDraft(buildRegionalAccessDraft(accessSource));
+            } catch (error) {
+                console.warn("Could not load user regional access; using company-user profile fields.", error);
+                setCompanyUserAccessDoc(null);
+                setRegionalAccessDraft(buildRegionalAccessDraft(fetchedUser));
+            }
+        };
+
+        const applyFetchedUser = async (userDoc) => {
             const fetchedUser = { ...userDoc.data(), id: userDoc.id };
             setUser(fetchedUser);
             setProfileDraft(buildProfileDraft(fetchedUser));
-            setAllowPersonalVehicle(Boolean(fetchedUser.allowPersonalVehicle));
+            setRouteVehicleAccess(normalizeRouteVehicleAccess(fetchedUser));
             setPersonalVehicle(buildPersonalVehicleForm(fetchedUser));
+            await loadRegionalAccess(fetchedUser);
         };
 
         const fetchUser = async () => {
@@ -686,13 +750,13 @@ const CompanyUserDetails = () => {
                 const querySnapshot = await getDocs(q);
 
                 if (!querySnapshot.empty) {
-                    applyFetchedUser(querySnapshot.docs[0]);
+                    await applyFetchedUser(querySnapshot.docs[0]);
                     return;
                 }
 
                 const userDoc = await getDoc(doc(db, "companies", recentlySelectedCompany, "companyUsers", companyUserId));
                 if (userDoc.exists()) {
-                    applyFetchedUser(userDoc);
+                    await applyFetchedUser(userDoc);
                 } else {
                     toast.error("User not found in this company.");
                     navigate("/company/companyUsers");
@@ -707,6 +771,36 @@ const CompanyUserDetails = () => {
 
         fetchUser();
     }, [recentlySelectedCompany, companyUserId, navigate]);
+
+    useEffect(() => {
+        if (!recentlySelectedCompany) {
+            setAvailableCustomerTags([]);
+            return;
+        }
+
+        let cancelled = false;
+
+        const fetchCustomerTags = async () => {
+            try {
+                const customersSnap = await getDocs(collection(db, "companies", recentlySelectedCompany, "customers"));
+                if (cancelled) return;
+
+                setAvailableCustomerTags(getCustomerTagOptions(customersSnap.docs.map((customerDoc) => ({
+                    id: customerDoc.id,
+                    ...customerDoc.data(),
+                }))));
+            } catch (error) {
+                console.error("Error loading customer tags for regional access:", error);
+                if (!cancelled) setAvailableCustomerTags([]);
+            }
+        };
+
+        fetchCustomerTags();
+
+        return () => {
+            cancelled = true;
+        };
+    }, [recentlySelectedCompany]);
 
     useEffect(() => {
         if (!recentlySelectedCompany) {
@@ -741,7 +835,7 @@ const CompanyUserDetails = () => {
     }, [recentlySelectedCompany]);
 
     useEffect(() => {
-        if (!recentlySelectedCompany || !user?.id) {
+        if (!recentlySelectedCompany || !user?.id || !permissionsReady || !can("420")) {
             setCompanyWorkTypes([]);
             setTechnicianRates([]);
             setLegacyRateSheets([]);
@@ -808,7 +902,7 @@ const CompanyUserDetails = () => {
         return () => {
             cancelled = true;
         };
-    }, [recentlySelectedCompany, user, companyUserId]);
+    }, [can, companyUserId, permissionsReady, recentlySelectedCompany, user]);
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user?.id) {
@@ -865,6 +959,8 @@ const CompanyUserDetails = () => {
             })();
             const routesQuery = buildLookupQuery("activeRoutes", "techId", "date", 8);
 
+            const canLoadPayrollActivity = permissionsReady && can("420");
+
             const [
                 serviceStopsSnapshot,
                 recurringServiceStopsSnapshot,
@@ -874,7 +970,9 @@ const CompanyUserDetails = () => {
                 serviceStopsQuery ? safeGet("recent service stops", () => getDocs(serviceStopsQuery)) : Promise.resolve({ docs: [] }),
                 recurringServiceStopsQuery ? safeGet("assigned recurring service stops", () => getDocs(recurringServiceStopsQuery)) : Promise.resolve({ docs: [] }),
                 routesQuery ? safeGet("recent routes", () => getDocs(routesQuery)) : Promise.resolve({ docs: [] }),
-                safeGet("recent statements", () => getDocs(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements"))),
+                canLoadPayrollActivity
+                    ? safeGet("recent statements", () => getDocs(collection(db, "companies", recentlySelectedCompany, "technicianPayStatements")))
+                    : Promise.resolve({ docs: [] }),
             ]);
 
             if (cancelled) return;
@@ -931,7 +1029,7 @@ const CompanyUserDetails = () => {
         return () => {
             cancelled = true;
         };
-    }, [recentlySelectedCompany, user, companyUserId]);
+    }, [can, companyUserId, permissionsReady, recentlySelectedCompany, user]);
 
     useEffect(() => {
         if (!permissionsReady || activeTab !== "performance" || can("260")) return;
@@ -1104,12 +1202,23 @@ const CompanyUserDetails = () => {
         );
     }, [profileDraft, user]);
 
+    const assignedRegionalTags = useMemo(
+        () => normalizeCustomerTags(regionalAccessDraft.tags),
+        [regionalAccessDraft.tags]
+    );
+    const regionalAccessSummary = regionalAccessDraft.mode === "all"
+        ? "Full company access"
+        : assignedRegionalTags.length
+            ? assignedRegionalTags.join(", ")
+            : "No customer tags assigned";
+
     const displayName = getDisplayName(user);
     const isContractor = normalizeWorkerType(user?.workerType) === WorkerTypeEnum.contractor;
     const canViewPerformanceReviews = can("260");
     const canEditPerformanceReviews = can("264");
     const canEditOnboardingChecklist = can("264");
     const canEditUserFiles = can("264");
+    const customerAreaFilteringEnabled = featureFlagsLoaded && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
 
     useEffect(() => {
         if (
@@ -1313,8 +1422,24 @@ const CompanyUserDetails = () => {
                 workerType: profileDraft.workerType,
             };
 
-            await updateDoc(doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id), payload);
+            const batch = writeBatch(db);
+            batch.set(doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id), payload, { merge: true });
+            if (user.userId) {
+                batch.set(
+                    doc(db, "users", user.userId, "userAccess", recentlySelectedCompany),
+                    {
+                        id: recentlySelectedCompany,
+                        companyId: recentlySelectedCompany,
+                        roleId: payload.roleId,
+                        roleName: payload.roleName,
+                    },
+                    { merge: true }
+                );
+            }
+
+            await batch.commit();
             setUser((current) => ({ ...current, ...payload }));
+            setCompanyUserAccessDoc((current) => (current ? { ...current, roleId: payload.roleId, roleName: payload.roleName } : current));
             setIsEditingProfile(false);
             toast.success("Company user updated.");
         } catch (error) {
@@ -1325,14 +1450,101 @@ const CompanyUserDetails = () => {
         }
     };
 
+    const addRegionalTagToDraft = () => {
+        const nextTag = normalizeCustomerTag(regionalTagInput);
+        if (!nextTag) return;
+
+        setRegionalAccessDraft((current) => ({
+            ...current,
+            tags: normalizeCustomerTags([...(current.tags || []), nextTag]),
+        }));
+        setAvailableCustomerTags((currentTags) => normalizeCustomerTags([...currentTags, nextTag]).sort((a, b) => a.localeCompare(b)));
+        setRegionalTagInput("");
+    };
+
+    const removeRegionalTagFromDraft = (tagToRemove) => {
+        setRegionalAccessDraft((current) => ({
+            ...current,
+            tags: normalizeCustomerTags(current.tags).filter((tag) => tag !== tagToRemove),
+        }));
+    };
+
+    const handleSaveRegionalAccess = async () => {
+        if (!requirePermission("264", "update company users")) return;
+        if (!recentlySelectedCompany || !user?.id) return;
+
+        const isFullAccess = regionalAccessDraft.mode === "all";
+        const assignedTags = isFullAccess ? [] : normalizeCustomerTags(regionalAccessDraft.tags);
+        if (!isFullAccess && assignedTags.length === 0) {
+            toast.error("Add at least one customer tag or choose full company access.");
+            return;
+        }
+
+        setIsSavingRegionalAccess(true);
+        try {
+            const payload = {
+                fullCustomerRegionAccess: isFullAccess,
+                fullRegionalAccess: isFullAccess,
+                regionalAccessMode: isFullAccess ? "all" : "limited",
+                customerRegionAccessMode: isFullAccess ? "all" : "limited",
+                customerRegionTags: assignedTags,
+                regionalCustomerTags: assignedTags,
+                customerTagAccess: assignedTags,
+                allowedCustomerTags: assignedTags,
+            };
+
+            const batch = writeBatch(db);
+            batch.set(
+                doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id),
+                payload,
+                { merge: true }
+            );
+
+            if (user.userId) {
+                batch.set(
+                    doc(db, "users", user.userId, "userAccess", recentlySelectedCompany),
+                    {
+                        id: recentlySelectedCompany,
+                        companyId: recentlySelectedCompany,
+                        roleId: user.roleId || "",
+                        roleName: user.roleName || "",
+                        ...payload,
+                    },
+                    { merge: true }
+                );
+            }
+
+            await batch.commit();
+
+            setUser((current) => ({ ...current, ...payload }));
+            setCompanyUserAccessDoc((current) => (user.userId ? {
+                ...(current || {}),
+                id: recentlySelectedCompany,
+                companyId: recentlySelectedCompany,
+                roleId: user.roleId || "",
+                roleName: user.roleName || "",
+                ...payload,
+            } : current));
+            setRegionalAccessDraft(buildRegionalAccessDraft(payload));
+            toast.success("Regional customer access updated.");
+        } catch (error) {
+            console.error("Error updating regional access:", error);
+            toast.error("Failed to update regional access.");
+        } finally {
+            setIsSavingRegionalAccess(false);
+        }
+    };
+
     const handleSaveVehicleAccess = async () => {
         if (!requirePermission("264", "update company users")) return;
         if (!recentlySelectedCompany || !user?.id) return;
 
         setIsSavingVehicleAccess(true);
         try {
+            const allowPersonalVehicle = canUsePersonalRouteVehicle(routeVehicleAccess);
             const payload = {
                 allowPersonalVehicle,
+                routeVehicleAccess,
                 personalVehicle: {
                     nickName: personalVehicle.nickName.trim(),
                     vehicalType: personalVehicle.vehicalType || "Car",
@@ -2218,51 +2430,195 @@ const CompanyUserDetails = () => {
         </Section>
     );
 
-    const renderRateSheetSection = () => (
+    const renderRegionalAccessSection = () => (
         <Section
-            title="Rate Sheet"
-            description="Current payroll rates and legacy iOS rate sheet entries for this company user."
-            action={can("400") && (
-                <button
-                    type="button"
-                    onClick={() => navigate("/company/settings/payroll-setup?tab=rates")}
-                    className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
-                >
-                    <CurrencyDollarIcon className="h-4 w-4" />
-                    Payroll Rates
-                </button>
+            title="Regional Customer Access"
+            description="Assign the customer-area tags this user can see in customers, reports, and related customer rollups."
+            action={(
+                <Badge className={regionalAccessDraft.mode === "all" ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-blue-50 text-blue-700 ring-blue-200"}>
+                    {regionalAccessDraft.mode === "all" ? "Full access" : `${assignedRegionalTags.length} tag${assignedRegionalTags.length === 1 ? "" : "s"}`}
+                </Badge>
             )}
         >
-            {isRateSheetLoading ? (
-                <p className="text-sm text-slate-500">Loading rate sheet...</p>
-            ) : (
-                <div className="space-y-5">
-                    {rateSheetError && (
-                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                            {rateSheetError}
-                        </div>
-                    )}
-
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                        <StatTile
-                            icon={CurrencyDollarIcon}
-                            title="Active Rates"
-                            value={rateStats.activeRates}
-                            subtitle="Available now"
-                        />
-                        <StatTile
-                            icon={ClockIcon}
-                            title="Scheduled"
-                            value={rateStats.scheduledRates}
-                            subtitle="Future changes"
-                        />
-                        <StatTile
-                            icon={DocumentTextIcon}
-                            title="Total Entries"
-                            value={rateStats.totalRates}
-                            subtitle="Payroll and legacy"
-                        />
+            <div className="space-y-5">
+                {!user.userId && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        This company user is not linked to an auth user yet, so regional access is saved on the company profile until the user link exists.
                     </div>
+                )}
+
+                {companyUserAccessDoc?.id && (
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+                        User access document: {companyUserAccessDoc.id}
+                    </div>
+                )}
+
+                <fieldset>
+                    <legend className="text-sm font-semibold text-slate-700">Access level</legend>
+                    <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1 md:grid-cols-2">
+                        {[
+                            {
+                                value: "all",
+                                label: "Full company access",
+                                description: "Can see all customers and all customer-linked work.",
+                            },
+                            {
+                                value: "limited",
+                                label: "Limited by customer tags",
+                                description: "Can only see customers tagged with one of the assigned areas.",
+                            },
+                        ].map((option) => {
+                            const isSelected = regionalAccessDraft.mode === option.value;
+                            return (
+                                <label
+                                    key={option.value}
+                                    className={`cursor-pointer rounded-md border px-3 py-2 text-sm transition ${isSelected
+                                        ? "border-blue-600 bg-white text-blue-700 shadow-sm"
+                                        : "border-transparent text-slate-600 hover:bg-white"
+                                        } ${!can("264") ? "cursor-not-allowed opacity-70" : ""}`}
+                                >
+                                    <input
+                                        type="radio"
+                                        name="regionalAccessMode"
+                                        value={option.value}
+                                        checked={isSelected}
+                                        onChange={(event) => setRegionalAccessDraft((current) => ({
+                                            ...current,
+                                            mode: event.target.value,
+                                        }))}
+                                        disabled={!can("264")}
+                                        className="sr-only"
+                                    />
+                                    <span className="block font-semibold">{option.label}</span>
+                                    <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                </fieldset>
+
+                {regionalAccessDraft.mode === "limited" && (
+                    <div className="space-y-3">
+                        <label className="block">
+                            <span className="text-sm font-semibold text-slate-700">Customer tags</span>
+                            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                                <input
+                                    value={regionalTagInput}
+                                    list="regional-customer-tag-options"
+                                    onChange={(event) => setRegionalTagInput(event.target.value)}
+                                    onKeyDown={(event) => {
+                                        if (event.key === "Enter") {
+                                            event.preventDefault();
+                                            addRegionalTagToDraft();
+                                        }
+                                    }}
+                                    readOnly={!can("264")}
+                                    className={inputBase}
+                                    placeholder="R1, East, North Route..."
+                                />
+                                <datalist id="regional-customer-tag-options">
+                                    {availableCustomerTags.map((tag) => (
+                                        <option key={tag} value={tag} />
+                                    ))}
+                                </datalist>
+                                {can("264") && (
+                                    <button
+                                        type="button"
+                                        onClick={addRegionalTagToDraft}
+                                        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                                    >
+                                        Add
+                                    </button>
+                                )}
+                            </div>
+                        </label>
+
+                        <div className="flex flex-wrap gap-2">
+                            {assignedRegionalTags.map((tag) => (
+                                <button
+                                    key={tag}
+                                    type="button"
+                                    onClick={() => removeRegionalTagFromDraft(tag)}
+                                    disabled={!can("264")}
+                                    className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                    {tag} x
+                                </button>
+                            ))}
+                            {assignedRegionalTags.length === 0 && (
+                                <span className="text-sm text-slate-500">No customer tags assigned.</span>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-slate-500">
+                        Current setting: <span className="font-semibold text-slate-700">{regionalAccessSummary}</span>
+                    </p>
+                    {can("264") && (
+                        <button
+                            type="button"
+                            onClick={handleSaveRegionalAccess}
+                            disabled={isSavingRegionalAccess}
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {isSavingRegionalAccess ? "Saving..." : "Save Regional Access"}
+                        </button>
+                    )}
+                </div>
+            </div>
+        </Section>
+    );
+
+    const renderRateSheetSection = () => {
+        if (!permissionsReady || !can("420")) return null;
+
+        return (
+            <Section
+                title="Rate Sheet"
+                description="Current payroll rates and legacy iOS rate sheet entries for this company user."
+                action={(
+                    <button
+                        type="button"
+                        onClick={() => navigate("/company/settings/payroll-setup?tab=rates")}
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
+                    >
+                        <CurrencyDollarIcon className="h-4 w-4" />
+                        Payroll Rates
+                    </button>
+                )}
+            >
+                {isRateSheetLoading ? (
+                    <p className="text-sm text-slate-500">Loading rate sheet...</p>
+                ) : (
+                    <div className="space-y-5">
+                        {rateSheetError && (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                                {rateSheetError}
+                            </div>
+                        )}
+
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                            <StatTile
+                                icon={CurrencyDollarIcon}
+                                title="Active Rates"
+                                value={rateStats.activeRates}
+                                subtitle="Available now"
+                            />
+                            <StatTile
+                                icon={ClockIcon}
+                                title="Scheduled"
+                                value={rateStats.scheduledRates}
+                                subtitle="Future changes"
+                            />
+                            <StatTile
+                                icon={DocumentTextIcon}
+                                title="Total Entries"
+                                value={rateStats.totalRates}
+                                subtitle="Payroll and legacy"
+                            />
+                        </div>
 
                     {technicianRates.length === 0 && legacyRateSheets.length === 0 ? (
                         <EmptyState
@@ -2350,8 +2706,9 @@ const CompanyUserDetails = () => {
                     )}
                 </div>
             )}
-        </Section>
-    );
+            </Section>
+        );
+    };
 
     const renderGeneralTab = () => (
         <>
@@ -2450,9 +2807,17 @@ const CompanyUserDetails = () => {
                             <span className="text-sm font-semibold text-slate-700">Auth User ID</span>
                             <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{user.userId || "Not linked"}</span>
                         </div>
+                        {customerAreaFilteringEnabled && (
+                            <div className="flex items-center justify-between gap-3">
+                                <span className="text-sm font-semibold text-slate-700">Regional Access</span>
+                                <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{regionalAccessSummary}</span>
+                            </div>
+                        )}
                     </div>
                 </Section>
             </div>
+
+            {customerAreaFilteringEnabled && renderRegionalAccessSection()}
 
             {isContractor && (
                 <Section title="Linked Company" description="Contractor relationship information.">
@@ -2467,19 +2832,44 @@ const CompanyUserDetails = () => {
 
             <Section
                 title="Route Vehicle Access"
-                description="Permit this technician to use a personal vehicle when starting or managing active routes."
-                action={can("264") && (
-                    <label className="inline-flex items-center gap-2 text-sm font-semibold text-slate-700">
-                        <input
-                            type="checkbox"
-                            checked={allowPersonalVehicle}
-                            onChange={(event) => setAllowPersonalVehicle(event.target.checked)}
-                            className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        Allow personal vehicle
-                    </label>
+                description="Choose which vehicle types this technician can use when starting or managing active routes."
+                action={(
+                    <Badge className="bg-blue-50 text-blue-700 ring-blue-200">
+                        {routeVehicleAccessOptions.find((option) => option.value === routeVehicleAccess)?.label || "Company vehicles"}
+                    </Badge>
                 )}
             >
+                <fieldset className="mb-5">
+                    <legend className="text-sm font-semibold text-slate-700">Access level</legend>
+                    <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1 sm:grid-cols-3">
+                        {routeVehicleAccessOptions.map((option) => {
+                            const isSelected = routeVehicleAccess === option.value;
+
+                            return (
+                                <label
+                                    key={option.value}
+                                    className={`cursor-pointer rounded-md border px-3 py-2 text-sm transition ${isSelected
+                                        ? "border-blue-600 bg-white text-blue-700 shadow-sm"
+                                        : "border-transparent text-slate-600 hover:bg-white"
+                                        } ${!can("264") ? "cursor-not-allowed opacity-70" : ""}`}
+                                >
+                                    <input
+                                        type="radio"
+                                        name="routeVehicleAccess"
+                                        value={option.value}
+                                        checked={isSelected}
+                                        onChange={(event) => setRouteVehicleAccess(event.target.value)}
+                                        disabled={!can("264")}
+                                        className="sr-only"
+                                    />
+                                    <span className="block font-semibold">{option.label}</span>
+                                    <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                </fieldset>
+
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                     <label className="space-y-1.5">
                         <span className="text-sm font-semibold text-slate-700">Nickname</span>

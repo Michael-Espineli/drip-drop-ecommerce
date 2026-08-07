@@ -5,9 +5,10 @@ export class BodyOfWater {
   constructor({
     id = null,
     name = "",
-    gallons = "",
-    material = "",
-    customerId = "",
+	    gallons = "",
+	    material = "",
+	    waterType = "",
+	    customerId = "",
     serviceLocationId = "",
     notes = null,
     shape = null,
@@ -21,8 +22,9 @@ export class BodyOfWater {
   } = {}) {
     this.id = id;
     this.name = name;
-    this.gallons = gallons;
-    this.material = material;
+	    this.gallons = gallons;
+	    this.material = material;
+	    this.waterType = waterType;
     this.customerId = customerId;
     this.serviceLocationId = serviceLocationId;
     this.notes = notes;
@@ -39,8 +41,9 @@ export class BodyOfWater {
   toFirestore() {
     return {
       name: this.name,
-      gallons: this.gallons,
-      material: this.material,
+	      gallons: this.gallons,
+	      material: this.material,
+	      waterType: this.waterType,
       customerId: this.customerId,
       serviceLocationId: this.serviceLocationId,
       notes: this.notes,
@@ -63,8 +66,9 @@ export class BodyOfWater {
     return new BodyOfWater({
       id: snapshot.id,
       name: data.name || "",
-      gallons: data.gallons || "",
-      material: data.material || "",
+	      gallons: data.gallons || "",
+	      material: data.material || "",
+	      waterType: data.waterType || "",
       customerId: data.customerId || "",
       serviceLocationId: data.serviceLocationId || "",
       notes: data.notes || null,

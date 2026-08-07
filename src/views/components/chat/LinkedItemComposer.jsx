@@ -184,7 +184,7 @@ const LinkedItemComposer = ({
               <p className="font-semibold text-slate-800">No records found.</p>
               <p className="mt-1 text-sm text-slate-500">
                 {audience === 'company'
-                  ? 'Records are filtered to the customer in this conversation.'
+                  ? 'Customer conversations filter by customer when possible. Internal conversations can browse company records.'
                   : 'Only records available to your account are shown.'}
               </p>
             </div>

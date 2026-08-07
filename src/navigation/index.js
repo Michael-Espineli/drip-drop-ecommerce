@@ -6,7 +6,6 @@ export const DEFAULT_COMPANY_CATEGORY_ORDER = [
     'Finance',
     'Marketing',
     'Migration',
-    'Settings',
 ];
 
 export const COMPANY_PINNED_CATEGORY = 'NA';
