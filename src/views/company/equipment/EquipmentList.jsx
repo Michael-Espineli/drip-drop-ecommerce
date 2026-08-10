@@ -1057,14 +1057,25 @@ export default function EquipmentList() {
             </div>
           </div>
 
-          {can("62") && (
-            <Link
-              to={"/company/equipment/createNew"}
-              className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
-            >
-              Create New
-            </Link>
-          )}
+          <div className="flex flex-wrap gap-2 lg:justify-end">
+            {can("60") && (
+              <Link
+                to="/company/equipment/universal-suggestions"
+                className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Equipment Suggestions
+              </Link>
+            )}
+
+            {can("62") && (
+              <Link
+                to={"/company/equipment/createNew"}
+                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
+              >
+                Create New
+              </Link>
+            )}
+          </div>
         </div>
         </section>
 

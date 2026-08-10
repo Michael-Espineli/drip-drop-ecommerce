@@ -18,6 +18,7 @@ import {
     uploadServiceLocationPhoto,
     validateServiceLocationPhotoFile,
 } from '../../../utils/serviceLocationPhotos';
+import ShareItemButton from '../../components/share/ShareItemButton';
 
 const ServiceLocationDetails = () => {
     const { serviceLocationId } = useParams();
@@ -233,9 +234,22 @@ const ServiceLocationDetails = () => {
                 ) : (
                     <div className='w-full flex justify-between items-center'>
                         <h1 className='font-bold text-xl'>Service Location Information</h1>
-                        {can("44") && (
-                            <button onClick={() => setEdit(true)} className='bg-blue-500 hover:bg-blue-700 cursor-pointer font-normal ml-2 rounded text-white px-4 py-1 text-base'>Edit</button>
-                        )}
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <ShareItemButton
+                                type="serviceLocation"
+                                recordId={serviceLocationId}
+                                title={serviceLocation.nickName || serviceLocation.name || 'Service Location'}
+                                subtitle={[serviceLocation.customerName, serviceLocation.address?.streetAddress].filter(Boolean).join(' - ')}
+                                companyId={recentlySelectedCompany}
+                                customerId={serviceLocation.customerId}
+                                collectionPath={`companies/${recentlySelectedCompany}/serviceLocations`}
+                                webPath={`/company/serviceLocations/detail/${serviceLocationId}`}
+                                buttonClassName="inline-flex items-center justify-center gap-2 rounded bg-white/10 px-4 py-1 text-base font-normal text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
+                            />
+                            {can("44") && (
+                                <button onClick={() => setEdit(true)} className='bg-blue-500 hover:bg-blue-700 cursor-pointer font-normal rounded text-white px-4 py-1 text-base'>Edit</button>
+                            )}
+                        </div>
                     </div>
                 )}
 

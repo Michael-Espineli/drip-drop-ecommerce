@@ -664,6 +664,14 @@ service cloud.firestore {
       allow read, update, delete: if isDripDropAdmin();
     }
 
+    match /poolProspectLists/{listId} {
+      allow read, create, update, delete: if isDripDropAdmin();
+
+      match /{document=**} {
+        allow read, create, update, delete: if isDripDropAdmin();
+      }
+    }
+
     match /{document=**} {
       allow read, write: if isSuperMaster();
     }

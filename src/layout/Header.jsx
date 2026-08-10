@@ -9,20 +9,35 @@ import CompanyCommandSearch from "./CompanyCommandSearch";
 import StartChatModal from "../views/components/chat/StartChatModal";
 import { useTheme } from "../context/ThemeContext";
 import { db } from "../utils/config";
+import { isChatUnreadFor, listenVisibleChats } from "../utils/chatMessaging";
 import {
     getCustomerTagOptions,
     getEffectiveCustomerRegionAccess,
+    normalizeCustomerTags,
 } from "../utils/customerTags";
 import {
     ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID,
+    alertBelongsToCompany,
     alertNeedsAttention,
-    normalizeAlertNotification,
+    attachAlertNotificationSource,
+    mergeAlertNotifications,
 } from "../utils/models/AlertNotification";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../utils/models/FeatureFlag";
- 
+
+const HeaderBadge = ({ count }) => {
+    if (!count) return null;
+
+    return (
+        <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
+            {count > 99 ? '99+' : count}
+        </span>
+    );
+};
+
 const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     const [isStartChatOpen, setIsStartChatOpen] = useState(false);
     const [alertCount, setAlertCount] = useState(0);
+    const [messageCount, setMessageCount] = useState(0);
     const [customerRegionOptions, setCustomerRegionOptions] = useState([]);
     const [isRegionLoading, setIsRegionLoading] = useState(false);
     const { isDarkMode, toggleTheme } = useTheme();
@@ -36,6 +51,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         companyUserAccess,
         companyRole,
         companyRoleLoading,
+        companyRoleLoaded,
         hasCompanyPermission,
         selectedCustomerRegionTag,
         setSelectedCustomerRegionTag,
@@ -48,42 +64,137 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         [companyUserAccess, companyRole]
     );
 
-    const alertsEnabled = accountType === 'Company'
-        && recentlySelectedCompany
+    const isCompanyShell = accountType === 'Company' && recentlySelectedCompany;
+    const alertsEnabled = (accountType === 'Client' || isCompanyShell)
         && featureFlagsLoaded
         && isFeatureEnabled(ALERTS_NOTIFICATIONS_FEATURE_FLAG_ID);
+    const messagingEnabled = featureFlagsLoaded && isFeatureEnabled("feature_flag_001");
     const customerAreaFilteringEnabled = accountType === 'Company'
         && recentlySelectedCompany
         && featureFlagsLoaded
         && isFeatureEnabled(CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID);
+    const customerAreaAccessReady = Boolean(
+        customerAreaFilteringEnabled &&
+        companyRoleLoaded &&
+        companyUserAccess
+    );
+    const customerRegionSelectLabel = customerRegionAccess.fullAccess
+        ? "Area"
+        : customerRegionAccess.source === "role"
+            ? "Role Area"
+            : "Assigned Area";
+    const customerRegionEmptyLabel = customerRegionAccess.fullAccess
+        ? "All areas"
+        : customerRegionAccess.source === "role"
+            ? "All role areas"
+            : "All assigned";
 
     useEffect(() => {
-        if (!alertsEnabled || !user) {
+        if (!alertsEnabled || !user?.uid) {
             setAlertCount(0);
             return undefined;
         }
 
-        return onSnapshot(
-            collection(db, "companies", recentlySelectedCompany, "alerts"),
-            (snapshot) => {
-                const activeCount = snapshot.docs
-                    .map(normalizeAlertNotification)
-                    .filter((alert) => alertNeedsAttention(alert))
-                    .length;
+        const companyId = isCompanyShell ? recentlySelectedCompany : "";
+        const alertSources = { company: [], personal: [] };
 
-                setAlertCount(activeCount);
+        const updateAlertCount = (scope, nextAlerts) => {
+            alertSources[scope] = nextAlerts;
+            const activeCount = mergeAlertNotifications([
+                ...alertSources.personal,
+                ...alertSources.company,
+            ])
+                .filter((alert) => alertBelongsToCompany(alert, companyId))
+                .filter(alertNeedsAttention)
+                .length;
+
+            setAlertCount(activeCount);
+        };
+
+        let unsubscribeCompanyAlerts = () => {};
+        let unsubscribePersonalAlerts = () => {};
+
+        if (companyId) {
+            unsubscribeCompanyAlerts = onSnapshot(
+                collection(db, "companies", companyId, "alerts"),
+                (snapshot) => {
+                    updateAlertCount(
+                        "company",
+                        snapshot.docs.map((alertDoc) => attachAlertNotificationSource(alertDoc, "company"))
+                    );
+                },
+                (error) => {
+                    console.error("Error loading header company alert count:", error);
+                    updateAlertCount("company", []);
+                }
+            );
+        }
+
+        unsubscribePersonalAlerts = onSnapshot(
+            collection(db, "users", user.uid, "alerts"),
+            (snapshot) => {
+                const personalAlerts = snapshot.docs
+                    .map((alertDoc) => attachAlertNotificationSource(alertDoc, "personal"))
+                    .filter((alert) => alertBelongsToCompany(alert, companyId));
+
+                updateAlertCount("personal", personalAlerts);
             },
             (error) => {
-                console.error("Error loading header alert count:", error);
-                setAlertCount(0);
+                console.error("Error loading header personal alert count:", error);
+                updateAlertCount("personal", []);
             }
         );
-    }, [alertsEnabled, recentlySelectedCompany, user]);
+
+        return () => {
+            unsubscribeCompanyAlerts();
+            unsubscribePersonalAlerts();
+        };
+    }, [alertsEnabled, isCompanyShell, recentlySelectedCompany, user]);
+
+    useEffect(() => {
+        const companyId = isCompanyShell ? recentlySelectedCompany : "";
+        const canListenForMessages = messagingEnabled
+            && user?.uid
+            && (
+                accountType === 'Client'
+                || (isCompanyShell && companyRoleLoaded && companyUserAccess)
+            );
+
+        if (!canListenForMessages) {
+            setMessageCount(0);
+            return undefined;
+        }
+
+        return listenVisibleChats({
+            db,
+            userId: user.uid,
+            companyId,
+            onChange: (visibleChats) => {
+                const unreadCount = visibleChats
+                    .filter((chat) => isChatUnreadFor(chat, user.uid, companyId))
+                    .length;
+
+                setMessageCount(unreadCount);
+            },
+            onError: (error) => {
+                console.error("Error loading header message count:", error);
+                setMessageCount(0);
+            },
+        });
+    }, [
+        accountType,
+        companyRoleLoaded,
+        companyUserAccess,
+        isCompanyShell,
+        messagingEnabled,
+        recentlySelectedCompany,
+        user,
+    ]);
 
     useEffect(() => {
         let isActive = true;
 
-        if (!customerAreaFilteringEnabled || companyRoleLoading) {
+        if (!customerAreaAccessReady || companyRoleLoading) {
             setCustomerRegionOptions([]);
             setIsRegionLoading(false);
             return () => {
@@ -93,12 +204,13 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
 
         const loadCustomerRegions = async () => {
             if (!customerRegionAccess.fullAccess) {
+                const allowedTags = normalizeCustomerTags(customerRegionAccess.tags);
                 if (!isActive) return;
-                setCustomerRegionOptions(customerRegionAccess.tags);
+                setCustomerRegionOptions(allowedTags);
                 setIsRegionLoading(false);
                 if (
                     selectedCustomerRegionTag &&
-                    !customerRegionAccess.tags.some((tag) => tag.toLowerCase() === selectedCustomerRegionTag.toLowerCase())
+                    !allowedTags.some((tag) => tag.toLowerCase() === selectedCustomerRegionTag.toLowerCase())
                 ) {
                     setSelectedCustomerRegionTag("");
                 }
@@ -138,7 +250,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     }, [
         accountType,
         recentlySelectedCompany,
-        customerAreaFilteringEnabled,
+        customerAreaAccessReady,
         companyRoleLoading,
         customerRegionAccess,
         selectedCustomerRegionTag,
@@ -161,7 +273,6 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
     const shellMarginClass = accountType === 'Company' && recentlySelectedCompany && isCompanySidebarCollapsed
         ? "lg:ml-[76px]"
         : "lg:ml-[260px]";
-    const messagingEnabled = featureFlagsLoaded && isFeatureEnabled("feature_flag_001");
     const canStartChat = messagingEnabled && (
         (accountType === 'Company' && recentlySelectedCompany)
         || accountType === 'Client'
@@ -170,6 +281,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
         companyRoleLoading || hasCompanyPermission("612")
     );
     const startChatMode = accountType === 'Company' ? 'company' : 'client';
+    const notificationsPath = accountType === 'Company' ? '/company/alerts' : '/client/notifications';
     // const profileLink = '/company/profile' 
     return (
         <>
@@ -195,9 +307,9 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
 
                     {/* Profile Section */}
                     <div className='relative flex shrink-0 items-center justify-center gap-3'>
-                        {customerAreaFilteringEnabled && customerRegionOptions.length > 0 && (
+                        {customerAreaAccessReady && customerRegionOptions.length > 0 && (
                             <label className="app-header-action hidden h-10 items-center gap-2 rounded-md px-2 text-xs font-semibold transition lg:flex">
-                                <span className="hidden xl:inline">Area</span>
+                                <span className="hidden xl:inline">{customerRegionSelectLabel}</span>
                                 <select
                                     value={selectedCustomerRegionTag || ""}
                                     onChange={(event) => setSelectedCustomerRegionTag(event.target.value)}
@@ -205,7 +317,7 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                                     className="h-8 max-w-[150px] rounded-md border border-slate-200 bg-white px-2 text-sm font-semibold text-slate-800 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-70"
                                     aria-label="Customer area filter"
                                 >
-                                    <option value="">{customerRegionAccess.fullAccess ? "All areas" : "All assigned"}</option>
+                                    <option value="">{customerRegionEmptyLabel}</option>
                                     {customerRegionOptions.map((tag) => (
                                         <option key={tag} value={tag}>{tag}</option>
                                     ))}
@@ -232,28 +344,26 @@ const Header = ({ showSidebar, setShowSidebar, isCompanySidebarCollapsed }) => {
                         </button>
                         {alertsEnabled && (
                             <Link
-                                to="/company/alerts"
+                                to={notificationsPath}
                                 className="app-header-action relative flex h-10 w-10 items-center justify-center rounded-md transition"
                                 aria-label={alertCount > 0 ? `${alertCount} active notifications` : "Notifications"}
                                 title="Notifications"
                             >
                                 <MdNotificationsActive className="h-5 w-5" />
-                                {alertCount > 0 && (
-                                    <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-[20px] items-center justify-center rounded-full bg-red-500 px-1 text-[10px] font-bold text-white shadow-sm">
-                                        {alertCount > 99 ? '99+' : alertCount}
-                                    </span>
-                                )}
+                                <HeaderBadge count={alertCount} />
                             </Link>
                         )}
                         {canStartChat && (
                             <button
                                 type="button"
                                 onClick={() => setIsStartChatOpen(true)}
-                                className="app-header-action flex h-10 items-center gap-2 rounded-md px-3 text-sm font-semibold transition"
-                                aria-label="Start a new chat"
+                                className="app-header-action relative flex h-10 items-center gap-2 rounded-md px-3 text-sm font-semibold transition"
+                                aria-label={messageCount > 0 ? `Start a new chat, ${messageCount} unread messages` : "Start a new chat"}
+                                title={messageCount > 0 ? `${messageCount} unread messages` : "Start a new chat"}
                             >
                                 <ChatBubbleLeftRightIcon className="h-5 w-5" />
                                 <span className="hidden xl:inline">Message</span>
+                                <HeaderBadge count={messageCount} />
                             </button>
                         )}
                         {canOpenSetupGuide && (

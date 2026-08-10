@@ -94,10 +94,9 @@ export const duplicateTermsTemplate = async (companyId, sourceTemplateId) => {
 
   const now = new Date();
   const duplicatedTemplate = new TermsTemplate({
+    ...sourceTemplate.toFirestore(),
+    id: undefined,
     name: getNextTermsTemplateDuplicateName(sourceTemplate.name, existingTemplates),
-    description: sourceTemplate.description,
-    content: sourceTemplate.content,
-    category: sourceTemplate.category,
     createdAt: now,
     updatedAt: now,
   });

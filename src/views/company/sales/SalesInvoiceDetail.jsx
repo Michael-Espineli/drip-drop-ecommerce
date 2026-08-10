@@ -28,6 +28,8 @@ import {
   invoiceBalanceCents,
   recordManualSalesPayment,
 } from '../../../utils/sales/manualBilling';
+import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
+import ShareItemButton from '../../components/share/ShareItemButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -565,6 +567,18 @@ const SalesInvoiceDetail = () => {
             </div>
 
             <div className="flex flex-wrap gap-2">
+              <ShareItemButton
+                type="invoice"
+                recordId={invoiceId}
+                title={invoice?.invoiceNumber ? `Invoice ${invoice.invoiceNumber}` : 'Invoice'}
+                subtitle={[invoice?.customerName, invoice?.status, formatCurrency(balanceCents)].filter(Boolean).join(' - ')}
+                companyId={invoice?.companyId || recentlySelectedCompany}
+                customerId={invoice?.customerId}
+                customerUserId={invoice?.customerUserId}
+                collectionPath={salesCollectionNames.invoices}
+                webPath={`/company/sales/invoices/${invoiceId}`}
+                disabled={!invoice || companyMismatch}
+              />
               {invoice?.stripeHostedInvoiceUrl && (
                 <a
                   href={invoice.stripeHostedInvoiceUrl}
@@ -814,6 +828,12 @@ const SalesInvoiceDetail = () => {
             </main>
 
             <aside className="space-y-6">
+              <CustomerBillingNotesPanel
+                companyId={invoice.companyId || recentlySelectedCompany}
+                customerId={invoice.customerId}
+                customerName={invoice.customerName}
+              />
+
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Totals</h2>
                 <dl className="mt-4 space-y-3 text-sm">

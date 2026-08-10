@@ -29,9 +29,12 @@ import {
   billingFrequencyOptions,
   formatBillingFrequency,
   formatServiceFrequency,
+  paymentTermsOptions,
+  rateTypeOptions,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
 import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
+import { applyTermsTemplateAgreementDefaults } from '../../../utils/terms/termsTemplateAgreementDefaults';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -619,8 +622,15 @@ const CreateSalesAgreement = () => {
       (templates) => {
         setTermsTemplates(templates);
         setForm((current) => ({
-          ...current,
-          termsTemplateId: current.termsTemplateId || templates[0]?.id || '',
+          ...applyTermsTemplateAgreementDefaults(
+            {
+              ...current,
+              termsTemplateId: current.termsTemplateId || templates[0]?.id || '',
+            },
+            current.termsTemplateId
+              ? {}
+              : templates.find((template) => template.id === templates[0]?.id) || {}
+          ),
         }));
       },
       (error) => {
@@ -716,6 +726,20 @@ const CreateSalesAgreement = () => {
       ...current,
       [field]: value,
     }));
+  };
+
+  const applyTermsTemplateToForm = (templateId) => {
+    const template = termsTemplates.find((item) => item.id === templateId) || {};
+
+    setForm((current) => (
+      applyTermsTemplateAgreementDefaults(
+        {
+          ...current,
+          termsTemplateId: templateId,
+        },
+        template
+      )
+    ));
   };
 
   const updateChemicalBillingMode = (value) => {
@@ -865,7 +889,6 @@ const CreateSalesAgreement = () => {
   const canSave = Boolean(
     recentlySelectedCompany &&
     form.customerId &&
-    form.email &&
     form.serviceLocationIds.length > 0 &&
     form.title.trim() &&
     lineItems.length > 0
@@ -875,7 +898,7 @@ const CreateSalesAgreement = () => {
     event.preventDefault();
 
     if (!canSave) {
-      toast.error('Add a customer, email, service location, title, and at least one line item.');
+      toast.error('Add a customer, service location, title, and at least one line item.');
       return;
     }
 
@@ -1061,6 +1084,7 @@ const CreateSalesAgreement = () => {
                 <div>
                   <label htmlFor="email" className="block text-sm font-semibold text-slate-700">
                     Billing Email
+                    <span className="ml-1 font-normal text-slate-500">(optional until send)</span>
                   </label>
                   <input
                     id="email"
@@ -1216,10 +1240,9 @@ const CreateSalesAgreement = () => {
                         onChange={(event) => handleFieldChange('rateType', event.target.value)}
                         className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                       >
-                        <option value="perMonth">Per Month</option>
-                        <option value="perVisit">Per Visit</option>
-                        <option value="oneTime">One Time</option>
-                        <option value="custom">Custom</option>
+                        {rateTypeOptions.map((option) => (
+                          <option key={option.value} value={option.value}>{option.label}</option>
+                        ))}
                       </select>
                     </div>
                   </div>
@@ -1359,10 +1382,9 @@ const CreateSalesAgreement = () => {
                       onChange={(event) => handleFieldChange('paymentTerms', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="dueOnReceipt">Due On Receipt</option>
-                      <option value="net7">Net 7</option>
-                      <option value="net15">Net 15</option>
-                      <option value="net30">Net 30</option>
+                      {paymentTermsOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -1475,7 +1497,7 @@ const CreateSalesAgreement = () => {
                 <select
                   id="termsTemplateId"
                   value={form.termsTemplateId}
-                  onChange={(event) => handleFieldChange('termsTemplateId', event.target.value)}
+                  onChange={(event) => applyTermsTemplateToForm(event.target.value)}
                   className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                 >
                   <option value="">No template selected</option>
@@ -1545,7 +1567,7 @@ const CreateSalesAgreement = () => {
               </dl>
 
               <div className="mt-5 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                This saves a draft only. Sending the SendGrid agreement email will be wired after the review and acceptance flow exists.
+                This saves a draft only. Add or verify a recipient email when you are ready to send.
               </div>
 
               <button

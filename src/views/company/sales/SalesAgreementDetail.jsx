@@ -18,6 +18,7 @@ import {
   FaCheckCircle,
   FaCopy,
   FaCreditCard,
+  FaDownload,
   FaEdit,
   FaEnvelope,
   FaExclamationTriangle,
@@ -48,6 +49,8 @@ import {
   salesCollectionNames,
 } from '../../../utils/models/Sales';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
+import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
+import ServiceAgreementSendDialog from './components/ServiceAgreementSendDialog';
 import { getCallableAuthPayload } from '../../../utils/callableAuth';
 import { ensureBillingSubscriptionForAgreement } from '../../../utils/sales/agreementBilling';
 import {
@@ -61,11 +64,17 @@ import {
   billingFrequencyOptions,
   formatBillingFrequency,
   formatServiceFrequency,
+  paymentTermsOptions,
+  rateTypeOptions,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
 import { chemicalBillingLabel } from '../../../utils/sales/chemicalBilling';
 import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
 import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
+import {
+  applyTermsTemplateAgreementDefaults,
+  termsTemplateDefaultsFromAgreementDraft,
+} from '../../../utils/terms/termsTemplateAgreementDefaults';
 import {
   deleteContractTerm,
   getTerms,
@@ -75,6 +84,7 @@ import {
 } from '../../../utils/terms/termsTemplateFirestore';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { appConfirm } from '../../../utils/appDialog';
+import ShareItemButton from '../../components/share/ShareItemButton';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -468,6 +478,372 @@ const locationLine = (location = {}) => [
   [location.city, location.state, location.zip].filter(Boolean).join(' '),
 ].filter(Boolean).join(', ');
 
+const escapeAgreementHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[char]));
+
+const agreementHtmlWithBreaks = (value) => escapeAgreementHtml(value).replace(/\n/g, '<br>');
+
+const firstAgreementText = (...values) => {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+
+  return '';
+};
+
+const agreementLocationForPrint = (agreement = {}) => {
+  const firstLocation = Array.isArray(agreement.serviceLocationSnapshots)
+    ? agreement.serviceLocationSnapshots[0]
+    : null;
+
+  const location = firstLocation || {};
+  const streetAddress = firstAgreementText(
+    location.streetAddress,
+    agreement.address01,
+    agreement.address?.streetAddress
+  );
+  const address02 = firstAgreementText(location.address02, agreement.address02, agreement.address?.address02);
+  const city = firstAgreementText(location.city, agreement.city, agreement.address?.city);
+  const state = firstAgreementText(location.state, agreement.state, agreement.address?.state);
+  const zip = firstAgreementText(location.zip, agreement.zip, agreement.address?.zip);
+
+  return {
+    name: firstAgreementText(location.nickName, location.name, agreement.serviceLocationName, streetAddress),
+    streetAddress,
+    address02,
+    city,
+    state,
+    zip,
+    addressText: [
+      streetAddress,
+      address02,
+      [city, state, zip].filter(Boolean).join(' '),
+    ].filter(Boolean).join(', '),
+  };
+};
+
+const agreementLineItemTotalCents = (item = {}) => {
+  const explicitTotal = Number(item.totalAmountCents);
+  if (Number.isFinite(explicitTotal) && explicitTotal !== 0) return explicitTotal;
+
+  const quantity = Number(item.quantity || 1) || 1;
+  return (Number(item.unitAmountCents || item.amountCents || 0) || 0) * quantity;
+};
+
+const agreementPrintSubtotalCents = (agreement = {}) => {
+  const explicitSubtotal = Number(agreement.subtotalAmountCents);
+  if (Number.isFinite(explicitSubtotal) && explicitSubtotal !== 0) return explicitSubtotal;
+
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  return lineItems.reduce((total, item) => total + agreementLineItemTotalCents(item), 0);
+};
+
+const agreementPrintTotalCents = (agreement = {}) => {
+  const subtotal = agreementPrintSubtotalCents(agreement);
+  const explicitTotal = Number(agreement.totalAmountCents || agreement.rateAmountCents || subtotal);
+  return Number.isFinite(explicitTotal) ? explicitTotal : subtotal;
+};
+
+const buildPrintableServiceAgreementHtml = ({ agreement = {}, companyName = '' }) => {
+  const providerName = firstAgreementText(agreement.companyName, companyName, 'Service Provider');
+  const clientName = firstAgreementText(agreement.customerName, agreement.customerDisplayName, 'Client');
+  const clientEmail = firstAgreementText(agreement.email, agreement.customerEmail, agreement.billingEmail);
+  const location = agreementLocationForPrint(agreement);
+  const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
+  const termsList = termsToStrings(agreement.termsList);
+  const termsIntro = stripNumberedTermsFromContent(agreement.terms, termsList);
+  const preparedDate = formatDate(agreement.createdAt || agreement.sentAt || new Date());
+  const totalAmountCents = agreementPrintTotalCents(agreement);
+  const documentTitle = firstAgreementText(agreement.title, 'Service Agreement');
+  const serviceFrequency = firstAgreementText(agreement.serviceFrequencyLabel, formatServiceFrequency(agreement));
+  const billingFrequency = firstAgreementText(formatBillingFrequency(agreement));
+  const paymentTerms = labelize(agreement.paymentTerms || 'dueOnReceipt');
+  const lineItemRows = lineItems.length
+    ? lineItems.map((item) => {
+      const quantity = Number(item.quantity || 1) || 1;
+      return `
+        <tr>
+          <td>
+            <strong>${escapeAgreementHtml(item.name || item.description || 'Service')}</strong>
+            ${item.description ? `<div class="muted">${agreementHtmlWithBreaks(item.description)}</div>` : ''}
+          </td>
+          <td>${escapeAgreementHtml(quantity)}</td>
+          <td>${escapeAgreementHtml(formatCurrency(item.unitAmountCents))}</td>
+          <td><strong>${escapeAgreementHtml(formatCurrency(agreementLineItemTotalCents(item)))}</strong></td>
+        </tr>
+      `;
+    }).join('')
+    : '<tr><td colspan="4" class="muted">No itemized services were saved with this agreement.</td></tr>';
+  const termsHtml = [
+    termsIntro ? `<p>${agreementHtmlWithBreaks(termsIntro)}</p>` : '',
+    termsList.length
+      ? `<ol>${termsList.map((term) => `<li>${agreementHtmlWithBreaks(term)}</li>`).join('')}</ol>`
+      : '',
+  ].filter(Boolean).join('');
+
+  return `
+    <!doctype html>
+    <html>
+      <head>
+        <title>${escapeAgreementHtml(providerName)} - ${escapeAgreementHtml(documentTitle)}</title>
+        <style>
+          @page { margin: 0.35in; size: Letter; }
+          * { box-sizing: border-box; }
+          body {
+            color: #111827;
+            font-family: Arial, Helvetica, sans-serif;
+            font-size: 11px;
+            line-height: 1.45;
+            margin: 0;
+            background: #ffffff;
+          }
+          .page {
+            max-width: 7.7in;
+            margin: 0 auto;
+            padding: 0.45in;
+          }
+          header {
+            border-bottom: 2px solid #111827;
+            margin-bottom: 18px;
+            padding-bottom: 12px;
+            text-align: center;
+          }
+          h1 {
+            font-size: 18px;
+            letter-spacing: 0;
+            margin: 0 0 10px;
+            text-transform: uppercase;
+          }
+          .document-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            color: #4b5563;
+            font-size: 10px;
+            text-transform: uppercase;
+          }
+          section {
+            break-inside: avoid;
+            margin-top: 14px;
+          }
+          h2 {
+            font-size: 11px;
+            margin: 0 0 7px;
+            text-transform: uppercase;
+          }
+          p {
+            margin: 0 0 8px;
+          }
+          .blank {
+            border-bottom: 1px solid #111827;
+            display: inline-block;
+            min-width: 155px;
+            padding: 0 4px 1px;
+          }
+          .long-blank {
+            min-width: 245px;
+          }
+          .contract-box {
+            border: 1px solid #111827;
+            min-height: 76px;
+            padding: 9px;
+            white-space: normal;
+          }
+          .muted {
+            color: #4b5563;
+            font-size: 10px;
+            font-weight: 400;
+            margin-top: 3px;
+          }
+          table {
+            border-collapse: collapse;
+            width: 100%;
+          }
+          .line-items {
+            margin-top: 8px;
+          }
+          .line-items th,
+          .line-items td {
+            border: 1px solid #9ca3af;
+            padding: 6px;
+            text-align: left;
+            vertical-align: top;
+          }
+          .line-items th {
+            background: #f3f4f6;
+            font-size: 9px;
+            text-transform: uppercase;
+          }
+          .summary-grid {
+            display: grid;
+            gap: 8px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+          }
+          .summary-cell {
+            border: 1px solid #d1d5db;
+            padding: 8px;
+          }
+          .summary-cell span {
+            color: #4b5563;
+            display: block;
+            font-size: 9px;
+            font-weight: 700;
+            text-transform: uppercase;
+          }
+          .summary-cell strong {
+            display: block;
+            margin-top: 3px;
+          }
+          ol {
+            margin: 0;
+            padding-left: 18px;
+          }
+          li {
+            margin-bottom: 5px;
+          }
+          .signature-grid {
+            display: grid;
+            gap: 26px;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            margin-top: 32px;
+          }
+          .signature-line {
+            border-top: 1px solid #111827;
+            padding-top: 5px;
+          }
+          footer {
+            align-items: center;
+            color: #4b5563;
+            display: flex;
+            font-size: 10px;
+            justify-content: space-between;
+            margin-top: 28px;
+          }
+          @media print {
+            body { margin: 0; padding: 0; }
+            .page { max-width: none; padding: 0.35in; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="page">
+          <header>
+            <h1>Professional Service Agreement</h1>
+            <div class="document-meta">
+              <span>${escapeAgreementHtml(documentTitle)}</span>
+              <span>Agreement: ${escapeAgreementHtml(agreement.id || 'Not assigned')}</span>
+              <span>Prepared: ${escapeAgreementHtml(preparedDate)}</span>
+            </div>
+          </header>
+
+          <section>
+            <h2>1. The Parties</h2>
+            <p>
+              This Service Agreement (the "Agreement") is made between
+              <span class="blank long-blank">${escapeAgreementHtml(providerName)}</span>
+              ("Service Provider") and
+              <span class="blank long-blank">${escapeAgreementHtml(clientName)}</span>
+              ("Client").
+            </p>
+            <p>
+              Client contact:
+              <span class="blank long-blank">${escapeAgreementHtml(clientEmail || 'Not provided')}</span>
+              Service location:
+              <span class="blank long-blank">${escapeAgreementHtml(location.addressText || location.name || 'Not provided')}</span>
+            </p>
+            <p>The Service Provider and the Client are each referred to as a "Party" and collectively as the "Parties."</p>
+          </section>
+
+          <section>
+            <h2>2. Term</h2>
+            <p>
+              The term of this Agreement shall commence on
+              <span class="blank">${escapeAgreementHtml(formatDate(agreement.startDate))}</span>.
+              ${agreement.expiresAt ? `This offer should be reviewed by <span class="blank">${escapeAgreementHtml(formatDate(agreement.expiresAt))}</span>.` : ''}
+            </p>
+            <div class="summary-grid">
+              <div class="summary-cell"><span>Service Frequency</span><strong>${escapeAgreementHtml(serviceFrequency || 'Not set')}</strong></div>
+              <div class="summary-cell"><span>Billing Frequency</span><strong>${escapeAgreementHtml(billingFrequency || 'Not set')}</strong></div>
+            </div>
+          </section>
+
+          <section>
+            <h2>3. Services</h2>
+            <div class="contract-box">
+              <p><strong>${escapeAgreementHtml(documentTitle)}</strong></p>
+              <p>${agreement.description ? agreementHtmlWithBreaks(agreement.description) : 'The Service Provider agrees to provide the services listed below.'}</p>
+              <table class="line-items">
+                <thead>
+                  <tr>
+                    <th>Service</th>
+                    <th>Qty</th>
+                    <th>Unit</th>
+                    <th>Total</th>
+                  </tr>
+                </thead>
+                <tbody>${lineItemRows}</tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <h2>4. Payment Amount</h2>
+            <p>
+              The Client agrees to pay the Service Provider
+              <span class="blank">${escapeAgreementHtml(formatCurrency(totalAmountCents))}</span>
+              for the services performed under this Agreement, billed
+              <span class="blank">${escapeAgreementHtml(billingFrequency || 'as agreed')}</span>.
+            </p>
+            <div class="summary-grid">
+              <div class="summary-cell"><span>Payment Terms</span><strong>${escapeAgreementHtml(paymentTerms)}</strong></div>
+              <div class="summary-cell"><span>Billing Start</span><strong>${escapeAgreementHtml(formatDate(agreement.startDate))}</strong></div>
+            </div>
+          </section>
+
+          <section>
+            <h2>5. Terms And Conditions</h2>
+            ${termsHtml || '<p class="muted">No additional terms were saved with this agreement.</p>'}
+          </section>
+
+          <section>
+            <h2>6. Acceptance</h2>
+            <p>
+              By signing below or accepting through the provided DripDrop review link, the Client authorizes the Service
+              Provider to begin the services described in this Agreement.
+            </p>
+            <div class="signature-grid">
+              <div>
+                <div class="signature-line">Client Signature</div>
+              </div>
+              <div>
+                <div class="signature-line">Date</div>
+              </div>
+              <div>
+                <div class="signature-line">Service Provider Representative</div>
+              </div>
+              <div>
+                <div class="signature-line">Date</div>
+              </div>
+            </div>
+          </section>
+
+          <footer>
+            <strong>DripDrop eSign</strong>
+            <span>Page 1 of 1</span>
+          </footer>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 const createEditDraft = (agreement) => ({
   title: agreement?.title || '',
   description: agreement?.description || '',
@@ -570,6 +946,7 @@ const SalesAgreementDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+  const [showSendDialog, setShowSendDialog] = useState(false);
   const [includeInspectionReport, setIncludeInspectionReport] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editDraft, setEditDraft] = useState(null);
@@ -971,7 +1348,9 @@ const SalesAgreementDetail = () => {
     user &&
     !companyMismatch &&
     !editing &&
-    readinessItems.every((item) => item.ready) &&
+    readinessItems
+      .filter((item) => item.title !== 'Customer email')
+      .every((item) => item.ready) &&
     !sending &&
     normalizeStatus(agreement.status) !== normalizeStatus(SalesAgreementStatus.accepted) &&
     !['canceled', 'rejected', 'expired', 'superseded'].includes(normalizeStatus(agreement.status))
@@ -991,6 +1370,7 @@ const SalesAgreementDetail = () => {
     sendEmailDisabledReasons.push('Save or cancel edit mode before sending.');
   }
   readinessItems
+    .filter((item) => item.title !== 'Customer email')
     .filter((item) => !item.ready)
     .forEach((item) => sendEmailDisabledReasons.push(`${item.title}: ${item.helper}`));
   if (sending) {
@@ -1004,7 +1384,7 @@ const SalesAgreementDetail = () => {
   }
 
   const sendEmailButtonTitle = canSend
-    ? 'Send service agreement email'
+    ? (agreement?.email ? 'Verify recipients before sending' : 'Add a recipient before sending')
     : `Send Email is disabled:\n${sendEmailDisabledReasons.join('\n') || 'No send reason is available.'}`;
   const canMarkAccepted = Boolean(
     agreement &&
@@ -1269,8 +1649,14 @@ const SalesAgreementDetail = () => {
     }
   };
 
-  const sendAgreementEmail = async () => {
+  const sendAgreementEmail = async ({ primaryEmail, additionalEmails = [] } = {}) => {
     if (!canSend) return;
+
+    const recipientEmail = String(primaryEmail || agreement?.email || '').trim();
+    if (!recipientEmail) {
+      toast.error('Add a recipient email before sending.');
+      return;
+    }
 
     setSending(true);
 
@@ -1282,6 +1668,8 @@ const SalesAgreementDetail = () => {
         agreementId: agreement.id,
         agreementBaseUrl: window.location.origin,
         includeInspectionReport,
+        primaryEmail: recipientEmail,
+        additionalEmails,
         ...authPayload,
       });
 
@@ -1292,6 +1680,7 @@ const SalesAgreementDetail = () => {
       } else {
         toast.success(result.data?.message || 'Service agreement email sent.');
       }
+      setShowSendDialog(false);
     } catch (sendError) {
       console.error('Unable to send service agreement email', sendError);
       toast.error(sendError.message || 'Failed to send service agreement email.');
@@ -1541,12 +1930,17 @@ const SalesAgreementDetail = () => {
     try {
       const templateTerms = await getTerms(recentlySelectedCompany, template.id);
       setEditDraft((current) => ({
-        ...current,
-        termsTemplateId: template.id,
-        termsTemplateName: template.name || '',
-        termsTemplateDescription: template.description || '',
-        terms: template.content || '',
-        termsList: normalizeAgreementTerms(templateTerms),
+        ...applyTermsTemplateAgreementDefaults(
+          {
+            ...current,
+            termsTemplateId: template.id,
+            termsTemplateName: template.name || '',
+            termsTemplateDescription: template.description || '',
+            terms: template.content || '',
+            termsList: normalizeAgreementTerms(templateTerms),
+          },
+          template
+        ),
       }));
     } catch (templateError) {
       console.error('Unable to apply terms template', templateError);
@@ -1589,7 +1983,7 @@ const SalesAgreementDetail = () => {
     const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
     const confirmed = await appConfirm({
       title: 'Update Terms Template',
-      message: `Update "${templateName}" with the current default content and terms lines from this agreement?`,
+      message: `Update "${templateName}" with the current default content, terms lines, and agreement defaults from this agreement?`,
       confirmLabel: 'Update Template',
     });
     if (!confirmed) return;
@@ -1610,6 +2004,7 @@ const SalesAgreementDetail = () => {
 
       await updateTermsTemplate(recentlySelectedCompany, editDraft.termsTemplateId, {
         content: editDraft.terms.trim(),
+        ...termsTemplateDefaultsFromAgreementDraft(editDraft),
       });
       await Promise.all([
         ...nextTermsList.map((term) => saveContractTerm(
@@ -1663,8 +2058,8 @@ const SalesAgreementDetail = () => {
       .map((term) => String(term.description || '').trim())
       .filter(Boolean);
 
-    if (!editDraft.title.trim() || !editDraft.email.trim() || nextLineItems.length === 0) {
-      toast.error('Add a title, customer email, and at least one priced line item.');
+    if (!editDraft.title.trim() || nextLineItems.length === 0) {
+      toast.error('Add a title and at least one priced line item.');
       return;
     }
 
@@ -1968,6 +2363,31 @@ const SalesAgreementDetail = () => {
     }
   };
 
+  const downloadServiceAgreement = () => {
+    if (!agreement || companyMismatch) {
+      toast.error('Load a service agreement before downloading.');
+      return;
+    }
+
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      toast.error('Allow popups to download or print the service agreement.');
+      return;
+    }
+
+    printWindow.document.open();
+    printWindow.document.write(buildPrintableServiceAgreementHtml({
+      agreement,
+      companyName: recentlySelectedCompanyName,
+    }));
+    printWindow.document.close();
+    printWindow.focus();
+    setTimeout(() => {
+      printWindow.print();
+    }, 250);
+    toast.success('Use Save as PDF in the print dialog to download the agreement.');
+  };
+
   const editChemicalBillingMode = editDraft?.chemicalBillingMode || SalesAgreementChemicalBillingMode.includedAll;
   const editChemicalBillingMixedSelectionMode = editDraft?.chemicalBillingMixedSelectionMode
     || ChemicalBillingMixedSelectionMode.separatelyBilled;
@@ -2009,6 +2429,34 @@ const SalesAgreementDetail = () => {
 
             <div className="flex flex-col gap-3 lg:items-end">
               <div className="flex flex-wrap gap-2 lg:justify-end">
+                <ShareItemButton
+                  type="serviceAgreement"
+                  recordId={agreementId}
+                  title={agreement?.title || 'Service Agreement'}
+                  subtitle={[
+                    agreement?.customerName,
+                    agreement?.status,
+                    agreement?.totalAmountCents || agreement?.rateAmountCents
+                      ? formatCurrency(agreement.totalAmountCents || agreement.rateAmountCents)
+                      : '',
+                  ].filter(Boolean).join(' - ')}
+                  companyId={agreement?.companyId || recentlySelectedCompany}
+                  customerId={agreement?.customerId}
+                  customerUserId={agreement?.customerUserId}
+                  collectionPath={salesCollectionNames.agreements}
+                  webPath={`/company/sales/agreements/${agreementId}`}
+                  disabled={!agreement || companyMismatch}
+                />
+                <button
+                  type="button"
+                  onClick={downloadServiceAgreement}
+                  disabled={!agreement || companyMismatch}
+                  title="Download or print this service agreement"
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <FaDownload className="text-xs" />
+                  Download
+                </button>
                 <button
                   type="button"
                   onClick={createRenewalAgreement}
@@ -2056,7 +2504,7 @@ const SalesAgreementDetail = () => {
                 <span className="inline-flex" title={sendEmailButtonTitle}>
                   <button
                     type="button"
-                    onClick={sendAgreementEmail}
+                    onClick={() => setShowSendDialog(true)}
                     disabled={!canSend}
                     className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                   >
@@ -2144,7 +2592,7 @@ const SalesAgreementDetail = () => {
             Loading service agreement...
           </div>
         ) : agreement && !companyMismatch ? (
-          <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[380px_minmax(0,1fr)]">
+          <div className="grid gap-6 lg:grid-cols-[360px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)_360px]">
             <main className="space-y-6 lg:order-2">
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Customer Snapshot</h2>
@@ -2718,6 +3166,14 @@ const SalesAgreementDetail = () => {
                 </dl>
               </section>
             </aside>
+
+            <aside className="lg:order-3 lg:col-span-2 xl:col-span-1">
+              <CustomerBillingNotesPanel
+                companyId={agreement.companyId || recentlySelectedCompany}
+                customerId={agreement.customerId}
+                customerName={agreement.customerName}
+              />
+            </aside>
           </div>
         ) : null}
       </div>
@@ -2767,6 +3223,7 @@ const SalesAgreementDetail = () => {
                 <div>
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementEmail">
                     Customer Email
+                    <span className="ml-1 font-normal text-slate-500">(optional until send)</span>
                   </label>
                   <input
                     id="agreementEmail"
@@ -2903,9 +3360,9 @@ const SalesAgreementDetail = () => {
                       onChange={(event) => updateEditField('rateType', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="perMonth">Per Month</option>
-                      <option value="perVisit">Per Visit</option>
-                      <option value="oneTime">One Time</option>
+                      {rateTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -2919,10 +3376,9 @@ const SalesAgreementDetail = () => {
                       onChange={(event) => updateEditField('paymentTerms', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="dueOnReceipt">Due On Receipt</option>
-                      <option value="net7">Net 7</option>
-                      <option value="net15">Net 15</option>
-                      <option value="net30">Net 30</option>
+                      {paymentTermsOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -3061,17 +3517,11 @@ const SalesAgreementDetail = () => {
 
                     return (
                       <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_100px_130px_130px_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
                           <input
                             value={item.name}
                             onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
                             placeholder="Item name"
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            value={item.description}
-                            onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
-                            placeholder="Description"
                             className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                           />
                           <input
@@ -3101,6 +3551,13 @@ const SalesAgreementDetail = () => {
                             Remove
                           </button>
                         </div>
+                        <textarea
+                          value={item.description}
+                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
+                          placeholder="Description"
+                          rows={2}
+                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
                       </div>
                     );
                   })}
@@ -3276,7 +3733,7 @@ const SalesAgreementDetail = () => {
                     disabled={!can("884") || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
                     className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from these lines'}
+                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from this agreement'}
                   </button>
                 </div>
 
@@ -3524,6 +3981,18 @@ const SalesAgreementDetail = () => {
         </div>
         </div>
       )}
+
+      <ServiceAgreementSendDialog
+        agreement={agreement}
+        open={showSendDialog}
+        sending={sending}
+        includeInspectionReport={includeInspectionReport}
+        hasLinkedInspectionReport={hasLinkedInspectionReport}
+        onClose={() => {
+          if (!sending) setShowSendDialog(false);
+        }}
+        onConfirm={sendAgreementEmail}
+      />
 
       {confirmingAcceptance && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">

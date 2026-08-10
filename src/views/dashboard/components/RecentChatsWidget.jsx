@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from 'react';
+import React, { useContext, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
@@ -11,12 +11,24 @@ import {
     listenVisibleChats,
 } from '../../../utils/chatMessaging';
 
-const RecentChatsWidget = () => {
+const EMPTY_CUSTOMER_IDS = [];
+
+const RecentChatsWidget = ({
+    variant = 'card',
+    limit = 3,
+    showViewAll = true,
+    personalOnly = false,
+    unreadOnly = false,
+    customerIds = EMPTY_CUSTOMER_IDS,
+}) => {
     const { user, recentlySelectedCompany, companyUserAccess, companyRoleLoaded } = useContext(Context);
     const [recentChats, setRecentChats] = useState([]);
     const [loading, setLoading] = useState(true);
     const [unreadCount, setUnreadCount] = useState(0);
     const navigate = useNavigate();
+    const isCompact = variant === 'compact';
+    const customerIdKey = Array.isArray(customerIds) ? customerIds.map((id) => String(id || '').trim()).filter(Boolean).join('|') : '';
+    const customerIdSet = useMemo(() => new Set(customerIdKey ? customerIdKey.split('|') : []), [customerIdKey]);
 
     useEffect(() => {
         if (!user?.uid) {
@@ -38,8 +50,19 @@ const RecentChatsWidget = () => {
             userId: user.uid,
             companyId: readableCompanyId,
             onChange: (visibleChats) => {
-                setRecentChats(visibleChats.slice(0, 3));
-                setUnreadCount(visibleChats.filter((chat) => isChatUnreadFor(chat, user.uid, readableCompanyId)).length);
+                const filteredChats = personalOnly
+                    ? visibleChats.filter((chat) => {
+                        const participantIds = Array.isArray(chat.participantIds) ? chat.participantIds : [];
+                        const chatCustomerId = String(chat.customerId || chat.customer?.id || chat.relationshipCustomerId || '').trim();
+
+                        return participantIds.includes(user.uid) || (chatCustomerId && customerIdSet.has(chatCustomerId));
+                    })
+                    : visibleChats;
+                const unreadChats = filteredChats.filter((chat) => isChatUnreadFor(chat, user.uid, readableCompanyId));
+                const displayChats = unreadOnly ? unreadChats : filteredChats;
+
+                setRecentChats(displayChats.slice(0, limit));
+                setUnreadCount(unreadChats.length);
                 setLoading(false);
             },
             onError: (error) => {
@@ -49,7 +72,7 @@ const RecentChatsWidget = () => {
         });
 
         return () => unsubscribe();
-    }, [companyRoleLoaded, companyUserAccess, recentlySelectedCompany, user]);
+    }, [companyRoleLoaded, companyUserAccess, customerIdSet, limit, personalOnly, recentlySelectedCompany, unreadOnly, user]);
 
     const handleChatClick = (chatId) => {
         navigate(`/companies-chat/detail/${chatId}`);
@@ -72,18 +95,18 @@ const RecentChatsWidget = () => {
 
     if (loading) {
         return (
-            <div className="bg-white p-6 rounded-lg shadow-md">
-                <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Conversations</h3>
+            <div className={isCompact ? "min-h-[132px]" : "bg-white p-6 rounded-lg shadow-md"}>
+                <h3 className={`${isCompact ? 'mb-3 text-sm' : 'mb-4 text-lg'} font-semibold text-gray-800`}>Recent Conversations</h3>
                 {renderSkeleton()}
             </div>
         );
     }
 
     return (
-        <div className="bg-white p-6 rounded-lg shadow-md flex flex-col h-full">
-            <div className="flex items-center justify-between mb-4">
+        <div className={`${isCompact ? 'flex min-h-[132px] flex-col' : 'bg-white p-6 rounded-lg shadow-md flex flex-col h-full'}`}>
+            <div className={`flex items-center justify-between ${isCompact ? 'mb-2' : 'mb-4'}`}>
                 <div className="flex items-center">
-                    <h3 className="text-lg font-semibold text-gray-800">Recent Conversations</h3>
+                    <h3 className={`${isCompact ? 'text-sm' : 'text-lg'} font-semibold text-gray-800`}>Recent Conversations</h3>
                     {unreadCount > 0 && (
                         <span className="ml-2 bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
                             {unreadCount}
@@ -93,46 +116,51 @@ const RecentChatsWidget = () => {
             </div>
             <div className="flex-grow">
                 {recentChats.length > 0 ? (
-                    <div className="space-y-4">
+                    <div className={isCompact ? "space-y-2" : "space-y-4"}>
                         {recentChats.map(chat => (
                             <RecentChatRow
                                 key={chat.id}
                                 chat={chat}
                                 userId={user.uid}
-                                companyId={recentlySelectedCompany && companyUserAccess ? recentlySelectedCompany : ''}
+                                companyId={personalOnly ? '' : (recentlySelectedCompany && companyUserAccess ? recentlySelectedCompany : '')}
+                                compact={isCompact}
                                 onClick={() => handleChatClick(chat.id)}
                             />
                         ))}
                     </div>
                 ) : (
                     <div className="flex-grow flex items-center justify-center h-full">
-                        <p className="text-center text-gray-500 py-4">No recent conversations.</p>
+                        <p className="text-center text-gray-500 py-4 text-sm">
+                            {unreadOnly ? 'No unread conversations.' : 'No recent conversations.'}
+                        </p>
                     </div>
                 )}
             </div>
-            <div className="mt-6 text-center">
+            {showViewAll && (
+            <div className={isCompact ? "mt-3 text-center" : "mt-6 text-center"}>
                 <Link to="/companies-chat">
-                    <button className="w-full bg-gray-100 text-gray-700 font-bold py-2 px-4 rounded-lg hover:bg-gray-200 transition-colors duration-300">
+                    <button className={`${isCompact ? 'py-1.5 text-xs' : 'py-2'} w-full bg-gray-100 text-gray-700 font-bold px-4 rounded-lg hover:bg-gray-200 transition-colors duration-300`}>
                         View All Chats
                     </button>
                 </Link>
             </div>
+            )}
         </div>
     );
 };
 
-const RecentChatRow = ({ chat, userId, companyId, onClick }) => {
+const RecentChatRow = ({ chat, userId, companyId, compact = false, onClick }) => {
     const unread = isChatUnreadFor(chat, userId, companyId);
     const title = getChatDisplayTitle(chat, userId, { companyId, audience: 'company' });
     const avatar = getChatAvatarText(chat, userId, { companyId, audience: 'company' });
 
     return (
         <div
-            className="flex items-start gap-4 cursor-pointer hover:bg-gray-50 p-2 rounded-md transition-colors duration-200"
+            className={`${compact ? 'gap-3 p-2' : 'gap-4 p-2'} flex items-start cursor-pointer hover:bg-gray-50 rounded-md transition-colors duration-200`}
             onClick={onClick}
         >
             <div className="shrink-0 relative">
-                <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold">
+                <div className={`${compact ? 'h-8 w-8 text-xs' : 'w-10 h-10'} rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-semibold`}>
                     {avatar}
                 </div>
                 {unread && (
@@ -140,8 +168,8 @@ const RecentChatRow = ({ chat, userId, companyId, onClick }) => {
                 )}
             </div>
             <div className="flex-1 min-w-0">
-                <p className="font-semibold text-gray-900 truncate">{title}</p>
-                <p className={`text-sm text-gray-500 truncate ${unread ? 'font-bold' : ''}`}>
+                <p className={`${compact ? 'text-sm' : ''} font-semibold text-gray-900 truncate`}>{title}</p>
+                <p className={`${compact ? 'text-xs' : 'text-sm'} text-gray-500 truncate ${unread ? 'font-bold' : ''}`}>
                     {getChatPreview(chat)}
                 </p>
             </div>

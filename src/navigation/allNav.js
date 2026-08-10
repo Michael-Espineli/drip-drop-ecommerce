@@ -62,6 +62,7 @@ export const allNav = [
     { id: 2, title: 'Companies', icon: <AiOutlineShoppingCart />, role: 'Admin', path: '/admin/company', category: 'Management' },
     { id: 3, title: 'Subscriptions', icon: <BiCategory />, role: 'Admin', path: '/admin/subscriptions', category: 'Management' },
     { id: 15, title: 'Billing Calculator', icon: <MdOutlineCalculate />, role: 'Admin', path: '/admin/billing-fee-calculator', category: 'Management' },
+    { id: 17, title: 'Pool Prospects', icon: <FaSwimmingPool />, role: 'Admin', path: '/admin/pool-prospect-lists', category: 'Management' },
     { id: 6, title: 'Complaints', icon: <AiOutlineException />, role: 'Admin', path: '/admin/dashboard/payment-request', category: 'Management' },
     { id: 7, title: 'Deactivated Sellers', icon: <FaUserTimes />, role: 'Admin', path: '/admin/dashboard/deactive-sellers', category: 'Management' },
     { id: 8, title: 'Seller Requests', icon: <FaCode />, role: 'Admin', path: '/admin/dashboard/sellers-request', category: 'Management' },
@@ -78,6 +79,7 @@ export const allNav = [
     { id: 81, title: 'Setup Guide', icon: <FaClipboardQuestion />, role: 'Company', path: '/company/setup-guide', category: 'NA', permissionId: '900' },
     //Marketting 
     { id: 64, title: 'Leads', icon: <IoIosPeople />, role: 'Company', path: '/company/leads', category: 'Marketing', permissionId: '610', featureFlagId: 'feature_flag_007' },
+    { id: 65, title: 'Initial Estimates', icon: <MdOutlineRequestQuote />, role: 'Company', path: '/company/initial-estimates', category: 'Marketing', permissionId: '620', featureFlagId: 'feature_flag_007' },
     { id: 90, title: 'Public Page', icon: <FaStore />, role: 'Company', path: '/company/public-profile', category: 'Marketing', featureFlagId: 'feature_flag_007' },
 
     // Finance
@@ -94,12 +96,10 @@ export const allNav = [
     // Operations
     { id: 21, title: 'Operations Dashboard', icon: <MdOutlineDashboard />, role: 'Company', path: '/company/operations-dashboard', category: 'Operations', permissionId: '0' },
     { id: 25, title: 'Customers', icon: <FaHouseUser />, role: 'Company', path: '/company/customers', category: 'Operations', permissionId: '10' },
+    { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
+    { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
     { id: 30, title: 'Jobs', icon: <AiOutlineSolution />, role: 'Company', path: '/company/jobs/operations', category: 'Operations', permissionId: '20' },
     { id: 40, title: 'Offered Work', icon: <FaBriefcase />, role: 'Company', path: '/company/offered-work', category: 'Operations', permissionId: '20' },
-    { id: 34, title: 'Repair Requests', icon: <GoTools />, role: 'Company', path: '/company/repair-requests', category: 'Operations', permissionId: '30' },
-    { id: 39, title: 'Suggested Work', icon: <FaClipboardList />, role: 'Company', path: '/company/suggested-work', category: 'Operations', permissionId: '20' },
-    { id: 31, title: 'Equipment', icon: <FaWrench />, role: 'Company', path: '/company/equipment/needs-maintenance', category: 'Operations', permissionId: '60' },
-    { id: 126, title: 'Equipment Suggestions', icon: <FaClipboardQuestion />, role: 'Company', path: '/company/equipment/universal-suggestions', category: 'Operations', permissionId: '60' },
     { id: 37, title: 'Part Approvals', icon: <FaClipboardList />, role: 'Company', path: '/company/part-approvals', category: 'Operations' },
     { id: 35, title: 'Shopping List', icon: <MdShoppingCart />, role: 'Company', path: '/company/shopping-list', category: 'Operations' },
     { id: 36, title: 'Purchased Items', icon: <ArchiveBoxIcon />, role: 'Company', path: '/company/purchased-items', category: 'Operations', permissionId: '400' },

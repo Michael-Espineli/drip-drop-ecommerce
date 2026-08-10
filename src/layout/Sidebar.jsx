@@ -7,6 +7,7 @@ import { getAuth, signOut } from "firebase/auth";
 import { collection, query, where, onSnapshot } from "firebase/firestore";
 import { db } from '../utils/config';
 import { isOpenRepairRequestStatus } from '../utils/models/RepairRequest';
+import { normalizeEquipmentStatus } from '../utils/models/Equipment';
 import { isChatUnreadFor, listenVisibleChats } from '../utils/chatMessaging';
 import {
     TODO_LIST_FEATURE_FLAG_ID,
@@ -59,12 +60,45 @@ const isFirestorePermissionDenied = (error) => (
     String(error?.message || "").toLowerCase().includes("insufficient permissions")
 );
 
+const toDateMillis = (value) => {
+    if (!value) return null;
+    if (value instanceof Date) return value.getTime();
+    if (typeof value.toDate === "function") return value.toDate().getTime();
+    if (typeof value.seconds === "number") return value.seconds * 1000;
+
+    const parsed = new Date(value);
+    const millis = parsed.getTime();
+    return Number.isNaN(millis) ? null : millis;
+};
+
+const dateIsDueThroughToday = (value) => {
+    const millis = toDateMillis(value);
+    if (millis === null) return false;
+
+    const endOfToday = new Date();
+    endOfToday.setHours(23, 59, 59, 999);
+
+    return millis <= endOfToday.getTime();
+};
+
+const equipmentNeedsMaintenance = (equipment = {}) => {
+    const status = normalizeEquipmentStatus(equipment.status);
+    if (status === "nonoperational") return false;
+
+    const statusSaysMaintenance =
+        status === "needsmaintenance" ||
+        status === "maintenance" ||
+        status === "needsservice";
+
+    return statusSaysMaintenance || (equipment.needsService === true && dateIsDueThroughToday(equipment.nextServiceDate));
+};
+
 const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) => {
     const auth = getAuth();
     const { role, recentlySelectedCompany, user, dataBaseUser, handleLogout, companyUserAccess, companyRoleLoading, companyRoleLoaded, hasCompanyPermission, featureFlagsLoaded, isFeatureEnabled } = useContext(Context);
     const { pathname } = useLocation();
     const [navItemsByCategory, setNavItemsByCategory] = useState({});
-    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
+    const [counts, setCounts] = useState({ leads: 0, messages: 0, notifications: 0, shopping: 0, repairRequests: 0, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
     const categoryLabel = (category) => category;
     const categoryInitial = (category) => categoryLabel(category).charAt(0).toUpperCase();
     const bookmarkItems = getBookmarkedNavItems(navItemsByCategory, dataBaseUser?.settings?.companyNavigationBookmarks);
@@ -134,11 +168,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
 
     useEffect(() => {
         if (!recentlySelectedCompany || !user) {
-            setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 });
+            setCounts({ leads: 0, messages: 0, notifications: 0, shopping: 0, legacyShopping: 0, repairRequests: 0, repairRequestSources: {}, todoItems: 0, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 });
             return;
         }
 
-        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0, offeredWork: 0 }));
+        setCounts(prev => ({ ...prev, repairRequests: 0, repairRequestSources: {}, finishedJobs: 0, actionableJobs: 0, offeredWork: 0, equipmentMaintenance: 0 }));
 
         const leadsQuery = query(
             collection(db, "homeownerServiceRequests"),
@@ -154,6 +188,11 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
         const legacyShoppingQuery = query(
             collection(db, "companies", recentlySelectedCompany, "shoppingListItems"),
             where("status", "==", "Need to Purchase")
+        );
+
+        const equipmentMaintenanceQuery = query(
+            collection(db, "companies", recentlySelectedCompany, "equipment"),
+            where("isActive", "==", true)
         );
 
         const internalRepairRequestsQuery = collection(
@@ -321,6 +360,22 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             setCounts(prev => ({ ...prev, legacyShopping: snapshot.size }));
         });
 
+        const unsubscribeEquipmentMaintenance = onSnapshot(
+            equipmentMaintenanceQuery,
+            snapshot => {
+                const equipmentMaintenance = snapshot.docs
+                    .map((equipmentDoc) => ({ id: equipmentDoc.id, ...equipmentDoc.data() }))
+                    .filter(equipmentNeedsMaintenance)
+                    .length;
+
+                setCounts(prev => ({ ...prev, equipmentMaintenance }));
+            },
+            error => {
+                console.error("Error loading equipment maintenance count:", error);
+                setCounts(prev => ({ ...prev, equipmentMaintenance: 0 }));
+            }
+        );
+
         const updateRepairRequestCount = (source, snapshot) => {
             const count = snapshot.docs.filter((requestDoc) => (
                 isOpenRepairRequestStatus(requestDoc.data()?.status)
@@ -440,6 +495,7 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
             unsubscribeTodos();
             unsubscribeShopping();
             unsubscribeLegacyShopping();
+            unsubscribeEquipmentMaintenance();
             unsubscribeInternalRepairRequests();
             unsubscribeExternalRepairRequests();
             unsubscribeFinishedJobs();
@@ -563,6 +619,8 @@ const Sidebar = ({ showSidebar, setShowSidebar, isCollapsed, setIsCollapsed }) =
                                                                         ? counts.actionableJobs
                                                                         : item.title === 'Offered Work'
                                                                             ? counts.offeredWork
+                                                                        : item.title === 'Equipment'
+                                                                            ? counts.equipmentMaintenance
                                                                         : 0;
 
                                         return (

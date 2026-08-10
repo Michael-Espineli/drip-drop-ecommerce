@@ -22,6 +22,7 @@ import {
     buildEquipmentNickname,
     equipmentDefaultsToNeedsService,
 } from '../../../utils/models/Equipment';
+import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
 
 const DEFAULT_EQUIPMENT = [
     {
@@ -69,7 +70,7 @@ const Field = ({ label, children }) => (
 
 const CreateBodyOfWater = () => {
     const { customerId: customerIdParam, serviceLocationId: serviceLocationIdParam } = useParams();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     const navigate = useNavigate();
 
@@ -215,41 +216,53 @@ const CreateBodyOfWater = () => {
             });
 
             if (createDefaultEquipment) {
-                await Promise.all(defaultEquipment.map((equipment) => {
+                await Promise.all(defaultEquipment.map(async (equipment) => {
                     const equipmentId = `com_equ_${uuidv4()}`;
                     const finalNeedsService = !!equipment.needsService || equipmentDefaultsToNeedsService(equipment);
-                    return setDoc(
-                        doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId),
-                        {
-                            id: equipmentId,
-                            name: equipment.name,
-                            type: equipment.type,
-                            typeId: equipment.typeId,
-                            make: equipment.make || '',
-                            makeId: equipment.makeId || '',
-                            model: equipment.model || '',
-                            modelId: equipment.modelId || equipment.universalEquipmentId || '',
-                            universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
-                            manualPdfLink: equipment.manualPdfLink || '',
-                            notes: '',
-                            customerId: selectedCustomerId,
-                            customerName,
-                            serviceLocationId: selectedLocationId,
-                            bodyOfWaterId,
-                            dateInstalled: new Date(),
-                            active: true,
-                            isActive: true,
-                            needsService: finalNeedsService,
-                            lastServiceDate: finalNeedsService ? new Date() : null,
-                            nextServiceDate: null,
-                            serviceFrequency: finalNeedsService ? (equipment.serviceFrequency || 6) : null,
-                            serviceFrequencyEvery: finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null,
-                            cleanFilterPressure: null,
-                            currentPressure: null,
-                            status: 'Operational',
-                            verified: false,
-                        }
-                    );
+                    const equipmentPayload = {
+                        id: equipmentId,
+                        name: equipment.name,
+                        type: equipment.type,
+                        typeId: equipment.typeId,
+                        make: equipment.make || '',
+                        makeId: equipment.makeId || '',
+                        model: equipment.model || '',
+                        modelId: equipment.modelId || equipment.universalEquipmentId || '',
+                        universalEquipmentId: equipment.universalEquipmentId || equipment.modelId || '',
+                        manualPdfLink: equipment.manualPdfLink || '',
+                        notes: '',
+                        customerId: selectedCustomerId,
+                        customerName,
+                        serviceLocationId: selectedLocationId,
+                        bodyOfWaterId,
+                        dateInstalled: new Date(),
+                        active: true,
+                        isActive: true,
+                        needsService: finalNeedsService,
+                        lastServiceDate: finalNeedsService ? new Date() : null,
+                        nextServiceDate: null,
+                        serviceFrequency: finalNeedsService ? (equipment.serviceFrequency || 6) : null,
+                        serviceFrequencyEvery: finalNeedsService ? (equipment.serviceFrequencyEvery || 'Month') : null,
+                        cleanFilterPressure: null,
+                        currentPressure: null,
+                        status: 'Operational',
+                        verified: false,
+                    };
+
+                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), equipmentPayload);
+
+                    try {
+                        await queueUniversalEquipmentSuggestion({
+                            db,
+                            companyId: recentlySelectedCompany,
+                            companyName: recentlySelectedCompanyName || '',
+                            user,
+                            equipment: equipmentPayload,
+                            source: 'bodyOfWaterCreateEquipment',
+                        });
+                    } catch (suggestionError) {
+                        console.error('Error creating universal equipment suggestion:', suggestionError);
+                    }
                 }));
             }
 

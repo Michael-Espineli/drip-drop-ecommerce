@@ -10,6 +10,7 @@ import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 import toast from "react-hot-toast";
 import { v4 as uuidv4 } from "uuid";
 import { isFilterEquipment } from "../../../utils/models/Equipment";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 const inputBase =
   "w-full p-3 border border-gray-300 rounded-lg bg-white text-gray-900 focus:ring-blue-500 focus:border-blue-500";
@@ -256,6 +257,16 @@ const BodiesOfWaterDetails = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <ShareItemButton
+              type="bodyOfWater"
+              recordId={bodyOfWaterId}
+              title={bodyOfWater.name || bodyOfWater.type || "Body of Water"}
+              subtitle={[bodyOfWater.customerName, bodyOfWater.serviceLocationName, bodyOfWater.waterType].filter(Boolean).join(" - ")}
+              companyId={recentlySelectedCompany}
+              customerId={bodyOfWater.customerId}
+              collectionPath={`companies/${recentlySelectedCompany}/bodiesOfWater`}
+              webPath={`/company/bodiesOfWater/detail/${bodyOfWaterId}`}
+            />
             {!edit ? (
               can("54") && (
               <button

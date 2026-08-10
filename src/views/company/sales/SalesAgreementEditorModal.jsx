@@ -34,10 +34,16 @@ import {
   billingFrequencyForAgreement,
   billingFrequencyOptions,
   formatServiceFrequency,
+  paymentTermsOptions,
+  rateTypeOptions,
   serviceFrequencyOptions,
 } from '../../../utils/sales/agreementCadence';
 import { dosageLabel, sortDosageTemplates } from '../../../utils/dosageItemLinks';
 import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
+import {
+  applyTermsTemplateAgreementDefaults,
+  termsTemplateDefaultsFromAgreementDraft,
+} from '../../../utils/terms/termsTemplateAgreementDefaults';
 import {
   deleteContractTerm,
   getTerms,
@@ -836,12 +842,17 @@ const SalesAgreementEditorModal = ({
     try {
       const templateTerms = await getTerms(recentlySelectedCompany, template.id);
       setEditDraft((current) => ({
-        ...current,
-        termsTemplateId: template.id,
-        termsTemplateName: template.name || '',
-        termsTemplateDescription: template.description || '',
-        terms: template.content || '',
-        termsList: normalizeAgreementTerms(templateTerms),
+        ...applyTermsTemplateAgreementDefaults(
+          {
+            ...current,
+            termsTemplateId: template.id,
+            termsTemplateName: template.name || '',
+            termsTemplateDescription: template.description || '',
+            terms: template.content || '',
+            termsList: normalizeAgreementTerms(templateTerms),
+          },
+          template
+        ),
       }));
     } catch (templateError) {
       console.error('Unable to apply terms template', templateError);
@@ -884,7 +895,7 @@ const SalesAgreementEditorModal = ({
     const templateName = editDraft.termsTemplateName || selectedEditTermsTemplate?.name || 'selected template';
     const confirmed = await appConfirm({
       title: 'Update Terms Template',
-      message: `Update "${templateName}" with the current default content and terms lines from this agreement?`,
+      message: `Update "${templateName}" with the current default content, terms lines, and agreement defaults from this agreement?`,
       confirmLabel: 'Update Template',
     });
     if (!confirmed) return;
@@ -905,6 +916,7 @@ const SalesAgreementEditorModal = ({
 
       await updateTermsTemplate(recentlySelectedCompany, editDraft.termsTemplateId, {
         content: editDraft.terms.trim(),
+        ...termsTemplateDefaultsFromAgreementDraft(editDraft),
       });
       await Promise.all([
         ...nextTermsList.map((term) => saveContractTerm(
@@ -958,8 +970,8 @@ const SalesAgreementEditorModal = ({
       .map((term) => String(term.description || '').trim())
       .filter(Boolean);
 
-    if (!editDraft.title.trim() || !editDraft.email.trim() || nextLineItems.length === 0) {
-      toast.error('Add a title, customer email, and at least one priced line item.');
+    if (!editDraft.title.trim() || nextLineItems.length === 0) {
+      toast.error('Add a title and at least one priced line item.');
       return;
     }
 
@@ -1190,6 +1202,7 @@ const SalesAgreementEditorModal = ({
                 <div>
                   <label className="block text-sm font-semibold text-slate-700" htmlFor="agreementEmail">
                     Customer Email
+                    <span className="ml-1 font-normal text-slate-500">(optional until send)</span>
                   </label>
                   <input
                     id="agreementEmail"
@@ -1326,9 +1339,9 @@ const SalesAgreementEditorModal = ({
                       onChange={(event) => updateEditField('rateType', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="perMonth">Per Month</option>
-                      <option value="perVisit">Per Visit</option>
-                      <option value="oneTime">One Time</option>
+                      {rateTypeOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
 
@@ -1342,10 +1355,9 @@ const SalesAgreementEditorModal = ({
                       onChange={(event) => updateEditField('paymentTerms', event.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                     >
-                      <option value="dueOnReceipt">Due On Receipt</option>
-                      <option value="net7">Net 7</option>
-                      <option value="net15">Net 15</option>
-                      <option value="net30">Net 30</option>
+                      {paymentTermsOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -1484,17 +1496,11 @@ const SalesAgreementEditorModal = ({
 
                     return (
                       <div key={item.id} className="rounded-md border border-slate-200 bg-slate-50 p-3">
-                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_100px_130px_130px_auto]">
+                        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_100px_130px_130px_auto]">
                           <input
                             value={item.name}
                             onChange={(event) => updateEditLineItem(item.id, 'name', event.target.value)}
                             placeholder="Item name"
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                          />
-                          <input
-                            value={item.description}
-                            onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
-                            placeholder="Description"
                             className="rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                           />
                           <input
@@ -1524,6 +1530,13 @@ const SalesAgreementEditorModal = ({
                             Remove
                           </button>
                         </div>
+                        <textarea
+                          value={item.description}
+                          onChange={(event) => updateEditLineItem(item.id, 'description', event.target.value)}
+                          placeholder="Description"
+                          rows={2}
+                          className="mt-3 min-h-[72px] w-full resize-y rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        />
                       </div>
                     );
                   })}
@@ -1699,7 +1712,7 @@ const SalesAgreementEditorModal = ({
                     disabled={!can('884') || !editDraft.termsTemplateId || applyingTermsTemplate || updatingTermsTemplate || savingEdit}
                     className="inline-flex items-center justify-center rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from these lines'}
+                    {updatingTermsTemplate ? 'Updating template...' : 'Update source template from this agreement'}
                   </button>
                 </div>
 

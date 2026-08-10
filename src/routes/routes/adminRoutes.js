@@ -24,6 +24,7 @@ const ReachOutMessages = lazy(() => import("../../views/admin/messages/ReachOutM
 const DeactivatedSellers = lazy(() => import("../../views/admin/sellers/DeactivatedSellers"))
 const SellerRequests = lazy(() => import("../../views/admin/sellers/SellerRequests"))
 const LiveChat = lazy(() => import("../../views/admin/liveChat/LiveChat"))
+const PoolProspectLists = lazy(() => import("../../views/admin/poolProspects/PoolProspectLists"))
 export const adminRoutes = [
     {
         path: '/admin/dashboard',
@@ -148,6 +149,12 @@ export const adminRoutes = [
     {
         path: '/admin/reach-out-messages',
         element: <ReachOutMessages />,
+        role: 'Admin'
+    }
+    ,
+    {
+        path: '/admin/pool-prospect-lists',
+        element: <PoolProspectLists />,
         role: 'Admin'
     }
     ,

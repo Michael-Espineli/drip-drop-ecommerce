@@ -20,6 +20,11 @@ import {
   togglePermissionSelection,
 } from "../../../utils/companyPermissions";
 import { getCustomerTagOptions, normalizeCustomerTag, normalizeCustomerTags } from "../../../utils/customerTags";
+import {
+  DASHBOARD_SCOPE_ACCESS_OPTIONS,
+  getDashboardScopeAccessList,
+  normalizeDashboardScopeAccess,
+} from "../../../utils/dashboardAccess";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
 
 const safeColorValue = (value) =>
@@ -56,6 +61,7 @@ const RoleDetails = () => {
             ...roleData,
             permissionIdList: normalizePermissionSelection(roleData.permissionIdList || []),
             customerTagAccess: normalizeCustomerTags(roleData.customerTagAccess || []),
+            dashboardScopeAccess: getDashboardScopeAccessList(roleData),
           };
           setRole(normalizedRole);
           setFormData(normalizedRole);
@@ -143,6 +149,21 @@ const RoleDetails = () => {
     setFormData((prev) => ({ ...prev, customerTagAccess: [] }));
   };
 
+  const handleDashboardScopeAccessToggle = (scopeId) => {
+    setFormData((prev) => {
+      const currentScopes = normalizeDashboardScopeAccess(prev.dashboardScopeAccess);
+      if (currentScopes.length === 1 && currentScopes.includes(scopeId)) return prev;
+      const nextScopes = currentScopes.includes(scopeId)
+        ? currentScopes.filter((currentScopeId) => currentScopeId !== scopeId)
+        : [...currentScopes, scopeId];
+
+      return {
+        ...prev,
+        dashboardScopeAccess: normalizeDashboardScopeAccess(nextScopes),
+      };
+    });
+  };
+
   const handleSave = async () => {
     if (!requirePermission("864", "update user roles")) return;
 
@@ -150,6 +171,7 @@ const RoleDetails = () => {
       ...formData,
       permissionIdList: normalizePermissionSelection(formData.permissionIdList || []),
       customerTagAccess: normalizeCustomerTags(formData.customerTagAccess || []),
+      dashboardScopeAccess: normalizeDashboardScopeAccess(formData.dashboardScopeAccess),
     };
 
     const docRef = doc(db, "companies", recentlySelectedCompany, "roles", roleId);
@@ -336,6 +358,12 @@ const RoleDetails = () => {
               onClearTags={handleClearCustomerTagAccess}
               onToggleTag={handleCustomerTagAccessToggle}
             />
+
+            <DashboardScopeAccessSection
+              editMode={editMode}
+              selectedScopes={formData.dashboardScopeAccess}
+              onToggleScope={handleDashboardScopeAccessToggle}
+            />
           </aside>
 
           <main className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -501,6 +529,75 @@ const CustomerTagAccessSection = ({
           )}
         </div>
       )}
+    </section>
+  );
+};
+
+const DashboardScopeAccessSection = ({
+  editMode,
+  selectedScopes,
+  onToggleScope,
+}) => {
+  const normalizedScopes = normalizeDashboardScopeAccess(selectedScopes);
+  const selectedSet = new Set(normalizedScopes);
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div>
+        <h2 className="text-sm font-semibold uppercase text-slate-500">Dashboard Views</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          Choose which dashboard scopes this role can open.
+        </p>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {DASHBOARD_SCOPE_ACCESS_OPTIONS.map((scope) => {
+          const selected = selectedSet.has(scope.id);
+
+          if (!editMode) {
+            return (
+              <div
+                key={scope.id}
+                className={`rounded-lg border px-3 py-2 ${selected ? "border-blue-200 bg-blue-50" : "border-slate-200 bg-slate-50 opacity-60"}`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className={`text-sm font-semibold ${selected ? "text-blue-800" : "text-slate-600"}`}>{scope.label}</p>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">{scope.description}</p>
+                  </div>
+                  <span className={`rounded-full px-2 py-1 text-xs font-semibold ${selected ? "bg-white text-blue-700" : "bg-white text-slate-500"}`}>
+                    {selected ? "Allowed" : "Hidden"}
+                  </span>
+                </div>
+              </div>
+            );
+          }
+
+          return (
+            <label
+              key={scope.id}
+              className={`block cursor-pointer rounded-lg border px-3 py-2 transition ${
+                selected
+                  ? "border-blue-600 bg-blue-50 text-blue-900"
+                  : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+              }`}
+            >
+              <div className="flex items-start gap-3">
+                <input
+                  type="checkbox"
+                  checked={selected}
+                  onChange={() => onToggleScope(scope.id)}
+                  className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span className="block text-sm font-semibold">{scope.label}</span>
+                  <span className="mt-1 block text-xs leading-5 text-slate-500">{scope.description}</span>
+                </span>
+              </div>
+            </label>
+          );
+        })}
+      </div>
     </section>
   );
 };

@@ -4,15 +4,11 @@ import { collection, getDocs, query, Timestamp, where } from 'firebase/firestore
 import {
     BriefcaseIcon,
     CalendarDaysIcon,
-    MapIcon,
     WrenchScrewdriverIcon,
 } from '@heroicons/react/24/outline';
 import {
     FaArrowRight,
-    FaCheckCircle,
-    FaRoute,
     FaSwimmingPool,
-    FaSyncAlt,
 } from 'react-icons/fa';
 import { db } from '../../../utils/config';
 import { Context } from '../../../context/AuthContext';
@@ -42,6 +38,21 @@ const formatDate = (value) => {
 
 const normalizeStatus = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
+const percentOf = (value, total) => {
+    if (!total) return 0;
+    return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+};
+
+const getStopState = (stop) => {
+    const start = toMillis(stop?.startTime);
+    const end = toMillis(stop?.endTime);
+    const status = normalizeStatus(stop?.operationStatus || stop?.status);
+
+    if (end || status === 'finished') return 'finished';
+    if (start || status === 'inprogress') return 'inProgress';
+    return 'open';
+};
+
 const startOfToday = () => {
     const date = new Date();
     date.setHours(0, 0, 0, 0);
@@ -61,46 +72,98 @@ const sortFresh = (records) => (
     ))
 );
 
-const StatTile = ({ icon: Icon, label, value, helper, to, tone = 'slate' }) => {
+const ProgressBar = ({ value, tone = 'blue' }) => {
     const tones = {
-        slate: 'bg-slate-100 text-slate-600',
-        blue: 'bg-blue-50 text-blue-700',
-        emerald: 'bg-emerald-50 text-emerald-700',
-        amber: 'bg-amber-50 text-amber-700',
-        rose: 'bg-rose-50 text-rose-700',
+        blue: 'bg-blue-600',
+        emerald: 'bg-emerald-500',
+        amber: 'bg-amber-400',
+        rose: 'bg-rose-500',
+        slate: 'bg-slate-500',
     };
 
-    const content = (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-200">
-            <div className="flex items-start justify-between gap-3">
-                <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-                    <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
-                </div>
-                <span className={`rounded-md p-2 ${tones[tone] || tones.slate}`}>
-                    <Icon className="h-5 w-5" />
-                </span>
-            </div>
-            {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
+    return (
+        <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+            <div className={`h-full rounded-full ${tones[tone] || tones.blue}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
         </div>
     );
-
-    return to ? <Link to={to}>{content}</Link> : content;
 };
 
-const StatGroup = ({ title, helper, children }) => (
-    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <div className="mb-4 flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
-            <div>
-                <h2 className="text-lg font-bold text-slate-950">{title}</h2>
-                {helper && <p className="mt-1 text-sm text-slate-500">{helper}</p>}
+const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
+    const tones = {
+        slate: 'text-slate-500',
+        blue: 'text-blue-600',
+        emerald: 'text-emerald-600',
+        amber: 'text-amber-600',
+        rose: 'text-rose-600',
+    };
+
+    return (
+        <div className="min-w-0 border-l border-slate-200 px-4 first:border-l-0 first:pl-0">
+            <div className="flex items-center gap-2">
+                <Icon className={`h-4 w-4 ${tones[tone] || tones.slate}`} />
+                <p className="truncate text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
+            </div>
+            <p className="mt-2 truncate text-2xl font-bold leading-none text-slate-950">{value}</p>
+            {helper && <p className="mt-1 truncate text-xs font-semibold text-slate-500">{helper}</p>}
+        </div>
+    );
+};
+
+const QueueLink = ({ to, label, value, helper, tone = 'slate' }) => {
+    const tones = {
+        slate: 'bg-white text-slate-950',
+        amber: 'bg-amber-300 text-slate-950',
+        rose: 'bg-rose-300 text-slate-950',
+        emerald: 'bg-emerald-300 text-slate-950',
+    };
+
+    return (
+        <Link to={to} className="block rounded-md bg-white/10 px-3 py-3 transition hover:bg-white/15">
+            <div className="flex items-start justify-between gap-3">
+                <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold text-white">{label}</span>
+                    {helper && <span className="mt-0.5 block truncate text-xs text-slate-300">{helper}</span>}
+                </span>
+                <span className={`shrink-0 rounded px-2 py-1 text-xs font-bold ${tones[tone] || tones.slate}`}>{value}</span>
+            </div>
+        </Link>
+    );
+};
+
+const FlowRow = ({ label, value, maxValue, tone = 'blue' }) => (
+    <div>
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+            <span className="font-semibold text-slate-800">{label}</span>
+            <span className="font-bold text-slate-950">{value}</span>
+        </div>
+        <ProgressBar value={percentOf(value, maxValue)} tone={tone} />
+    </div>
+);
+
+const TodayStopBar = ({ summary }) => {
+    const finishedWidth = percentOf(summary.finished, summary.total);
+    const activeWidth = percentOf(summary.inProgress, summary.total);
+    const openWidth = percentOf(summary.open, summary.total);
+
+    return (
+        <div>
+            <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                <span>Service stops today</span>
+                <span>{summary.finished}/{summary.total} complete</span>
+            </div>
+            <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
+                <span className="bg-emerald-500" style={{ width: `${finishedWidth}%` }} />
+                <span className="bg-blue-500" style={{ width: `${activeWidth}%` }} />
+                <span className="bg-amber-300" style={{ width: `${openWidth}%` }} />
+            </div>
+            <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Finished</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> In progress</span>
+                <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-300" /> Open</span>
             </div>
         </div>
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            {children}
-        </div>
-    </section>
-);
+    );
+};
 
 const ListCard = ({ title, helper, to, children }) => (
     <section className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -303,57 +366,119 @@ const OperationsDashboard = () => {
         return sortFresh([...acceptedJobRows, ...acceptedContractRows]).slice(0, 8);
     }, [jobs, legacyContracts]);
 
+    const todayStopSummary = useMemo(() => (
+        serviceStopsToday.reduce((summary, stop) => {
+            summary.total += 1;
+            summary[getStopState(stop)] += 1;
+            return summary;
+        }, {
+            total: 0,
+            finished: 0,
+            inProgress: 0,
+            open: 0,
+        })
+    ), [serviceStopsToday]);
+
+    const todayCompletionPercent = percentOf(todayStopSummary.finished, todayStopSummary.total);
+    const jobFlowMax = Math.max(1, ...activeJobStatuses.map((status) => jobBuckets[status] || 0));
+
     if (loading) {
         return <div className="min-h-screen bg-slate-50 px-2 py-6 text-sm text-slate-500 sm:px-3 lg:px-4">Loading operations dashboard...</div>;
     }
 
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-            <div className="w-full space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                        <div>
-                            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || 'Selected company'}</p>
-                            <h1 className="mt-2 text-3xl font-bold text-slate-950">Operations Dashboard</h1>
-                            <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                                Jobs, routes, repair requests, recurring stops, equipment due, and scheduling handoffs.
-                            </p>
+            <div className="w-full space-y-5">
+                <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+                    <div>
+                        <p className="text-xs font-bold uppercase tracking-wide text-blue-700">{recentlySelectedCompanyName || 'Selected company'}</p>
+                        <h1 className="mt-1 text-2xl font-bold text-slate-950">Operations Dashboard</h1>
+                        <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                            Workload, dispatch pressure, repair intake, equipment due, and scheduling handoffs.
+                        </p>
+                    </div>
+                    <Link to="/company/recurring-service-stops/create" className="w-fit rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700">
+                        New Recurring Service Stop
+                    </Link>
+                </header>
+
+                <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+                    <div className="grid xl:grid-cols-[minmax(0,1fr)_390px]">
+                        <div className="p-5">
+                            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                                <div>
+                                    <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Operations Pulse</p>
+                                    <h2 className="mt-1 text-xl font-bold text-slate-950">Workload and service health</h2>
+                                </div>
+                                <div className="rounded-md bg-slate-900 px-4 py-3 text-white">
+                                    <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Today Complete</p>
+                                    <p className="mt-1 text-3xl font-bold leading-none">{todayCompletionPercent}%</p>
+                                </div>
+                            </div>
+
+                            <div className="mt-5 grid gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
+                                <PulseMetric icon={BriefcaseIcon} label="Active Jobs" value={jobs.length} helper={`${jobBuckets["In Progress"] || 0} in progress`} tone="amber" />
+                                <PulseMetric icon={WrenchScrewdriverIcon} label="Open Repairs" value={openRepairs.length} helper="repair intake" tone={openRepairs.length ? 'rose' : 'emerald'} />
+                                <PulseMetric icon={CalendarDaysIcon} label="Stops Today" value={serviceStopsToday.length} helper={`${todayStopSummary.open} open`} tone="blue" />
+                                <PulseMetric icon={FaSwimmingPool} label="Equipment Due" value={equipmentDue.length} helper="maintenance due now" tone={equipmentDue.length ? 'amber' : 'emerald'} />
+                            </div>
+
+                            <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+                                <TodayStopBar summary={todayStopSummary} />
+                                <div className="space-y-3">
+                                    {activeJobStatuses.map((status) => (
+                                        <FlowRow
+                                            key={status}
+                                            label={status}
+                                            value={jobBuckets[status] || 0}
+                                            maxValue={jobFlowMax}
+                                            tone={status === 'In Progress' ? 'emerald' : status === 'Estimate Pending' ? 'blue' : 'amber'}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
                         </div>
-                        <Link to="/company/recurring-service-stops/create" className="w-fit rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700">
-                            New Recurring Service Stop
-                        </Link>
+
+                        <aside className="border-t border-slate-800 bg-slate-900 p-5 text-white xl:border-l xl:border-t-0">
+                            <div className="flex items-start justify-between gap-3">
+                                <div>
+                                    <p className="text-xs font-bold uppercase tracking-wide text-amber-300">Action Queue</p>
+                                    <h2 className="mt-1 text-xl font-bold">Needs a decision</h2>
+                                </div>
+                                <WrenchScrewdriverIcon className={openRepairs.length || equipmentDue.length || agreementsNeedRouting.length ? 'mt-1 h-5 w-5 text-amber-300' : 'mt-1 h-5 w-5 text-emerald-300'} />
+                            </div>
+
+                            <div className="mt-5 space-y-3">
+                                <QueueLink to="/company/repair-requests" label="Open repair requests" value={openRepairs.length} helper="internal and homeowner requests" tone={openRepairs.length ? 'rose' : 'emerald'} />
+                                <QueueLink to="/company/equipment" label="Equipment due" value={equipmentDue.length} helper="maintenance due now" tone={equipmentDue.length ? 'amber' : 'emerald'} />
+                                <QueueLink to="/company/sales/agreements" label="Needs routing" value={agreementsNeedRouting.length} helper="accepted recurring agreements" tone={agreementsNeedRouting.length ? 'amber' : 'emerald'} />
+                                <QueueLink to="/company/jobs" label="Estimates to schedule" value={acceptedEstimatesNeedScheduling.length} helper="accepted work without a clear date" tone={acceptedEstimatesNeedScheduling.length ? 'amber' : 'emerald'} />
+                            </div>
+
+                            <div className="mt-5 border-t border-white/10 pt-4">
+                                <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Route context</p>
+                                <div className="mt-3 grid grid-cols-3 gap-2 text-sm">
+                                    <div>
+                                        <p className="text-2xl font-bold leading-none">{routes.length}</p>
+                                        <p className="mt-1 text-xs font-semibold text-slate-300">routes</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold leading-none">{recurringServiceStops.length}</p>
+                                        <p className="mt-1 text-xs font-semibold text-slate-300">recurring</p>
+                                    </div>
+                                    <div>
+                                        <p className="text-2xl font-bold leading-none">{todayStopSummary.inProgress}</p>
+                                        <p className="mt-1 text-xs font-semibold text-slate-300">active</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </aside>
                     </div>
                 </section>
 
-                <StatGroup title="Actionable" helper="Work that needs someone to make a decision, route, schedule, or repair.">
-                    <StatTile icon={WrenchScrewdriverIcon} label="Open Repairs" value={openRepairs.length} helper="Internal and homeowner requests" to="/company/repair-requests" tone="rose" />
-                    <StatTile icon={FaSwimmingPool} label="Equipment Due" value={equipmentDue.length} helper="Maintenance due now" to="/company/equipment" tone="amber" />
-                    <StatTile icon={FaRoute} label="Needs Routing" value={agreementsNeedRouting.length} helper="Accepted service agreements" to="/company/sales/agreements" tone="amber" />
-                    <StatTile icon={CalendarDaysIcon} label="Estimates To Schedule" value={acceptedEstimatesNeedScheduling.length} helper="Accepted estimates" to="/company/jobs" tone="amber" />
-                </StatGroup>
-
-                <StatGroup title="Informative" helper="Current operating volume and route context.">
-                    <StatTile icon={BriefcaseIcon} label="Active Jobs" value={jobs.length} helper="Open operational work" to="/company/jobs" tone="amber" />
-                    <StatTile icon={FaSyncAlt} label="Recurring Service Stops" value={recurringServiceStops.length} helper="Active recurring service templates" to="/company/recurringServiceStop" tone="emerald" />
-                    <StatTile icon={CalendarDaysIcon} label="Stops Today" value={serviceStopsToday.length} helper="Scheduled service stops" to="/company/route-day-management" tone="blue" />
-                    <StatTile icon={MapIcon} label="Routes" value={routes.length} helper="Recurring route templates" to="/company/route-dashboard" tone="blue" />
-                    <StatTile icon={FaCheckCircle} label="In Progress" value={jobBuckets["In Progress"] || 0} helper="Jobs actively underway" to="/company/jobs" tone="emerald" />
-                </StatGroup>
-
-                <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
-                    <div className="space-y-4">
-                        <ListCard title="Job Flow" helper="Operational statuses at a glance" to="/company/jobs">
-                            <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-4">
-                                {activeJobStatuses.map((status) => (
-                                    <div key={status} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                        <p className="text-2xl font-bold text-slate-950">{jobBuckets[status] || 0}</p>
-                                        <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-500">{status}</p>
-                                    </div>
-                                ))}
-                            </div>
-                        </ListCard>
-
-                        <div className="grid gap-4 lg:grid-cols-2">
+                <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
+                    <div className="space-y-5">
+                        <div className="grid gap-5 lg:grid-cols-2">
                             <ListCard title="Needs Routing" helper="Accepted service agreements without a recurring stop match" to="/company/recurringServiceStop">
                                 {agreementsNeedRouting.length === 0 ? (
                                     <EmptyRow>No accepted service agreements waiting on recurring routing.</EmptyRow>

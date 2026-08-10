@@ -17,6 +17,7 @@ import {
     normalizeContact,
     normalizeServiceLocationForFirestore,
 } from '../../../utils/customerLocationData';
+import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
 
 const nextServiceDate = (date, amount, unit) => {
     const next = new Date(date);
@@ -85,7 +86,7 @@ const FormSelect = ({ label, name, value, onChange, children, ...props }) => (
 const CreateNewServiceLocation = () => {
     const navigate = useNavigate();
     const { customerId } = useParams();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
     const { requirePermission } = useCompanyPermissions();
     
     const [customers, setCustomers] = useState([]);
@@ -239,17 +240,17 @@ const CreateNewServiceLocation = () => {
 
             for (const eq of equipment) {
                 if (eq.name) {
-	                     const equipmentId = 'com_equ_' + uuidv4();
-	                     const finalType = eq.type || eq.category || '';
-	                     const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalType });
-	                     const lastServiceDate = finalNeedsService ? new Date() : null;
-	                     const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency || 6) : null;
-	                     const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
-                     await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
+                    const equipmentId = 'com_equ_' + uuidv4();
+                    const finalType = eq.type || eq.category || '';
+                    const finalNeedsService = !!eq.needsService || equipmentDefaultsToNeedsService({ ...eq, type: finalType });
+                    const lastServiceDate = finalNeedsService ? new Date() : null;
+                    const serviceFrequency = finalNeedsService ? Number(eq.serviceFrequency || 6) : null;
+                    const serviceFrequencyEvery = finalNeedsService ? (eq.serviceFrequencyEvery || 'Month') : null;
+                    const equipmentPayload = {
                          id: equipmentId,
                          name: eq.name,
                          notes: eq.notes || '',
-	                         needsService: finalNeedsService,
+                         needsService: finalNeedsService,
                          type: finalType,
                          typeId: eq.typeId || '',
                          make: eq.make || '',
@@ -277,7 +278,22 @@ const CreateNewServiceLocation = () => {
                              : null,
                          photoUrls: [],
                          verified: false,
-                     });
+                    };
+
+                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), equipmentPayload);
+
+                    try {
+                        await queueUniversalEquipmentSuggestion({
+                            db,
+                            companyId: recentlySelectedCompany,
+                            companyName: recentlySelectedCompanyName || '',
+                            user,
+                            equipment: equipmentPayload,
+                            source: 'serviceLocationCreateEquipment',
+                        });
+                    } catch (suggestionError) {
+                        console.error('Error creating universal equipment suggestion:', suggestionError);
+                    }
                 }
             }
 

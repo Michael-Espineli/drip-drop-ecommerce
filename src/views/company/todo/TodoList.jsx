@@ -313,7 +313,7 @@ const StatCard = ({ icon: Icon, label, value, helper, tone = "slate" }) => {
 };
 
 const TodoList = () => {
-  const { recentlySelectedCompany, recentlySelectedCompanyName, user, dataBaseUser, companyUserAccess, name } = useContext(Context);
+  const { recentlySelectedCompany, user, dataBaseUser, companyUserAccess, name } = useContext(Context);
   const [todoItems, setTodoItems] = useState([]);
   const [todoBoards, setTodoBoards] = useState([]);
   const [companyUsers, setCompanyUsers] = useState([]);
@@ -325,6 +325,7 @@ const TodoList = () => {
   const [selectedBoardId, setSelectedBoardId] = useState(BOARD_FILTER_ALL);
   const [searchTerm, setSearchTerm] = useState("");
   const [createTodoModalOpen, setCreateTodoModalOpen] = useState(false);
+  const [boardModalOpen, setBoardModalOpen] = useState(false);
   const [form, setForm] = useState(emptyTodoForm);
   const [boardForm, setBoardForm] = useState(emptyBoardForm);
   const [editingBoardId, setEditingBoardId] = useState("");
@@ -343,6 +344,7 @@ const TodoList = () => {
       setSelectedTodoId("");
       setEditForm(null);
       setCreateTodoModalOpen(false);
+      setBoardModalOpen(false);
       setBoardForm(emptyBoardForm());
       setEditingBoardId("");
       setRelatedEntitySearch("");
@@ -436,6 +438,27 @@ const TodoList = () => {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [createTodoModalOpen, saving]);
+
+  useEffect(() => {
+    if (!boardModalOpen) return undefined;
+
+    const originalOverflow = document.body.style.overflow;
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape" && !savingBoard) {
+        setBoardModalOpen(false);
+        setBoardForm(emptyBoardForm());
+        setEditingBoardId("");
+      }
+    };
+
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [boardModalOpen, savingBoard]);
 
   useEffect(() => {
     const config = relatedEntityPickerConfig[form.relatedEntityType];
@@ -642,6 +665,11 @@ const TodoList = () => {
     return boardById.get(selectedBoardId)?.name || "Board";
   }, [boardById, selectedBoardId]);
 
+  const selectedEditableBoard = useMemo(() => {
+    if (selectedBoardId === BOARD_FILTER_ALL || selectedBoardId === BOARD_FILTER_UNASSIGNED) return null;
+    return boardById.get(selectedBoardId) || null;
+  }, [boardById, selectedBoardId]);
+
   const kanbanColumns = useMemo(() => boardColumns.map((column) => ({
     ...column,
     todos: filteredTodos.filter((todo) => todoColumnId(todo) === column.id),
@@ -719,12 +747,26 @@ const TodoList = () => {
     setEditingBoardId("");
   };
 
+  const openCreateBoardModal = () => {
+    resetBoardForm();
+    setBoardModalOpen(true);
+  };
+
   const startEditBoard = (board) => {
+    if (!board) return;
+
     setEditingBoardId(board.id);
     setBoardForm({
       name: board.name || "",
       memberUserIds: Array.isArray(board.memberUserIds) ? board.memberUserIds : [],
     });
+    setBoardModalOpen(true);
+  };
+
+  const closeBoardModal = () => {
+    if (savingBoard) return;
+    setBoardModalOpen(false);
+    resetBoardForm();
   };
 
   const saveBoard = async (event) => {
@@ -766,6 +808,7 @@ const TodoList = () => {
       await setDoc(doc(db, "companies", recentlySelectedCompany, "todoBoards", boardId), boardPayload, { merge: Boolean(editingBoardId) });
       setSelectedBoardId(boardId);
       setForm((current) => ({ ...current, boardId }));
+      setBoardModalOpen(false);
       resetBoardForm();
       toast.success(editingBoardId ? "Board updated." : "Board created.");
     } catch (error) {
@@ -1051,37 +1094,49 @@ const TodoList = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F7F8F9] px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
-      <div className="w-full space-y-6">
-        <section className="rounded-md border border-[#0C66E4]/20 bg-[#0C66E4] p-5 text-white shadow-sm">
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-            <div className="min-w-0">
-              <p className="text-xs font-bold uppercase tracking-wide text-blue-100">{recentlySelectedCompanyName || "Selected company"}</p>
-              <h1 className="mt-2 break-words text-3xl font-bold">Todo Board</h1>
-              <p className="mt-2 max-w-3xl text-sm text-blue-50">
-                Track team tasks as issues with boards, owners, priorities, linked records, due dates, and reminders.
-              </p>
+    <div className="min-h-screen bg-slate-100 px-3 py-3 text-slate-900 sm:px-4 lg:px-5">
+      <div className="w-full space-y-3">
+        <section className="rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <h1 className="text-xl font-bold text-slate-950">Todo Board</h1>
+              <span className="max-w-full truncate rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-bold text-slate-600">
+                {selectedBoardLabel}
+              </span>
             </div>
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-stretch">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={openCreateTodoModal}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-white/30 bg-white px-4 py-3 text-sm font-bold text-[#0C66E4] shadow-sm transition hover:bg-blue-50"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700"
               >
-                <FaPlus className="h-4 w-4" />
+                <FaPlus className="h-3.5 w-3.5" />
                 New Task
+              </button>
+              <button
+                type="button"
+                onClick={openCreateBoardModal}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+              >
+                <FaPlus className="h-3.5 w-3.5" />
+                Create Board
+              </button>
+              <button
+                type="button"
+                onClick={() => startEditBoard(selectedEditableBoard)}
+                disabled={!selectedEditableBoard}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <FaEdit className="h-3.5 w-3.5" />
+                Edit Board
               </button>
               <Link
                 to={todoHistoryLink}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-white/30 bg-white px-4 py-3 text-sm font-bold text-[#0C66E4] shadow-sm transition hover:bg-blue-50"
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
               >
                 <MdHistory className="h-4 w-4" />
-                Todo History
+                History
               </Link>
-              <div className="rounded-md border border-white/20 bg-white/10 px-4 py-3">
-                <p className="text-xs font-bold uppercase tracking-wide text-blue-100">Current board</p>
-                <p className="mt-1 max-w-[260px] truncate text-sm font-semibold">{selectedBoardLabel}</p>
-              </div>
             </div>
           </div>
         </section>
@@ -1113,7 +1168,7 @@ const TodoList = () => {
                 >
                   <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
                     <div className="min-w-0">
-                      <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Issue creator</p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Issue creator</p>
                       <h2 id="create-todo-modal-title" className="mt-1 text-lg font-bold text-slate-950">Create Todo</h2>
                       <p className="mt-1 text-sm text-slate-500">Add team work, assign an owner, and link the record it belongs to.</p>
                     </div>
@@ -1351,7 +1406,7 @@ const TodoList = () => {
               <button
                 type="submit"
                 disabled={saving}
-                className="w-full rounded-md bg-[#0C66E4] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC] disabled:cursor-not-allowed disabled:opacity-60"
+                className="w-full rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {saving ? "Creating..." : "Create Issue"}
               </button>
@@ -1361,88 +1416,130 @@ const TodoList = () => {
               </div>
             )}
 
-            <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
-              <div className="mb-5 flex items-start justify-between gap-3">
+            {boardModalOpen && (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-3 sm:p-6"
+                onMouseDown={(event) => {
+                  if (!savingBoard && event.target === event.currentTarget) {
+                    closeBoardModal();
+                  }
+                }}
+              >
+                <section
+                  role="dialog"
+                  aria-modal="true"
+                  aria-labelledby="board-modal-title"
+                  className="flex max-h-[92vh] w-full max-w-xl flex-col overflow-hidden rounded-md bg-white shadow-2xl"
+                  onMouseDown={(event) => event.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold uppercase tracking-wide text-blue-600">
+                        {editingBoardId ? "Edit board" : "Create board"}
+                      </p>
+                      <h2 id="board-modal-title" className="mt-1 text-lg font-bold text-slate-950">
+                        {editingBoardId ? "Edit Board" : "Create New Board"}
+                      </h2>
+                      <p className="mt-1 text-sm text-slate-500">Name the board and choose the users who belong on it.</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={closeBoardModal}
+                      disabled={savingBoard}
+                      className="inline-flex shrink-0 items-center justify-center rounded-md border border-slate-200 bg-white p-2 text-slate-600 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      aria-label="Close board form"
+                    >
+                      <FaTimes className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="overflow-y-auto px-5 py-5">
+                    <form onSubmit={saveBoard} className="space-y-4">
+                      <div>
+                        <label className="text-sm font-semibold text-slate-700" htmlFor="todo-board-name">Board name</label>
+                        <input
+                          id="todo-board-name"
+                          value={boardForm.name}
+                          onChange={(event) => updateBoardForm("name", event.target.value)}
+                          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                          placeholder="Service team"
+                        />
+                      </div>
+
+                      <div>
+                        <p className="text-sm font-semibold text-slate-700">Users</p>
+                        <div className="mt-2 max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                          {companyUserOptions.length === 0 ? (
+                            <div className="px-2 py-2 text-sm text-slate-500">No company users found.</div>
+                          ) : companyUserOptions.map((option) => (
+                            <label key={option.id} className="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
+                              <input
+                                type="checkbox"
+                                checked={boardForm.memberUserIds.includes(option.userId)}
+                                onChange={() => toggleBoardMember(option.userId)}
+                                className="mt-1"
+                              />
+                              <span className="min-w-0">
+                                <span className="block truncate font-semibold text-slate-900">{option.userName}</span>
+                                {option.roleName && <span className="block truncate text-xs text-slate-500">{option.roleName}</span>}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-col-reverse gap-2 border-t border-slate-200 pt-4 sm:flex-row sm:justify-end">
+                        <button
+                          type="button"
+                          onClick={closeBoardModal}
+                          disabled={savingBoard}
+                          className="inline-flex h-9 items-center justify-center rounded-md border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="submit"
+                          disabled={savingBoard}
+                          className="inline-flex h-9 items-center justify-center gap-2 rounded-md bg-blue-600 px-3 text-sm font-bold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {editingBoardId ? <FaSave className="h-3.5 w-3.5" /> : <FaPlus className="h-3.5 w-3.5" />}
+                          {savingBoard ? "Saving..." : editingBoardId ? "Save Board" : "Create Board"}
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </section>
+              </div>
+            )}
+
+            <section className="rounded-md border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Project rail</p>
-                  <h2 className="mt-1 text-lg font-bold text-slate-950">Boards</h2>
-                  <p className="mt-1 text-sm text-slate-500">Name each board and choose its users.</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Project rail</p>
+                  <h2 className="mt-1 text-base font-bold text-slate-950">Boards</h2>
+                  <p className="mt-1 text-sm text-slate-500">Select a board or edit its users.</p>
                 </div>
-                {editingBoardId && (
-                  <button
-                    type="button"
-                    onClick={resetBoardForm}
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-100"
-                  >
-                    <FaTimes className="h-3.5 w-3.5" />
-                    Cancel
-                  </button>
-                )}
               </div>
 
-              <form onSubmit={saveBoard} className="space-y-4">
-                <div>
-                  <label className="text-sm font-semibold text-slate-700" htmlFor="todo-board-name">Board name</label>
-                  <input
-                    id="todo-board-name"
-                    value={boardForm.name}
-                    onChange={(event) => updateBoardForm("name", event.target.value)}
-                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                    placeholder="Service team"
-                  />
-                </div>
-
-                <div>
-                  <p className="text-sm font-semibold text-slate-700">Users</p>
-                  <div className="mt-2 max-h-56 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
-                    {companyUserOptions.length === 0 ? (
-                      <div className="px-2 py-2 text-sm text-slate-500">No company users found.</div>
-                    ) : companyUserOptions.map((option) => (
-                      <label key={option.id} className="flex items-start gap-3 rounded-md bg-white px-3 py-2 text-sm text-slate-700 shadow-sm">
-                        <input
-                          type="checkbox"
-                          checked={boardForm.memberUserIds.includes(option.userId)}
-                          onChange={() => toggleBoardMember(option.userId)}
-                          className="mt-1"
-                        />
-                        <span className="min-w-0">
-                          <span className="block truncate font-semibold text-slate-900">{option.userName}</span>
-                          {option.roleName && <span className="block truncate text-xs text-slate-500">{option.roleName}</span>}
-                        </span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={savingBoard}
-                  className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {editingBoardId ? <FaSave className="h-3.5 w-3.5" /> : <FaPlus className="h-3.5 w-3.5" />}
-                  {savingBoard ? "Saving..." : editingBoardId ? "Save Board" : "Create Board"}
-                </button>
-              </form>
-
-              {todoBoards.length > 0 && (
-                <div className="mt-5 space-y-1 rounded-md border border-slate-200 bg-slate-50 p-1">
+              {todoBoards.length > 0 ? (
+                <div className="space-y-1 rounded-md border border-slate-200 bg-slate-50 p-1">
                   {todoBoards.map((board) => {
                     const selected = selectedBoardId === board.id;
 
                     return (
-                      <div key={board.id} className={`flex items-start justify-between gap-3 rounded-md px-3 py-3 ${selected ? "bg-white shadow-sm ring-1 ring-[#0C66E4]/20" : "bg-transparent hover:bg-white"}`}>
+                      <div key={board.id} className={`flex items-start justify-between gap-3 rounded-md px-3 py-3 ${selected ? "bg-white shadow-sm ring-1 ring-blue-200" : "bg-transparent hover:bg-white"}`}>
                         <button
                           type="button"
                           onClick={() => setSelectedBoardId(board.id)}
                           className="min-w-0 flex-1 text-left"
                         >
-                          <span className={`block truncate text-sm font-bold ${selected ? "text-[#0C66E4]" : "text-slate-950"}`}>{board.name}</span>
+                          <span className={`block truncate text-sm font-bold ${selected ? "text-blue-600" : "text-slate-950"}`}>{board.name}</span>
                           <span className="mt-0.5 block truncate text-xs text-slate-500">{memberSummary(board)}</span>
                         </button>
                         <button
                           type="button"
                           onClick={() => startEditBoard(board)}
-                          className="inline-flex shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
+                          className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-100"
                         >
                           <FaEdit className="h-3 w-3" />
                           Edit
@@ -1450,6 +1547,10 @@ const TodoList = () => {
                       </div>
                     );
                   })}
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-3 py-4 text-sm text-slate-500">
+                  No boards yet. Use Create Board in the header.
                 </div>
               )}
             </section>
@@ -1459,7 +1560,7 @@ const TodoList = () => {
             <section className="rounded-md border border-slate-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                 <div>
-                  <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">Board filter</p>
+                  <p className="text-xs font-bold uppercase tracking-wide text-blue-600">Board filter</p>
                   <h2 className="mt-1 text-lg font-bold text-slate-950">Focus Area</h2>
                   <p className="mt-1 text-sm text-slate-500">Choose a board and view to focus this issue board.</p>
                 </div>
@@ -1469,14 +1570,14 @@ const TodoList = () => {
                 <button
                   type="button"
                   onClick={() => setSelectedBoardId(BOARD_FILTER_ALL)}
-                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_ALL ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_ALL ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                 >
                   All Boards ({boardCounts.all})
                 </button>
                 <button
                   type="button"
                   onClick={() => setSelectedBoardId(BOARD_FILTER_UNASSIGNED)}
-                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_UNASSIGNED ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                  className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === BOARD_FILTER_UNASSIGNED ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                 >
                   No Board ({boardCounts.unassigned})
                 </button>
@@ -1485,7 +1586,7 @@ const TodoList = () => {
                     key={board.id}
                     type="button"
                     onClick={() => setSelectedBoardId(board.id)}
-                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === board.id ? "bg-[#0C66E4] text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
+                    className={`rounded-md px-3 py-2 text-sm font-semibold transition ${selectedBoardId === board.id ? "bg-blue-600 text-white shadow-sm" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}
                   >
                     {board.name} ({boardCounts.byBoard[board.id] || 0})
                   </button>
@@ -1498,7 +1599,7 @@ const TodoList = () => {
                 <div className="border-b border-slate-200 px-5 py-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                     <div>
-                      <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">{selectedBoardLabel}</p>
+                      <p className="text-xs font-bold uppercase tracking-wide text-blue-600">{selectedBoardLabel}</p>
                       <h2 className="mt-1 text-lg font-bold text-slate-950">Task Board</h2>
                       <p className="mt-1 text-sm text-slate-500">Issues are grouped by workflow status and sorted by urgency. Done shows the last {TODO_DONE_BOARD_LOOKBACK_DAYS} days.</p>
                     </div>
@@ -1507,7 +1608,7 @@ const TodoList = () => {
                       <input
                         value={searchTerm}
                         onChange={(event) => setSearchTerm(event.target.value)}
-                        className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-[#0C66E4] focus:outline-none focus:ring-2 focus:ring-blue-100"
+                        className="w-full rounded-md border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                         placeholder="Search todos"
                       />
                     </div>
@@ -1533,7 +1634,7 @@ const TodoList = () => {
                     <button
                       type="button"
                       onClick={openCreateTodoModal}
-                      className="inline-flex items-center justify-center gap-2 rounded-md bg-[#0C66E4] px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC]"
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
                     >
                       <FaPlus className="h-3.5 w-3.5" />
                       New Task
@@ -1568,7 +1669,7 @@ const TodoList = () => {
                             return (
                               <article
                                 key={todo.id}
-                                className={`rounded-md border bg-white p-3 shadow-sm transition hover:border-[#0C66E4]/40 hover:shadow-md ${selectedTodoId === todo.id ? "border-[#0C66E4] ring-2 ring-blue-100" : "border-slate-200"}`}
+                                className={`rounded-md border bg-white p-3 shadow-sm transition hover:border-blue-300 hover:shadow-md ${selectedTodoId === todo.id ? "border-blue-600 ring-2 ring-blue-100" : "border-slate-200"}`}
                               >
                                 <button
                                   type="button"
@@ -1688,7 +1789,7 @@ const TodoList = () => {
                       <div className="space-y-5">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="text-xs font-bold uppercase tracking-wide text-[#0C66E4]">{todoIssueKey(selectedTodo)} | {todoBoardName(selectedTodo, boardById)}</p>
+                        <p className="text-xs font-bold uppercase tracking-wide text-blue-600">{todoIssueKey(selectedTodo)} | {todoBoardName(selectedTodo, boardById)}</p>
                         <h2 id="todo-details-modal-title" className="mt-1 break-words text-lg font-bold text-slate-950">Issue Details</h2>
                       </div>
                       <button
@@ -1863,7 +1964,7 @@ const TodoList = () => {
                       <button
                         type="submit"
                         disabled={savingTodoEdit}
-                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0C66E4] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#0052CC] disabled:cursor-not-allowed disabled:opacity-60"
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <FaSave className="h-3.5 w-3.5" />
                         {savingTodoEdit ? "Saving..." : "Save Issue"}

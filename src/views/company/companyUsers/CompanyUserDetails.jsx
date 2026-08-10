@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useContext, useMemo, useCallback } from "react";
 import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { addDoc, doc, query, where, collection, getDocs, getDoc, limit, updateDoc, orderBy, serverTimestamp, Timestamp, writeBatch } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 import Select from "react-select";
 import {
@@ -27,10 +28,15 @@ import {
     StarIcon,
     XMarkIcon,
 } from "@heroicons/react/24/outline";
-import { db, storage } from "../../../utils/config";
+import { db, functions, storage } from "../../../utils/config";
 import { Context } from "../../../context/AuthContext";
 import toast from "react-hot-toast";
 import useCompanyPermissions from "../../../hooks/useCompanyPermissions";
+import {
+    companyPermissionCategoryGroups,
+    companyPermissions,
+    normalizePermissionSelection,
+} from "../../../utils/companyPermissions";
 import {
     CompanyUserStatus,
     WorkerTypeEnum,
@@ -45,6 +51,13 @@ import {
     normalizeCustomerTag,
     normalizeCustomerTags,
 } from "../../../utils/customerTags";
+import {
+    DASHBOARD_SCOPE_ACCESS_OPTIONS,
+    DEFAULT_DASHBOARD_SCOPE_ACCESS,
+    getDashboardScopeAccessList,
+    normalizeDashboardScopeAccess,
+    sourceHasDashboardScopeAccessFields,
+} from "../../../utils/dashboardAccess";
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from "../../../utils/models/FeatureFlag";
 
 const VEHICLE_TYPES = ["Car", "Truck", "Van"];
@@ -76,9 +89,10 @@ const statusOptions = [
 const companyUserSections = [
     { id: "general", label: "General", helper: "Profile, role, route access, and rate sheet" },
     { id: "activity", label: "Activity", helper: "Recent service stops, routes, and statements" },
+    { id: "performance", label: "Performance", helper: "Internal reviews, references, and shared reports", permissionId: "260" },
     { id: "onboarding", label: "Onboarding", helper: "Setup list and completion tracking" },
     { id: "files", label: "Files", helper: "Documents, photos, and technician attachments" },
-    { id: "performance", label: "Performance", helper: "Internal reviews, references, and shared reports", permissionId: "260" },
+    { id: "permissions", label: "Permissions", helper: "Role, dashboard views, and customer tag access" },
 ];
 
 const validCompanyUserTabs = companyUserSections.map((section) => section.id);
@@ -321,10 +335,6 @@ const getCompanyUserLookupIds = (companyUser, routeId) => (
         companyUser?.docId,
         routeId,
     ].filter(Boolean).map(String))]
-);
-
-const getPrimaryTechnicianId = (companyUser, routeId) => (
-    companyUser?.userId || companyUser?.id || routeId || ""
 );
 
 const getServiceStopDate = (stop) => (
@@ -585,6 +595,15 @@ const buildRegionalAccessDraft = (source = {}) => ({
     tags: getCustomerTagAccessList(source),
 });
 
+const buildDashboardScopeAccessDraft = (source = {}) => ({
+    mode: source?.dashboardScopeAccessMode === "custom" || Array.isArray(source?.dashboardScopeAccess)
+        ? "custom"
+        : "role",
+    scopes: source?.dashboardScopeAccessMode === "custom" || Array.isArray(source?.dashboardScopeAccess)
+        ? getDashboardScopeAccessList(source)
+        : [...DEFAULT_DASHBOARD_SCOPE_ACCESS],
+});
+
 const Section = ({ title, description, action, children }) => (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-col gap-3 border-b border-slate-100 pb-4 sm:flex-row sm:items-start sm:justify-between">
@@ -638,11 +657,13 @@ const CompanyUserDetails = () => {
     const [isEditingProfile, setIsEditingProfile] = useState(false);
     const [profileDraft, setProfileDraft] = useState(buildProfileDraft(null));
     const [isSavingProfile, setIsSavingProfile] = useState(false);
-    const [companyUserAccessDoc, setCompanyUserAccessDoc] = useState(null);
+    const [, setCompanyUserAccessDoc] = useState(null);
     const [regionalAccessDraft, setRegionalAccessDraft] = useState(buildRegionalAccessDraft(null));
+    const [dashboardScopeAccessDraft, setDashboardScopeAccessDraft] = useState(buildDashboardScopeAccessDraft(null));
     const [availableCustomerTags, setAvailableCustomerTags] = useState([]);
     const [regionalTagInput, setRegionalTagInput] = useState("");
     const [isSavingRegionalAccess, setIsSavingRegionalAccess] = useState(false);
+    const [isSavingDashboardScopeAccess, setIsSavingDashboardScopeAccess] = useState(false);
     const [routeVehicleAccess, setRouteVehicleAccess] = useState(normalizeRouteVehicleAccess());
     const [personalVehicle, setPersonalVehicle] = useState(emptyPersonalVehicle);
     const [isSavingVehicleAccess, setIsSavingVehicleAccess] = useState(false);
@@ -717,6 +738,7 @@ const CompanyUserDetails = () => {
             if (!linkedUserId) {
                 setCompanyUserAccessDoc(null);
                 setRegionalAccessDraft(buildRegionalAccessDraft(fetchedUser));
+                setDashboardScopeAccessDraft(buildDashboardScopeAccessDraft(fetchedUser));
                 return;
             }
 
@@ -724,12 +746,15 @@ const CompanyUserDetails = () => {
                 const accessSnap = await getDoc(doc(db, "users", linkedUserId, "userAccess", recentlySelectedCompany));
                 const accessDoc = accessSnap.exists() ? { id: accessSnap.id, ...accessSnap.data() } : null;
                 const accessSource = sourceHasRegionalAccessFields(accessDoc) ? accessDoc : fetchedUser;
+                const dashboardAccessSource = sourceHasDashboardScopeAccessFields(accessDoc) ? accessDoc : fetchedUser;
                 setCompanyUserAccessDoc(accessDoc);
                 setRegionalAccessDraft(buildRegionalAccessDraft(accessSource));
+                setDashboardScopeAccessDraft(buildDashboardScopeAccessDraft(dashboardAccessSource));
             } catch (error) {
                 console.warn("Could not load user regional access; using company-user profile fields.", error);
                 setCompanyUserAccessDoc(null);
                 setRegionalAccessDraft(buildRegionalAccessDraft(fetchedUser));
+                setDashboardScopeAccessDraft(buildDashboardScopeAccessDraft(fetchedUser));
             }
         };
 
@@ -1206,11 +1231,72 @@ const CompanyUserDetails = () => {
         () => normalizeCustomerTags(regionalAccessDraft.tags),
         [regionalAccessDraft.tags]
     );
+    const assignedRegionalTagKeys = useMemo(
+        () => new Set(assignedRegionalTags.map((tag) => tag.toLowerCase())),
+        [assignedRegionalTags]
+    );
     const regionalAccessSummary = regionalAccessDraft.mode === "all"
         ? "Full company access"
         : assignedRegionalTags.length
             ? assignedRegionalTags.join(", ")
             : "No customer tags assigned";
+    const assignedDashboardScopes = useMemo(
+        () => normalizeDashboardScopeAccess(dashboardScopeAccessDraft.scopes),
+        [dashboardScopeAccessDraft.scopes]
+    );
+    const dashboardScopeAccessSummary = dashboardScopeAccessDraft.mode === "role"
+        ? "Role default"
+        : assignedDashboardScopes
+            .map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId)
+            .join(", ");
+    const assignedRole = useMemo(() => (
+        roleList.find((role) => String(role.id || role.value || "") === String(user?.roleId || ""))
+        || (user?.roleId ? {
+            id: user.roleId,
+            value: user.roleId,
+            label: user.roleName || "Current Role",
+            name: user.roleName || "Current Role",
+            permissionIdList: [],
+        } : null)
+    ), [roleList, user?.roleId, user?.roleName]);
+    const rolePermissionIds = useMemo(
+        () => normalizePermissionSelection(assignedRole?.permissionIdList || []),
+        [assignedRole]
+    );
+    const rolePermissionGroups = useMemo(() => {
+        const selected = new Set(rolePermissionIds);
+        return companyPermissionCategoryGroups
+            .map((categoryGroup) => ({
+                category: categoryGroup.category,
+                permissions: categoryGroup.permissions.filter((permission) => selected.has(permission.id)),
+            }))
+            .filter((categoryGroup) => categoryGroup.permissions.length > 0);
+    }, [rolePermissionIds]);
+    const knownRolePermissionIds = useMemo(
+        () => new Set(companyPermissions.map((permission) => permission.id)),
+        []
+    );
+    const unknownRolePermissionIds = useMemo(
+        () => rolePermissionIds.filter((permissionId) => !knownRolePermissionIds.has(permissionId)),
+        [knownRolePermissionIds, rolePermissionIds]
+    );
+    const roleDashboardScopes = useMemo(
+        () => getDashboardScopeAccessList(assignedRole || {}),
+        [assignedRole]
+    );
+    const effectiveDashboardScopes = dashboardScopeAccessDraft.mode === "custom"
+        ? assignedDashboardScopes
+        : roleDashboardScopes;
+    const effectiveDashboardScopeSummary = effectiveDashboardScopes
+        .map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId)
+        .join(", ") || "No dashboard views";
+    const roleCustomerTagAccess = useMemo(
+        () => getCustomerTagAccessList(assignedRole || {}),
+        [assignedRole]
+    );
+    const roleCustomerTagAccessSummary = roleCustomerTagAccess.length
+        ? roleCustomerTagAccess.join(", ")
+        : "All customer tags";
 
     const displayName = getDisplayName(user);
     const isContractor = normalizeWorkerType(user?.workerType) === WorkerTypeEnum.contractor;
@@ -1250,7 +1336,6 @@ const CompanyUserDetails = () => {
         [can]
     );
     const selectedSection = visibleCompanyUserSections.find((section) => section.id === activeTab) || visibleCompanyUserSections[0] || companyUserSections[0];
-    const primaryTechnicianId = getPrimaryTechnicianId(user, companyUserId);
     const reviewerName = (
         dataBaseUser?.userName ||
         dataBaseUser?.displayName ||
@@ -1398,6 +1483,25 @@ const CompanyUserDetails = () => {
         setPersonalVehicle((current) => ({ ...current, [field]: value }));
     };
 
+    const saveCompanyUserAccessUpdates = useCallback(async (updates) => {
+        if (!recentlySelectedCompany || !user?.id) return null;
+
+        const idToken = await authUser?.getIdToken?.();
+        if (!idToken) {
+            throw new Error("AUTH_TOKEN_MISSING");
+        }
+
+        const updateCompanyUserAccess = httpsCallable(functions, "updateCompanyUserAccess");
+        const response = await updateCompanyUserAccess({
+            companyId: recentlySelectedCompany,
+            companyUserId: user.id,
+            updates,
+            idToken,
+        });
+
+        return response?.data || null;
+    }, [authUser, recentlySelectedCompany, user?.id]);
+
     const handleCancelProfileEdit = () => {
         setProfileDraft(buildProfileDraft(user));
         setIsEditingProfile(false);
@@ -1422,24 +1526,17 @@ const CompanyUserDetails = () => {
                 workerType: profileDraft.workerType,
             };
 
-            const batch = writeBatch(db);
-            batch.set(doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id), payload, { merge: true });
-            if (user.userId) {
-                batch.set(
-                    doc(db, "users", user.userId, "userAccess", recentlySelectedCompany),
-                    {
-                        id: recentlySelectedCompany,
-                        companyId: recentlySelectedCompany,
-                        roleId: payload.roleId,
-                        roleName: payload.roleName,
-                    },
-                    { merge: true }
-                );
-            }
-
-            await batch.commit();
+            await saveCompanyUserAccessUpdates(payload);
             setUser((current) => ({ ...current, ...payload }));
-            setCompanyUserAccessDoc((current) => (current ? { ...current, roleId: payload.roleId, roleName: payload.roleName } : current));
+            setCompanyUserAccessDoc((current) => (user.userId ? {
+                ...(current || {}),
+                id: recentlySelectedCompany,
+                companyId: recentlySelectedCompany,
+                roleId: payload.roleId,
+                roleName: payload.roleName,
+                status: payload.status,
+                workerType: payload.workerType,
+            } : current));
             setIsEditingProfile(false);
             toast.success("Company user updated.");
         } catch (error) {
@@ -1450,8 +1547,8 @@ const CompanyUserDetails = () => {
         }
     };
 
-    const addRegionalTagToDraft = () => {
-        const nextTag = normalizeCustomerTag(regionalTagInput);
+    const addRegionalTagValueToDraft = (tag) => {
+        const nextTag = normalizeCustomerTag(tag);
         if (!nextTag) return;
 
         setRegionalAccessDraft((current) => ({
@@ -1459,6 +1556,10 @@ const CompanyUserDetails = () => {
             tags: normalizeCustomerTags([...(current.tags || []), nextTag]),
         }));
         setAvailableCustomerTags((currentTags) => normalizeCustomerTags([...currentTags, nextTag]).sort((a, b) => a.localeCompare(b)));
+    };
+
+    const addRegionalTagToDraft = () => {
+        addRegionalTagValueToDraft(regionalTagInput);
         setRegionalTagInput("");
     };
 
@@ -1467,6 +1568,22 @@ const CompanyUserDetails = () => {
             ...current,
             tags: normalizeCustomerTags(current.tags).filter((tag) => tag !== tagToRemove),
         }));
+    };
+
+    const toggleDashboardScopeAccessDraft = (scopeId) => {
+        setDashboardScopeAccessDraft((current) => {
+            const currentScopes = normalizeDashboardScopeAccess(current.scopes);
+            if (currentScopes.length === 1 && currentScopes.includes(scopeId)) return current;
+            const nextScopes = currentScopes.includes(scopeId)
+                ? currentScopes.filter((currentScopeId) => currentScopeId !== scopeId)
+                : [...currentScopes, scopeId];
+
+            return {
+                ...current,
+                mode: "custom",
+                scopes: normalizeDashboardScopeAccess(nextScopes),
+            };
+        });
     };
 
     const handleSaveRegionalAccess = async () => {
@@ -1493,28 +1610,7 @@ const CompanyUserDetails = () => {
                 allowedCustomerTags: assignedTags,
             };
 
-            const batch = writeBatch(db);
-            batch.set(
-                doc(db, "companies", recentlySelectedCompany, "companyUsers", user.id),
-                payload,
-                { merge: true }
-            );
-
-            if (user.userId) {
-                batch.set(
-                    doc(db, "users", user.userId, "userAccess", recentlySelectedCompany),
-                    {
-                        id: recentlySelectedCompany,
-                        companyId: recentlySelectedCompany,
-                        roleId: user.roleId || "",
-                        roleName: user.roleName || "",
-                        ...payload,
-                    },
-                    { merge: true }
-                );
-            }
-
-            await batch.commit();
+            await saveCompanyUserAccessUpdates(payload);
 
             setUser((current) => ({ ...current, ...payload }));
             setCompanyUserAccessDoc((current) => (user.userId ? {
@@ -1526,12 +1622,55 @@ const CompanyUserDetails = () => {
                 ...payload,
             } : current));
             setRegionalAccessDraft(buildRegionalAccessDraft(payload));
-            toast.success("Regional customer access updated.");
+            toast.success("Customer tag access updated.");
         } catch (error) {
-            console.error("Error updating regional access:", error);
-            toast.error("Failed to update regional access.");
+            console.error("Error updating customer tag access:", error);
+            toast.error("Failed to update customer tag access.");
         } finally {
             setIsSavingRegionalAccess(false);
+        }
+    };
+
+    const handleSaveDashboardScopeAccess = async () => {
+        if (!requirePermission("264", "update company users")) return;
+        if (!recentlySelectedCompany || !user?.id) return;
+
+        const isRoleDefault = dashboardScopeAccessDraft.mode === "role";
+        const assignedScopes = isRoleDefault
+            ? []
+            : normalizeDashboardScopeAccess(dashboardScopeAccessDraft.scopes);
+
+        if (!isRoleDefault && assignedScopes.length === 0) {
+            toast.error("Choose at least one dashboard view or use role defaults.");
+            return;
+        }
+
+        setIsSavingDashboardScopeAccess(true);
+        try {
+            const payload = {
+                dashboardScopeAccessMode: isRoleDefault ? "role" : "custom",
+                dashboardScopeAccess: isRoleDefault ? [] : assignedScopes,
+                allowedDashboardScopes: isRoleDefault ? [] : assignedScopes,
+            };
+
+            await saveCompanyUserAccessUpdates(payload);
+
+            setUser((current) => ({ ...current, ...payload }));
+            setCompanyUserAccessDoc((current) => (user.userId ? {
+                ...(current || {}),
+                id: recentlySelectedCompany,
+                companyId: recentlySelectedCompany,
+                roleId: user.roleId || "",
+                roleName: user.roleName || "",
+                ...payload,
+            } : current));
+            setDashboardScopeAccessDraft(buildDashboardScopeAccessDraft(payload));
+            toast.success("Dashboard view access updated.");
+        } catch (error) {
+            console.error("Error updating dashboard view access:", error);
+            toast.error("Failed to update dashboard view access.");
+        } finally {
+            setIsSavingDashboardScopeAccess(false);
         }
     };
 
@@ -2432,8 +2571,8 @@ const CompanyUserDetails = () => {
 
     const renderRegionalAccessSection = () => (
         <Section
-            title="Regional Customer Access"
-            description="Assign the customer-area tags this user can see in customers, reports, and related customer rollups."
+            title="Customer Tag Access"
+            description="Assign the customer tags this user can see in customers, reports, and related customer rollups."
             action={(
                 <Badge className={regionalAccessDraft.mode === "all" ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-blue-50 text-blue-700 ring-blue-200"}>
                     {regionalAccessDraft.mode === "all" ? "Full access" : `${assignedRegionalTags.length} tag${assignedRegionalTags.length === 1 ? "" : "s"}`}
@@ -2443,13 +2582,7 @@ const CompanyUserDetails = () => {
             <div className="space-y-5">
                 {!user.userId && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                        This company user is not linked to an auth user yet, so regional access is saved on the company profile until the user link exists.
-                    </div>
-                )}
-
-                {companyUserAccessDoc?.id && (
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
-                        User access document: {companyUserAccessDoc.id}
+                        This company user is not linked to an auth user yet, so customer tag access is saved on the company profile until the user link exists.
                     </div>
                 )}
 
@@ -2533,6 +2666,51 @@ const CompanyUserDetails = () => {
                             </div>
                         </label>
 
+                        <div>
+                            <div className="flex items-center justify-between gap-3">
+                                <p className="text-sm font-semibold text-slate-700">Available customer tags</p>
+                                <span className="text-xs font-semibold text-slate-500">
+                                    {availableCustomerTags.length} tag{availableCustomerTags.length === 1 ? "" : "s"}
+                                </span>
+                            </div>
+                            {availableCustomerTags.length > 0 ? (
+                                <div className="mt-2 max-h-56 overflow-y-auto rounded-lg border border-slate-200 bg-slate-50 p-2">
+                                    <div className="flex flex-wrap gap-2">
+                                        {availableCustomerTags.map((tag) => {
+                                            const isSelected = assignedRegionalTagKeys.has(tag.toLowerCase());
+                                            return (
+                                                <button
+                                                    key={tag}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (isSelected) {
+                                                            removeRegionalTagFromDraft(tag);
+                                                        } else {
+                                                            addRegionalTagValueToDraft(tag);
+                                                        }
+                                                    }}
+                                                    disabled={!can("264")}
+                                                    className={[
+                                                        "inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold ring-1 ring-inset transition disabled:cursor-not-allowed disabled:opacity-70",
+                                                        isSelected
+                                                            ? "bg-blue-600 text-white ring-blue-600 hover:bg-blue-700"
+                                                            : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-100",
+                                                    ].join(" ")}
+                                                >
+                                                    {isSelected && <CheckIcon className="h-3.5 w-3.5" />}
+                                                    {tag}
+                                                </button>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            ) : (
+                                <p className="mt-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                                    No customer tags found yet. Type a new tag above to add it.
+                                </p>
+                            )}
+                        </div>
+
                         <div className="flex flex-wrap gap-2">
                             {assignedRegionalTags.map((tag) => (
                                 <button
@@ -2563,7 +2741,112 @@ const CompanyUserDetails = () => {
                             disabled={isSavingRegionalAccess}
                             className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
                         >
-                            {isSavingRegionalAccess ? "Saving..." : "Save Regional Access"}
+                            {isSavingRegionalAccess ? "Saving..." : "Save Customer Tag Access"}
+                        </button>
+                    )}
+                </div>
+            </div>
+        </Section>
+    );
+
+    const renderDashboardScopeAccessSection = () => (
+        <Section
+            title="Dashboard View Access"
+            description="Choose which dashboard scopes this user can open. Use role defaults for broad permission management, or custom access for exceptions."
+            action={(
+                <Badge className={dashboardScopeAccessDraft.mode === "role" ? "bg-slate-50 text-slate-700 ring-slate-200" : "bg-blue-50 text-blue-700 ring-blue-200"}>
+                    {dashboardScopeAccessDraft.mode === "role" ? "Role default" : `${assignedDashboardScopes.length} view${assignedDashboardScopes.length === 1 ? "" : "s"}`}
+                </Badge>
+            )}
+        >
+            <div className="space-y-5">
+                <fieldset>
+                    <legend className="text-sm font-semibold text-slate-700">Permission source</legend>
+                    <div className="mt-2 grid gap-2 rounded-lg border border-slate-200 bg-slate-50 p-1 md:grid-cols-2">
+                        {[
+                            {
+                                value: "role",
+                                label: "Use role defaults",
+                                description: "Dashboard views come from the assigned role.",
+                            },
+                            {
+                                value: "custom",
+                                label: "Custom for this user",
+                                description: "Override the role for this user only.",
+                            },
+                        ].map((option) => {
+                            const isSelected = dashboardScopeAccessDraft.mode === option.value;
+                            return (
+                                <label
+                                    key={option.value}
+                                    className={`cursor-pointer rounded-md border px-3 py-2 text-sm transition ${isSelected
+                                        ? "border-blue-600 bg-white text-blue-700 shadow-sm"
+                                        : "border-transparent text-slate-600 hover:bg-white"
+                                        } ${!can("264") ? "cursor-not-allowed opacity-70" : ""}`}
+                                >
+                                    <input
+                                        type="radio"
+                                        name="dashboardScopeAccessMode"
+                                        value={option.value}
+                                        checked={isSelected}
+                                        onChange={(event) => setDashboardScopeAccessDraft((current) => ({
+                                            ...current,
+                                            mode: event.target.value,
+                                        }))}
+                                        disabled={!can("264")}
+                                        className="sr-only"
+                                    />
+                                    <span className="block font-semibold">{option.label}</span>
+                                    <span className="mt-1 block text-xs leading-5 text-slate-500">{option.description}</span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                </fieldset>
+
+                {dashboardScopeAccessDraft.mode === "custom" && (
+                    <div className="grid gap-2 md:grid-cols-3">
+                        {DASHBOARD_SCOPE_ACCESS_OPTIONS.map((scope) => {
+                            const selected = assignedDashboardScopes.includes(scope.id);
+                            return (
+                                <label
+                                    key={scope.id}
+                                    className={`cursor-pointer rounded-lg border p-3 text-sm transition ${selected
+                                        ? "border-blue-600 bg-blue-50 text-blue-900"
+                                        : "border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-200 hover:bg-blue-50"
+                                        } ${!can("264") ? "cursor-not-allowed opacity-70" : ""}`}
+                                >
+                                    <div className="flex items-start gap-3">
+                                        <input
+                                            type="checkbox"
+                                            checked={selected}
+                                            onChange={() => toggleDashboardScopeAccessDraft(scope.id)}
+                                            disabled={!can("264")}
+                                            className="mt-1 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                        />
+                                        <span>
+                                            <span className="block font-semibold">{scope.label}</span>
+                                            <span className="mt-1 block text-xs leading-5 text-slate-500">{scope.description}</span>
+                                        </span>
+                                    </div>
+                                </label>
+                            );
+                        })}
+                    </div>
+                )}
+
+                <div className="flex flex-col gap-3 border-t border-slate-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <p className="text-sm text-slate-500">
+                        Current setting: <span className="font-semibold text-slate-700">{dashboardScopeAccessSummary}</span>
+                    </p>
+                    {can("264") && (
+                        <button
+                            type="button"
+                            onClick={handleSaveDashboardScopeAccess}
+                            disabled={isSavingDashboardScopeAccess}
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                            {isSavingDashboardScopeAccess ? "Saving..." : "Save Dashboard Access"}
                         </button>
                     )}
                 </div>
@@ -2710,6 +2993,119 @@ const CompanyUserDetails = () => {
         );
     };
 
+    const renderPermissionsTab = () => (
+        <div className="space-y-4">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                <StatTile
+                    icon={ClipboardDocumentCheckIcon}
+                    title="Role"
+                    value={assignedRole?.label || assignedRole?.name || user.roleName || "Not set"}
+                    subtitle={`${rolePermissionIds.length.toLocaleString()} permission${rolePermissionIds.length === 1 ? "" : "s"}`}
+                />
+                <StatTile
+                    icon={EyeIcon}
+                    title="Dashboard Views"
+                    value={effectiveDashboardScopes.length}
+                    subtitle={effectiveDashboardScopeSummary}
+                />
+                <StatTile
+                    icon={MapIcon}
+                    title="Customer Tags"
+                    value={regionalAccessDraft.mode === "all" ? "All" : assignedRegionalTags.length}
+                    subtitle={regionalAccessDraft.mode === "all" ? "Full company access" : "Limited access"}
+                />
+            </div>
+
+            <Section
+                title="Role Assignment"
+                description="The assigned role provides default permissions, dashboard views, and customer tag visibility unless a user-level override is saved."
+                action={can("264") && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            handleTabChange("general");
+                            setIsEditingProfile(true);
+                        }}
+                        className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-100"
+                    >
+                        <PencilSquareIcon className="h-4 w-4" />
+                        Edit Role
+                    </button>
+                )}
+            >
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+                    <DetailField label="Assigned Role" value={assignedRole?.label || assignedRole?.name || user.roleName} />
+                    <DetailField label="Role Dashboard Views" value={roleDashboardScopes.map((scopeId) => DASHBOARD_SCOPE_ACCESS_OPTIONS.find((option) => option.id === scopeId)?.label || scopeId).join(", ")} />
+                    <DetailField label="Role Customer Tags" value={roleCustomerTagAccessSummary} />
+                </div>
+            </Section>
+
+            <Section
+                title="Role Permissions"
+                description="Individual permissions inherited from the assigned role."
+                action={(
+                    <Badge className="bg-slate-50 text-slate-700 ring-slate-200">
+                        {rolePermissionIds.length} selected
+                    </Badge>
+                )}
+            >
+                {rolePermissionIds.length === 0 ? (
+                    <EmptyState
+                        title="No role permissions found"
+                        description="Assign or update this user's role to define their default permissions."
+                    />
+                ) : (
+                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                        {rolePermissionGroups.map((categoryGroup) => (
+                            <div key={categoryGroup.category} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                <div className="flex items-center justify-between gap-3">
+                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">{categoryGroup.category}</h3>
+                                    <span className="text-xs font-semibold text-slate-500">
+                                        {categoryGroup.permissions.length} permission{categoryGroup.permissions.length === 1 ? "" : "s"}
+                                    </span>
+                                </div>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {categoryGroup.permissions.map((permission) => (
+                                        <span key={permission.id} className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 ring-1 ring-slate-200">
+                                            {permission.name}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        ))}
+                        {unknownRolePermissionIds.length > 0 && (
+                            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4">
+                                <h3 className="text-sm font-bold uppercase tracking-wide text-amber-700">Unknown Permission IDs</h3>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    {unknownRolePermissionIds.map((permissionId) => (
+                                        <span key={permissionId} className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-200">
+                                            {permissionId}
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+            </Section>
+
+            {renderDashboardScopeAccessSection()}
+            {customerAreaFilteringEnabled ? (
+                renderRegionalAccessSection()
+            ) : (
+                <Section
+                    title="Customer Tag Access"
+                    description="Customer tag access is available when customer area filtering is enabled."
+                >
+                    <EmptyState
+                        title="Customer tag access is off"
+                        description="Enable the customer area filtering feature flag to manage tag-limited customer visibility."
+                    />
+                </Section>
+            )}
+        </div>
+    );
+
     const renderGeneralTab = () => (
         <>
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
@@ -2799,25 +3195,19 @@ const CompanyUserDetails = () => {
                             <span className="text-sm font-semibold text-slate-700">Status</span>
                             <Badge className={getStatusClass(user.status)}>{normalizeStatus(user.status)}</Badge>
                         </div>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-semibold text-slate-700">Company User ID</span>
-                            <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{user.id}</span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                            <span className="text-sm font-semibold text-slate-700">Auth User ID</span>
-                            <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{user.userId || "Not linked"}</span>
-                        </div>
                         {customerAreaFilteringEnabled && (
                             <div className="flex items-center justify-between gap-3">
-                                <span className="text-sm font-semibold text-slate-700">Regional Access</span>
+                                <span className="text-sm font-semibold text-slate-700">Customer Tag Access</span>
                                 <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{regionalAccessSummary}</span>
                             </div>
                         )}
+                        <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm font-semibold text-slate-700">Dashboard Views</span>
+                            <span className="max-w-[190px] truncate text-right text-xs font-medium text-slate-500">{dashboardScopeAccessSummary}</span>
+                        </div>
                     </div>
                 </Section>
             </div>
-
-            {customerAreaFilteringEnabled && renderRegionalAccessSection()}
 
             {isContractor && (
                 <Section title="Linked Company" description="Contractor relationship information.">
@@ -4004,20 +4394,12 @@ const CompanyUserDetails = () => {
                                     <dd className="mt-1 text-slate-700">{user.roleName || "Not set"}</dd>
                                 </div>
                                 <div>
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Primary Technician ID</dt>
-                                    <dd className="mt-1 break-all text-slate-700">{primaryTechnicianId || "Not linked"}</dd>
-                                </div>
-                                <div>
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Rate Entries</dt>
                                     <dd className="mt-1 font-semibold text-slate-900">{rateStats.totalRates}</dd>
                                 </div>
                                 <div>
                                     <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Activity Items</dt>
                                     <dd className="mt-1 font-semibold text-slate-900">{activityItems.length}</dd>
-                                </div>
-                                <div className="border-t border-slate-200 pt-3">
-                                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Company User ID</dt>
-                                    <dd className="mt-1 break-all text-slate-700">{user.id}</dd>
                                 </div>
                             </dl>
                         </div>
@@ -4028,11 +4410,13 @@ const CompanyUserDetails = () => {
                             ? renderGeneralTab()
                             : activeTab === "activity"
                                 ? renderActivityTab()
+                                : activeTab === "performance"
+                                    ? renderPerformanceTab()
                                 : activeTab === "onboarding"
                                     ? renderOnboardingTab()
                                     : activeTab === "files"
                                         ? renderFilesTab()
-                                        : renderPerformanceTab()}
+                                        : renderPermissionsTab()}
                     </main>
                 </section>
             </div>

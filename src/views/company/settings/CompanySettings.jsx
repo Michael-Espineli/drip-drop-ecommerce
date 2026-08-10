@@ -16,6 +16,7 @@ import {
     TruckIcon,
     ChevronRightIcon,
     ArrowDownIcon,
+    ArrowDownTrayIcon,
     ArrowUpIcon,
     XMarkIcon,
     BookmarkIcon,
@@ -579,6 +580,48 @@ const CompanySettings = () => {
                 featureFlagId: 'feature_flag_008',
             },
         ].filter((item) => featureFlagsEnabledForItem(item, featureFlagsLoaded, isFeatureEnabled)),
+        exports: [
+            {
+                to: '/company/migration/customer-export',
+                icon: <ArrowDownTrayIcon className="w-6 h-6" />,
+                title: 'Customer Export',
+                description: 'Export customer records, billing addresses, tags, and contact fields.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+            {
+                to: '/company/migration/service-location-export',
+                icon: <ArrowDownTrayIcon className="w-6 h-6" />,
+                title: 'Service Location Export',
+                description: 'Export locations, access notes, rates, linked customers, and pool details.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+            {
+                to: '/company/migration/equipment-export',
+                icon: <WrenchScrewdriverIcon className="w-6 h-6" />,
+                title: 'Equipment Export',
+                description: 'Export equipment, service settings, linked locations, pools, and equipment parts.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+            {
+                to: '/company/migration/service-history-export',
+                icon: <BeakerIcon className="w-6 h-6" />,
+                title: 'Service History Export',
+                description: 'Export stop data, readings, dosages, observations, and service history details.',
+                permissionId: '910',
+                featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
+            },
+            {
+                to: '/company/migration/performance-history-export',
+                icon: <ClipboardDocumentCheckIcon className="w-6 h-6" />,
+                title: 'Performance History Export (Murdock Only)',
+                description: 'Export technician performance history for supported migration workflows.',
+                permissionId: '910',
+                featureFlagId: 'feature_flag_008',
+            },
+        ].filter((item) => featureFlagsEnabledForItem(item, featureFlagsLoaded, isFeatureEnabled)),
         other: [
             {
                 to: '/company/vendors',
@@ -700,6 +743,9 @@ const CompanySettings = () => {
                 {visibleSettings.configuration.length > 0 && <SettingsSection title="Configuration" items={visibleSettings.configuration} />}
                 {visibleSettings.uploads.length > 0 && (
                     <SettingsSection title="Data Uploads" items={visibleSettings.uploads} />
+                )}
+                {visibleSettings.exports.length > 0 && (
+                    <SettingsSection title="Data Exports" items={visibleSettings.exports} />
                 )}
                 {visibleSettings.other.length > 0 && <SettingsSection title="Other" items={visibleSettings.other} />}
                 {visibleSettings.billing.length > 0 && <SettingsSection title="Billing & Payroll" items={visibleSettings.billing} />}

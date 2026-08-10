@@ -11,20 +11,70 @@ import {
 import { Context } from '../../../context/AuthContext';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { SalesAgreementChemicalBillingMode } from '../../../utils/models/Sales';
 import { TermsTemplate } from '../../../utils/models/TermsTemplate';
+import {
+    billingFrequencyOptions,
+    paymentTermsOptions,
+    rateTypeOptions,
+} from '../../../utils/sales/agreementCadence';
+import {
+    TermsTemplateChemicalBillingMixedSelectionMode,
+    termsTemplateAgreementDefaults,
+    termsTemplateHasAgreementDefaults,
+    termsTemplateMixedChemicalBillingSelectionOptions,
+    termsTemplateUseCaseLabel,
+    termsTemplateUseCaseOptions,
+} from '../../../utils/terms/termsTemplateAgreementDefaults';
 import {
     duplicateTermsTemplate,
     listenTermsTemplates,
     saveTermsTemplate,
 } from '../../../utils/terms/termsTemplateFirestore';
 
-const emptyTemplate = { name: '', description: '', content: '' };
+const emptyTemplate = {
+    name: '',
+    description: '',
+    content: '',
+    useCase: 'recurringService',
+    billingFrequency: '',
+    billingFrequencyCount: '',
+    rateType: '',
+    paymentTerms: '',
+    chemicalBillingMode: '',
+    chemicalBillingMixedSelectionMode: TermsTemplateChemicalBillingMixedSelectionMode.separatelyBilled,
+    includedChemicalIds: [],
+    separatelyBilledChemicalIds: [],
+    chemicalBillingNotes: '',
+};
+
+const chemicalBillingModeOptions = [
+    { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
+    { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
+    { value: SalesAgreementChemicalBillingMode.mixed, label: 'Mixed Chemical Billing' },
+];
 
 const templatePreview = (template) => {
     const content = String(template?.content || '').trim();
     if (content) return content;
 
     return 'No default content saved yet.';
+};
+
+const optionLabel = (options, value) => (
+    options.find((option) => option.value === value)?.label || ''
+);
+
+const templateDefaultChips = (template) => {
+    const defaults = termsTemplateAgreementDefaults(template);
+
+    return [
+        defaults.billingFrequency && optionLabel(billingFrequencyOptions, defaults.billingFrequency),
+        defaults.billingFrequencyCount && `Count ${defaults.billingFrequencyCount}`,
+        defaults.rateType && optionLabel(rateTypeOptions, defaults.rateType),
+        defaults.paymentTerms && optionLabel(paymentTermsOptions, defaults.paymentTerms),
+        defaults.chemicalBillingMode && optionLabel(chemicalBillingModeOptions, defaults.chemicalBillingMode),
+    ].filter(Boolean);
 };
 
 const StatCard = ({ label, value, helper }) => (
@@ -35,49 +85,63 @@ const StatCard = ({ label, value, helper }) => (
     </div>
 );
 
-const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) => (
-    <article className="flex min-h-[220px] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200">
-        <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-                <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Terms Template'}</h2>
-                <p className="mt-1 line-clamp-2 text-sm text-slate-600">
-                    {template.description || 'No description added.'}
-                </p>
+const TemplateCard = ({ template, canDuplicate, isDuplicating, onDuplicate }) => {
+    const defaultChips = templateDefaultChips(template);
+
+    return (
+        <article className="flex min-h-[220px] flex-col rounded-lg border border-slate-200 bg-white p-5 shadow-sm transition hover:border-blue-200">
+            <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                    <h2 className="truncate text-lg font-bold text-slate-950">{template.name || 'Terms Template'}</h2>
+                    <p className="mt-1 line-clamp-2 text-sm text-slate-600">
+                        {template.description || 'No description added.'}
+                    </p>
+                </div>
+                <span className="shrink-0 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                    {termsTemplateUseCaseLabel(template.useCase || template.category)}
+                </span>
             </div>
-            <span className="rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                Template
-            </span>
-        </div>
 
-        <div className="mt-4 flex-1 rounded-lg border border-slate-100 bg-slate-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Default Content</p>
-            <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-700">{templatePreview(template)}</p>
-        </div>
+            <div className="mt-4 flex-1 rounded-lg border border-slate-100 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Default Content</p>
+                <p className="mt-2 line-clamp-3 text-sm leading-6 text-slate-700">{templatePreview(template)}</p>
+            </div>
 
-        <p className="mt-3 truncate text-xs text-slate-400">{template.id}</p>
-
-        <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
-            {canDuplicate && (
-                <button
-                    type="button"
-                    onClick={() => onDuplicate(template)}
-                    disabled={isDuplicating}
-                    className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                    <DocumentDuplicateIcon className="h-4 w-4" />
-                    {isDuplicating ? 'Duplicating...' : 'Duplicate'}
-                </button>
+            {defaultChips.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                    {defaultChips.map((chip) => (
+                        <span key={chip} className="rounded-md bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600">
+                            {chip}
+                        </span>
+                    ))}
+                </div>
             )}
-            <Link
-                to={`/company/settings/terms-templates/${template.id}`}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            >
-                Open
-                <ChevronRightIcon className="h-4 w-4" />
-            </Link>
-        </div>
-    </article>
-);
+
+            <p className="mt-3 truncate text-xs text-slate-400">{template.id}</p>
+
+            <div className="mt-4 flex flex-col gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                {canDuplicate && (
+                    <button
+                        type="button"
+                        onClick={() => onDuplicate(template)}
+                        disabled={isDuplicating}
+                        className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                        <DocumentDuplicateIcon className="h-4 w-4" />
+                        {isDuplicating ? 'Duplicating...' : 'Duplicate'}
+                    </button>
+                )}
+                <Link
+                    to={`/company/settings/terms-templates/${template.id}`}
+                    className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+                >
+                    Open
+                    <ChevronRightIcon className="h-4 w-4" />
+                </Link>
+            </div>
+        </article>
+    );
+};
 
 const TermsTemplates = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -121,6 +185,12 @@ const TermsTemplates = () => {
             template.name,
             template.description,
             template.content,
+            template.useCase,
+            template.category,
+            template.billingFrequency,
+            template.rateType,
+            template.paymentTerms,
+            template.chemicalBillingMode,
             template.id,
         ].some((value) => String(value || '').toLowerCase().includes(query)));
     }, [search, templates]);
@@ -128,7 +198,7 @@ const TermsTemplates = () => {
     const summary = useMemo(() => ({
         total: templates.length,
         withContent: templates.filter((template) => String(template.content || '').trim()).length,
-        withDescription: templates.filter((template) => String(template.description || '').trim()).length,
+        withDefaults: templates.filter((template) => termsTemplateHasAgreementDefaults(template)).length,
     }), [templates]);
 
     const handleOpenModal = () => {
@@ -165,6 +235,12 @@ const TermsTemplates = () => {
                 name: currentTemplate.name.trim(),
                 description: currentTemplate.description.trim(),
                 content: currentTemplate.content.trim(),
+                useCase: currentTemplate.useCase || 'custom',
+                category: currentTemplate.useCase || 'custom',
+                billingFrequencyCount: currentTemplate.billingFrequencyCount
+                    ? Math.max(Number(currentTemplate.billingFrequencyCount) || 1, 1)
+                    : '',
+                chemicalBillingNotes: currentTemplate.chemicalBillingNotes.trim(),
             });
             await saveTermsTemplate(recentlySelectedCompany, newTemplate);
             toast.success('Template created successfully!');
@@ -245,7 +321,7 @@ const TermsTemplates = () => {
                 <section className="grid gap-4 sm:grid-cols-3">
                     <StatCard label="Templates" value={summary.total} helper="Saved terms records" />
                     <StatCard label="Default Copy" value={summary.withContent} helper="Templates with content" />
-                    <StatCard label="Documented" value={summary.withDescription} helper="Templates with descriptions" />
+                    <StatCard label="Agreement Defaults" value={summary.withDefaults} helper="Templates that seed billing" />
                 </section>
 
                 <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -291,7 +367,7 @@ const TermsTemplates = () => {
 
             {isModalOpen && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
-                    <div className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                    <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-2xl" onClick={(e) => e.stopPropagation()}>
                         <form onSubmit={handleSave}>
                             <div className="border-b border-slate-200 p-5">
                                 <h2 className="text-xl font-bold text-slate-950">New Template</h2>
@@ -320,6 +396,19 @@ const TermsTemplates = () => {
                                     />
                                 </div>
                                 <div>
+                                    <label htmlFor="useCase" className="block text-sm font-semibold text-slate-700">Use Case</label>
+                                    <select
+                                        id="useCase"
+                                        value={currentTemplate.useCase}
+                                        onChange={(e) => setCurrentTemplate({ ...currentTemplate, useCase: e.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        {termsTemplateUseCaseOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
                                     <label htmlFor="content" className="block text-sm font-semibold text-slate-700">Default Content</label>
                                     <textarea
                                         id="content"
@@ -328,6 +417,105 @@ const TermsTemplates = () => {
                                         rows={8}
                                         className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                     />
+                                </div>
+                                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Agreement Defaults</h3>
+                                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                                        <div>
+                                            <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">Billing Frequency</label>
+                                            <select
+                                                id="billingFrequency"
+                                                value={currentTemplate.billingFrequency}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, billingFrequency: e.target.value })}
+                                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <option value="">No default</option>
+                                                {billingFrequencyOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="billingFrequencyCount" className="block text-sm font-semibold text-slate-700">Billing Count</label>
+                                            <input
+                                                id="billingFrequencyCount"
+                                                type="number"
+                                                min="1"
+                                                value={currentTemplate.billingFrequencyCount}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, billingFrequencyCount: e.target.value })}
+                                                placeholder="No default"
+                                                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">Rate Type</label>
+                                            <select
+                                                id="rateType"
+                                                value={currentTemplate.rateType}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, rateType: e.target.value })}
+                                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <option value="">No default</option>
+                                                {rateTypeOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="paymentTerms" className="block text-sm font-semibold text-slate-700">Payment Terms</label>
+                                            <select
+                                                id="paymentTerms"
+                                                value={currentTemplate.paymentTerms}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, paymentTerms: e.target.value })}
+                                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <option value="">No default</option>
+                                                {paymentTermsOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label htmlFor="chemicalBillingMode" className="block text-sm font-semibold text-slate-700">Chemical Billing</label>
+                                            <select
+                                                id="chemicalBillingMode"
+                                                value={currentTemplate.chemicalBillingMode}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, chemicalBillingMode: e.target.value })}
+                                                className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            >
+                                                <option value="">No default</option>
+                                                {chemicalBillingModeOptions.map((option) => (
+                                                    <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                        {currentTemplate.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                                            <div>
+                                                <label htmlFor="chemicalBillingMixedSelectionMode" className="block text-sm font-semibold text-slate-700">Mixed Billing Selection</label>
+                                                <select
+                                                    id="chemicalBillingMixedSelectionMode"
+                                                    value={currentTemplate.chemicalBillingMixedSelectionMode}
+                                                    onChange={(e) => setCurrentTemplate({ ...currentTemplate, chemicalBillingMixedSelectionMode: e.target.value })}
+                                                    className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                                >
+                                                    {termsTemplateMixedChemicalBillingSelectionOptions.map((option) => (
+                                                        <option key={option.value} value={option.value}>{option.label}</option>
+                                                    ))}
+                                                </select>
+                                            </div>
+                                        )}
+                                        <div className="sm:col-span-2">
+                                            <label htmlFor="chemicalBillingNotes" className="block text-sm font-semibold text-slate-700">Chemical Billing Notes</label>
+                                            <input
+                                                id="chemicalBillingNotes"
+                                                type="text"
+                                                value={currentTemplate.chemicalBillingNotes}
+                                                onChange={(e) => setCurrentTemplate({ ...currentTemplate, chemicalBillingNotes: e.target.value })}
+                                                placeholder="tabs supplied by customer, phosphate billed separately"
+                                                className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                            />
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
                             <div className="flex justify-end gap-3 border-t border-slate-200 bg-slate-50 px-5 py-4">

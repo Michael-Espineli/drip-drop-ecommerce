@@ -19,6 +19,7 @@ import { format } from "date-fns";
 import Select from "react-select";
 import { appConfirm } from "../../../utils/appDialog";
 import { compareCompanyUsersByName } from "../../../utils/companyUsers";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 const ReceiptDetailView = () => {
     const { recentlySelectedCompany } = useContext(Context);
@@ -539,12 +540,23 @@ const ReceiptDetailView = () => {
                     </div>
 
                     {!edit ? (
-                        <button
-                            onClick={editJob}
-                            className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
-                        >
-                            Edit
-                        </button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <ShareItemButton
+                                type="receipt"
+                                recordId={receiptId}
+                                title={receipt.storeName || receipt.vendorName || receipt.invoiceNum || "Receipt"}
+                                subtitle={[receipt.techName, receipt.invoiceNum].filter(Boolean).join(" - ")}
+                                companyId={recentlySelectedCompany}
+                                collectionPath={`companies/${recentlySelectedCompany}/receipts`}
+                                webPath={`/company/receipts/detail/${receiptId}`}
+                            />
+                            <button
+                                onClick={editJob}
+                                className="py-2 px-4 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 transition"
+                            >
+                                Edit
+                            </button>
+                        </div>
                     ) : (
                         <div className="flex flex-wrap gap-2">
                             <button

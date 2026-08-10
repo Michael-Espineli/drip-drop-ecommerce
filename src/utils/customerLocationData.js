@@ -87,7 +87,7 @@ export const formatAddressLabel = (address = {}) => (
 
 export const getCustomerDisplayName = (customer = {}) => {
   if (asBoolean(customer.displayAsCompany, false)) {
-    const companyName = asString(customer.company ?? customer.companyName).trim();
+    const companyName = asString(customer.company ?? customer.companyName ?? customer.businessName).trim();
     if (companyName) return companyName;
   }
 
@@ -96,7 +96,13 @@ export const getCustomerDisplayName = (customer = {}) => {
     .filter(Boolean)
     .join(' ');
 
-  return personName || asString(customer.email).trim() || asString(customer.id).trim();
+  return (
+    personName ||
+    asString(customer.customerName ?? customer.displayName ?? customer.name).trim() ||
+    asString(customer.company ?? customer.companyName ?? customer.businessName).trim() ||
+    asString(customer.email).trim() ||
+    asString(customer.id).trim()
+  );
 };
 
 export const normalizeCustomerForFirestore = (customer = {}) => {
@@ -112,6 +118,7 @@ export const normalizeCustomerForFirestore = (customer = {}) => {
     active,
     isActive: active,
     company: asString(customer.company ?? customer.companyName).trim(),
+    companyName: asString(customer.company ?? customer.companyName).trim(),
     displayAsCompany: asBoolean(customer.displayAsCompany, false),
     hireDate: customer.hireDate ?? null,
     billingNotes: asString(customer.billingNotes),

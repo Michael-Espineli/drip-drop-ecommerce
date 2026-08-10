@@ -36,6 +36,7 @@ import {
   createManualSubscriptionInvoice,
   getSubscriptionBillingPeriodPreview,
 } from '../../../utils/sales/manualBilling';
+import CustomerBillingNotesPanel from './components/CustomerBillingNotesPanel';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -889,6 +890,12 @@ const SalesBillingSubscriptionDetail = () => {
             </main>
 
             <aside className="space-y-6">
+              <CustomerBillingNotesPanel
+                companyId={subscription.companyId || recentlySelectedCompany}
+                customerId={subscription.customerId}
+                customerName={subscription.customerName}
+              />
+
               <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                 <h2 className="text-lg font-bold text-slate-950">Manual Billing</h2>
                 <dl className="mt-4 space-y-4">

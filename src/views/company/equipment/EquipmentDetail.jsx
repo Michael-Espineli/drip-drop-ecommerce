@@ -46,6 +46,12 @@ import {
   WrenchScrewdriverIcon,
 } from "@heroicons/react/24/outline";
 import { deleteEquipmentWithSubcollections } from "../../../utils/equipmentDelete";
+import {
+  CATALOG_READY_STATUS,
+  RECONCILED_STATUS,
+  syncUniversalEquipmentSuggestionForEquipment,
+} from "../../../utils/universalEquipmentSuggestions";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 import toast from "react-hot-toast";
 
@@ -293,7 +299,7 @@ const applyEquipmentDefaults = (current = {}, next = {}) => {
 const EquipmentDetail = () => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { recentlySelectedCompany } = useContext(Context);
+  const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
   const { can, requirePermission } = useCompanyPermissions();
   const { equipmentId } = useParams();
 
@@ -375,6 +381,8 @@ const EquipmentDetail = () => {
   const [catalogTypeId, setCatalogTypeId] = useState(CUSTOM_CATALOG_VALUE);
   const [catalogMakeId, setCatalogMakeId] = useState(CUSTOM_CATALOG_VALUE);
   const [catalogEquipmentId, setCatalogEquipmentId] = useState(CUSTOM_CATALOG_VALUE);
+  const [catalogSuggestion, setCatalogSuggestion] = useState(null);
+  const [applyingCatalogSuggestion, setApplyingCatalogSuggestion] = useState(false);
 
   const openMaintenanceModal = useCallback(() => {
     setMaintenanceName(DEFAULT_MAINTENANCE_NAME);
@@ -501,6 +509,41 @@ const EquipmentDetail = () => {
 
     fetchEquipmentModels();
   }, [catalogTypeId, catalogMakeId]);
+
+  useEffect(() => {
+    if (!equipmentId || !recentlySelectedCompany) {
+      setCatalogSuggestion(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const fetchCatalogSuggestion = async () => {
+      try {
+        const suggestionQuery = query(
+          collection(db, "universalEquipmentSuggestions"),
+          where("companyId", "==", recentlySelectedCompany),
+          where("equipmentId", "==", equipmentId),
+          limit(1)
+        );
+        const suggestionSnap = await getDocs(suggestionQuery);
+        if (cancelled) return;
+        const suggestionDoc = suggestionSnap.docs[0];
+        setCatalogSuggestion(suggestionDoc ? { id: suggestionDoc.id, ...suggestionDoc.data() } : null);
+      } catch (error) {
+        if (!cancelled) {
+          console.error("Error loading universal equipment suggestion:", error);
+          setCatalogSuggestion(null);
+        }
+      }
+    };
+
+    fetchCatalogSuggestion();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [equipmentId, recentlySelectedCompany]);
 
   // -----------------------------
   // Load equipment + live history
@@ -962,6 +1005,33 @@ const EquipmentDetail = () => {
         status,
         notes,
       });
+      const syncedEquipment = {
+        ...equipment,
+        id: equipmentId,
+        type: category,
+        category,
+        typeId,
+        make,
+        makeId,
+        model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
+        name,
+        notes,
+      };
+      try {
+        await syncUniversalEquipmentSuggestionForEquipment({
+          db,
+          companyId: recentlySelectedCompany,
+          companyName: recentlySelectedCompanyName || "",
+          user,
+          equipment: syncedEquipment,
+          source: "companyEquipmentEdit",
+        });
+      } catch (suggestionError) {
+        console.error("Error syncing universal equipment suggestion:", suggestionError);
+      }
 
       setEquipment((prev) => ({
         ...prev,
@@ -1015,6 +1085,31 @@ const EquipmentDetail = () => {
         universalEquipmentId,
         manualPdfLink,
       });
+      const syncedEquipment = {
+        ...equipment,
+        id: equipmentId,
+        type: category,
+        category,
+        typeId,
+        make,
+        makeId,
+        model,
+        modelId,
+        universalEquipmentId,
+        manualPdfLink,
+      };
+      try {
+        await syncUniversalEquipmentSuggestionForEquipment({
+          db,
+          companyId: recentlySelectedCompany,
+          companyName: recentlySelectedCompanyName || "",
+          user,
+          equipment: syncedEquipment,
+          source: "companyEquipmentCatalogEdit",
+        });
+      } catch (suggestionError) {
+        console.error("Error syncing universal equipment suggestion:", suggestionError);
+      }
 
       setEquipment((prev) => ({
         ...prev,
@@ -1033,6 +1128,153 @@ const EquipmentDetail = () => {
     } catch (error) {
       console.error("Error updating equipment make/model:", error);
       toast.error("Failed to update make and model");
+    }
+  };
+
+  const readyCatalogSuggestion = useMemo(() => {
+    const universalMatchId = catalogSuggestion?.reconciledUniversalEquipmentId || "";
+    const currentCatalogId = equipment?.universalEquipmentId || equipment?.modelId || "";
+
+    if (catalogSuggestion?.status !== CATALOG_READY_STATUS || !universalMatchId) return null;
+    if (currentCatalogId && currentCatalogId === universalMatchId) return null;
+
+    return catalogSuggestion;
+  }, [catalogSuggestion, equipment?.modelId, equipment?.universalEquipmentId]);
+
+  const readyCatalogSuggestionLabel = useMemo(() => {
+    if (!readyCatalogSuggestion) return "";
+
+    return [
+      readyCatalogSuggestion.reconciledMake,
+      readyCatalogSuggestion.reconciledModel,
+    ].filter(Boolean).join(" ") || readyCatalogSuggestion.reconciledUniversalEquipmentId || "catalog equipment";
+  }, [readyCatalogSuggestion]);
+
+  const copyMissingCatalogParts = async ({ universalEquipmentId, match }) => {
+    if (!recentlySelectedCompany || !equipmentId || !universalEquipmentId) return 0;
+
+    const companyPartsRef = collection(db, "companies", recentlySelectedCompany, "equipment", equipmentId, "parts");
+    const catalogPartsRef = collection(db, "universal", "equipment", "equipment", universalEquipmentId, "parts");
+    const [companyPartsSnap, catalogPartsSnap] = await Promise.all([
+      getDocs(companyPartsRef),
+      getDocs(catalogPartsRef),
+    ]);
+
+    const existingKeys = new Set();
+    companyPartsSnap.docs.forEach((partDoc) => {
+      const part = partDoc.data() || {};
+      [
+        part.universalPartId ? `universal:${part.universalPartId}` : "",
+        part.sku ? `sku:${String(part.sku).trim().toLowerCase()}` : "",
+        part.name ? `name:${String(part.name).trim().toLowerCase()}` : "",
+      ].filter(Boolean).forEach((key) => existingKeys.add(key));
+    });
+
+    const writes = catalogPartsSnap.docs
+      .filter((partDoc) => {
+        const part = partDoc.data() || {};
+        const keys = [
+          `universal:${part.id || partDoc.id}`,
+          part.sku ? `sku:${String(part.sku).trim().toLowerCase()}` : "",
+          part.name ? `name:${String(part.name).trim().toLowerCase()}` : "",
+        ].filter(Boolean);
+
+        return !keys.some((key) => existingKeys.has(key));
+      })
+      .map((partDoc) => {
+        const part = partDoc.data() || {};
+        const partId = "com_equ_par_" + uuidv4();
+
+        return setDoc(doc(companyPartsRef, partId), {
+          id: partId,
+          name: part.name || "",
+          sku: part.sku || "",
+          make: part.make || match.make || "",
+          model: part.model || match.model || "",
+          manualPdfLink: part.manualPdfLink || "",
+          universalPartId: part.id || partDoc.id,
+          universalEquipmentId,
+          createdAt: serverTimestamp(),
+        });
+      });
+
+    await Promise.all(writes);
+    return writes.length;
+  };
+
+  const handleApplyCatalogSuggestion = async () => {
+    if (!readyCatalogSuggestion || !requirePermission("64", "update equipment")) return;
+
+    const catalogUpdate = {
+      type: readyCatalogSuggestion.reconciledType || readyCatalogSuggestion.type || "",
+      typeId: readyCatalogSuggestion.reconciledTypeId || readyCatalogSuggestion.typeId || "",
+      make: readyCatalogSuggestion.reconciledMake || readyCatalogSuggestion.make || "",
+      makeId: readyCatalogSuggestion.reconciledMakeId || readyCatalogSuggestion.makeId || "",
+      model: readyCatalogSuggestion.reconciledModel || readyCatalogSuggestion.model || "",
+      modelId: readyCatalogSuggestion.reconciledModelId || readyCatalogSuggestion.reconciledUniversalEquipmentId || "",
+      universalEquipmentId: readyCatalogSuggestion.reconciledUniversalEquipmentId || readyCatalogSuggestion.reconciledModelId || "",
+      manualPdfLink: readyCatalogSuggestion.reconciledManualPdfLink || readyCatalogSuggestion.manualPdfLink || "",
+    };
+
+    try {
+      setApplyingCatalogSuggestion(true);
+      const docRef = doc(db, "companies", recentlySelectedCompany, "equipment", equipmentId);
+      await updateDoc(docRef, catalogUpdate);
+
+      const partsCopied = await copyMissingCatalogParts({
+        universalEquipmentId: catalogUpdate.universalEquipmentId,
+        match: catalogUpdate,
+      });
+
+      const syncedEquipment = {
+        ...equipment,
+        ...catalogUpdate,
+        id: equipmentId,
+      };
+
+      try {
+        await syncUniversalEquipmentSuggestionForEquipment({
+          db,
+          companyId: recentlySelectedCompany,
+          companyName: recentlySelectedCompanyName || "",
+          user,
+          equipment: syncedEquipment,
+          source: "companyEquipmentSuggestionApply",
+        });
+      } catch (suggestionError) {
+        console.error("Error reconciling universal equipment suggestion:", suggestionError);
+      }
+
+      if (partsCopied > 0) {
+        try {
+          await updateDoc(doc(db, "universalEquipmentSuggestions", readyCatalogSuggestion.id), {
+            partsCopied,
+            updatedAt: serverTimestamp(),
+          });
+        } catch (suggestionError) {
+          console.error("Error updating universal equipment suggestion parts count:", suggestionError);
+        }
+      }
+
+      setEquipment((prev) => ({ ...prev, ...catalogUpdate }));
+      setCategory(catalogUpdate.type);
+      setTypeId(catalogUpdate.typeId);
+      setMake(catalogUpdate.make);
+      setMakeId(catalogUpdate.makeId);
+      setModel(catalogUpdate.model);
+      setModelId(catalogUpdate.modelId);
+      setUniversalEquipmentId(catalogUpdate.universalEquipmentId);
+      setManualPdfLink(catalogUpdate.manualPdfLink);
+      setCatalogTypeId(catalogUpdate.typeId || CUSTOM_CATALOG_VALUE);
+      setCatalogMakeId(catalogUpdate.makeId || CUSTOM_CATALOG_VALUE);
+      setCatalogEquipmentId(catalogUpdate.universalEquipmentId || catalogUpdate.modelId || CUSTOM_CATALOG_VALUE);
+      setCatalogSuggestion((current) => (current ? { ...current, status: RECONCILED_STATUS } : current));
+      toast.success(partsCopied ? `Catalog match applied. ${partsCopied} parts copied.` : "Catalog match applied.");
+    } catch (error) {
+      console.error("Error applying universal equipment suggestion:", error);
+      toast.error("Failed to apply catalog match");
+    } finally {
+      setApplyingCatalogSuggestion(false);
     }
   };
 
@@ -1390,6 +1632,16 @@ const EquipmentDetail = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            <ShareItemButton
+              type="equipment"
+              recordId={equipmentId}
+              title={getEquipmentDisplayName()}
+              subtitle={[equipment?.customerName, displayEquipmentStatus(equipment?.status || "")].filter(Boolean).join(" - ")}
+              companyId={recentlySelectedCompany}
+              customerId={equipment?.customerId}
+              collectionPath={`companies/${recentlySelectedCompany}/equipment`}
+              webPath={`/company/equipment/detail/${equipmentId}`}
+            />
 
             {!edit ? (
               can("64") && (
@@ -1501,6 +1753,37 @@ const EquipmentDetail = () => {
             </Menu>
           </div>
         </div>
+
+        {readyCatalogSuggestion && (
+          <div className="rounded-xl border border-purple-200 bg-purple-50 p-5 shadow-sm">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="text-sm font-bold text-purple-900">Catalog match available</p>
+                <p className="mt-1 text-sm text-purple-800">
+                  This custom equipment can be matched to {readyCatalogSuggestionLabel}.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  to="/company/equipment/universal-suggestions"
+                  className="rounded-lg border border-purple-300 bg-white px-4 py-2 text-sm font-semibold text-purple-800 hover:bg-purple-100"
+                >
+                  View Suggestions
+                </Link>
+                {can("64") && (
+                  <button
+                    type="button"
+                    onClick={handleApplyCatalogSuggestion}
+                    disabled={applyingCatalogSuggestion}
+                    className="rounded-lg bg-purple-700 px-4 py-2 text-sm font-semibold text-white hover:bg-purple-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {applyingCatalogSuggestion ? "Applying..." : "Use Catalog Match"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="bg-white shadow-lg rounded-xl p-6">
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">

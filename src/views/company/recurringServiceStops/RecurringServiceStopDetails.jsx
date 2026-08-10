@@ -24,6 +24,7 @@ import { salesCollectionNames } from "../../../utils/models/Sales";
 import { recurringFrequencyToAgreementService } from "../../../utils/sales/agreementCadence";
 import { appConfirm } from "../../../utils/appDialog";
 import { reportAppError } from "../../../utils/errorReporting";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 import { v4 as uuidv4 } from 'uuid';
 const functions = getFunctions();
@@ -953,6 +954,16 @@ const RecurringServiceStopDetails = () => {
 
           {!edit ? (
             <div className="flex items-center gap-2">
+              <ShareItemButton
+                type="recurringServiceStop"
+                recordId={recurringServiceStopId}
+                title={recurringServiceStop.type || recurringServiceStop.serviceStopType || "Recurring Service Stop"}
+                subtitle={[recurringServiceStop.customerName, recurringServiceStop.internalId, recurringServiceStop.frequency].filter(Boolean).join(" - ")}
+                companyId={recentlySelectedCompany}
+                customerId={recurringServiceStop.customerId}
+                collectionPath={`companies/${recentlySelectedCompany}/recurringServiceStop`}
+                webPath={`/company/recurringServiceStop/details/${recurringServiceStopId}`}
+              />
               <Link
                 to="/company/recurringServiceStop"
                 className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-50 border border-gray-200 rounded-xl shadow-sm hover:bg-gray-100 transition"

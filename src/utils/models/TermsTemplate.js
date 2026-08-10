@@ -3,13 +3,31 @@ import { v4 as uuidv4 } from 'uuid';
 export const termsTemplateCollectionName = 'termsTemplates';
 export const termsCollectionName = 'terms';
 
+const normalizeTemplateList = (value) => (
+  Array.from(new Set(
+    (Array.isArray(value) ? value : String(value || '').split(/[\n,]/))
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  ))
+);
+
 export class TermsTemplate {
   constructor({
     id = `terms_${uuidv4()}`,
     name = '',
     description = '',
     content = '',
+    useCase = '',
     category = '',
+    billingFrequency = '',
+    billingFrequencyCount = '',
+    rateType = '',
+    paymentTerms = '',
+    chemicalBillingMode = '',
+    chemicalBillingMixedSelectionMode = '',
+    includedChemicalIds = [],
+    separatelyBilledChemicalIds = [],
+    chemicalBillingNotes = '',
     createdAt = new Date(),
     updatedAt = new Date(),
   } = {}) {
@@ -17,7 +35,17 @@ export class TermsTemplate {
     this.name = name;
     this.description = description;
     this.content = content;
-    this.category = category;
+    this.useCase = useCase || category;
+    this.category = category || useCase;
+    this.billingFrequency = billingFrequency;
+    this.billingFrequencyCount = billingFrequencyCount;
+    this.rateType = rateType;
+    this.paymentTerms = paymentTerms;
+    this.chemicalBillingMode = chemicalBillingMode;
+    this.chemicalBillingMixedSelectionMode = chemicalBillingMixedSelectionMode;
+    this.includedChemicalIds = normalizeTemplateList(includedChemicalIds);
+    this.separatelyBilledChemicalIds = normalizeTemplateList(separatelyBilledChemicalIds);
+    this.chemicalBillingNotes = chemicalBillingNotes;
     this.createdAt = createdAt;
     this.updatedAt = updatedAt;
   }
@@ -28,7 +56,17 @@ export class TermsTemplate {
       name: this.name,
       description: this.description,
       content: this.content,
+      useCase: this.useCase,
       category: this.category,
+      billingFrequency: this.billingFrequency,
+      billingFrequencyCount: this.billingFrequencyCount,
+      rateType: this.rateType,
+      paymentTerms: this.paymentTerms,
+      chemicalBillingMode: this.chemicalBillingMode,
+      chemicalBillingMixedSelectionMode: this.chemicalBillingMixedSelectionMode,
+      includedChemicalIds: this.includedChemicalIds,
+      separatelyBilledChemicalIds: this.separatelyBilledChemicalIds,
+      chemicalBillingNotes: this.chemicalBillingNotes,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

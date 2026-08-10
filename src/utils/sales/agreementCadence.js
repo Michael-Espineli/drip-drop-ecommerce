@@ -19,6 +19,20 @@ export const billingFrequencyOptions = [
   { value: 'custom', label: 'Custom' },
 ];
 
+export const rateTypeOptions = [
+  { value: 'perMonth', label: 'Per Month' },
+  { value: 'perVisit', label: 'Per Visit' },
+  { value: 'oneTime', label: 'One Time' },
+  { value: 'custom', label: 'Custom' },
+];
+
+export const paymentTermsOptions = [
+  { value: 'dueOnReceipt', label: 'Due On Receipt' },
+  { value: 'net7', label: 'Net 7' },
+  { value: 'net15', label: 'Net 15' },
+  { value: 'net30', label: 'Net 30' },
+];
+
 const normalizeKey = (value) => String(value || '').replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
 
 const optionLabel = (options, value) => {

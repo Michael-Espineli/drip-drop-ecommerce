@@ -95,6 +95,7 @@ exports.deleteUser = callableGeneral.deleteUser;
 exports.acceptTechInvite = callableGeneral.acceptTechInvite;
 exports.createCompanyUserInvite = callableGeneral.createCompanyUserInvite;
 exports.manageCompanyUserInvite = callableGeneral.manageCompanyUserInvite;
+exports.updateCompanyUserAccess = callableGeneral.updateCompanyUserAccess;
 exports.populateBaseTechnicianRatesOnCompanyUserCreate = callableGeneral.populateBaseTechnicianRatesOnCompanyUserCreate;
 exports.populateCustomerPipelineOnCustomerCreate = callableGeneral.populateCustomerPipelineOnCustomerCreate;
 exports.populateCustomerPipelineOnLeadCreate = callableGeneral.populateCustomerPipelineOnLeadCreate;
@@ -125,6 +126,9 @@ exports.listPublicCompanies = publicLeadIntake.listPublicCompanies;
 exports.submitPublicServiceRequestLead = publicLeadIntake.submitPublicServiceRequestLead;
 exports.getPublicLeadVerificationPreview = publicLeadIntake.getPublicLeadVerificationPreview;
 exports.claimPublicServiceRequestLead = publicLeadIntake.claimPublicServiceRequestLead;
+
+const customerNameCascade = require('./customerNameCascade');
+exports.syncCustomerNameReferencesOnCustomerUpdate = customerNameCascade.syncCustomerNameReferencesOnCustomerUpdate;
 
 
 //-----------------Stripe Functions----------------------------

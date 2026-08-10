@@ -35,6 +35,7 @@ import {
 import { generateServiceAgreementsFromRoutes } from '../../../utils/sales/routeAgreementGeneration';
 import FeatureInfoButton from '../../../components/FeatureInfoButton';
 import SalesAgreementEditorModal from './SalesAgreementEditorModal';
+import ServiceAgreementSendDialog from './components/ServiceAgreementSendDialog';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', {
   style: 'currency',
@@ -183,7 +184,6 @@ const agreementSendDisabledReason = ({ agreement, activeUser, selectedCompanyId 
   if (terminalAgreementStatusKeys.has(normalizeStatus(agreement.status))) {
     return `Agreement status is ${labelize(agreement.status)}.`;
   }
-  if (!agreement.email) return 'Add a customer email before sending.';
   if (!Array.isArray(agreement.lineItems) || agreement.lineItems.length === 0) {
     return 'Add at least one line item before sending.';
   }
@@ -455,20 +455,46 @@ const agreementFilterParamsFromState = (baseParams, filters, options = {}) => {
   return nextParams;
 };
 
-const StatTile = ({ icon: Icon, label, value, helper }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
+const StatTile = ({ icon: Icon, label, value, helper, selected = false, onClick, disabled = false }) => {
+  const isInteractive = typeof onClick === 'function';
+  const Component = isInteractive ? 'button' : 'div';
+  const tileProps = isInteractive
+    ? {
+        type: 'button',
+        onClick,
+        disabled,
+        'aria-pressed': selected,
+    }
+    : {};
+
+  const selectedClasses = selected
+    ? 'border-blue-200 bg-blue-50 text-blue-700'
+    : 'border-slate-200 bg-white text-slate-900';
+  const interactiveClasses = isInteractive
+    ? 'text-left transition hover:border-blue-200 hover:bg-blue-50/60 focus:outline-none focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60'
+    : '';
+  const iconClasses = selected
+    ? 'border border-blue-100 bg-white text-blue-700'
+    : 'bg-slate-100 text-slate-600';
+
+  return (
+    <Component
+      {...tileProps}
+      className={`w-full rounded-lg border p-4 shadow-sm ${selectedClasses} ${interactiveClasses}`}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className={`text-xs font-semibold uppercase tracking-wide ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{label}</p>
+          <p className={`mt-2 text-2xl font-bold ${selected ? 'text-blue-950' : 'text-slate-950'}`}>{value}</p>
+        </div>
+        <span className={`rounded-md p-2 ${iconClasses}`}>
+          <Icon />
+        </span>
       </div>
-      <span className="rounded-md bg-slate-100 p-2 text-slate-600">
-        <Icon />
-      </span>
-    </div>
-    {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
-  </div>
-);
+      {helper && <p className={`mt-3 text-sm ${selected ? 'text-blue-700' : 'text-slate-500'}`}>{helper}</p>}
+    </Component>
+  );
+};
 
 const AgreementActionMenuItem = ({
   label,
@@ -523,6 +549,7 @@ const SalesAgreements = ({
   const [error, setError] = useState('');
   const [generatingFromRoutes, setGeneratingFromRoutes] = useState(false);
   const [editingAgreementId, setEditingAgreementId] = useState('');
+  const [sendDialogAgreementId, setSendDialogAgreementId] = useState('');
   const [openActionAgreementId, setOpenActionAgreementId] = useState('');
   const [actionMenuPosition, setActionMenuPosition] = useState(null);
   const [actionLoadingKey, setActionLoadingKey] = useState('');
@@ -541,10 +568,6 @@ const SalesAgreements = ({
     routingQueueOnly,
   }), [allowedBillingTypes, initialBillingTypeFilter, routingQueueOnly]);
   const searchParamsString = searchParams.toString();
-  const hasExplicitStatusFilter = useMemo(() => {
-    const params = new URLSearchParams(searchParamsString);
-    return agreementFilterParamAliases.statusFilter.some((key) => params.has(key));
-  }, [searchParamsString]);
   const {
     searchTerm,
     statusFilter,
@@ -616,6 +639,10 @@ const SalesAgreements = ({
   const openActionAgreement = useMemo(
     () => agreements.find((agreement) => agreement.id === openActionAgreementId) || null,
     [agreements, openActionAgreementId]
+  );
+  const sendDialogAgreement = useMemo(
+    () => agreements.find((agreement) => agreement.id === sendDialogAgreementId) || null,
+    [agreements, sendDialogAgreementId]
   );
   const actorName = [
     dataBaseUser?.firstName,
@@ -739,22 +766,6 @@ const SalesAgreements = ({
     };
   }, [recurringRoutingIndex, typeScopedAgreements]);
 
-  useEffect(() => {
-    if (routingQueueOnly || loading || hasExplicitStatusFilter) return;
-    if (statusFilter !== SalesAgreementStatus.draft) return;
-    if (summary.draftCount === 0 && summary.sentCount > 0) {
-      setAgreementFilters({ statusFilter: SalesAgreementStatus.sent });
-    }
-  }, [
-    hasExplicitStatusFilter,
-    loading,
-    routingQueueOnly,
-    setAgreementFilters,
-    statusFilter,
-    summary.draftCount,
-    summary.sentCount,
-  ]);
-
   const selectedCompanyName = recentlySelectedCompanyName || 'Selected company';
   const statusOptions = ['all', ...Object.values(SalesAgreementStatus)];
   const billingTypeOptions = useMemo(() => {
@@ -784,6 +795,18 @@ const SalesAgreements = ({
     }
 
     handleSortKeyChange(nextSortKey);
+  };
+
+  const statusTileSelected = (status) => (
+    !routingQueueOnly && normalizeStatus(statusFilter) === normalizeStatus(status)
+  );
+
+  const handleStatusTileClick = (nextStatus) => {
+    if (routingQueueOnly) return;
+
+    setAgreementFilters({
+      statusFilter: statusTileSelected(nextStatus) ? 'all' : nextStatus,
+    });
   };
 
   const closeAgreementActions = () => {
@@ -895,7 +918,7 @@ const SalesAgreements = ({
     }
   };
 
-  const sendAgreementEmailFromList = async (agreement) => {
+  const sendAgreementEmailFromList = async (agreement, { primaryEmail, additionalEmails = [] } = {}) => {
     const disabledReason = agreementSendDisabledReason({
       agreement,
       activeUser,
@@ -903,6 +926,12 @@ const SalesAgreements = ({
     });
     if (disabledReason) {
       toast.error(disabledReason);
+      return;
+    }
+
+    const recipientEmail = String(primaryEmail || agreement?.email || '').trim();
+    if (!recipientEmail) {
+      toast.error('Add a recipient email before sending.');
       return;
     }
 
@@ -917,6 +946,8 @@ const SalesAgreements = ({
         agreementId: agreement.id,
         agreementBaseUrl: window.location.origin,
         includeInspectionReport: agreement.emailDelivery?.includeInspectionReport === true || agreement.includeInspectionReport === true,
+        primaryEmail: recipientEmail,
+        additionalEmails,
         ...authPayload,
       });
 
@@ -927,6 +958,7 @@ const SalesAgreements = ({
       } else {
         toast.success(result.data?.message || 'Service agreement email sent.');
       }
+      setSendDialogAgreementId('');
     } catch (sendError) {
       console.error('Unable to send service agreement email from list', sendError);
       toast.error(sendError.message || 'Failed to send service agreement email.');
@@ -1176,6 +1208,15 @@ const SalesAgreements = ({
                 </Link>
               )}
               {!routingQueueOnly && (
+                <Link
+                  to="/company/sales/agreements/active-customers-without-service-agreements"
+                  className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                >
+                  <FaUserCheck className="text-xs" />
+                  Missing Agreements
+                </Link>
+              )}
+              {!routingQueueOnly && (
                 <button
                   type="button"
                   onClick={handleGenerateFromRoutes}
@@ -1209,12 +1250,34 @@ const SalesAgreements = ({
             label={routingQueueOnly ? 'Need Routing' : 'Agreements'}
             value={routingQueueOnly ? filteredAgreements.length : typeScopedAgreements.length}
             helper={routingQueueOnly ? 'Accepted recurring agreements' : 'Current type scope'}
+            onClick={!routingQueueOnly ? () => setAgreementFilters({ statusFilter: 'all' }) : undefined}
           />
           {!routingQueueOnly && (
-            <StatTile icon={FaFileSignature} label="Draft" value={summary.draftCount} helper="Ready to review" />
+            <StatTile
+              icon={FaFileSignature}
+              label="Draft"
+              value={summary.draftCount}
+              helper="Ready to review"
+              selected={statusTileSelected(SalesAgreementStatus.draft)}
+              onClick={() => handleStatusTileClick(SalesAgreementStatus.draft)}
+            />
           )}
-          <StatTile icon={FaEnvelope} label="Sent" value={summary.sentCount} helper="Waiting on customer" />
-          <StatTile icon={FaCheckCircle} label="Accepted" value={summary.acceptedCount} helper="Ready for billing" />
+          <StatTile
+            icon={FaEnvelope}
+            label="Sent"
+            value={summary.sentCount}
+            helper="Waiting on customer"
+            selected={statusTileSelected(SalesAgreementStatus.sent)}
+            onClick={!routingQueueOnly ? () => handleStatusTileClick(SalesAgreementStatus.sent) : undefined}
+          />
+          <StatTile
+            icon={FaCheckCircle}
+            label="Accepted"
+            value={summary.acceptedCount}
+            helper="Ready for billing"
+            selected={statusTileSelected(SalesAgreementStatus.accepted)}
+            onClick={!routingQueueOnly ? () => handleStatusTileClick(SalesAgreementStatus.accepted) : undefined}
+          />
           <StatTile
             icon={FaFileSignature}
             label={routingQueueOnly ? 'Queue Total' : 'Quoted Value'}
@@ -1431,7 +1494,10 @@ const SalesAgreements = ({
                 activeUser,
                 selectedCompanyId: recentlySelectedCompany,
               })}
-              onClick={() => sendAgreementEmailFromList(openActionAgreement)}
+              onClick={() => {
+                setSendDialogAgreementId(openActionAgreement.id);
+                closeAgreementActions();
+              }}
             />
             <AgreementActionMenuItem
               label="Mark as rejected"
@@ -1459,6 +1525,29 @@ const SalesAgreements = ({
         open={Boolean(editingAgreement)}
         onClose={() => setEditingAgreementId('')}
         onDeleted={() => setEditingAgreementId('')}
+      />
+
+      <ServiceAgreementSendDialog
+        agreement={sendDialogAgreement}
+        open={Boolean(sendDialogAgreement)}
+        sending={Boolean(sendDialogAgreement && actionLoadingKey === `${sendDialogAgreement.id}:send`)}
+        includeInspectionReport={sendDialogAgreement?.emailDelivery?.includeInspectionReport === true || sendDialogAgreement?.includeInspectionReport === true}
+        hasLinkedInspectionReport={Boolean(
+          sendDialogAgreement?.emailDelivery?.inspectionReportUrl ||
+          sendDialogAgreement?.inspectionReportUrl ||
+          sendDialogAgreement?.serviceAgreementInspectionReportUrl ||
+          sendDialogAgreement?.inspectionReport?.url ||
+          sendDialogAgreement?.inspectionServiceStopId ||
+          sendDialogAgreement?.serviceAgreementEstimateServiceStopId ||
+          sendDialogAgreement?.estimateServiceStopId ||
+          sendDialogAgreement?.serviceStopId
+        )}
+        onClose={() => {
+          if (!actionLoadingKey) setSendDialogAgreementId('');
+        }}
+        onConfirm={(sendOptions) => {
+          if (sendDialogAgreement) sendAgreementEmailFromList(sendDialogAgreement, sendOptions);
+        }}
       />
     </div>
   );

@@ -33,6 +33,12 @@ import {
     SERVICE_STOP_TYPE_USE_CASES,
     normalizeServiceStopTypeBucket,
 } from "../../../utils/serviceStopTypes/serviceStopTypeResolver";
+import { salesCollectionNames } from "../../../utils/models/Sales";
+import {
+    agreementDisplayTitle,
+    agreementLinksInitialEstimate,
+    connectServiceAgreementToInitialEstimate,
+} from "../../../utils/sales/initialEstimateAgreementLinks";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
 import PartApprovalCreateModal from "../partApprovals/PartApprovalCreateModal";
 import { getItemPhotoUrl } from "../../../utils/itemPhotos";
@@ -43,6 +49,9 @@ import {
     partApprovalTotalPriceCents,
 } from "../../../utils/partApprovalShopping";
 import { isFilterEquipment } from "../../../utils/models/Equipment";
+import { PaperAirplaneIcon, PrinterIcon } from "@heroicons/react/24/outline";
+import ShareItemButton from "../../components/share/ShareItemButton";
+import ConnectAgreementModal from "../marketing/ConnectAgreementModal";
 
 const jobTaskTypeOptions = [
     "Basic",
@@ -481,6 +490,383 @@ const getEquipmentSurveyFindings = (equipmentList = []) => (
         .filter(Boolean)
 );
 
+const escapeHtml = (value) =>
+    String(value ?? "").replace(/[&<>"']/g, (character) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;",
+    }[character]));
+
+const firstPresent = (...values) => values.find((value) => {
+    if (value === null || value === undefined) return false;
+    if (typeof value === "string") return value.trim() !== "";
+    return true;
+});
+
+const valueWithUnit = (value, unit = "") => [
+    displayText(value, ""),
+    displayText(unit, ""),
+].filter(Boolean).join(" ");
+
+const formatReportMinutes = (minutes) => {
+    if (minutes === null || minutes === undefined || minutes === "") return "—";
+    return `${minutes} mins`;
+};
+
+const reportTextBlock = (value, fallback = "—") => escapeHtml(displayText(value, fallback));
+
+const reportDetailGridHtml = (items = []) => items
+    .map((item) => `
+        <div class="detail">
+            <span>${escapeHtml(item.label)}</span>
+            <strong>${reportTextBlock(item.value)}</strong>
+        </div>
+    `)
+    .join("");
+
+const reportTableHtml = (columns = [], rows = [], emptyMessage = "No records.") => `
+    <table>
+        <thead>
+            <tr>${columns.map((column) => `<th>${escapeHtml(column.label)}</th>`).join("")}</tr>
+        </thead>
+        <tbody>
+            ${rows.length
+        ? rows.map((row) => `
+            <tr>
+                ${columns.map((column) => `<td>${reportTextBlock(row[column.key])}</td>`).join("")}
+            </tr>
+        `).join("")
+        : `<tr><td colspan="${columns.length}">${escapeHtml(emptyMessage)}</td></tr>`}
+        </tbody>
+    </table>
+`;
+
+const reportPhotoGridHtml = (title, photos = []) => {
+    const normalizedPhotos = (Array.isArray(photos) ? photos : [])
+        .map((photo, index) => ({
+            url: photoUrl(photo),
+            caption: photoCaption(photo, `${title} ${index + 1}`),
+        }))
+        .filter((photo) => photo.url);
+
+    if (!normalizedPhotos.length) return "";
+
+    return `
+        <div class="photo-section">
+            <h3>${escapeHtml(title)}</h3>
+            <div class="photo-grid">
+                ${normalizedPhotos.map((photo) => (
+        isWebUrl(photo.url)
+            ? `<figure><img src="${escapeHtml(photo.url)}" alt="${escapeHtml(photo.caption)}" /><figcaption>${escapeHtml(photo.caption)}</figcaption></figure>`
+            : `<figure class="photo-note"><figcaption>${escapeHtml(photo.caption)}</figcaption><p>${escapeHtml(photo.url)}</p></figure>`
+    )).join("")}
+            </div>
+        </div>
+    `;
+};
+
+const reportLineItems = (items = [], formatter) => (
+    items.length ? items.map(formatter).filter(Boolean).join("; ") : "—"
+);
+
+const stopDataObservationValues = (record = {}) => {
+    if (Array.isArray(record.observation)) return record.observation;
+    if (Array.isArray(record.observations)) return record.observations;
+    if (typeof record.observation === "string") return record.observation.split("\n");
+    if (typeof record.observations === "string") return record.observations.split("\n");
+    return [];
+};
+
+const buildPrintableServiceReportHtml = ({
+    serviceStop = {},
+    customerRecord = null,
+    serviceLocation = null,
+    bodiesOfWater = [],
+    equipmentList = [],
+    taskList = [],
+    stopDataRecords = [],
+    serviceStopShoppingItems = [],
+    partApprovals = [],
+    serviceStopBucket = {},
+    technicianServiceNotes = "",
+    surveyNotes = {},
+    equipmentSurveyFindings = [],
+}) => {
+    const customerName = firstPresent(
+        customerRecord?.displayName,
+        customerRecord?.customerName,
+        customerRecord?.name,
+        serviceStop.customerName,
+        "Customer"
+    );
+    const locationName = firstPresent(
+        serviceLocation?.nickName,
+        serviceLocation?.name,
+        serviceStop.serviceLocationName,
+        serviceStop.address?.streetAddress,
+        customerName
+    );
+    const address = [
+        firstPresent(serviceStop.address?.streetAddress, serviceLocation?.streetAddress),
+        [firstPresent(serviceStop.address?.city, serviceLocation?.city), firstPresent(serviceStop.address?.state, serviceLocation?.state)]
+            .filter(Boolean)
+            .join(", "),
+        firstPresent(serviceStop.address?.zip, serviceLocation?.zip),
+    ].filter(Boolean).join(" ");
+    const bodyOfWaterById = new Map(bodiesOfWater.map((body) => [body.id, body]));
+    const equipmentById = new Map(equipmentList.map((equipment) => [equipment.id, equipment]));
+    const generatedAt = format(new Date(), "MM/dd/yyyy h:mm a");
+    const reportTitle = `${displayText(locationName, "Service")} Service Report`;
+
+    const summaryItems = [
+        { label: "Customer", value: customerName },
+        { label: "Location", value: locationName },
+        { label: "Address", value: address },
+        { label: "Service Date", value: formatDateText(serviceStop.serviceDate) },
+        { label: "Technician", value: firstPresent(serviceStop.tech, serviceStop.techName) },
+        { label: "Status", value: serviceStop.operationStatus },
+        { label: "Service Type", value: getServiceStopTypeLabel(serviceStop) },
+        { label: "Report Type", value: serviceStopBucket.label },
+        { label: "Duration", value: formatReportMinutes(serviceStop.duration) },
+    ];
+
+    const taskRows = taskList.map((task) => ({
+        name: task.name || "Unnamed Task",
+        type: task.type || "—",
+        status: task.status || "—",
+        worker: task.workerName || serviceStop.tech || "—",
+        time: formatReportMinutes(firstPresent(task.actualTime, task.estimatedTime)),
+        rate: centsCurrency(task.contractedRate),
+    }));
+
+    const stopDataRows = stopDataRecords.map((record) => {
+        const body = bodyOfWaterById.get(record.bodyOfWaterId);
+        const readings = reportLineItems(record.readings || [], (reading) => {
+            const name = reading.name || reading.templateName || reading.readingName || "Reading";
+            return `${name}: ${valueWithUnit(firstPresent(reading.amount, reading.value), firstPresent(reading.UOM, reading.uom, reading.unit)) || "—"}`;
+        });
+        const dosages = reportLineItems(record.dosages || [], (dosage) => {
+            const name = dosage.name || dosage.templateName || dosage.dosageName || "Dosage";
+            return `${name}: ${valueWithUnit(firstPresent(dosage.amount, dosage.value), firstPresent(dosage.UOM, dosage.uom, dosage.unit)) || "—"}`;
+        });
+        const observations = stopDataObservationValues(record)
+            .map((observation) => displayText(observation, ""))
+            .filter(Boolean)
+            .join("; ") || "—";
+        const equipmentMeasurements = reportLineItems(record.equipmentMeasurements || [], (measurement) => {
+            const equipment = equipmentById.get(measurement.equipmentId);
+            const pressure = displayText(firstPresent(measurement.poundForcePerSquareInch, measurement.pressure, measurement.currentPressure), "");
+            const rpm = displayText(firstPresent(measurement.revolutionsPerMinute, measurement.rpm), "");
+            return [
+                equipment ? getEquipmentTitle(equipment) : "Equipment",
+                pressure ? `${pressure} PSI` : "",
+                rpm ? `${rpm} RPM` : "",
+                measurement.status || "",
+            ].filter(Boolean).join(" - ");
+        });
+
+        return {
+            body: body ? getBodyOfWaterTitle(body) : "Stop Data",
+            readings,
+            dosages,
+            observations,
+            equipmentMeasurements,
+        };
+    });
+
+    const shoppingRows = serviceStopShoppingItems.map((item) => ({
+        item: item.name || item.itemName || item.dbItemName || "Install material",
+        qty: item.quantity || "1",
+        status: item.status || "Ready",
+        assigned: item.assignedTechName || item.assignedToUserName || item.userName || serviceStop.tech || "—",
+        price: centsCurrency(partApprovalTotalPriceCents(item)),
+    }));
+
+    const approvalRows = partApprovals.map((approval) => ({
+        item: approval.itemName || approval.name || approval.dbItemName || "Pool Part",
+        qty: approval.quantity || "1",
+        status: approval.status || approval.approvalStatus || "Pending",
+        price: centsCurrency(partApprovalTotalPriceCents(approval)),
+        notes: approval.description || "—",
+    }));
+
+    const equipmentRows = equipmentList.map((equipment) => ({
+        equipment: getEquipmentTitle(equipment),
+        type: equipment.type || equipment.equipmentType || "Equipment",
+        make: equipment.make || equipment.manufacturer || "—",
+        model: equipment.model || "—",
+        status: equipment.status || equipment.operationStatus || equipment.equipmentStatus || "—",
+        pressure: valueWithUnit(firstPresent(equipment.currentFilterPressure, equipment.currentPressure), "PSI") || "—",
+    }));
+
+    const bodyRows = bodiesOfWater.map((body) => ({
+        body: getBodyOfWaterTitle(body),
+        type: body.type || body.bodyOfWaterType || body.waterType || "Pool",
+        gallons: firstPresent(body.gallons, body.capacityGallons, body.volume, "—"),
+        material: body.material || body.surfaceMaterial || "—",
+        sanitizer: body.sanitizer || body.sanitizerType || "—",
+        status: body.status || body.operationStatus || "—",
+    }));
+
+    const findings = [
+        ...(surveyNotes.findings || []),
+        ...equipmentSurveyFindings.map((finding) => [
+            finding.title,
+            finding.status ? `Status: ${finding.status}` : "",
+            finding.notes,
+        ].filter(Boolean).join(" - ")),
+    ];
+
+    const serviceStopPhotosHtml = reportPhotoGridHtml("Service Photos", serviceStop.photoUrls || []);
+    const locationPhotosHtml = reportPhotoGridHtml(
+        "Location Photos",
+        serviceLocation?.photoUrls || serviceLocation?.photos || serviceLocation?.serviceLocationPhotos || []
+    );
+
+    return `
+        <!doctype html>
+        <html>
+            <head>
+                <title>${escapeHtml(reportTitle)}</title>
+                <style>
+                    body { color: #0f172a; font-family: Arial, sans-serif; margin: 28px; }
+                    header { border-bottom: 2px solid #e2e8f0; margin-bottom: 18px; padding-bottom: 14px; }
+                    h1 { font-size: 26px; margin: 0 0 4px; }
+                    .subtitle { color: #64748b; font-size: 12px; margin: 0; }
+                    section { break-inside: avoid; margin-top: 18px; }
+                    h2 { font-size: 16px; margin: 0 0 8px; }
+                    h3 { color: #475569; font-size: 12px; margin: 12px 0 8px; text-transform: uppercase; }
+                    .details { display: grid; gap: 8px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                    .detail { border: 1px solid #cbd5e1; border-radius: 6px; padding: 9px; }
+                    .detail span { color: #64748b; display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; }
+                    .detail strong { display: block; font-size: 12px; line-height: 1.35; margin-top: 4px; word-break: break-word; }
+                    .note { border: 1px solid #cbd5e1; border-radius: 6px; line-height: 1.45; padding: 10px; white-space: pre-wrap; }
+                    ul { margin: 0; padding-left: 18px; }
+                    li { margin-bottom: 5px; }
+                    table { border-collapse: collapse; font-size: 11px; width: 100%; }
+                    th { background: #f1f5f9; color: #475569; font-size: 10px; text-align: left; text-transform: uppercase; }
+                    th, td { border: 1px solid #cbd5e1; padding: 6px; vertical-align: top; }
+                    .photo-grid { display: grid; gap: 10px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+                    figure { border: 1px solid #cbd5e1; border-radius: 6px; margin: 0; overflow: hidden; }
+                    figure img { display: block; height: 130px; object-fit: cover; width: 100%; }
+                    figcaption { color: #475569; font-size: 10px; padding: 6px; }
+                    .photo-note { padding: 8px; }
+                    .photo-note p { font-size: 10px; margin: 4px 0 0; word-break: break-all; }
+                    @media print {
+                        body { margin: 18px; }
+                        .details { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                        .photo-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+                    }
+                </style>
+            </head>
+            <body>
+                <header>
+                    <h1>${escapeHtml(reportTitle)}</h1>
+                    <p class="subtitle">Generated ${escapeHtml(generatedAt)}${serviceStop.internalId ? ` | Stop #${escapeHtml(serviceStop.internalId)}` : ""}</p>
+                </header>
+
+                <section>
+                    <h2>Summary</h2>
+                    <div class="details">${reportDetailGridHtml(summaryItems)}</div>
+                </section>
+
+                <section>
+                    <h2>Technician Notes</h2>
+                    <div class="note">${escapeHtml(technicianServiceNotes || "No technician service notes captured.")}</div>
+                </section>
+
+                ${surveyNotes.locationNotes ? `
+                    <section>
+                        <h2>Service Location Notes</h2>
+                        <div class="note">${escapeHtml(surveyNotes.locationNotes)}</div>
+                    </section>
+                ` : ""}
+
+                ${findings.length ? `
+                    <section>
+                        <h2>Suggested Repairs & Changes</h2>
+                        <ul>${findings.map((finding) => `<li>${escapeHtml(finding)}</li>`).join("")}</ul>
+                    </section>
+                ` : ""}
+
+                <section>
+                    <h2>Tasks</h2>
+                    ${reportTableHtml([
+        { key: "name", label: "Task" },
+        { key: "type", label: "Type" },
+        { key: "status", label: "Status" },
+        { key: "worker", label: "Worker" },
+        { key: "time", label: "Time" },
+        { key: "rate", label: "Rate" },
+    ], taskRows, "No tasks were captured for this stop.")}
+                </section>
+
+                <section>
+                    <h2>Captured Readings & Dosages</h2>
+                    ${reportTableHtml([
+        { key: "body", label: "Body Of Water" },
+        { key: "readings", label: "Readings" },
+        { key: "dosages", label: "Dosages" },
+        { key: "observations", label: "Observations" },
+        { key: "equipmentMeasurements", label: "Equipment" },
+    ], stopDataRows, "No readings, dosages, or observations were captured for this stop.")}
+                </section>
+
+                <section>
+                    <h2>Install Materials</h2>
+                    ${reportTableHtml([
+        { key: "item", label: "Item" },
+        { key: "qty", label: "Qty" },
+        { key: "status", label: "Status" },
+        { key: "assigned", label: "Assigned" },
+        { key: "price", label: "Price" },
+    ], shoppingRows, "No install materials were linked to this stop.")}
+                </section>
+
+                <section>
+                    <h2>Part Approvals</h2>
+                    ${reportTableHtml([
+        { key: "item", label: "Item" },
+        { key: "qty", label: "Qty" },
+        { key: "status", label: "Status" },
+        { key: "price", label: "Price" },
+        { key: "notes", label: "Notes" },
+    ], approvalRows, "No part approvals were linked to this stop.")}
+                </section>
+
+                <section>
+                    <h2>Body Of Water Details</h2>
+                    ${reportTableHtml([
+        { key: "body", label: "Body" },
+        { key: "type", label: "Type" },
+        { key: "gallons", label: "Gallons" },
+        { key: "material", label: "Material" },
+        { key: "sanitizer", label: "Sanitizer" },
+        { key: "status", label: "Status" },
+    ], bodyRows, "No body of water information was captured for this stop.")}
+                </section>
+
+                <section>
+                    <h2>Equipment</h2>
+                    ${reportTableHtml([
+        { key: "equipment", label: "Equipment" },
+        { key: "type", label: "Type" },
+        { key: "make", label: "Make" },
+        { key: "model", label: "Model" },
+        { key: "status", label: "Status" },
+        { key: "pressure", label: "Pressure" },
+    ], equipmentRows, "No equipment information was captured for this stop.")}
+                </section>
+
+                ${serviceStopPhotosHtml}
+                ${locationPhotosHtml}
+            </body>
+        </html>
+    `;
+};
+
 const SurveyPhotoGrid = ({ photos = [], title }) => {
     const normalizedPhotos = photos
         .map((photo, index) => ({
@@ -560,6 +946,11 @@ const ServiceStopDetails = () => {
     const [loadingPartWorkflow, setLoadingPartWorkflow] = useState(false);
     const [showPartApprovalModal, setShowPartApprovalModal] = useState(false);
     const [partWorkflowActionId, setPartWorkflowActionId] = useState("");
+    const [sendingServiceReport, setSendingServiceReport] = useState(false);
+    const [serviceAgreements, setServiceAgreements] = useState([]);
+    const [loadingServiceAgreements, setLoadingServiceAgreements] = useState(false);
+    const [showConnectAgreementModal, setShowConnectAgreementModal] = useState(false);
+    const [connectingAgreementId, setConnectingAgreementId] = useState("");
 
     const [showAddTask, setShowAddTask] = useState(false);
     const [savingTask, setSavingTask] = useState(false);
@@ -859,6 +1250,39 @@ const ServiceStopDetails = () => {
         loadPartWorkflow();
     }, [loadPartWorkflow, serviceStop]);
 
+    const loadServiceAgreements = useCallback(async () => {
+        if (!recentlySelectedCompany) {
+            setServiceAgreements([]);
+            return;
+        }
+
+        setLoadingServiceAgreements(true);
+        try {
+            const agreementSnapshot = await getDocs(
+                query(
+                    collection(db, salesCollectionNames.agreements),
+                    where("companyId", "==", recentlySelectedCompany)
+                )
+            );
+            setServiceAgreements(
+                agreementSnapshot.docs.map((agreementDoc) => ({
+                    id: agreementDoc.id,
+                    ...agreementDoc.data(),
+                }))
+            );
+        } catch (error) {
+            console.error("Failed to load service agreements:", error);
+            toast.error("Failed to load service agreements");
+        } finally {
+            setLoadingServiceAgreements(false);
+        }
+    }, [recentlySelectedCompany]);
+
+    const openConnectAgreementModal = () => {
+        setShowConnectAgreementModal(true);
+        loadServiceAgreements();
+    };
+
     useEffect(() => {
         if (!bodiesOfWater.length) {
             if (selectedBodyOfWaterId) setSelectedBodyOfWaterId("");
@@ -934,6 +1358,26 @@ const ServiceStopDetails = () => {
         [serviceStop?.address?.city, serviceStop?.address?.state].filter(Boolean).join(", "),
         serviceStop?.address?.zip,
     ].filter(Boolean).join(" "), [serviceStop]);
+    const serviceStopGoogleMapsUrl = useMemo(() => (
+        serviceStopAddressText
+            ? `https://www.google.com/maps/place/${encodeURIComponent(serviceStopAddressText)}`
+            : ""
+    ), [serviceStopAddressText]);
+    const serviceAgreementsById = useMemo(() => (
+        new Map(serviceAgreements.map((agreement) => [agreement.id, agreement]))
+    ), [serviceAgreements]);
+    const connectedServiceAgreement = useMemo(() => {
+        const linkedAgreementId = serviceStop?.serviceAgreementId || serviceStop?.salesAgreementId || serviceStop?.agreementId || "";
+        if (linkedAgreementId) {
+            return serviceAgreementsById.get(linkedAgreementId) || {
+                id: linkedAgreementId,
+                title: serviceStop?.serviceAgreementTitle || "Service Agreement",
+                status: serviceStop?.serviceAgreementStatus || "",
+            };
+        }
+
+        return serviceAgreements.find((agreement) => agreementLinksInitialEstimate(agreement, serviceStopId)) || null;
+    }, [serviceAgreements, serviceAgreementsById, serviceStop, serviceStopId]);
     const partApprovalCustomer = useMemo(() => {
         if (customerRecord) return customerRecord;
         if (!serviceStop?.customerId) return null;
@@ -972,6 +1416,50 @@ const ServiceStopDetails = () => {
 
         return `/company/sales/agreements/new${params.toString() ? `?${params.toString()}` : ""}`;
     }, [serviceStop, serviceStopId]);
+    const handleConnectAgreement = async (agreement) => {
+        if (!serviceStopId || !agreement?.id) return;
+
+        setConnectingAgreementId(agreement.id);
+        try {
+            const connection = await connectServiceAgreementToInitialEstimate({
+                db,
+                companyId: recentlySelectedCompany,
+                serviceStopId,
+                serviceStop,
+                agreement,
+            });
+            const linkedServiceStopIds = Array.isArray(agreement.serviceStopIds) ? agreement.serviceStopIds : [];
+            const nextAgreement = {
+                ...agreement,
+                serviceAgreementEstimateServiceStopId: serviceStopId,
+                inspectionServiceStopId: serviceStopId,
+                serviceStopIds: [...new Set([...linkedServiceStopIds, serviceStopId])],
+                leadId: agreement.leadId || connection.leadId || "",
+            };
+
+            setServiceStop((current) => ({
+                ...current,
+                serviceAgreementId: agreement.id,
+                serviceAgreementTitle: connection.agreementTitle,
+                serviceAgreementStatus: agreement.status || "",
+                salesAgreementId: agreement.id,
+                agreementId: agreement.id,
+                leadId: connection.leadId || current?.leadId || "",
+            }));
+            setServiceAgreements((current) => (
+                current.some((item) => item.id === agreement.id)
+                    ? current.map((item) => (item.id === agreement.id ? nextAgreement : item))
+                    : [nextAgreement, ...current]
+            ));
+            setShowConnectAgreementModal(false);
+            toast.success("Service agreement connected.");
+        } catch (error) {
+            console.error("Failed to connect service agreement:", error);
+            toast.error("Failed to connect service agreement.");
+        } finally {
+            setConnectingAgreementId("");
+        }
+    };
     const surveyNotes = useMemo(() => splitSurveyNotes(
         serviceLocation?.notes ||
         serviceLocation?.locationNotes ||
@@ -988,6 +1476,95 @@ const ServiceStopDetails = () => {
         ""
     ), [serviceStop]);
     const equipmentSurveyFindings = useMemo(() => getEquipmentSurveyFindings(equipmentList), [equipmentList]);
+
+    const printServiceReport = useCallback(() => {
+        if (!serviceStop) {
+            toast.error("Load a service stop before printing.");
+            return;
+        }
+
+        const printWindow = window.open("", "_blank");
+        if (!printWindow) {
+            toast.error("Allow popups to print the service report.");
+            return;
+        }
+
+        printWindow.document.open();
+        printWindow.document.write(buildPrintableServiceReportHtml({
+            serviceStop,
+            customerRecord,
+            serviceLocation,
+            bodiesOfWater,
+            equipmentList,
+            taskList,
+            stopDataRecords,
+            serviceStopShoppingItems,
+            partApprovals,
+            serviceStopBucket,
+            technicianServiceNotes,
+            surveyNotes,
+            equipmentSurveyFindings,
+        }));
+        printWindow.document.close();
+        printWindow.focus();
+        setTimeout(() => {
+            printWindow.print();
+        }, 250);
+    }, [
+        bodiesOfWater,
+        customerRecord,
+        equipmentList,
+        equipmentSurveyFindings,
+        partApprovals,
+        serviceLocation,
+        serviceStop,
+        serviceStopBucket,
+        serviceStopShoppingItems,
+        stopDataRecords,
+        surveyNotes,
+        taskList,
+        technicianServiceNotes,
+    ]);
+
+    const sendServiceReport = useCallback(async () => {
+        if (!requirePermission("244", "send service reports")) return;
+        if (!recentlySelectedCompany || !serviceStopId || !serviceStop) {
+            toast.error("Load a service stop before sending the report.");
+            return;
+        }
+
+        const toastId = toast.loading("Sending service report...");
+        try {
+            setSendingServiceReport(true);
+            const sendServiceReportOnFinish = httpsCallable(functions, "sendServiceReportOnFinish");
+            const result = await sendServiceReportOnFinish({
+                companyId: recentlySelectedCompany,
+                serviceStopId,
+                serviceReportBaseUrl: typeof window !== "undefined" ? window.location.origin : "",
+            });
+            const response = result?.data || {};
+            const status = Number(response.status || 0);
+
+            if (status >= 400) {
+                const errorMessage = typeof response.error === "string"
+                    ? response.error
+                    : "Failed to send service report";
+                throw new Error(errorMessage);
+            }
+
+            if (String(response.account || "").toLowerCase().includes("turned off")) {
+                toast("Service report email is turned off in email settings.", { id: toastId });
+                return;
+            }
+
+            toast.success(response.testMode ? "Service report sent in test mode." : "Service report sent.", { id: toastId });
+        } catch (error) {
+            console.error("Failed to send service report:", error);
+            toast.error(error?.message || "Failed to send service report.", { id: toastId });
+        } finally {
+            setSendingServiceReport(false);
+        }
+    }, [recentlySelectedCompany, requirePermission, serviceStop, serviceStopId]);
 
     const buildEquipmentMeasurementsForStopData = (overrideMeasurement = null) => {
         const existingByEquipmentId = new Map(
@@ -1619,6 +2196,7 @@ const ServiceStopDetails = () => {
                 await sendServiceReportOnFinish({
                     companyId: recentlySelectedCompany,
                     serviceStopId,
+                    serviceReportBaseUrl: typeof window !== "undefined" ? window.location.origin : "",
                 });
             } catch (emailError) {
                 console.warn("Service stop finished, but the service report callable failed:", emailError);
@@ -2247,7 +2825,7 @@ const ServiceStopDetails = () => {
     return (
         <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
             <div className="w-full space-y-6">
-                <div className="flex justify-between items-center mb-6">
+                <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div>
                         <Link
                             to="/company/serviceStops"
@@ -2258,28 +2836,55 @@ const ServiceStopDetails = () => {
                         <h2 className="text-3xl font-bold text-slate-800">Service Stop Details</h2>
                         <p className="text-sm text-slate-500">#{serviceStop.internalId || "—"}</p>
                     </div>
-                    {editEnabled && can("246") && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ShareItemButton
+                            type="serviceStop"
+                            recordId={serviceStopId}
+                            title={serviceStop.type || serviceStop.serviceStopType || "Service Stop"}
+                            subtitle={[serviceStop.customerName, serviceStop.internalId].filter(Boolean).join(" - ")}
+                            companyId={recentlySelectedCompany}
+                            customerId={serviceStop.customerId}
+                            collectionPath={`companies/${recentlySelectedCompany}/serviceStops`}
+                            webPath={`/company/serviceStops/detail/${serviceStopId}`}
+                        />
                         <button
                             type="button"
-                            onClick={() => setShowDeleteConfirm(true)}
-                            className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                            onClick={printServiceReport}
+                            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
                         >
-                            Delete
+                            <PrinterIcon className="h-4 w-4" />
+                            Print Report
                         </button>
-                    )}
+                        {can("244") && (
+                            <button
+                                type="button"
+                                onClick={sendServiceReport}
+                                disabled={sendingServiceReport}
+                                className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                <PaperAirplaneIcon className="h-4 w-4" />
+                                {sendingServiceReport ? "Sending..." : "Send Report"}
+                            </button>
+                        )}
+                        {editEnabled && can("246") && (
+                            <button
+                                type="button"
+                                onClick={() => setShowDeleteConfirm(true)}
+                                className="rounded-md border border-red-200 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 transition hover:bg-red-100"
+                            >
+                                Delete
+                            </button>
+                        )}
+                    </div>
                 </div>
 
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    <div className="lg:col-span-2 space-y-6">
-                        <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                            <div className="flex justify-between items-start gap-4">
-                                <div>
-                                    <h3 className="text-xl font-bold text-slate-800">Stop Information</h3>
-                                    <p className="text-sm text-slate-600 mt-1">Core service stop details</p>
-                                </div>
+                    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm lg:col-span-3">
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <h3 className="text-base font-bold text-slate-800">Stop Information</h3>
 
                                 <span
-                                    className={`px-3 py-1 text-sm font-bold leading-none rounded-full ${getStatusClass(
+                                    className={`rounded-full px-2.5 py-1 text-xs font-bold leading-none ${getStatusClass(
                                         serviceStop.operationStatus
                                     )}`}
                                 >
@@ -2287,7 +2892,7 @@ const ServiceStopDetails = () => {
                                 </span>
                             </div>
 
-                            <div className="mt-5 grid grid-cols-1 gap-4 border-y border-slate-200 py-4 md:grid-cols-3">
+                            <div className="mt-3 grid grid-cols-1 gap-x-5 gap-y-3 border-t border-slate-200 pt-3 md:grid-cols-3 xl:grid-cols-5">
                                 <div>
                                     <p className="text-sm font-semibold text-slate-600">Bucket</p>
                                     <span className={`mt-1 inline-flex rounded-full border px-3 py-1 text-sm font-semibold ${serviceStopBucket.className}`}>
@@ -2296,16 +2901,21 @@ const ServiceStopDetails = () => {
                                 </div>
                                 <Field label="Work Order Type" value={getWorkOrderTypeLabel(serviceStop)} />
                                 <Field label="Service Stop Type" value={getServiceStopTypeLabel(serviceStop)} />
-                                {serviceStop.typeId && (
-                                    <div className="md:col-span-3">
-                                        <p className="text-sm font-semibold text-slate-600">Service Stop Type ID</p>
-                                        <p className="mt-1 break-all text-sm text-slate-700">{serviceStop.typeId}</p>
-                                    </div>
-                                )}
                             </div>
 
-                            <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6">
-                                <Field label="Customer" value={serviceStop.customerName} />
+                            <div className="mt-3 grid grid-cols-1 gap-x-5 gap-y-3 border-t border-slate-200 pt-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+                                <Field label="Customer">
+                                    {serviceStop.customerId ? (
+                                        <Link
+                                            to={`/company/customers/details/${serviceStop.customerId}`}
+                                            className="text-slate-800 hover:text-blue-700"
+                                        >
+                                            {serviceStop.customerName || "Customer"}
+                                        </Link>
+                                    ) : (
+                                        <p className="text-slate-800">{serviceStop.customerName || "—"}</p>
+                                    )}
+                                </Field>
                                 <Field label="Technician" value={serviceStop.tech} />
 
                                 <Field label="Recurring Service Stop">
@@ -2330,11 +2940,20 @@ const ServiceStopDetails = () => {
                                     }
                                 />
 
-                                <Field
-                                    label="Address"
-                                    value={`${serviceStop.address?.streetAddress || ""}${serviceStop.address?.city ? `, ${serviceStop.address.city}` : ""
-                                        }${serviceStop.address?.state ? `, ${serviceStop.address.state}` : ""}`}
-                                />
+                                <Field label="Address">
+                                    {serviceStopGoogleMapsUrl ? (
+                                        <a
+                                            href={serviceStopGoogleMapsUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="text-slate-800 hover:text-blue-700"
+                                        >
+                                            {serviceStopAddressText}
+                                        </a>
+                                    ) : (
+                                        <p className="text-slate-800">—</p>
+                                    )}
+                                </Field>
 
                                 <Field label="Job">
                                     {serviceStop.jobId ? (
@@ -2359,15 +2978,16 @@ const ServiceStopDetails = () => {
                             </div>
 
                             {!isServiceAgreementEstimate && (
-                                <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                                    <h3 className="text-sm font-bold uppercase tracking-wide text-slate-500">Technician Service Notes</h3>
-                                    <p className="mt-2 whitespace-pre-line text-sm leading-6 text-slate-700">
+                                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                                    <h3 className="text-xs font-bold uppercase tracking-wide text-slate-500">Technician Service Notes</h3>
+                                    <p className="mt-1 whitespace-pre-line text-sm leading-6 text-slate-700">
                                         {technicianServiceNotes || "No technician service notes captured."}
                                     </p>
                                 </div>
                             )}
-                        </div>
+                    </div>
 
+                    <div className="lg:col-span-2 space-y-6">
                         <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
                             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                                 <div>
@@ -2543,6 +3163,21 @@ const ServiceStopDetails = () => {
                                         </p>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
+                                        {connectedServiceAgreement?.id && (
+                                            <Link
+                                                to={`/company/sales/agreements/${connectedServiceAgreement.id}`}
+                                                className="inline-flex items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                                            >
+                                                Connected: {agreementDisplayTitle(connectedServiceAgreement)}
+                                            </Link>
+                                        )}
+                                        <button
+                                            type="button"
+                                            onClick={openConnectAgreementModal}
+                                            className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+                                        >
+                                            {connectedServiceAgreement?.id ? "Change Agreement" : "Connect Agreement"}
+                                        </button>
                                         {can("612") && (
                                             <Link
                                                 to={serviceAgreementSurveyDraftPath}
@@ -3560,6 +4195,16 @@ const ServiceStopDetails = () => {
                 hideCost
                 allowInPersonApproval
                 onCreated={loadPartWorkflow}
+            />
+            <ConnectAgreementModal
+                agreements={serviceAgreements}
+                connectedAgreementId={connectedServiceAgreement?.id || ""}
+                connectingAgreementId={connectingAgreementId}
+                isOpen={showConnectAgreementModal}
+                loading={loadingServiceAgreements}
+                onClose={() => setShowConnectAgreementModal(false)}
+                onConnect={handleConnectAgreement}
+                serviceStop={serviceStop}
             />
             {showFinishConfirm && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">

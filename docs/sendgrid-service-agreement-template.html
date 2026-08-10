@@ -109,19 +109,22 @@ Recommended template data:
             max-width: 680px;
             margin: 0 auto;
             background-color: #FFFFFF;
-            border-radius: 12px;
+            border: 1px solid #E5E7EB;
+            border-radius: 8px;
             overflow: hidden;
-            box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
         }
 
         .header {
-            background-color: #1D2E76;
-            padding: 32px 36px;
-            color: #FFFFFF;
+            background-color: #FFFFFF;
+            border-bottom: 3px solid #111827;
+            padding: 30px 36px 26px;
+            color: #111827;
+            text-align: center;
         }
 
         .header-eyebrow {
-            color: #E0AE36;
+            color: #64748B;
             font-size: 13px;
             line-height: 18px;
             font-weight: 700;
@@ -131,14 +134,15 @@ Recommended template data:
         }
 
         .header-title {
-            font-size: 28px;
-            line-height: 36px;
+            font-size: 24px;
+            line-height: 31px;
             font-weight: 700;
             margin: 0;
+            text-transform: uppercase;
         }
 
         .header-copy {
-            color: #DCE4F6;
+            color: #374151;
             font-size: 15px;
             line-height: 23px;
             margin: 12px 0 0;
@@ -272,6 +276,72 @@ Recommended template data:
             margin: 0;
         }
 
+        .contract-panel {
+            background-color: #FFFFFF;
+            border: 1px solid #111827;
+            border-radius: 4px;
+            padding: 18px;
+        }
+
+        .contract-heading {
+            color: #111827;
+            font-size: 17px;
+            line-height: 24px;
+            font-weight: 700;
+            margin: 0 0 8px;
+            text-align: center;
+            text-transform: uppercase;
+        }
+
+        .contract-meta {
+            color: #64748B;
+            font-size: 12px;
+            line-height: 18px;
+            margin: 0 0 16px;
+            text-align: center;
+        }
+
+        .contract-copy {
+            color: #1F2937;
+            font-size: 14px;
+            line-height: 22px;
+            margin: 0 0 12px;
+        }
+
+        .contract-line {
+            border-bottom: 1px solid #111827;
+            display: inline-block;
+            font-weight: 700;
+            min-width: 120px;
+            padding: 0 4px 1px;
+        }
+
+        .contract-box {
+            border: 1px solid #111827;
+            color: #1F2937;
+            font-size: 14px;
+            line-height: 22px;
+            margin: 8px 0 12px;
+            padding: 12px;
+        }
+
+        .signature-table {
+            margin-top: 18px;
+        }
+
+        .signature-cell {
+            color: #64748B;
+            font-size: 12px;
+            line-height: 18px;
+            padding-top: 24px;
+            width: 50%;
+        }
+
+        .signature-rule {
+            border-top: 1px solid #111827;
+            padding-top: 6px;
+        }
+
         .fallback-note {
             background-color: #EEF6FF;
             border: 1px solid #BFDBFE;
@@ -310,6 +380,10 @@ Recommended template data:
             .header-title {
                 font-size: 24px;
                 line-height: 31px;
+            }
+
+            .contract-line {
+                min-width: 90px;
             }
 
             .line-items th:nth-child(3),
@@ -362,6 +436,51 @@ Recommended template data:
                                     Need to connect your homeowner account?
                                     <a href="{{claimAccountUrl}}" style="color:#1D4ED8;font-weight:700;">Connect account</a>.
                                     {{/if}}
+                                </div>
+                            </div>
+
+                            <div class="section">
+                                <div class="contract-panel">
+                                    <p class="contract-heading">Professional Service Agreement</p>
+                                    <p class="contract-meta">
+                                        {{#if agreementNumber}}Agreement {{agreementNumber}} &nbsp;|&nbsp; {{/if}}
+                                        {{#if sentDate}}Prepared {{sentDate}}{{/if}}
+                                    </p>
+                                    <p class="contract-copy">
+                                        <strong>1. The Parties.</strong>
+                                        This Service Agreement is made between
+                                        <span class="contract-line">{{companyName}}</span>
+                                        ("Service Provider") and
+                                        <span class="contract-line">{{customer}}</span>
+                                        ("Client").
+                                    </p>
+                                    <p class="contract-copy">
+                                        <strong>2. Term.</strong>
+                                        Service is scheduled to begin {{billingStartDate}}{{#if expiresAt}} and this offer should be reviewed by {{expiresAt}}{{/if}}.
+                                    </p>
+                                    <div class="contract-box">
+                                        <strong>3. Services.</strong><br>
+                                        {{agreementTitle}} at {{address01}}{{#if address02}}, {{address02}}{{/if}}{{#if city}}, {{city}}, {{state}} {{zip}}{{/if}}.
+                                        The included items, billing details, and agreement terms are summarized below.
+                                    </div>
+                                    <p class="contract-copy">
+                                        <strong>4. Payment Amount.</strong>
+                                        The Client agrees to pay {{billingAmount}}{{#if billingFrequency}} billed {{billingFrequency}}{{/if}}{{#if paymentTerms}}, with payment terms of {{paymentTerms}}{{/if}}.
+                                    </p>
+                                    <p class="contract-copy">
+                                        <strong>5. Acceptance.</strong>
+                                        Use the private review button in this email to review and accept the full agreement. No homeowner account is required from this email link.
+                                    </p>
+                                    <table role="presentation" class="signature-table" width="100%" cellpadding="0" cellspacing="0">
+                                        <tr>
+                                            <td class="signature-cell" style="padding-right:14px;">
+                                                <div class="signature-rule">Client Signature</div>
+                                            </td>
+                                            <td class="signature-cell" style="padding-left:14px;">
+                                                <div class="signature-rule">Date</div>
+                                            </td>
+                                        </tr>
+                                    </table>
                                 </div>
                             </div>
 

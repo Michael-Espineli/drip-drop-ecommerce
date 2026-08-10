@@ -1,7 +1,8 @@
 
 import React, { useState, useEffect, useContext, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { collection, getDocs, query, onSnapshot } from 'firebase/firestore';
+import { FaPlus, FaUsers } from 'react-icons/fa';
 import { db } from '../../../utils/config';
 import { Context } from "../../../context/AuthContext";
 import { reportAppError } from '../../../utils/errorReporting';
@@ -203,10 +204,22 @@ const RecurringServiceStopList = () => {
                         <h2 className="text-3xl font-bold text-slate-900">Recurring Service Stops</h2>
                         <p className="mt-1 text-slate-600">Recurring stop templates that seed future service stops.</p>
                     </div>
-                    <button
-                        onClick={handleCreateNew}
-                        className="rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
-                    >Create New</button>
+                    <div className="flex flex-wrap gap-2">
+                        <Link
+                            to="/company/recurringServiceStop/active-customers-without-recurring-service-stops"
+                            className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
+                        >
+                            <FaUsers className="text-xs" />
+                            Missing Stops
+                        </Link>
+                        <button
+                            onClick={handleCreateNew}
+                            className="inline-flex items-center gap-2 rounded-md bg-slate-900 px-4 py-3 text-sm font-semibold text-white hover:bg-slate-800"
+                        >
+                            <FaPlus className="text-xs" />
+                            Create New
+                        </button>
+                    </div>
                 </div>
 
                 <div className="mb-6 grid gap-4 md:grid-cols-4">

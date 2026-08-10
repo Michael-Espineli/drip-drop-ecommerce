@@ -5,7 +5,21 @@ import { Context } from '../../../context/AuthContext';
 import toast from 'react-hot-toast';
 import { ArrowLeftIcon, CheckIcon, DocumentDuplicateIcon, PencilIcon, PlusIcon, TrashIcon, XMarkIcon } from '@heroicons/react/24/outline';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
+import { SalesAgreementChemicalBillingMode } from '../../../utils/models/Sales';
 import { ContractTerm, getTermDescription } from '../../../utils/models/TermsTemplate';
+import {
+    billingFrequencyOptions,
+    paymentTermsOptions,
+    rateTypeOptions,
+} from '../../../utils/sales/agreementCadence';
+import {
+    TermsTemplateChemicalBillingMixedSelectionMode,
+    termsTemplateAgreementDefaults,
+    termsTemplateHasAgreementDefaults,
+    termsTemplateMixedChemicalBillingSelectionOptions,
+    termsTemplateUseCaseLabel,
+    termsTemplateUseCaseOptions,
+} from '../../../utils/terms/termsTemplateAgreementDefaults';
 import {
     deleteContractTerm,
     duplicateTermsTemplate,
@@ -17,11 +31,58 @@ import {
 } from '../../../utils/terms/termsTemplateFirestore';
 import { appConfirm } from '../../../utils/appDialog';
 
-const templateForm = (template = {}) => ({
-    name: template.name || '',
-    description: template.description || '',
-    content: template.content || '',
-});
+const chemicalBillingModeOptions = [
+    { value: SalesAgreementChemicalBillingMode.includedAll, label: 'Chemicals Included In Service' },
+    { value: SalesAgreementChemicalBillingMode.billAllSeparately, label: 'Bill All Chemicals Separately' },
+    { value: SalesAgreementChemicalBillingMode.mixed, label: 'Mixed Chemical Billing' },
+];
+
+const optionLabel = (options, value) => (
+    options.find((option) => option.value === value)?.label || ''
+);
+
+const templateForm = (template = {}) => {
+    const defaults = termsTemplateAgreementDefaults(template);
+
+    return {
+        name: template.name || '',
+        description: template.description || '',
+        content: template.content || '',
+        useCase: defaults.useCase || 'recurringService',
+        billingFrequency: defaults.billingFrequency,
+        billingFrequencyCount: defaults.billingFrequencyCount ? String(defaults.billingFrequencyCount) : '',
+        rateType: defaults.rateType,
+        paymentTerms: defaults.paymentTerms,
+        chemicalBillingMode: defaults.chemicalBillingMode,
+        chemicalBillingMixedSelectionMode: defaults.chemicalBillingMixedSelectionMode
+            || TermsTemplateChemicalBillingMixedSelectionMode.separatelyBilled,
+        includedChemicalIds: defaults.includedChemicalIds,
+        separatelyBilledChemicalIds: defaults.separatelyBilledChemicalIds,
+        chemicalBillingNotes: defaults.chemicalBillingNotes,
+    };
+};
+
+const templateDefaultRows = (template = {}) => {
+    const defaults = termsTemplateAgreementDefaults(template);
+
+    return [
+        ['Use Case', termsTemplateUseCaseLabel(defaults.useCase)],
+        ['Billing Frequency', optionLabel(billingFrequencyOptions, defaults.billingFrequency) || 'No default'],
+        ['Billing Count', defaults.billingFrequencyCount || 'No default'],
+        ['Rate Type', optionLabel(rateTypeOptions, defaults.rateType) || 'No default'],
+        ['Payment Terms', optionLabel(paymentTermsOptions, defaults.paymentTerms) || 'No default'],
+        ['Chemical Billing', optionLabel(chemicalBillingModeOptions, defaults.chemicalBillingMode) || 'No default'],
+        defaults.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+            ? [
+                'Mixed Selection',
+                optionLabel(termsTemplateMixedChemicalBillingSelectionOptions, defaults.chemicalBillingMixedSelectionMode) || 'No default',
+            ]
+            : null,
+        defaults.includedChemicalIds.length ? ['Included Dosage IDs', defaults.includedChemicalIds.join(', ')] : null,
+        defaults.separatelyBilledChemicalIds.length ? ['Separately Billed Dosage IDs', defaults.separatelyBilledChemicalIds.join(', ')] : null,
+        ['Chemical Notes', defaults.chemicalBillingNotes || 'No default'],
+    ].filter(Boolean);
+};
 
 const clauseDrafts = (clauses = []) => clauses.map((clause) => ({
     id: clause.id,
@@ -111,6 +172,27 @@ const TermsTemplateDetail = () => {
             name: editedTemplate.name.trim(),
             description: editedTemplate.description.trim(),
             content: editedTemplate.content.trim(),
+            useCase: editedTemplate.useCase || 'custom',
+            category: editedTemplate.useCase || 'custom',
+            billingFrequency: editedTemplate.billingFrequency,
+            billingFrequencyCount: editedTemplate.billingFrequencyCount
+                ? Math.max(Number(editedTemplate.billingFrequencyCount) || 1, 1)
+                : '',
+            rateType: editedTemplate.rateType,
+            paymentTerms: editedTemplate.paymentTerms,
+            chemicalBillingMode: editedTemplate.chemicalBillingMode,
+            chemicalBillingMixedSelectionMode: editedTemplate.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+                ? editedTemplate.chemicalBillingMixedSelectionMode
+                : '',
+            includedChemicalIds: editedTemplate.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+                && editedTemplate.chemicalBillingMixedSelectionMode === TermsTemplateChemicalBillingMixedSelectionMode.included
+                ? editedTemplate.includedChemicalIds
+                : [],
+            separatelyBilledChemicalIds: editedTemplate.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed
+                && editedTemplate.chemicalBillingMixedSelectionMode === TermsTemplateChemicalBillingMixedSelectionMode.separatelyBilled
+                ? editedTemplate.separatelyBilledChemicalIds
+                : [],
+            chemicalBillingNotes: editedTemplate.chemicalBillingNotes.trim(),
         };
         const nextClauses = editedClauses
             .map((clause) => ({
@@ -267,12 +349,135 @@ const TermsTemplateDetail = () => {
                                     />
                                 </div>
                                 <div>
+                                    <label htmlFor="useCase" className="block text-sm font-semibold text-slate-700">Use Case</label>
+                                    <select
+                                        id="useCase"
+                                        value={editedTemplate.useCase}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, useCase: event.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        {termsTemplateUseCaseOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
                                     <label htmlFor="content" className="block text-sm font-semibold text-slate-700">Default Content</label>
                                     <textarea
                                         id="content"
                                         value={editedTemplate.content}
                                         onChange={e => setEditedTemplate({ ...editedTemplate, content: e.target.value })}
                                         rows={6}
+                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </div>
+                            </div>
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-950">Agreement Defaults</h2>
+                                <p className="mt-1 text-sm text-slate-500">Optional defaults copied into a draft when this template is selected.</p>
+                            </div>
+
+                            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                                <div>
+                                    <label htmlFor="billingFrequency" className="block text-sm font-semibold text-slate-700">Billing Frequency</label>
+                                    <select
+                                        id="billingFrequency"
+                                        value={editedTemplate.billingFrequency}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, billingFrequency: event.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        <option value="">No default</option>
+                                        {billingFrequencyOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label htmlFor="billingFrequencyCount" className="block text-sm font-semibold text-slate-700">Billing Count</label>
+                                    <input
+                                        id="billingFrequencyCount"
+                                        type="number"
+                                        min="1"
+                                        value={editedTemplate.billingFrequencyCount}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, billingFrequencyCount: event.target.value })}
+                                        placeholder="No default"
+                                        className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label htmlFor="rateType" className="block text-sm font-semibold text-slate-700">Rate Type</label>
+                                    <select
+                                        id="rateType"
+                                        value={editedTemplate.rateType}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, rateType: event.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        <option value="">No default</option>
+                                        {rateTypeOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label htmlFor="paymentTerms" className="block text-sm font-semibold text-slate-700">Payment Terms</label>
+                                    <select
+                                        id="paymentTerms"
+                                        value={editedTemplate.paymentTerms}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, paymentTerms: event.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        <option value="">No default</option>
+                                        {paymentTermsOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="lg:col-span-2">
+                                    <label htmlFor="chemicalBillingMode" className="block text-sm font-semibold text-slate-700">Chemical Billing</label>
+                                    <select
+                                        id="chemicalBillingMode"
+                                        value={editedTemplate.chemicalBillingMode}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, chemicalBillingMode: event.target.value })}
+                                        className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                    >
+                                        <option value="">No default</option>
+                                        {chemicalBillingModeOptions.map((option) => (
+                                            <option key={option.value} value={option.value}>{option.label}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {editedTemplate.chemicalBillingMode === SalesAgreementChemicalBillingMode.mixed && (
+                                    <div className="lg:col-span-2">
+                                        <label htmlFor="chemicalBillingMixedSelectionMode" className="block text-sm font-semibold text-slate-700">Mixed Billing Selection</label>
+                                        <select
+                                            id="chemicalBillingMixedSelectionMode"
+                                            value={editedTemplate.chemicalBillingMixedSelectionMode}
+                                            onChange={(event) => setEditedTemplate({ ...editedTemplate, chemicalBillingMixedSelectionMode: event.target.value })}
+                                            className="mt-1 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                                        >
+                                            {termsTemplateMixedChemicalBillingSelectionOptions.map((option) => (
+                                                <option key={option.value} value={option.value}>{option.label}</option>
+                                            ))}
+                                        </select>
+                                    </div>
+                                )}
+
+                                <div className="sm:col-span-2 lg:col-span-4">
+                                    <label htmlFor="chemicalBillingNotes" className="block text-sm font-semibold text-slate-700">Chemical Billing Notes</label>
+                                    <input
+                                        id="chemicalBillingNotes"
+                                        type="text"
+                                        value={editedTemplate.chemicalBillingNotes}
+                                        onChange={(event) => setEditedTemplate({ ...editedTemplate, chemicalBillingNotes: event.target.value })}
+                                        placeholder="tabs supplied by customer, phosphate billed separately"
                                         className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                     />
                                 </div>
@@ -361,7 +566,7 @@ const TermsTemplateDetail = () => {
                                 <div className="min-w-0">
                                     <div className="flex flex-wrap items-center gap-2">
                                         <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                                            Terms Template
+                                            {termsTemplateUseCaseLabel(template.useCase || template.category)}
                                         </span>
                                         <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
                                             {clauses.length} term{clauses.length === 1 ? '' : 's'}
@@ -407,7 +612,25 @@ const TermsTemplateDetail = () => {
                         <section className="grid gap-4 sm:grid-cols-3">
                             <DetailStatCard label="Terms" value={clauses.length} helper="Reusable term lines" />
                             <DetailStatCard label="Default Copy" value={String(template.content || '').trim() ? 'Yes' : 'No'} helper="Seed agreement body text" />
-                            <DetailStatCard label="Template ID" value="Saved" helper={template.id} />
+                            <DetailStatCard label="Agreement Defaults" value={termsTemplateHasAgreementDefaults(template) ? 'Yes' : 'No'} helper="Seed billing and chemical settings" />
+                        </section>
+
+                        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                            <div>
+                                <h2 className="text-xl font-bold text-slate-950">Agreement Defaults</h2>
+                                <p className="mt-1 text-sm text-slate-500">These values are copied into draft agreements when this template is selected.</p>
+                            </div>
+
+                            <dl className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                                {templateDefaultRows(template).map(([label, value]) => (
+                                    <div key={label} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                                        <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</dt>
+                                        <dd className="mt-1 break-words text-sm font-semibold text-slate-900">{value}</dd>
+                                    </div>
+                                ))}
+                            </dl>
+
+                            <p className="mt-4 truncate text-xs text-slate-400">{template.id}</p>
                         </section>
 
                         <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

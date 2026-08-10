@@ -7,16 +7,14 @@ import {
   FaChartLine,
   FaCheckCircle,
   FaCreditCard,
+  FaExclamationTriangle,
   FaExternalLinkAlt,
   FaFileInvoiceDollar,
   FaFileSignature,
   FaInfoCircle,
-  FaMoneyBillWave,
   FaPlus,
   FaReceipt,
-  FaRoute,
   FaTags,
-  FaUsers,
 } from 'react-icons/fa';
 import { Context } from '../../../context/AuthContext';
 import { db } from '../../../utils/config';
@@ -74,6 +72,11 @@ const toMillis = (value) => {
 
 const formatCurrency = (amountCents = 0) => currencyFormatter.format((Number(amountCents) || 0) / 100);
 
+const percentOf = (value, total) => {
+  if (!total) return 0;
+  return Math.max(0, Math.min(100, Math.round((value / total) * 100)));
+};
+
 const formatDate = (value) => {
   const millis = toMillis(value);
   if (!millis) return 'Not set';
@@ -126,18 +129,72 @@ const StatusBadge = ({ status }) => {
   );
 };
 
-const StatTile = ({ icon: Icon, label, value, helper }) => (
-  <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-    <div className="flex items-start justify-between gap-3">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
-        <p className="mt-2 text-2xl font-bold text-slate-950">{value}</p>
-      </div>
-      <span className="rounded-md bg-slate-100 p-2 text-slate-600">
-        <Icon />
-      </span>
+const ProgressBar = ({ value, tone = 'blue' }) => {
+  const tones = {
+    blue: 'bg-blue-600',
+    emerald: 'bg-emerald-500',
+    amber: 'bg-amber-400',
+    rose: 'bg-rose-500',
+    slate: 'bg-slate-500',
+  };
+
+  return (
+    <div className="h-2 overflow-hidden rounded-full bg-slate-100">
+      <div className={`h-full rounded-full ${tones[tone] || tones.blue}`} style={{ width: `${Math.max(0, Math.min(100, value))}%` }} />
     </div>
-    {helper && <p className="mt-3 text-sm text-slate-500">{helper}</p>}
+  );
+};
+
+const PulseMetric = ({ icon: Icon, label, value, helper, tone = 'slate' }) => {
+  const tones = {
+    slate: 'text-slate-500',
+    blue: 'text-blue-600',
+    emerald: 'text-emerald-600',
+    amber: 'text-amber-600',
+    rose: 'text-rose-600',
+  };
+
+  return (
+    <div className="min-w-0 border-l border-slate-200 px-4 first:border-l-0 first:pl-0">
+      <div className="flex items-center gap-2">
+        <Icon className={`h-4 w-4 ${tones[tone] || tones.slate}`} />
+        <p className="truncate text-xs font-bold uppercase tracking-wide text-slate-500">{label}</p>
+      </div>
+      <p className="mt-2 truncate text-2xl font-bold leading-none text-slate-950">{value}</p>
+      {helper && <p className="mt-1 truncate text-xs font-semibold text-slate-500">{helper}</p>}
+    </div>
+  );
+};
+
+const QueueLink = ({ to, label, value, helper, tone = 'slate' }) => {
+  const tones = {
+    slate: 'bg-white text-slate-950',
+    amber: 'bg-amber-300 text-slate-950',
+    rose: 'bg-rose-300 text-slate-950',
+    emerald: 'bg-emerald-300 text-slate-950',
+  };
+
+  return (
+    <Link to={to} className="block rounded-md bg-white/10 px-3 py-3 transition hover:bg-white/15">
+      <div className="flex items-start justify-between gap-3">
+        <span className="min-w-0">
+          <span className="block truncate text-sm font-bold text-white">{label}</span>
+          {helper && <span className="mt-0.5 block truncate text-xs text-slate-300">{helper}</span>}
+        </span>
+        <span className={`shrink-0 rounded px-2 py-1 text-xs font-bold ${tones[tone] || tones.slate}`}>{value}</span>
+      </div>
+    </Link>
+  );
+};
+
+const PipelineRow = ({ label, value, maxValue, helper, tone = 'blue' }) => (
+  <div>
+    <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+      <span className="font-semibold text-slate-800">{label}</span>
+      <span className="font-bold text-slate-950">{value}</span>
+    </div>
+    <ProgressBar value={percentOf(value, maxValue)} tone={tone} />
+    {helper && <p className="mt-1 text-xs font-semibold text-slate-500">{helper}</p>}
   </div>
 );
 
@@ -350,6 +407,44 @@ const Sales = () => {
   const recentSubscriptions = useMemo(() => sortByFreshest(billingSubscriptions).slice(0, 8), [billingSubscriptions]);
   const recentInvoices = useMemo(() => sortByFreshest(invoices).slice(0, 8), [invoices]);
   const recentPayments = useMemo(() => sortByFreshest(payments).slice(0, 6), [payments]);
+  const sentAgreements = useMemo(() => (
+    agreements.filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.sent)
+  ), [agreements]);
+  const pendingBillingAgreements = useMemo(() => (
+    agreements
+      .filter((agreement) => normalizeStatus(agreement.status) === SalesAgreementStatus.accepted)
+      .filter((agreement) => !activatedAgreementIds.has(agreement.id))
+  ), [agreements, activatedAgreementIds]);
+  const openInvoices = useMemo(() => {
+    const openStatuses = new Set([
+      normalizeStatus(SalesInvoiceStatus.open),
+      normalizeStatus(SalesInvoiceStatus.partiallyPaid),
+      normalizeStatus(SalesInvoiceStatus.overdue),
+      'pastdue',
+    ]);
+
+    return invoices.filter((invoice) => openStatuses.has(normalizeStatus(invoice.status)) && invoiceBalanceCents(invoice) > 0);
+  }, [invoices]);
+  const overdueInvoices = useMemo(() => {
+    const now = Date.now();
+
+    return openInvoices.filter((invoice) => {
+      const status = normalizeStatus(invoice.status);
+      const dueMillis = toMillis(invoice.dueDate || invoice.dueAt);
+      return status === normalizeStatus(SalesInvoiceStatus.overdue) || status === 'pastdue' || (dueMillis && dueMillis < now);
+    });
+  }, [openInvoices]);
+  const collectionsPercent = percentOf(salesSummary.postedPaymentCents, salesSummary.issuedInvoiceCents);
+  const receivablePercent = percentOf(salesSummary.accountsReceivableCents, salesSummary.issuedInvoiceCents);
+  const appPaymentPercent = percentOf(salesSummary.paidThroughAppCents, salesSummary.postedPaymentCents);
+  const manualPaymentPercent = percentOf(salesSummary.manualPaymentCents, salesSummary.postedPaymentCents);
+  const pipelineMax = Math.max(
+    1,
+    salesSummary.sentAgreementCount,
+    salesSummary.acceptedAgreementCount,
+    pendingBillingAgreements.length,
+    activeSubscriptions.length
+  );
   const selectedTermsTemplate = useMemo(
     () => termsTemplates.find((template) => template.id === selectedTermsTemplateId) || null,
     [selectedTermsTemplateId, termsTemplates]
@@ -368,75 +463,59 @@ const Sales = () => {
 
   return (
     <div className="min-h-screen bg-slate-50 px-3 py-5 text-slate-900 sm:px-4 lg:px-5">
-      <div className="w-full space-y-6">
-        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
-                  Feature Flag 004
-                </span>
-                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
-                  {selectedCompanyName}
-                </span>
-              </div>
-              <div className="mt-3 flex items-center gap-2">
-                <h1 className="text-3xl font-bold text-slate-950">Sales Dashboard</h1>
-                <FeatureInfoButton title="How Sales Works" align="left">
-                  <p>
-                    Sales is the finance workspace for homeowner billing. It tracks agreements, billing profiles,
-                    Stripe subscriptions, invoices, accounts receivable, and posted payments.
-                  </p>
-                  <p>
-                    Job estimates still start from Job Detail. Once accepted, those snapshots can become Sales
-                    invoices and, later, Stripe invoice items on the pool company connected account.
-                  </p>
-                </FeatureInfoButton>
-              </div>
-              <p className="mt-2 max-w-3xl text-sm text-slate-600">
-                Agreements, customer billing profiles, subscriptions, invoices, accounts receivable, and payment history.
-              </p>
+      <div className="w-full space-y-5">
+        <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-blue-200 bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                Feature Flag 004
+              </span>
+              <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600">
+                {selectedCompanyName}
+              </span>
             </div>
-
-            <div className="flex flex-wrap gap-2">
-              <Link
-                to="/company/sales/pnl-viewer"
-                className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
-              >
-                <FaChartLine className="text-xs" />
-                PNL Viewer
-              </Link>
-              <Link
-                to="/company/sales/catalog-items"
-                className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-semibold text-blue-700 transition hover:bg-blue-100"
-              >
-                <FaTags className="text-xs" />
-                Catalog Items
-              </Link>
-              <Link
-                to="/company/settings/terms-templates"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaFileSignature className="text-xs" />
-                Terms Templates
-              </Link>
-              <Link
-                to="/company/sales/invoices/new"
-                className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <FaFileInvoiceDollar className="text-xs" />
-                Invoice
-              </Link>
-              <Link
-                to="/company/sales/agreements/new"
-                className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-              >
-                <FaPlus className="text-xs" />
-                Agreement
-              </Link>
+            <div className="mt-2 flex items-center gap-2">
+              <h1 className="text-2xl font-bold text-slate-950">Sales Dashboard</h1>
+              <FeatureInfoButton title="How Sales Works" align="left">
+                <p>
+                  Sales is the finance workspace for homeowner billing. It tracks agreements, billing profiles,
+                  Stripe subscriptions, invoices, accounts receivable, and posted payments.
+                </p>
+                <p>
+                  Job estimates still start from Job Detail. Once accepted, those snapshots can become Sales
+                  invoices and, later, Stripe invoice items on the pool company connected account.
+                </p>
+              </FeatureInfoButton>
             </div>
+            <p className="mt-1 max-w-3xl text-sm text-slate-600">
+              Pipeline, recurring revenue, receivables, collections, and billing follow-up.
+            </p>
           </div>
-        </section>
+
+          <div className="flex flex-wrap gap-2">
+            <Link
+              to="/company/sales/pnl-viewer"
+              className="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 transition hover:bg-emerald-100"
+            >
+              <FaChartLine className="text-xs" />
+              PNL Viewer
+            </Link>
+            <Link
+              to="/company/sales/invoices/new"
+              className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+            >
+              <FaFileInvoiceDollar className="text-xs" />
+              Invoice
+            </Link>
+            <Link
+              to="/company/sales/agreements/new"
+              className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
+            >
+              <FaPlus className="text-xs" />
+              Agreement
+            </Link>
+          </div>
+        </header>
 
         {errors.length > 0 && (
           <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -450,20 +529,95 @@ const Sales = () => {
           </div>
         )}
 
-        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
-          <StatTile icon={FaUsers} label="Billing Profiles" value={billingProfiles.length} helper="Customers ready for billing" />
-          <StatTile icon={FaRoute} label="Sent" value={salesSummary.sentAgreementCount} helper="Waiting on customer" />
-          <StatTile icon={FaCheckCircle} label="Accepted" value={salesSummary.acceptedAgreementCount} helper="Approved agreements" />
-          <StatTile icon={FaCreditCard} label="Active Subs" value={activeSubscriptions.length} helper={formatCurrency(salesSummary.mrrCents)} />
-          <StatTile icon={FaFileInvoiceDollar} label="Invoiced" value={formatCurrency(salesSummary.issuedInvoiceCents)} helper="Issued invoice total" />
-          <StatTile icon={FaFileInvoiceDollar} label="AR" value={formatCurrency(salesSummary.accountsReceivableCents)} helper="Open invoice balance" />
-          <StatTile icon={FaReceipt} label="Received" value={formatCurrency(salesSummary.postedPaymentCents)} helper="Posted collections" />
-          <StatTile icon={FaCreditCard} label="Paid In App" value={formatCurrency(salesSummary.paidThroughAppCents)} helper="Stripe card or ACH" />
-          <StatTile icon={FaMoneyBillWave} label="Manual Paid" value={formatCurrency(salesSummary.manualPaymentCents)} helper="Cash, check, external" />
+        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+          <div className="grid xl:grid-cols-[minmax(0,1fr)_390px]">
+            <div className="p-5">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-slate-500">Sales Pulse</p>
+                  <h2 className="mt-1 text-xl font-bold text-slate-950">Revenue and collections</h2>
+                </div>
+                <div className="rounded-md bg-slate-900 px-4 py-3 text-white">
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Monthly Recurring</p>
+                  <p className="mt-1 text-3xl font-bold leading-none">{formatCurrency(salesSummary.mrrCents)}</p>
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-y-5 sm:grid-cols-2 xl:grid-cols-4">
+                <PulseMetric icon={FaCreditCard} label="Active Subs" value={activeSubscriptions.length} helper={`${billingProfiles.length} billing profiles`} tone="blue" />
+                <PulseMetric icon={FaFileInvoiceDollar} label="Receivable" value={formatCurrency(salesSummary.accountsReceivableCents)} helper={`${openInvoices.length} open invoices`} tone={openInvoices.length ? 'amber' : 'emerald'} />
+                <PulseMetric icon={FaReceipt} label="Received" value={formatCurrency(salesSummary.postedPaymentCents)} helper={`${collectionsPercent}% of issued`} tone="emerald" />
+                <PulseMetric icon={FaCheckCircle} label="Accepted" value={salesSummary.acceptedAgreementCount} helper={`${pendingBillingAgreements.length} need billing`} tone={pendingBillingAgreements.length ? 'amber' : 'emerald'} />
+              </div>
+
+              <div className="mt-6 grid gap-5 lg:grid-cols-[minmax(0,1fr)_280px]">
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                    <span>Collections against issued invoices</span>
+                    <span>{collectionsPercent}% collected</span>
+                  </div>
+                  <ProgressBar value={collectionsPercent} tone="emerald" />
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                        <span>Open AR</span>
+                        <span>{receivablePercent}%</span>
+                      </div>
+                      <ProgressBar value={receivablePercent} tone={receivablePercent > 30 ? 'amber' : 'blue'} />
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                        <span>Paid in app</span>
+                        <span>{appPaymentPercent}%</span>
+                      </div>
+                      <ProgressBar value={appPaymentPercent} tone="blue" />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <PipelineRow label="Sent" value={salesSummary.sentAgreementCount} maxValue={pipelineMax} helper="waiting on customer" tone="blue" />
+                  <PipelineRow label="Pending Billing" value={pendingBillingAgreements.length} maxValue={pipelineMax} helper="accepted but not active" tone="amber" />
+                  <PipelineRow label="Active Subs" value={activeSubscriptions.length} maxValue={pipelineMax} helper={formatCurrency(salesSummary.mrrCents)} tone="emerald" />
+                </div>
+              </div>
+            </div>
+
+            <aside className="border-t border-slate-800 bg-slate-900 p-5 text-white xl:border-l xl:border-t-0">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wide text-amber-300">Action Queue</p>
+                  <h2 className="mt-1 text-xl font-bold">Needs follow-up</h2>
+                </div>
+                <FaExclamationTriangle className={pendingBillingAgreements.length || overdueInvoices.length ? 'mt-1 text-amber-300' : 'mt-1 text-emerald-300'} />
+              </div>
+
+              <div className="mt-5 space-y-3">
+                <QueueLink to="/company/sales/agreements" label="Accepted agreements need billing" value={pendingBillingAgreements.length} helper="turn accepted work into active billing" tone={pendingBillingAgreements.length ? 'amber' : 'emerald'} />
+                <QueueLink to="/company/sales/invoices" label="Overdue invoices" value={overdueInvoices.length} helper={formatCurrency(overdueInvoices.reduce((total, invoice) => total + invoiceBalanceCents(invoice), 0))} tone={overdueInvoices.length ? 'rose' : 'emerald'} />
+                <QueueLink to="/company/sales/agreements" label="Sent agreements waiting" value={sentAgreements.length} helper="customer signatures outstanding" tone={sentAgreements.length ? 'amber' : 'emerald'} />
+                <QueueLink to="/company/sales/invoices" label="Manual invoices" value={salesSummary.manualInvoiceCount} helper={`${manualPaymentPercent}% of payments recorded manually`} />
+              </div>
+
+              <div className="mt-5 border-t border-white/10 pt-4">
+                <p className="text-xs font-bold uppercase tracking-wide text-slate-300">Billing readiness</p>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div>
+                    <p className="text-2xl font-bold leading-none">{billingProfiles.length}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-300">profiles</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold leading-none">{salesSummary.emailOnlyProfileCount}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-300">email only</p>
+                  </div>
+                </div>
+              </div>
+            </aside>
+          </div>
         </section>
 
-        <section className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_360px]">
-          <div className="space-y-6">
+        <section className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_390px]">
+          <div className="space-y-5">
             <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
               <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-5 py-4">
                 <div>

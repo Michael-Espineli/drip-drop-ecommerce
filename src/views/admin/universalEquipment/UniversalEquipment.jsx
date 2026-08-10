@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { db } from '../../../utils/config';
 import {
+  arrayUnion,
   collection,
   getDocs,
   query,
@@ -13,7 +14,9 @@ import {
   deleteDoc,
   serverTimestamp,
 } from 'firebase/firestore';
+import { getAuth } from 'firebase/auth';
 import { v4 as uuidv4 } from 'uuid';
+import { CATALOG_READY_STATUS } from '../../../utils/universalEquipmentSuggestions';
 
 const sortByField = (items = [], field = 'name', direction = 'asc') => (
   [...items].sort((a, b) => {
@@ -24,6 +27,10 @@ const sortByField = (items = [], field = 'name', direction = 'asc') => (
     return direction === 'desc' ? comparison * -1 : comparison;
   })
 );
+
+const cleanText = (value) => String(value || '').trim();
+
+const textKey = (value) => cleanText(value).toLowerCase();
 
 const getPermissionMessage = (error, action) => (
   error?.code === 'permission-denied'
@@ -118,6 +125,7 @@ const UniversalEquipment = () => {
 
   const suggestionStatusClass = (status) => {
     if (status === 'Reconciled') return 'bg-blue-500/15 text-blue-200 ring-1 ring-blue-500/30';
+    if (status === CATALOG_READY_STATUS) return 'bg-purple-500/15 text-purple-200 ring-1 ring-purple-500/30';
     if (status === 'Reviewed') return 'bg-emerald-500/15 text-emerald-200 ring-1 ring-emerald-500/30';
     if (status === 'Dismissed') return 'bg-slate-700/60 text-slate-300 ring-1 ring-slate-600/60';
 
@@ -632,6 +640,158 @@ const UniversalEquipment = () => {
     }
   };
 
+  const findRecordByName = (items = [], nameToFind = '') => {
+    const key = textKey(nameToFind);
+    if (!key) return null;
+    return items.find((item) => textKey(item.name) === key) || null;
+  };
+
+  const ensureSuggestionType = async (suggestion) => {
+    const typeName = cleanText(suggestion.type || suggestion.category);
+    if (!typeName) throw new Error('This suggestion needs a category before catalog equipment can be created.');
+
+    const existingById = suggestion.typeId
+      ? equipmentTypes.find((item) => item.id === suggestion.typeId)
+      : null;
+    const existingType = existingById || findRecordByName(equipmentTypes, typeName);
+    if (existingType) return existingType;
+
+    const id = 'unv_equ_' + uuidv4();
+    const record = {
+      id,
+      name: typeName,
+      description: '',
+      sourceSuggestionId: suggestion.id,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(doc(db, 'universal', 'equipment', 'equipmentTypes', id), record);
+    const localRecord = { ...record, createdAt: null, updatedAt: null };
+    setEquipmentTypes((current) => sortByField([...current, localRecord]));
+    return localRecord;
+  };
+
+  const ensureSuggestionMake = async (suggestion, typeRecord) => {
+    const makeName = cleanText(suggestion.make);
+    if (!makeName) throw new Error('This suggestion needs a make before catalog equipment can be created.');
+
+    const existingById = suggestion.makeId
+      ? allEquipmentMakes.find((item) => item.id === suggestion.makeId)
+      : null;
+    const existingMake = existingById || findRecordByName(allEquipmentMakes, makeName);
+
+    if (existingMake) {
+      const typeIds = Array.isArray(existingMake.types) ? existingMake.types : [];
+      if (!typeIds.includes(typeRecord.id)) {
+        await updateDoc(doc(db, 'universal', 'equipment', 'equipmentMakes', existingMake.id), {
+          types: arrayUnion(typeRecord.id),
+          updatedAt: serverTimestamp(),
+        });
+        const updatedMake = { ...existingMake, types: [...typeIds, typeRecord.id] };
+        setAllEquipmentMakes((current) => sortByField(current.map((item) => (
+          item.id === updatedMake.id ? updatedMake : item
+        ))));
+        return updatedMake;
+      }
+
+      return existingMake;
+    }
+
+    const id = 'unv_equ_' + uuidv4();
+    const record = {
+      id,
+      name: makeName,
+      description: '',
+      types: [typeRecord.id],
+      sourceSuggestionId: suggestion.id,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(doc(db, 'universal', 'equipment', 'equipmentMakes', id), record);
+    const localRecord = { ...record, createdAt: null, updatedAt: null };
+    setAllEquipmentMakes((current) => sortByField([...current, localRecord]));
+    return localRecord;
+  };
+
+  const ensureSuggestionModel = async (suggestion, typeRecord, makeRecord) => {
+    const modelName = cleanText(suggestion.model || suggestion.equipmentName);
+    if (!modelName) throw new Error('This suggestion needs a model before catalog equipment can be created.');
+
+    const existingById = suggestion.reconciledUniversalEquipmentId || suggestion.modelId;
+    const existingModel = equipment.find((item) => (
+      (existingById && item.id === existingById)
+      || (
+        item.typeId === typeRecord.id
+        && item.makeId === makeRecord.id
+        && textKey(item.model || item.name) === textKey(modelName)
+      )
+    ));
+
+    if (existingModel) return existingModel;
+
+    const id = 'unv_equ_' + uuidv4();
+    const displayName = cleanText(suggestion.equipmentName)
+      || [makeRecord.name, modelName].filter(Boolean).join(' ')
+      || modelName;
+    const record = {
+      id,
+      name: displayName,
+      type: typeRecord.name || '',
+      typeId: typeRecord.id,
+      make: makeRecord.name || '',
+      makeId: makeRecord.id,
+      model: modelName,
+      modelId: id,
+      manualPdfLink: cleanText(suggestion.manualPdfLink),
+      sourceSuggestionId: suggestion.id,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(doc(db, 'universal', 'equipment', 'equipment', id), record);
+    const localRecord = { ...record, createdAt: null, updatedAt: null };
+    setEquipment((current) => sortByField([...current, localRecord], sortField, sortDirection));
+    return localRecord;
+  };
+
+  const handleCreateUniversalFromSuggestion = async (suggestion) => {
+    setSuggestionsError('');
+
+    try {
+      const typeRecord = await ensureSuggestionType(suggestion);
+      const makeRecord = await ensureSuggestionMake(suggestion, typeRecord);
+      const modelRecord = await ensureSuggestionModel(suggestion, typeRecord, makeRecord);
+      const authUser = getAuth().currentUser;
+
+      await updateDoc(doc(db, 'universalEquipmentSuggestions', suggestion.id), {
+        status: CATALOG_READY_STATUS,
+        catalogReadyAt: serverTimestamp(),
+        catalogReadyByUserId: authUser?.uid || '',
+        reconciledUniversalEquipmentId: modelRecord.id,
+        reconciledType: typeRecord.name || '',
+        reconciledTypeId: typeRecord.id,
+        reconciledMake: makeRecord.name || '',
+        reconciledMakeId: makeRecord.id,
+        reconciledModel: modelRecord.model || modelRecord.name || '',
+        reconciledModelId: modelRecord.id,
+        reconciledManualPdfLink: modelRecord.manualPdfLink || '',
+        updatedAt: serverTimestamp(),
+      });
+
+      await Promise.all([
+        fetchEquipmentTypes(),
+        fetchAllEquipmentMakes(),
+        fetchEquipmentCatalog(),
+        fetchEquipmentSuggestions(),
+      ]);
+    } catch (error) {
+      console.error('Error creating universal equipment from suggestion:', error);
+      setSuggestionsError(error?.message || getPermissionMessage(error, 'create universal equipment from this suggestion'));
+    }
+  };
+
   const handleUpdateSuggestionStatus = async (suggestionId, status) => {
     setSuggestionsError('');
 
@@ -1025,6 +1185,7 @@ const UniversalEquipment = () => {
             <option value="">All Statuses</option>
             <option value="New">New</option>
             <option value="Reviewed">Reviewed</option>
+            <option value={CATALOG_READY_STATUS}>{CATALOG_READY_STATUS}</option>
             <option value="Reconciled">Reconciled</option>
             <option value="Dismissed">Dismissed</option>
           </select>
@@ -1066,73 +1227,92 @@ const UniversalEquipment = () => {
             </thead>
 
             <tbody className="divide-y divide-slate-800/60">
-              {visibleEquipmentSuggestions.map((suggestion) => (
-                <tr key={suggestion.id} className="align-top">
-                  <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
-                    {formatDateTime(suggestion.createdAt || suggestion.createdAtMillis)}
-                  </td>
-                  <td className="px-4 py-3 text-slate-200">
-                    <p className="font-semibold text-slate-100">{suggestion.equipmentName || 'Equipment'}</p>
-                    <p className="mt-1 text-xs text-slate-500">{suggestion.equipmentId || 'No equipment id'}</p>
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {suggestion.customCategoryRequested && (
-                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom category</span>
+              {visibleEquipmentSuggestions.map((suggestion) => {
+                const hasCatalogMinimums = Boolean(cleanText(suggestion.type) && cleanText(suggestion.make) && cleanText(suggestion.model || suggestion.equipmentName));
+                const isCatalogReady = Boolean(suggestion.reconciledUniversalEquipmentId);
+
+                return (
+                  <tr key={suggestion.id} className="align-top">
+                    <td className="px-4 py-3 text-slate-300 whitespace-nowrap">
+                      {formatDateTime(suggestion.createdAt || suggestion.createdAtMillis)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-200">
+                      <p className="font-semibold text-slate-100">{suggestion.equipmentName || 'Equipment'}</p>
+                      <p className="mt-1 text-xs text-slate-500">{suggestion.equipmentId || 'No equipment id'}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {suggestion.customCategoryRequested && (
+                          <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom category</span>
+                        )}
+                        {suggestion.customMakeRequested && (
+                          <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom make</span>
+                        )}
+                        {suggestion.customModelRequested && (
+                          <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom model</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-slate-300">
+                      <p><span className="text-slate-500">Type:</span> {suggestion.type || 'None'}</p>
+                      <p><span className="text-slate-500">Make:</span> {suggestion.make || 'None'}</p>
+                      <p><span className="text-slate-500">Model:</span> {suggestion.model || 'None'}</p>
+                      {suggestion.reconciledUniversalEquipmentId && (
+                        <p className="mt-2 text-xs text-purple-200">
+                          Ready: {[suggestion.reconciledMake, suggestion.reconciledModel].filter(Boolean).join(' ') || suggestion.reconciledUniversalEquipmentId}
+                        </p>
                       )}
-                      {suggestion.customMakeRequested && (
-                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom make</span>
-                      )}
-                      {suggestion.customModelRequested && (
-                        <span className="rounded-full px-2 py-0.5 text-xs bg-sky-500/15 text-sky-200 ring-1 ring-sky-500/30">Custom model</span>
-                      )}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-slate-300">
-                    <p><span className="text-slate-500">Type:</span> {suggestion.type || 'None'}</p>
-                    <p><span className="text-slate-500">Make:</span> {suggestion.make || 'None'}</p>
-                    <p><span className="text-slate-500">Model:</span> {suggestion.model || 'None'}</p>
-                  </td>
-                  <td className="px-4 py-3 text-slate-300">
-                    <p>{suggestion.companyName || suggestion.companyId || 'Company'}</p>
-                    <p className="mt-1 text-xs text-slate-500">{suggestion.customerName || 'No customer name'}</p>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${suggestionStatusClass(suggestion.status)}`}>
-                      {suggestion.status || 'New'}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-col gap-2">
-                      {suggestion.status !== 'Reviewed' && (
+                    </td>
+                    <td className="px-4 py-3 text-slate-300">
+                      <p>{suggestion.companyName || suggestion.companyId || 'Company'}</p>
+                      <p className="mt-1 text-xs text-slate-500">{suggestion.customerName || 'No customer name'}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${suggestionStatusClass(suggestion.status)}`}>
+                        {suggestion.status || 'New'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-2">
                         <button
                           type="button"
-                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Reviewed')}
-                          className={btnPrimary}
+                          onClick={() => handleCreateUniversalFromSuggestion(suggestion)}
+                          disabled={!hasCatalogMinimums || suggestion.status === 'Reconciled'}
+                          className={btnAccentOutline + ' disabled:cursor-not-allowed disabled:opacity-50'}
+                          title={hasCatalogMinimums ? '' : 'Add type, make, and model values before creating catalog equipment.'}
                         >
-                          Mark Reviewed
+                          {isCatalogReady ? 'Refresh Catalog Match' : 'Create Universal'}
                         </button>
-                      )}
-                      {suggestion.status !== 'Dismissed' && (
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Dismissed')}
-                          className={btnSecondary}
-                        >
-                          Dismiss
-                        </button>
-                      )}
-                      {suggestion.status !== 'New' && (
-                        <button
-                          type="button"
-                          onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'New')}
-                          className={btnAccentOutline}
-                        >
-                          Reopen
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                        {suggestion.status !== 'Reviewed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Reviewed')}
+                            className={btnPrimary}
+                          >
+                            Mark Reviewed
+                          </button>
+                        )}
+                        {suggestion.status !== 'Dismissed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'Dismissed')}
+                            className={btnSecondary}
+                          >
+                            Dismiss
+                          </button>
+                        )}
+                        {suggestion.status !== 'New' && (
+                          <button
+                            type="button"
+                            onClick={() => handleUpdateSuggestionStatus(suggestion.id, 'New')}
+                            className={btnAccentOutline}
+                          >
+                            Reopen
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

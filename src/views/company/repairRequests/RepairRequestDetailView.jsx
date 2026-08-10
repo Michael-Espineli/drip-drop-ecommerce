@@ -30,6 +30,7 @@ import {
   suggestedWorkIdForSource,
 } from '../../../utils/models/SuggestedWork';
 import { appAlert, appConfirm } from '../../../utils/appDialog';
+import ShareItemButton from '../../components/share/ShareItemButton';
 
 const RepairRequestDetailView = () => {
   const { recentlySelectedCompany } = useContext(Context);
@@ -572,7 +573,7 @@ const RepairRequestDetailView = () => {
   return (
     <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
       <div className="w-full space-y-6">
-        <div className="flex justify-between items-center">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <Link
               to={"/company/repair-requests"}
@@ -581,6 +582,17 @@ const RepairRequestDetailView = () => {
             <h2 className="text-3xl font-bold text-gray-800">Repair Request Details</h2>
             <p className="text-sm text-gray-500">{displayRepairRequestStatus(repairRequest.status)} request</p>
           </div>
+          <ShareItemButton
+            type="repairRequest"
+            recordId={repairRequestId}
+            title={repairRequest.description || repairRequest.notes || "Repair Request"}
+            subtitle={[displayRepairRequestStatus(repairRequest.status), repairRequest.customerName || repairRequest.requesterName].filter(Boolean).join(" - ")}
+            companyId={recentlySelectedCompany}
+            customerId={repairRequest.customerId}
+            customerUserId={repairRequest.customerUserId || repairRequest.homeownerId}
+            collectionPath={sourcePath === "homeowner" ? "homeownerRepairRequests" : `companies/${recentlySelectedCompany}/repairRequests`}
+            webPath={`/company/repair-requests/detail/${repairRequestId}`}
+          />
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">

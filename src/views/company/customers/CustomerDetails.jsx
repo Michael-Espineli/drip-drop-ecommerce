@@ -43,6 +43,7 @@ import {
     normalizeCustomerTags,
 } from '../../../utils/customerTags';
 import {
+    getCustomerDisplayName,
     normalizeAddress,
     normalizeContact,
     normalizeCustomerForFirestore,
@@ -65,6 +66,10 @@ import {
 import { appConfirm } from '../../../utils/appDialog';
 import { CUSTOMER_AREA_FILTERING_FEATURE_FLAG_ID } from '../../../utils/models/FeatureFlag';
 import {
+    queueUniversalEquipmentSuggestion,
+    syncUniversalEquipmentSuggestionForEquipment,
+} from '../../../utils/universalEquipmentSuggestions';
+import {
     buildCompanyServiceLocationPhotoPath,
     getServiceLocationPhotoUrl,
     uploadServiceLocationPhoto,
@@ -72,6 +77,7 @@ import {
 } from '../../../utils/serviceLocationPhotos';
 import { deleteEquipmentWithSubcollections } from '../../../utils/equipmentDelete';
 import { endCustomerPipelineRowsForInactiveCustomer } from '../../../utils/customerPipeline';
+import ShareItemButton from '../../components/share/ShareItemButton';
 
 const customerSections = [
     { id: 'profile', label: 'Profile', helper: 'Contact, billing, notes, and account status' },
@@ -98,13 +104,17 @@ const getLinkedCustomerUserId = (customer = {}) => {
 };
 
 // Reusable Components
-const InfoCard = ({ title, children, actions }) => (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className="mb-4 flex items-center justify-between gap-3">
-            <h3 className="text-lg font-bold text-slate-950">{title}</h3>
+const InfoCard = ({ title, children, actions, compact = false, className = '' }) => (
+    <div className={[
+        "rounded-lg border border-slate-200 bg-white shadow-sm",
+        compact ? "p-3 sm:p-4" : "p-5",
+        className,
+    ].filter(Boolean).join(" ")}>
+        <div className={`${compact ? "mb-3" : "mb-4"} flex items-center justify-between gap-3`}>
+            <h3 className={`${compact ? "text-base" : "text-lg"} font-bold text-slate-950`}>{title}</h3>
             {actions && <div className="flex-shrink-0">{actions}</div>}
         </div>
-        <div className="space-y-4">{children}</div>
+        <div className={compact ? "space-y-3" : "space-y-4"}>{children}</div>
     </div>
 );
 
@@ -680,11 +690,7 @@ const getOutstandingWorkMillis = (item = {}) => (
     )
 );
 
-const getCustomerName = (customer = {}) => (
-    customer.displayAsCompany
-        ? customer.companyName
-        : `${customer.firstName || ''} ${customer.lastName || ''}`.trim()
-);
+const getCustomerName = getCustomerDisplayName;
 
 const formatRecurringDays = (stop) => {
     const days = stop.daysOfWeek ?? stop.day;
@@ -1015,6 +1021,9 @@ const ProfileTab = ({ customer, onCustomerUpdate, onDeleteCustomer, onCustomerIn
             ...normalizedCustomer,
             tags: normalizedTags,
         };
+        const customerDisplayName = getCustomerDisplayName(payload);
+        payload.customerName = customerDisplayName;
+        payload.name = customerDisplayName;
         const wasActive = (customer.active ?? customer.isActive ?? true) !== false;
         const nextActive = (payload.active ?? payload.isActive ?? true) !== false;
         const shouldCascadeInactive = wasActive && !nextActive;
@@ -1667,14 +1676,15 @@ const ServiceLocationsTab = ({ customer }) => {
     const selectedLocationPhotos = Array.isArray(selectedLocation?.photoUrls) ? selectedLocation.photoUrls : [];
 
     return (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-            <div className="space-y-6">
+        <div className="grid grid-cols-1 gap-3 sm:gap-4 lg:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] lg:items-start lg:gap-5">
+            <div className="space-y-3 sm:space-y-4">
                 <InfoCard
                     title="Service Locations"
+                    compact
                     actions={
                         <Link
                             to={`/company/serviceLocations/createNew/${customer.id}`}
-                            className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm"
+                            className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
                         >
                             + Add
                         </Link>
@@ -1686,19 +1696,19 @@ const ServiceLocationsTab = ({ customer }) => {
                                 <li
                                     key={loc.id}
                                     onClick={() => setSelectedLocation(loc)}
-                                    className={`py-3 px-3 rounded-xl cursor-pointer border transition
+                                    className={`cursor-pointer rounded-lg border px-2.5 py-2 transition
                                         ${selectedLocation?.id === loc.id ? 'bg-blue-50 border-blue-200' : 'hover:bg-slate-50 border-transparent'}
                                     `}
                                 >
                                     <div className="flex items-center justify-between gap-3">
-                                        <p className="font-semibold text-gray-800">{loc.nickName}</p>
+                                        <p className="truncate text-sm font-semibold text-gray-800">{loc.nickName || 'Service location'}</p>
                                         {(loc.isActive ?? loc.active ?? true) === false && (
                                             <span className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700">
                                                 Inactive
                                             </span>
                                         )}
                                     </div>
-                                    <p className="text-sm text-gray-600">{loc.address?.streetAddress}, {loc.address?.city}</p>
+                                    <p className="mt-0.5 truncate text-xs text-gray-600">{loc.address?.streetAddress}, {loc.address?.city}</p>
                                 </li>
                             ))}
                             {locations.length === 0 && <p className="text-gray-500">No locations found.</p>}
@@ -1708,6 +1718,7 @@ const ServiceLocationsTab = ({ customer }) => {
                 {selectedLocation !== null &&
                     <InfoCard
                         title="Service Location"
+                        compact
                         actions={
                             editingLocation ? (
                                 <button
@@ -1715,7 +1726,7 @@ const ServiceLocationsTab = ({ customer }) => {
                                         setEditingLocation(false);
                                         setCleanupLinkedRecords(false);
                                     }}
-                                    className="text-sm font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-xl hover:bg-slate-200 shadow-sm transition"
+                                    className="text-sm font-semibold text-slate-700 bg-slate-100 px-3 py-1.5 rounded-md hover:bg-slate-200 shadow-sm transition"
                                     type="button"
                                 >
                                     Cancel
@@ -1723,7 +1734,7 @@ const ServiceLocationsTab = ({ customer }) => {
                             ) : (
                                 <button
                                     onClick={startEditLocation}
-                                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm transition"
                                     type="button"
                                 >
                                     Edit
@@ -1894,37 +1905,37 @@ const ServiceLocationsTab = ({ customer }) => {
                             </form>
                         ) : (
                             <>
-                                <div className="grid gap-4 sm:grid-cols-2">
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                <div className="grid gap-2 sm:grid-cols-2">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Main Contact
                                         </p>
                                         <p className="text-sm text-slate-900">{selectedLocation.mainContact?.name || "—"}</p>
                                     </div>
 
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Email
                                         </p>
-                                        <p className="text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
+                                        <p className="break-all text-sm text-slate-900">{selectedLocation.mainContact?.email || "—"}</p>
                                     </div>
 
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Phone Number
                                         </p>
                                         <p className="text-sm text-slate-900">{selectedLocation.mainContact?.phoneNumber || "—"}</p>
                                     </div>
 
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Gate Code
                                         </p>
                                         <p className="text-sm text-slate-900">{selectedLocation.gateCode || "—"}</p>
                                     </div>
 
-                                    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-1">
+                                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5">
+                                        <p className="mb-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Status
                                         </p>
                                         <p className="text-sm text-slate-900">
@@ -1934,42 +1945,44 @@ const ServiceLocationsTab = ({ customer }) => {
                                 </div>
 
 
-                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                        Contact Notes
-                                    </p>
-                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
-                                        {selectedLocation.mainContact?.notes || "No contact notes added."}
-                                    </p>
-                                </div>
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Contact Notes
+                                        </p>
+                                        <p className="line-clamp-4 whitespace-pre-wrap text-sm text-slate-700">
+                                            {selectedLocation.mainContact?.notes || "No contact notes added."}
+                                        </p>
+                                    </div>
 
-                                <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">
-                                        Dogs on Property
-                                    </p>
+                                    <div className="rounded-lg border border-slate-200 bg-white p-3">
+                                        <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                                            Dogs on Property
+                                        </p>
 
-                                    {selectedLocation.dogName?.length > 0 ? (
-                                        <ul className="flex flex-wrap gap-2">
-                                            {selectedLocation.dogName.map((dog) => (
-                                                <li
-                                                    key={dog}
-                                                    className="rounded-full bg-blue-50 px-3 py-1 text-sm font-medium text-blue-700 border border-blue-100"
-                                                >
-                                                    {dog}
-                                                </li>
-                                            ))}
-                                        </ul>
-                                    ) : (
-                                        <p className="text-sm text-slate-500">None found.</p>
-                                    )}
+                                        {selectedLocation.dogName?.length > 0 ? (
+                                            <ul className="flex flex-wrap gap-1.5">
+                                                {selectedLocation.dogName.map((dog) => (
+                                                    <li
+                                                        key={dog}
+                                                        className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700 border border-blue-100"
+                                                    >
+                                                        {dog}
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        ) : (
+                                            <p className="text-sm text-slate-500">None found.</p>
+                                        )}
+                                    </div>
                                 </div>
                             </>
                         )}
 
                         {!editingLocation && (
-                            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
+                            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
                                 <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                                    <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                         Location Notes
                                     </p>
                                     <button
@@ -1984,16 +1997,16 @@ const ServiceLocationsTab = ({ customer }) => {
                                 <textarea
                                     value={locationNotesDraft}
                                     onChange={(event) => setLocationNotesDraft(event.target.value)}
-                                    rows="4"
+                                    rows="3"
                                     className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
                                     placeholder="Add service location notes..."
                                 />
                             </div>
                         )}
 
-                        <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3">
+                            <div className="mb-2 flex flex-wrap items-center justify-between gap-3">
+                                <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                     Location Photos
                                 </p>
                                 <div className="flex flex-wrap gap-2">
@@ -2027,12 +2040,12 @@ const ServiceLocationsTab = ({ customer }) => {
                                 </div>
                             </div>
                             {locationPhotoFiles.length > 0 && (
-                                <p className="mb-3 text-xs font-semibold text-slate-500">
+                                <p className="mb-2 text-xs font-semibold text-slate-500">
                                     {locationPhotoFiles.length} file{locationPhotoFiles.length > 1 ? 's' : ''} selected
                                 </p>
                             )}
                             {selectedLocationPhotos.length > 0 ? (
-                                <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                                <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
                                     {selectedLocationPhotos.map((photo, index) => {
                                         const photoSrc = getServiceLocationPhotoUrl(photo);
                                         const photoAlt = photo?.description || photo?.name || `Location photo ${index + 1}`;
@@ -2064,7 +2077,7 @@ const ServiceLocationsTab = ({ customer }) => {
                 {selectedLocation && <RecentServiceHistoryCard location={selectedLocation} />}
 
             </div>
-            <div className="space-y-6 lg:col-span-2">
+            <div className="min-w-0 space-y-3 sm:space-y-4">
                 {selectedLocation && <LocationDetails location={selectedLocation} customer={customer} customerId={customer.id} />}
             </div>
 
@@ -2112,19 +2125,19 @@ const RecentServiceHistoryCard = ({ location }) => {
     }, [location?.id, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Recent Service History">
+        <InfoCard compact title="Recent Service History">
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
                 <ul className="divide-y divide-slate-200">
                     {serviceHistory.map((stop) => (
-                        <li key={stop.id} className="py-3">
+                        <li key={stop.id} className="py-2.5">
                             <div className="flex items-start justify-between gap-3">
                                 <div className="min-w-0">
                                     <p className="text-sm font-semibold text-slate-900">
                                         {formatDateValue(stop.serviceDate)}
                                     </p>
-                                    <p className="mt-1 truncate text-xs text-slate-500">
+                                    <p className="mt-0.5 truncate text-xs text-slate-500">
                                         {[stop.type || stop.jobName, stop.tech].filter(Boolean).join(" • ") || "Service stop"}
                                     </p>
                                 </div>
@@ -2413,36 +2426,14 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
     };
 
     const createCustomEquipmentSuggestion = async (equipmentId, equipmentData, flags) => {
-        if (!flags?.isCustomMake && !flags?.isCustomModel) return;
-
-        const suggestionId = `unv_equ_sug_${equipmentId}`;
-
-        await setDoc(doc(db, 'universalEquipmentSuggestions', suggestionId), {
-            id: suggestionId,
-            status: 'New',
-            source: 'companyEquipmentCreate',
+        await queueUniversalEquipmentSuggestion({
+            db,
             companyId: recentlySelectedCompany,
             companyName: recentlySelectedCompanyName || '',
-            createdByUserId: user?.uid || '',
-            createdByUserEmail: user?.email || '',
-            createdAt: serverTimestamp(),
-            createdAtMillis: Date.now(),
-            equipmentId,
-            equipmentName: equipmentData.name || '',
-            customerId: equipmentData.customerId || '',
-            customerName: equipmentData.customerName || '',
-            serviceLocationId: equipmentData.serviceLocationId || '',
-            bodyOfWaterId: equipmentData.bodyOfWaterId || '',
-            type: equipmentData.type || '',
-            typeId: equipmentData.typeId || '',
-            make: equipmentData.make || '',
-            makeId: equipmentData.makeId || '',
-            model: equipmentData.model || '',
-            modelId: equipmentData.modelId || '',
-            customCategoryRequested: flags.isCustomType,
-            customMakeRequested: flags.isCustomMake,
-            customModelRequested: flags.isCustomModel,
-            notes: equipmentData.notes || '',
+            user,
+            equipment: { ...equipmentData, id: equipmentId },
+            source: 'companyEquipmentCreate',
+            flags,
         });
     };
 
@@ -2616,6 +2607,22 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                     updatedAt: serverTimestamp(),
                 }
             );
+            try {
+                await syncUniversalEquipmentSuggestionForEquipment({
+                    db,
+                    companyId: recentlySelectedCompany,
+                    companyName: recentlySelectedCompanyName || '',
+                    user,
+                    equipment: {
+                        ...selectedEditingEquipment,
+                        ...equipmentUpdates,
+                        id: selectedEditingEquipment.id,
+                    },
+                    source: 'companyEquipmentEdit',
+                });
+            } catch (suggestionError) {
+                console.error('Error syncing universal equipment suggestion:', suggestionError);
+            }
 
             setEquipment((currentEquipment) => currentEquipment.map((item) => (
                 item.id === selectedEditingEquipment.id ? { ...item, ...equipmentUpdates } : item
@@ -2766,18 +2773,18 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
         });
     };
 
-    return (<div className="grid gap-6 lg:grid-cols-2">
+    return (<div className="grid gap-3 sm:gap-4 lg:grid-cols-2">
         <div className="lg:col-span-2">
-            <InfoCard title="Schedule Service Stop">
-                <div className="grid gap-3 md:grid-cols-3">
+            <InfoCard compact title="Schedule Service Stop">
+                <div className="grid gap-2 md:grid-cols-3">
                     {standaloneServiceStopLinks.map((item) => (
                         <Link
                             key={item.category}
                             to={buildStandaloneServiceStopPath(item.category)}
-                            className="rounded-lg border border-slate-200 bg-slate-50 p-4 transition hover:border-blue-200 hover:bg-blue-50"
+                            className="rounded-lg border border-slate-200 bg-slate-50 p-3 transition hover:border-blue-200 hover:bg-blue-50"
                         >
                             <span className="block text-sm font-bold text-slate-900">{item.label}</span>
-                            <span className="mt-1 block text-xs text-slate-600">{item.helper}</span>
+                            <span className="mt-0.5 line-clamp-2 block text-xs text-slate-600">{item.helper}</span>
                         </Link>
                     ))}
                 </div>
@@ -2786,10 +2793,11 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 
         <InfoCard
             title="Bodies of Water"
+            compact
             actions={
                 <Link
                     to={`/company/bodiesOfWater/createNew/${customerId}/${location.id}`}
-                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                    className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm transition"
                 >
                     + Add
                 </Link>
@@ -2798,65 +2806,65 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
-                <ul className="space-y-3">
+                <ul className="space-y-2">
                     {bodiesOfWater.map((bow) => (
                         <li key={bow.id}>
-                            <div className="rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-slate-50">
-                                <div className="flex items-start justify-between gap-4">
+                            <div className="rounded-lg border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-slate-50">
+                                <div className="flex items-start justify-between gap-3">
                                     <div>
                                         <h3 className="text-sm font-semibold text-slate-900">
                                             {bow.name || "Unnamed Body of Water"}
                                         </h3>
-                                        <p className="mt-1 text-sm text-slate-500">
+                                        <p className="mt-0.5 text-xs text-slate-500">
                                             Body of water profile
                                         </p>
                                     </div>
 
-                                    <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700 border border-blue-100 whitespace-nowrap">
+                                    <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 border border-blue-100 whitespace-nowrap">
                                         {bow.gallons ? `${Number(bow.gallons).toLocaleString()} gal` : "No volume"}
                                     </span>
                                 </div>
 
-                                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                                    <div className="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Material
                                         </p>
-                                        <p className="mt-1 text-sm text-slate-800">
+                                        <p className="mt-0.5 text-sm text-slate-800">
                                             {bow.material || "Not specified"}
                                         </p>
                                     </div>
 
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                    <div className="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Last Filled
                                         </p>
-                                        <p className="mt-1 text-sm text-slate-800">
+                                        <p className="mt-0.5 text-sm text-slate-800">
                                             {bow.lastFilled
                                                 ? format(bow.lastFilled.toDate(), "PPP")
                                                 : "Not recorded"}
                                         </p>
                                     </div>
 
-                                    <div className="rounded-xl bg-slate-50 p-3 border border-slate-100">
+                                    <div className="rounded-lg bg-slate-50 px-3 py-2 border border-slate-100">
                                         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
                                             Water Type
                                         </p>
-                                        <p className="mt-1 text-sm text-slate-800">
+                                        <p className="mt-0.5 text-sm text-slate-800">
                                             {normalizeWaterType(bow.waterType) || "Not specified"}
                                         </p>
                                     </div>
                                 </div>
 
-                                <div className="mt-4">
+                                <div className="mt-3">
                                     <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
                                         Notes
                                     </p>
-                                    <p className="text-sm text-slate-700 whitespace-pre-wrap">
+                                    <p className="line-clamp-3 whitespace-pre-wrap text-sm text-slate-700">
                                         {bow.notes || "No notes added."}
                                     </p>
                                 </div>
-                                <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-3">
+                                <div className="mt-3 flex flex-wrap gap-2 border-t border-slate-100 pt-2.5">
                                     {can("54") && (
                                         <button
                                             type="button"
@@ -2886,13 +2894,14 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
 
 	        <InfoCard
 		            title={`Equipment (${visibleEquipment.length})`}
+                    compact
 		            actions={
                         <div className="flex flex-wrap justify-end gap-2">
                             {pastEquipment.length > 0 && (
                                 <button
                                     type="button"
                                     onClick={() => setShowPastEquipment((current) => !current)}
-                                    className="text-sm font-semibold text-slate-700 bg-white border border-slate-300 px-3 py-1.5 rounded-xl hover:bg-slate-50 shadow-sm transition"
+                                    className="text-sm font-semibold text-slate-700 bg-white border border-slate-300 px-3 py-1.5 rounded-md hover:bg-slate-50 shadow-sm transition"
                                 >
                                     {showPastEquipment ? `Active (${activeEquipment.length})` : `Past (${pastEquipment.length})`}
                                 </button>
@@ -2900,7 +2909,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                             <button
                                 type="button"
                                 onClick={openEquipmentCreate}
-                                className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm transition"
+                                className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm transition"
                             >
                                 + Add
                             </button>
@@ -2910,7 +2919,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
             {loading ? (
                 <ClipLoader size={20} />
             ) : (
-                <ul className="grid gap-3">
+                <ul className="grid gap-2">
 	                    {visibleEquipment.map((eq) => (
                         <li key={eq.id}>
                             <div className="rounded-xl border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-slate-50">
@@ -2946,7 +2955,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                         </div>
                                     </div>
 
-                                    <div className="mt-3 flex flex-wrap gap-2">
+                                    <div className="mt-2 flex flex-wrap gap-1.5">
 	                                        <span className="rounded-md bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">
 	                                            {bodyOfWaterNameById.get(eq.bodyOfWaterId) || (eq.bodyOfWaterId ? "Linked water" : "Unassigned")}
 	                                        </span>
@@ -2976,7 +2985,7 @@ const LocationDetails = ({ location, customer = {}, customerId }) => {
                                     )}
                                 </Link>
 
-                                <div className="mt-3 border-t border-slate-100 pt-3">
+                                <div className="mt-2 border-t border-slate-100 pt-2">
                                     {movingEquipmentId === eq.id ? (
                                         <form onSubmit={handleSaveEquipmentMove} className="space-y-3">
                                             <div className="grid gap-3 sm:grid-cols-2">
@@ -3730,27 +3739,27 @@ const RecurringTab = ({ customer }) => {
     }, [customer.id, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Recurring Service Stops" actions={<Link to={`/company/recurring-service-stops/create/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
+        <InfoCard compact title="Recurring Service Stops" actions={<Link to={`/company/recurring-service-stops/create/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm">+ Add</Link>}>
             {loading ? <ClipLoader size={20} /> : (
-                <ul className="space-y-3">
+                <ul className="space-y-2">
                     {recurringStops.map(rs => {
                         const status = getRecurringStopStatus(rs);
                         return (
                             <li key={rs.id}>
                                 <Link
                                     to={`/company/recurringServiceStop/details/${rs.id}?edit=1`}
-                                    className="group block rounded-lg border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    className="group block rounded-lg border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-blue-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
                                 >
-                                    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                                         <div className="min-w-0">
                                             <div className="flex flex-wrap items-center gap-2">
                                                 <p className="text-sm font-bold text-slate-900">{rs.internalId || 'RSS'}</p>
                                                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
                                             </div>
-                                            <p className="mt-1 truncate text-sm text-slate-700">
+                                            <p className="mt-1 truncate text-sm font-medium text-slate-700">
                                                 {rs.type || 'Recurring service stop'}
                                             </p>
-                                            <p className="mt-1 text-xs text-slate-500">
+                                            <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">
                                                 {getRecurringStopAddress(rs)}
                                             </p>
                                         </div>
@@ -3761,12 +3770,12 @@ const RecurringTab = ({ customer }) => {
                                         </div>
                                     </div>
 
-                                    <div className="mt-3 flex flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+                                    <div className="mt-2 flex flex-col gap-2 border-t border-slate-100 pt-2 sm:flex-row sm:items-center sm:justify-between">
                                         <p className="text-xs text-slate-500">
                                             <span className="font-semibold text-slate-600">Tech:</span> {rs.tech || 'Unassigned'}
                                             {rs.startDate ? ` • Starts ${formatDateValue(rs.startDate)}` : ''}
                                         </p>
-                                        <span className="inline-flex items-center gap-1 self-start rounded-md bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white transition group-hover:bg-blue-700 sm:self-auto">
+                                        <span className="inline-flex items-center gap-1 self-start rounded-md bg-blue-600 px-2.5 py-1 text-xs font-semibold text-white transition group-hover:bg-blue-700 sm:self-auto">
                                             <PencilSquareIcon className="h-4 w-4" />
                                             Edit RSS
                                         </span>
@@ -3807,16 +3816,16 @@ const WorkOrdersTab = ({ customer }) => {
     }, [customer.id, recentlySelectedCompany, db]);
 
     return (
-        <InfoCard title="Jobs" actions={<Link to={`/company/jobs/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm">+ Add</Link>}>
-            {loading ? <ClipLoader size={30} /> : (
+        <InfoCard compact title="Jobs" actions={<Link to={`/company/jobs/createNew/${customer.id}`} className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm">+ Add</Link>}>
+            {loading ? <ClipLoader size={20} /> : (
                 <ul className="divide-y divide-gray-200">
                     {workOrders.map(order => (
-                        <li key={order.id} className="py-4 flex justify-between items-center">
+                        <li key={order.id} className="flex items-center justify-between gap-3 py-2.5">
                             <div className="min-w-0">
-                                <p className="font-semibold text-gray-800 truncate">{order.description}</p>
-                                <p className="text-sm text-gray-600">Status: {order.operationStatus}</p>
+                                <p className="truncate text-sm font-semibold text-gray-800">{order.description || order.type || 'Job'}</p>
+                                <p className="text-xs text-gray-600">Status: {order.operationStatus || 'Open'}</p>
                             </div>
-                            <Link to={`/company/jobs/detail/${order.id}`} className="text-sm font-semibold text-blue-600 hover:underline">View Details</Link>
+                            <Link to={`/company/jobs/detail/${order.id}`} className="shrink-0 text-xs font-semibold text-blue-600 hover:underline">View Details</Link>
                         </li>
                     ))}
                     {workOrders.length === 0 && <p className="text-gray-500">No jobs found.</p>}
@@ -3906,17 +3915,17 @@ const RepairRequestsSection = ({ customer }) => {
     };
 
     const renderRequestRow = request => (
-        <li key={request.id} className="py-4 flex justify-between items-center">
+        <li key={request.id} className="flex items-center justify-between gap-3 py-2.5">
             <div className="min-w-0">
-                <p className="font-semibold text-gray-800 truncate">{request.title || request.description || 'Repair Request'}</p>
-                <p className="text-sm text-gray-600">
+                <p className="truncate text-sm font-semibold text-gray-800">{request.title || request.description || 'Repair Request'}</p>
+                <p className="text-xs text-gray-600">
                     Status: {displayRepairRequestStatus(request.status)}
                 </p>
             </div>
             {request.id && (
                 <Link
                     to={`/company/repair-requests/detail/${request.id}`}
-                    className="text-sm font-semibold text-blue-600 hover:underline"
+                    className="shrink-0 text-xs font-semibold text-blue-600 hover:underline"
                 >
                     View Details
                 </Link>
@@ -3925,13 +3934,14 @@ const RepairRequestsSection = ({ customer }) => {
     );
 
     return (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
             <InfoCard
                 title="Internal Repair Requests"
+                compact
                 actions={
                     <Link
                         to={`/company/repair-requests/internal/create/${customer.id}`}
-                        className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm"
+                        className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
                     >
                         + Add
                     </Link>
@@ -3947,10 +3957,11 @@ const RepairRequestsSection = ({ customer }) => {
 
             <InfoCard
                 title="External Repair Requests"
+                compact
                 actions={
                     <Link
                         to={`/company/repair-requests/external/create/${customer.id}`}
-                        className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-xl hover:bg-blue-700 shadow-sm"
+                        className="text-sm font-semibold text-white bg-blue-600 px-3 py-1.5 rounded-md hover:bg-blue-700 shadow-sm"
                     >
                         + Add
                     </Link>
@@ -4093,8 +4104,8 @@ const OutstandingWorkSection = ({ customer }) => {
 
     const renderOutstandingItem = (item) => {
         const content = (
-            <div className="rounded-md border border-slate-200 bg-white p-4 transition hover:border-blue-200 hover:bg-slate-50">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="rounded-md border border-slate-200 bg-white p-3 transition hover:border-blue-200 hover:bg-slate-50">
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
                             <StatusBadge tone={item.sourceKind === 'repairRequest' ? 'amber' : statusToneFor(item.status)}>
@@ -4105,20 +4116,20 @@ const OutstandingWorkSection = ({ customer }) => {
                                 <StatusBadge tone={item.secondaryTone || statusToneFor(item.secondaryStatus)}>{item.secondaryStatus}</StatusBadge>
                             )}
                         </div>
-                        <p className="mt-3 text-sm font-semibold text-slate-900">{item.title}</p>
+                        <p className="mt-2 text-sm font-semibold text-slate-900">{item.title}</p>
                         {(item.bodyOfWaterName || item.serviceLocationName) && (
                             <p className="mt-1 text-xs font-medium text-slate-500">
                                 {[item.bodyOfWaterName, item.serviceLocationName].filter(Boolean).join(' - ')}
                             </p>
                         )}
                         {item.description && (
-                            <p className="mt-2 whitespace-pre-line text-sm text-slate-600 line-clamp-4">{item.description}</p>
+                            <p className="mt-1.5 whitespace-pre-line text-xs text-slate-600 line-clamp-2 sm:text-sm">{item.description}</p>
                         )}
                     </div>
                     <div className="shrink-0 text-left lg:text-right">
                         <p className="text-xs font-semibold text-slate-500">{formatDateValue(item.dateValue)}</p>
                         {item.target && (
-                            <span className="mt-3 inline-flex rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700">
+                            <span className="mt-2 inline-flex rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700">
                                 View
                             </span>
                         )}
@@ -4141,6 +4152,7 @@ const OutstandingWorkSection = ({ customer }) => {
     return (
         <InfoCard
             title="Suggested & Outstanding Work"
+            compact
             actions={
                 <div className="flex flex-wrap gap-2">
                     <StatusBadge tone={outstandingItems.length ? 'amber' : 'emerald'}>
@@ -4157,11 +4169,11 @@ const OutstandingWorkSection = ({ customer }) => {
                     <ClipLoader size={24} />
                 </div>
             ) : outstandingItems.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
                     No suggested or outstanding work is listed for this customer.
                 </div>
             ) : (
-                <ul className="space-y-3">
+                <ul className="space-y-2">
                     {outstandingItems.map(renderOutstandingItem)}
                 </ul>
             )}
@@ -4479,42 +4491,43 @@ const SalesActivitySection = ({ customer }) => {
 // Operations Tab
 const OperationsTab = ({ customer, onNewPartApproval }) => {
     return (
-        <div className="space-y-8">
+        <div className="space-y-4 sm:space-y-6">
             <OutstandingWorkSection customer={customer} />
             <InfoCard
                 title="Part Approvals"
+                compact
                 actions={
                     <button
                         type="button"
                         onClick={onNewPartApproval}
-                        className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white transition hover:bg-blue-700"
+                        className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-3 py-1.5 text-sm font-semibold text-white transition hover:bg-blue-700"
                     >
                         <PlusIcon className="h-4 w-4" />
                         New Part Approval
                     </button>
                 }
             >
-                <div className="flex flex-col gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:flex-row sm:items-center sm:justify-between">
                     <div className="flex items-start gap-3">
-                        <span className="rounded-md bg-white p-2 text-slate-600 shadow-sm">
-                            <WrenchScrewdriverIcon className="h-5 w-5" />
+                        <span className="rounded-md bg-white p-1.5 text-slate-600 shadow-sm">
+                            <WrenchScrewdriverIcon className="h-4 w-4" />
                         </span>
                         <div>
-                            <p className="font-semibold text-slate-950">Customer part requests</p>
-                            <p className="mt-1 text-sm text-slate-600">
+                            <p className="text-sm font-semibold text-slate-950">Customer part requests</p>
+                            <p className="mt-1 line-clamp-2 text-xs text-slate-600 sm:text-sm">
                                 Approved parts move into the shopping list, then can be installed and invoiced from the part approvals queue.
                             </p>
                         </div>
                     </div>
                     <Link
                         to="/company/part-approvals"
-                        className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100"
+                        className="inline-flex items-center justify-center rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-semibold text-slate-700 hover:bg-slate-100"
                     >
                         Open Queue
                     </Link>
                 </div>
             </InfoCard>
-            <div className="grid grid-cols-1 xl:grid-cols-2 gap-8">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
                 <RecurringTab customer={customer} />
                 <WorkOrdersTab customer={customer} />
             </div>
@@ -5261,9 +5274,9 @@ export default function CustomerDetails() {
     );
 
     return (
-        <div className="min-h-screen bg-slate-50 px-2 py-6 text-slate-900 sm:px-3 lg:px-4">
-            <div className="w-full space-y-6">
-                <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="min-h-screen bg-slate-50 px-2 py-4 text-slate-900 sm:px-3 sm:py-6 lg:px-4">
+            <div className="w-full space-y-4 sm:space-y-6">
+                <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-5">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                         <div>
                             <div className="flex flex-wrap items-center gap-2">
@@ -5285,13 +5298,24 @@ export default function CustomerDetails() {
                                     <StatusBadge key={tag}>{tag}</StatusBadge>
                                 ))}
                             </div>
-                            <h1 className="mt-3 text-3xl font-bold text-slate-950">{customerName}</h1>
+                            <h1 className="mt-3 text-2xl font-bold text-slate-950 sm:text-3xl">{customerName}</h1>
                             <p className="mt-2 max-w-3xl text-sm text-slate-600">
                                 {[customer.email, customer.phoneNumber].filter(Boolean).join(' · ') || 'No contact details saved'}
                             </p>
                         </div>
 
                         <div className="flex flex-wrap gap-2">
+                            <ShareItemButton
+                                type="customer"
+                                recordId={customerId}
+                                title={customerName}
+                                subtitle={[customer.email, customer.phoneNumber].filter(Boolean).join(' - ')}
+                                companyId={recentlySelectedCompany}
+                                customerId={customerId}
+                                customerUserId={customer.userId}
+                                collectionPath={`companies/${recentlySelectedCompany}/customers`}
+                                webPath={`/company/customers/details/${customerId}`}
+                            />
                             {can("12") && (
                                 <Link
                                     to={`/company/customers/duplicate/${customer.id}`}
@@ -5333,9 +5357,9 @@ export default function CustomerDetails() {
                     </div>
                 </section>
 
-                <section className="grid gap-6 lg:grid-cols-[260px_minmax(0,1fr)]">
+                <section className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)] lg:gap-6">
                     <aside className="space-y-4">
-                        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm sm:p-4">
                             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Sections</h2>
                             <div className="mt-3 space-y-2">
                                 {customerSections.map((section) => {
@@ -5360,7 +5384,7 @@ export default function CustomerDetails() {
                             </div>
                         </div>
 
-                        <div className="rounded-lg border border-slate-200 bg-white p-4 text-sm shadow-sm">
+                        <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm shadow-sm sm:p-4">
                             <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Customer Snapshot</h2>
                             <dl className="mt-3 space-y-3">
                                 <div>
@@ -5423,7 +5447,7 @@ export default function CustomerDetails() {
                         <CustomerNotesSection customer={customer} compact />
                     </aside>
 
-                    <main className="min-w-0 space-y-6">
+                    <main className="min-w-0 space-y-4 sm:space-y-6">
                         {activeTab === 'profile' && (
                             <ProfileTab
                                 customer={customer}

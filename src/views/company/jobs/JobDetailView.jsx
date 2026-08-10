@@ -105,6 +105,7 @@ import {
   syncLinkedShoppingPurchase,
 } from "../../../utils/shoppingPurchaseSync";
 import { getCompanyUserDisplayName, sortCompanyUsersByName } from "../../../utils/companyUsers";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 /**
  * JobDetailView
@@ -10578,7 +10579,20 @@ const JobDetailView = () => {
                 </>
               )}
             </div>
-            <div className="flex justify-start lg:justify-end lg:pl-4">
+            <div className="flex flex-wrap justify-start gap-2 lg:justify-end lg:pl-4">
+              {!isInitialShellLoading && (
+                <ShareItemButton
+                  type="job"
+                  recordId={jobId}
+                  title={job.type || job.title || "Job"}
+                  subtitle={[getCustomerDisplayName(), job.billingStatus, job.operationStatus].filter(Boolean).join(" - ")}
+                  companyId={recentlySelectedCompany}
+                  customerId={job.customerId}
+                  customerUserId={job.customerUserId}
+                  collectionPath={`companies/${recentlySelectedCompany}/workOrders`}
+                  webPath={`/company/jobs/detail/${jobId}`}
+                />
+              )}
               {!edit ? (
                 <Menu as="div" className="relative inline-block text-left">
                   <MenuButton className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2">

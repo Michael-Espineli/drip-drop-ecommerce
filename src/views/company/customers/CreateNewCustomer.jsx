@@ -18,6 +18,7 @@ import {
     describeDuplicateCustomerMatch,
     findDuplicateCustomerMatches,
 } from '../../../utils/customerDuplicates';
+import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
 
 const InfoSection = ({ title, children }) => (
     <div className="border-b border-gray-200 pb-6 mb-6">
@@ -51,7 +52,7 @@ const FormSelect = ({ label, name, value, onChange, children }) => (
 
 const CreateNewCustomer = () => {
     const navigate = useNavigate();
-    const { recentlySelectedCompany } = useContext(Context);
+    const { recentlySelectedCompany, recentlySelectedCompanyName, user } = useContext(Context);
 
     const [showUpgradeModal, setShowUpgradeModal] = useState(false);
     // Form state
@@ -189,8 +190,7 @@ const CreateNewCustomer = () => {
                 if (eq.name) {
                     const equipmentId = 'com_equ_' + uuidv4();
                     const finalCategory = eq.type || eq.category || '';
-
-                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), {
+                    const equipmentPayload = {
                         id: equipmentId, name: eq.name, notes: eq.notes, needsService: eq.needsService,
                         type: finalCategory,
                         typeId: eq.typeId || "",
@@ -205,7 +205,22 @@ const CreateNewCustomer = () => {
                         bodyOfWaterId,
                         customerName,
                         dateInstalled: new Date(), active: true, status: 'Operational'
-                    });
+                    };
+
+                    await setDoc(doc(db, 'companies', recentlySelectedCompany, 'equipment', equipmentId), equipmentPayload);
+
+                    try {
+                        await queueUniversalEquipmentSuggestion({
+                            db,
+                            companyId: recentlySelectedCompany,
+                            companyName: recentlySelectedCompanyName || '',
+                            user,
+                            equipment: equipmentPayload,
+                            source: 'customerCreateEquipment',
+                        });
+                    } catch (suggestionError) {
+                        console.error('Error creating universal equipment suggestion:', suggestionError);
+                    }
                 }
             }
 

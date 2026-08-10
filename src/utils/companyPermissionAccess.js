@@ -59,6 +59,7 @@ const routePermissionRules = [
   [/^\/company\/leads/i, "610"],
   [/^\/company\/pipeline/i, "630"],
   [/^\/company\/customers\/create-from-lead/i, "612"],
+  [/^\/company\/initial-estimates/i, "620"],
   [/^\/company\/estimates\/create/i, "622"],
   [/^\/company\/estimates\/schedule/i, "622"],
   [/^\/company\/estimates/i, "620"],

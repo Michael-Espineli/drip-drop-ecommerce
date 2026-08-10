@@ -22,6 +22,7 @@ import { format } from "date-fns";
 import { displayRecordReference, linkedReferenceText } from "../../../utils/displayReferences";
 import { appAlert, appConfirm } from "../../../utils/appDialog";
 import { syncLinkedShoppingPurchase } from "../../../utils/shoppingPurchaseSync";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 const purchaseCategoryOptions = ["PVC", "Galvanized", "Chemicals", "Useables", "Equipment", "Parts", "Electrical", "Tools", "Misc", "Uncategorized"];
 const normalizePurchaseCategory = (value) => String(value || "").trim() || "Uncategorized";
@@ -1343,12 +1344,24 @@ const PurchaseDetailView = () => {
                     </div>
 
                     {!edit ? (
-                        <button
-                            onClick={editJob}
-                            className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
-                        >
-                            Edit
-                        </button>
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <ShareItemButton
+                                type="purchase"
+                                recordId={purchaseId}
+                                title={purchase.name || purchase.itemName || purchase.description || "Purchased Item"}
+                                subtitle={[purchase.customerName, purchase.vendorName || purchase.venderName, purchase.status].filter(Boolean).join(" - ")}
+                                companyId={recentlySelectedCompany}
+                                customerId={purchase.customerId}
+                                collectionPath={`companies/${recentlySelectedCompany}/purchasedItems`}
+                                webPath={`/company/purchased-items/detail/${purchaseId}`}
+                            />
+                            <button
+                                onClick={editJob}
+                                className="px-4 py-2 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 rounded-xl shadow-sm hover:bg-blue-100 transition"
+                            >
+                                Edit
+                            </button>
+                        </div>
                     ) : (
                         <div className="flex gap-2">
                             <button

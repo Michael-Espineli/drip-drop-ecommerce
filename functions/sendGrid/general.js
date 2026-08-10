@@ -217,6 +217,24 @@ const getCompanyCustomerEmail = async ({ companyId, customerId }) => {
 
 const normalizeEmail = (email) => String(email || "").trim().toLowerCase();
 
+const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || "").trim());
+
+const normalizeEmailList = (value = []) => {
+    const rawValues = Array.isArray(value)
+        ? value
+        : String(value || "").split(/[\s,;]+/);
+    const seen = new Set();
+
+    return rawValues
+        .map((email) => normalizeEmail(email))
+        .filter(Boolean)
+        .filter((email) => {
+            if (seen.has(email)) return false;
+            seen.add(email);
+            return true;
+        });
+};
+
 const getFirstLinkedCustomerId = (customer = {}) => (
     Array.isArray(customer.linkedCustomerIds)
         ? customer.linkedCustomerIds.find(Boolean) || ""
@@ -1532,8 +1550,24 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         throw new HttpsError("permission-denied", "Agreement does not belong to the selected company.");
     }
 
-    if (!agreement.email) {
-        throw new HttpsError("failed-precondition", "Agreement is missing a customer email.");
+    const primaryEmail = normalizeEmail(
+        payload.primaryEmail ||
+        payload.email ||
+        agreement.email ||
+        agreement.customerEmail ||
+        agreement.billingEmail
+    );
+    const additionalEmails = normalizeEmailList(payload.additionalEmails)
+        .filter((email) => email !== primaryEmail);
+    const recipientEmails = [primaryEmail, ...additionalEmails].filter(Boolean);
+    const invalidRecipientEmails = recipientEmails.filter((email) => !isValidEmail(email));
+
+    if (!primaryEmail) {
+        throw new HttpsError("failed-precondition", "Add a primary recipient email before sending.");
+    }
+
+    if (invalidRecipientEmails.length) {
+        throw new HttpsError("invalid-argument", `Check recipient email: ${invalidRecipientEmails.join(", ")}`);
     }
 
     const lineItems = Array.isArray(agreement.lineItems) ? agreement.lineItems : [];
@@ -1563,30 +1597,33 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
     const fromEmail = process.env.SEND_GRID_FROM_EMAIL || emailConfig.fromEmail || "info@dripdrop-poolapp.com";
     const replyToEmail = emailConfig.replyToEmail || companyData.email || companyData.companyEmail || fromEmail;
     const reviewAccessToken = uuidv4();
+    const agreementForEmail = {
+        ...agreement,
+        email: primaryEmail,
+    };
     const agreementUrl = buildUrl(agreementBaseUrl, `/customer/service-agreements/${agreementId}`, {
-        email: agreement.email,
+        email: primaryEmail,
         accessToken: reviewAccessToken,
     });
     const inspectionReportUrl = includeInspectionReport
         ? publicInspectionReportUrlForAgreement({
-            agreement,
+            agreement: agreementForEmail,
             baseUrl: agreementBaseUrl,
             agreementId,
-            email: agreement.email,
+            email: primaryEmail,
             accessToken: reviewAccessToken,
         })
         : "";
     const customerAccess = await buildCustomerAccessTemplateData({
         companyId,
         customerId: agreement.customerId || "",
-        email: agreement.email,
-        record: agreement,
+        email: primaryEmail,
+        record: agreementForEmail,
         actionUrl: agreementUrl,
         baseUrl: agreementBaseUrl,
     });
-    const emailDelivery = await resolveEmailDeliveryRecipient(agreement.email);
     const dynamicTemplateData = buildServiceAgreementTemplateData({
-        agreement,
+        agreement: agreementForEmail,
         companyData,
         agreementUrl,
         customerAccess,
@@ -1594,38 +1631,55 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         inspectionReportUrl,
     });
 
-    const msg = {
-        to: emailDelivery.actualTo,
-        from: fromEmail,
-        replyTo: replyToEmail,
-        templateId,
-        dynamicTemplateData: addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery)
-    };
+    const deliveryResults = [];
+    for (const recipientEmail of recipientEmails) {
+        const emailDelivery = await resolveEmailDeliveryRecipient(recipientEmail);
+        const msg = {
+            to: emailDelivery.actualTo,
+            from: fromEmail,
+            replyTo: replyToEmail,
+            templateId,
+            dynamicTemplateData: addDeliveryModeTemplateData(dynamicTemplateData, emailDelivery)
+        };
 
-    let sendResult;
-    try {
-        sendResult = await sgMail.send(msg);
-    } catch (error) {
-        const providerErrors = error.response?.body?.errors || [];
-        const providerMessage = providerErrors.length
-            ? providerErrors.map((item) => item.message).filter(Boolean).join("; ")
-            : error.message || "SendGrid rejected the request.";
+        let sendResult;
+        try {
+            sendResult = await sgMail.send(msg);
+        } catch (error) {
+            const providerErrors = error.response?.body?.errors || [];
+            const providerMessage = providerErrors.length
+                ? providerErrors.map((item) => item.message).filter(Boolean).join("; ")
+                : error.message || "SendGrid rejected the request.";
 
-        console.error("Unable to send service agreement email through SendGrid", {
-            message: error.message,
-            code: error.code,
-            responseBody: error.response?.body,
+            console.error("Unable to send service agreement email through SendGrid", {
+                message: error.message,
+                code: error.code,
+                responseBody: error.response?.body,
+                intendedTo: recipientEmail,
+            });
+
+            throw new HttpsError("internal", `Unable to send service agreement email: ${providerMessage}`);
+        }
+
+        deliveryResults.push({
+            to: emailDelivery.actualTo,
+            intendedTo: emailDelivery.intendedTo,
+            testMode: emailDelivery.testMode,
+            realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
+            realEmailsEnabled: emailDelivery.realEmailsEnabled,
+            messageId: sendResult?.[0]?.headers?.["x-message-id"] || "",
         });
-
-        throw new HttpsError("internal", `Unable to send service agreement email: ${providerMessage}`);
     }
 
-    const messageId = sendResult?.[0]?.headers?.["x-message-id"] || "";
+    const primaryDelivery = deliveryResults[0] || {};
+    const messageId = primaryDelivery.messageId || "";
+    const messageIds = deliveryResults.map((delivery) => delivery.messageId).filter(Boolean);
 
     const sentAt = admin.firestore.FieldValue.serverTimestamp();
 
     await agreementRef.set({
         status: "sent",
+        email: primaryEmail,
         customerUserId: agreement.customerUserId || customerAccess.customerUserId || null,
         relationshipId: agreement.relationshipId || customerAccess.relationshipId || "",
         customerCompanyRelationshipId: agreement.customerCompanyRelationshipId || customerAccess.customerCompanyRelationshipId || "",
@@ -1635,11 +1689,15 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         emailDelivery: {
             provider: "sendGrid",
             templateId,
-            to: emailDelivery.actualTo,
-            intendedTo: emailDelivery.intendedTo,
+            to: primaryDelivery.to || "",
+            intendedTo: primaryEmail,
+            additionalEmails,
+            recipientEmails,
+            deliveries: deliveryResults,
             from: fromEmail,
             replyTo: replyToEmail,
             messageId,
+            messageIds,
             agreementUrl,
             reviewAccessToken,
             reviewAccessTokenCreatedAt: sentAt,
@@ -1651,16 +1709,16 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
             customerPortalUrl: customerAccess.customerPortalUrl,
             claimAccountUrl: customerAccess.claimAccountUrl,
             hasLinkedCustomerAccount: customerAccess.hasLinkedCustomerAccount,
-            testMode: emailDelivery.testMode,
-            realEmailsFeatureFlagId: emailDelivery.realEmailsFeatureFlagId,
-            realEmailsEnabled: emailDelivery.realEmailsEnabled,
+            testMode: deliveryResults.some((delivery) => delivery.testMode),
+            realEmailsFeatureFlagId: primaryDelivery.realEmailsFeatureFlagId || "",
+            realEmailsEnabled: primaryDelivery.realEmailsEnabled === true,
             lastSentAt: sentAt,
         }
     }, { merge: true });
 
     await syncLinkedJobForAgreementStatus({
         agreement: {
-            ...agreement,
+            ...agreementForEmail,
             customerUserId: agreement.customerUserId || customerAccess.customerUserId || null,
         },
         status: "sent",
@@ -1669,22 +1727,27 @@ exports.sendServiceAgreementEmail = functions.https.onCall(async (data, context)
         timestamp: sentAt,
     });
     await syncLinkedLeadForAgreementStatus({
-        agreement,
+        agreement: agreementForEmail,
         status: "sent",
         timestamp: sentAt,
     });
 
     return {
         status: 200,
-        message: "Service agreement email sent.",
+        message: `Service agreement email sent to ${recipientEmails.length} recipient${recipientEmails.length === 1 ? "" : "s"}.`,
         messageId,
+        messageIds,
         agreementUrl,
         includeInspectionReport,
         hasInspectionReport: Boolean(includeInspectionReport && inspectionReportUrl),
         inspectionReportUrl,
-        to: emailDelivery.actualTo,
-        intendedTo: emailDelivery.intendedTo,
-        testMode: emailDelivery.testMode
+        to: primaryDelivery.to || "",
+        intendedTo: primaryEmail,
+        additionalEmails,
+        recipientEmails,
+        deliveries: deliveryResults,
+        sentCount: recipientEmails.length,
+        testMode: deliveryResults.some((delivery) => delivery.testMode)
     };
 });
 

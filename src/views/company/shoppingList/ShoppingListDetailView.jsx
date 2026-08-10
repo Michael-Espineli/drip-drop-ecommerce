@@ -25,6 +25,7 @@ import {
     isShoppingItemFromPartApproval,
 } from "../../../utils/shoppingListDelete";
 import { compareCompanyUsersByName } from "../../../utils/companyUsers";
+import ShareItemButton from "../../components/share/ShareItemButton";
 
 const categoryOptions = ["Personal", "Customer", "Job"];
 const subCategoryOptions = ["Data Base", "Chemical", "Part", "Custom"];
@@ -882,7 +883,17 @@ const ShoppingListDetailView = () => {
                     </div>
 
                     {!edit ? (
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap items-center justify-end gap-2">
+                            <ShareItemButton
+                                type="shoppingListItem"
+                                recordId={shoppingItemId}
+                                title={item.name || item.itemName || item.description || "Shopping Item"}
+                                subtitle={[item.customerName, item.jobName, item.status].filter(Boolean).join(" - ")}
+                                companyId={recentlySelectedCompany}
+                                customerId={item.customerId}
+                                collectionPath={`companies/${recentlySelectedCompany}/${sourceCollection}`}
+                                webPath={`/company/shopping-list/detail/${shoppingItemId}`}
+                            />
                             <button
                                 onClick={editJob}
                                 className="rounded-md bg-blue-600 px-4 py-2 font-semibold text-white transition hover:bg-blue-700"

@@ -4104,6 +4104,234 @@ const isCompanyAccessActive = (access = {}) => {
   return access.active !== false && !["inactive", "past", "revoked"].includes(status);
 };
 
+const COMPANY_USER_MANAGER_ROLE_NAMES = new Set(["owner", "admin", "manager"]);
+const COMPANY_USER_ACCESS_PERMISSION_ID = "264";
+const COMPANY_USER_ACCESS_ARRAY_FIELDS = new Set([
+  "customerRegionTags",
+  "regionalCustomerTags",
+  "customerTagAccess",
+  "allowedCustomerTags",
+  "dashboardScopeAccess",
+  "allowedDashboardScopes",
+]);
+const COMPANY_USER_ACCESS_BOOLEAN_FIELDS = new Set([
+  "fullCustomerRegionAccess",
+  "fullRegionalAccess",
+  "active",
+]);
+const COMPANY_USER_ACCESS_STRING_FIELDS = new Set([
+  "regionalAccessMode",
+  "customerRegionAccessMode",
+  "dashboardScopeAccessMode",
+  "roleId",
+  "roleName",
+  "status",
+  "workerType",
+]);
+
+const normalizeAccessArray = (value) => {
+  if (!Array.isArray(value)) return [];
+
+  const seen = new Set();
+  return value.reduce((items, item) => {
+    const normalized = String(item || "").trim();
+    const key = normalized.toLowerCase();
+    if (!normalized || seen.has(key)) return items;
+
+    seen.add(key);
+    items.push(normalized);
+    return items;
+  }, []);
+};
+
+const sanitizeCompanyUserAccessUpdates = (updates = {}) => {
+  if (!updates || typeof updates !== "object" || Array.isArray(updates)) {
+    throw new functions.https.HttpsError("invalid-argument", "updates must be an object.");
+  }
+
+  const sanitized = {};
+  Object.entries(updates).forEach(([field, value]) => {
+    if (COMPANY_USER_ACCESS_ARRAY_FIELDS.has(field)) {
+      sanitized[field] = normalizeAccessArray(value);
+      return;
+    }
+
+    if (COMPANY_USER_ACCESS_BOOLEAN_FIELDS.has(field)) {
+      sanitized[field] = value === true;
+      return;
+    }
+
+    if (COMPANY_USER_ACCESS_STRING_FIELDS.has(field)) {
+      sanitized[field] = String(value || "").trim();
+      return;
+    }
+
+    throw new functions.https.HttpsError("invalid-argument", `${field} cannot be updated by this action.`);
+  });
+
+  if (Object.keys(sanitized).length === 0) {
+    throw new functions.https.HttpsError("invalid-argument", "At least one supported update field is required.");
+  }
+
+  return sanitized;
+};
+
+const userCanUpdateCompanyUsers = async (firestore, userId, companyId) => {
+  if (!userId || !companyId) return false;
+
+  const [userSnap, accessSnap] = await Promise.all([
+    firestore.collection("users").doc(userId).get(),
+    firestore.collection("users").doc(userId).collection("userAccess").doc(companyId).get(),
+  ]);
+
+  const userData = userSnap.exists ? userSnap.data() || {} : {};
+  if (userData.accountType === "Admin") return true;
+  if (!accessSnap.exists) return false;
+
+  const access = accessSnap.data() || {};
+  if (!isCompanyAccessActive(access)) return false;
+
+  const roleId = String(access.roleId || "").trim();
+  if (roleId) {
+    const roleSnap = await firestore.collection("companies").doc(companyId).collection("roles").doc(roleId).get();
+    if (roleSnap.exists) {
+      const permissionIds = roleSnap.data()?.permissionIdList;
+      if (!Array.isArray(permissionIds)) return true;
+      return permissionIds.map(String).includes(COMPANY_USER_ACCESS_PERMISSION_ID);
+    }
+  }
+
+  return COMPANY_USER_MANAGER_ROLE_NAMES.has(String(access.roleName || "").trim().toLowerCase());
+};
+
+const copyDefinedAccessFields = (source = {}, fields = []) => fields.reduce((payload, field) => {
+  if (source[field] !== undefined) payload[field] = source[field];
+  return payload;
+}, {});
+
+exports.updateCompanyUserAccess = functions.https.onCall(async (data, context) => {
+  const payload = getCallablePayload(data);
+  const authContext = await getVerifiedCallableAuth(payload, context);
+  const authUserId = authContext?.uid;
+  const companyId = String(payload.companyId || "").trim();
+  const companyUserId = String(payload.companyUserId || "").trim();
+  const updates = sanitizeCompanyUserAccessUpdates(payload.updates || {});
+
+  if (!authUserId) {
+    throw new functions.https.HttpsError("unauthenticated", "You must be signed in to update company users.");
+  }
+
+  if (!companyId || !companyUserId) {
+    throw new functions.https.HttpsError("invalid-argument", "companyId and companyUserId are required.");
+  }
+
+  const firestore = getFirestore();
+  const canUpdate = await userCanUpdateCompanyUsers(firestore, authUserId, companyId);
+  if (!canUpdate) {
+    throw new functions.https.HttpsError("permission-denied", "You do not have permission to update company users.");
+  }
+
+  const companyRef = firestore.collection("companies").doc(companyId);
+  const companyUserRef = companyRef.collection("companyUsers").doc(companyUserId);
+  const [companySnap, companyUserSnap] = await Promise.all([
+    companyRef.get(),
+    companyUserRef.get(),
+  ]);
+
+  if (!companySnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Company not found.");
+  }
+
+  if (!companyUserSnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Company user not found.");
+  }
+
+  const companyData = companySnap.data() || {};
+  const existingCompanyUser = companyUserSnap.data() || {};
+  const nextCompanyUser = {
+    ...existingCompanyUser,
+    ...updates,
+  };
+  const linkedUserId = String(existingCompanyUser.userId || existingCompanyUser.uid || "").trim();
+  const now = admin.firestore.FieldValue.serverTimestamp();
+  const auditFields = {
+    updatedAt: now,
+    accessUpdatedAt: now,
+    accessUpdatedByUserId: authUserId,
+  };
+  const batch = firestore.batch();
+
+  batch.set(companyUserRef, {
+    ...updates,
+    ...auditFields,
+  }, { merge: true });
+
+  let userAccessResponse = null;
+  if (linkedUserId) {
+    const userAccessRef = firestore.collection("users").doc(linkedUserId).collection("userAccess").doc(companyId);
+    const accessPayload = {
+      id: companyId,
+      companyId,
+      companyName: getCompanyDisplayName(companyData, nextCompanyUser.companyName || ""),
+      companyUserId,
+      companyUserDocId: companyUserId,
+      userId: linkedUserId,
+      roleId: nextCompanyUser.roleId || "",
+      roleName: nextCompanyUser.roleName || "",
+      status: nextCompanyUser.status || "Active",
+      active: nextCompanyUser.active !== false,
+      ...copyDefinedAccessFields(nextCompanyUser, [
+        "userName",
+        "displayName",
+        "name",
+        "firstName",
+        "lastName",
+        "email",
+        "workerType",
+      ]),
+      ...copyDefinedAccessFields(updates, [
+        "fullCustomerRegionAccess",
+        "fullRegionalAccess",
+        "regionalAccessMode",
+        "customerRegionAccessMode",
+        "customerRegionTags",
+        "regionalCustomerTags",
+        "customerTagAccess",
+        "allowedCustomerTags",
+        "dashboardScopeAccessMode",
+        "dashboardScopeAccess",
+        "allowedDashboardScopes",
+        "roleId",
+        "roleName",
+        "status",
+        "active",
+        "workerType",
+      ]),
+      ...auditFields,
+    };
+
+    batch.set(userAccessRef, accessPayload, { merge: true });
+    userAccessResponse = {
+      ...accessPayload,
+      updatedAt: null,
+      accessUpdatedAt: null,
+    };
+  }
+
+  await batch.commit();
+
+  return {
+    status: 200,
+    companyId,
+    companyUserId,
+    companyUser: {
+      id: companyUserId,
+      ...updates,
+    },
+    userAccess: userAccessResponse,
+  };
+});
+
 const customerCanRespondToPartApproval = (auth, approval = {}) => {
   if (!auth?.uid) return false;
   if (approval.customerUserId && approval.customerUserId === auth.uid) return true;

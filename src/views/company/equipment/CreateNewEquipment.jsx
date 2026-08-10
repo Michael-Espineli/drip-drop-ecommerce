@@ -2,7 +2,7 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { useNavigate, useParams, Link, useLocation } from 'react-router-dom';
 import { db } from '../../../utils/config';
-import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, query, where, getDocs, orderBy, setDoc, updateDoc } from 'firebase/firestore';
 import { Context } from '../../../context/AuthContext';
 import { Customer } from '../../../utils/models/Customer';
 import {
@@ -15,6 +15,7 @@ import Select from 'react-select';
 import { v4 as uuidv4 } from 'uuid';
 import useCompanyPermissions from '../../../hooks/useCompanyPermissions';
 import { appAlert } from '../../../utils/appDialog';
+import { queueUniversalEquipmentSuggestion } from '../../../utils/universalEquipmentSuggestions';
 
 const getDateFromReplacementContext = (value) => {
     if (!value) return new Date();
@@ -309,36 +310,14 @@ const CreateNewEquipment = () => {
     };
 
     const createCustomEquipmentSuggestion = async (equipmentId, equipmentData, flags) => {
-        if (!flags?.isCustomMake && !flags?.isCustomModel) return;
-
-        const suggestionId = `unv_equ_sug_${equipmentId}`;
-
-        await setDoc(doc(db, 'universalEquipmentSuggestions', suggestionId), {
-            id: suggestionId,
-            status: 'New',
-            source: 'companyEquipmentCreate',
+        await queueUniversalEquipmentSuggestion({
+            db,
             companyId: recentlySelectedCompany,
             companyName: recentlySelectedCompanyName || '',
-            createdByUserId: user?.uid || '',
-            createdByUserEmail: user?.email || '',
-            createdAt: serverTimestamp(),
-            createdAtMillis: Date.now(),
-            equipmentId,
-            equipmentName: equipmentData.name || '',
-            customerId: equipmentData.customerId || '',
-            customerName: equipmentData.customerName || '',
-            serviceLocationId: equipmentData.serviceLocationId || '',
-            bodyOfWaterId: equipmentData.bodyOfWaterId || '',
-            type: equipmentData.type || '',
-            typeId: equipmentData.typeId || '',
-            make: equipmentData.make || '',
-            makeId: equipmentData.makeId || '',
-            model: equipmentData.model || '',
-            modelId: equipmentData.modelId || '',
-            customCategoryRequested: flags.isCustomType,
-            customMakeRequested: flags.isCustomMake,
-            customModelRequested: flags.isCustomModel,
-            notes: equipmentData.notes || '',
+            user,
+            equipment: { ...equipmentData, id: equipmentId },
+            source: 'companyEquipmentCreate',
+            flags,
         });
     };
 

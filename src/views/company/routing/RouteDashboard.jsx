@@ -1762,6 +1762,91 @@ const RouteDashboard = () => {
             .filter(isStopMovable);
     }, [allRouteStops, selectedStopIds, serviceStops]);
 
+    const dailyRoutePulse = useMemo(() => {
+        const finishedStops = serviceStops.filter(stop => getStopTiming(stop).end).length;
+        const inProgressStops = serviceStops.filter(stop => {
+            const { start, end } = getStopTiming(stop);
+            return start && !end;
+        }).length;
+        const notStartedStops = serviceStops.length - finishedStops - inProgressStops;
+        const openStops = serviceStops.filter(isStopMovable).length;
+        const routedTechnicianCount = new Set(
+            displayActiveRoutes
+                .map(route => route.techId || route.techName || route.name)
+                .filter(Boolean)
+        ).size;
+
+        return {
+            totalStops: serviceStops.length,
+            finishedStops,
+            inProgressStops,
+            notStartedStops: Math.max(0, notStartedStops),
+            openStops,
+            activeRouteCount: displayActiveRoutes.length,
+            routedTechnicianCount,
+            completionPercent: serviceStops.length ? Math.round((finishedStops / serviceStops.length) * 100) : 0,
+        };
+    }, [displayActiveRoutes, serviceStops]);
+
+    const routeFollowUpItems = useMemo(() => {
+        const activeStopItems = allRouteStops
+            .filter(stop => {
+                const { start, end } = getStopTiming(stop);
+                return start && !end;
+            })
+            .map(stop => ({
+                id: `active-stop-${stop.id}`,
+                type: 'In Progress',
+                title: stop.customerName || 'Active service stop',
+                helper: `${stop.routeTechName || stop.tech || 'Unassigned'} started at ${formatTimeValue(getStopTiming(stop).start)}`,
+                tone: 'blue',
+                stopId: stop.id,
+            }));
+
+        const notStartedRouteItems = displayActiveRoutes
+            .map(route => {
+                const routeStops = getOrderedRouteStops(route, serviceStops);
+                const startedCount = routeStops.filter(stop => getStopTiming(stop).start).length;
+                const finishedCount = routeStops.filter(stop => getStopTiming(stop).end).length;
+
+                return {
+                    route,
+                    routeStops,
+                    startedCount,
+                    finishedCount,
+                };
+            })
+            .filter(({ routeStops, startedCount, finishedCount }) => routeStops.length > 0 && startedCount === 0 && finishedCount === 0)
+            .map(({ route, routeStops }) => ({
+                id: `not-started-route-${route.id}`,
+                type: 'Not Started',
+                title: route.techName || route.name || 'Route',
+                helper: `${routeStops.length} stop${routeStops.length === 1 ? '' : 's'} still untouched`,
+                tone: 'amber',
+                routeId: route.id,
+            }));
+
+        const openStopItems = allRouteStops
+            .filter(stop => {
+                const { start } = getStopTiming(stop);
+                return !start && isStopMovable(stop);
+            })
+            .map(stop => ({
+                id: `open-stop-${stop.id}`,
+                type: 'Open Stop',
+                title: stop.customerName || 'Service stop',
+                helper: `${stop.routeTechName || stop.tech || 'Unassigned'} - ${stop.address?.streetAddress || 'No address'}`,
+                tone: 'slate',
+                stopId: stop.id,
+            }));
+
+        return [
+            ...activeStopItems,
+            ...notStartedRouteItems,
+            ...openStopItems,
+        ].slice(0, 6);
+    }, [allRouteStops, displayActiveRoutes, serviceStops]);
+
     const selectedRouteLocations = useMemo(() => (
         isAllRoutesSelected ? [] :
         activeRouteLocations
@@ -2315,6 +2400,15 @@ const RouteDashboard = () => {
                             onClearSelection={() => setSelectedStopIds([])}
                         />
                     </div>
+                )}
+
+                {!isLoading && (
+                    <DailyRoutePulse
+                        summary={dailyRoutePulse}
+                        followUpItems={routeFollowUpItems}
+                        onOpenStop={(stopId) => navigate(`/company/serviceStops/detail/${stopId}`)}
+                        onSelectRoute={setSelectedRouteId}
+                    />
                 )}
 
                 {isLoading ? (
@@ -2923,6 +3017,143 @@ const RouteWeekNavigator = ({
     </section>
 );
 
+const DailyPulseStat = ({ label, value, helper, tone = 'slate' }) => {
+    const tones = {
+        slate: 'border-slate-200 bg-slate-50 text-slate-900',
+        blue: 'border-blue-100 bg-blue-50 text-blue-900',
+        emerald: 'border-emerald-100 bg-emerald-50 text-emerald-900',
+        amber: 'border-amber-100 bg-amber-50 text-amber-900',
+    };
+
+    return (
+        <div className={`rounded-lg border px-3 py-3 ${tones[tone] || tones.slate}`}>
+            <p className="text-[10px] font-bold uppercase tracking-wide opacity-65">{label}</p>
+            <p className="mt-1 text-xl font-bold leading-none">{value}</p>
+            {helper && <p className="mt-1 truncate text-xs font-semibold opacity-70">{helper}</p>}
+        </div>
+    );
+};
+
+const DailyRoutePulse = ({ summary, followUpItems, onOpenStop, onSelectRoute }) => {
+    const finishedWidth = summary.totalStops ? `${(summary.finishedStops / summary.totalStops) * 100}%` : '0%';
+    const inProgressWidth = summary.totalStops ? `${(summary.inProgressStops / summary.totalStops) * 100}%` : '0%';
+    const notStartedWidth = summary.totalStops ? `${(summary.notStartedStops / summary.totalStops) * 100}%` : '0%';
+    const followUpToneClass = {
+        blue: 'bg-blue-50 text-blue-700 ring-blue-100',
+        amber: 'bg-amber-50 text-amber-700 ring-amber-100',
+        slate: 'bg-slate-100 text-slate-700 ring-slate-200',
+    };
+
+    return (
+        <section className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div>
+                        <p className="text-xs font-bold uppercase tracking-wide text-blue-700">Daily Route Pulse</p>
+                        <h2 className="mt-1 text-xl font-bold text-slate-950">Execution status</h2>
+                        <p className="mt-1 text-sm text-slate-500">Completion, active work, and route coverage for the selected day.</p>
+                    </div>
+                    <div className="rounded-lg bg-slate-900 px-4 py-3 text-white">
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-slate-300">Completion</p>
+                        <p className="mt-1 text-3xl font-bold leading-none">{summary.completionPercent}%</p>
+                    </div>
+                </div>
+
+                <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                    <DailyPulseStat
+                        label="Stops Finished"
+                        value={`${summary.finishedStops}/${summary.totalStops}`}
+                        helper="completed service stops"
+                        tone="emerald"
+                    />
+                    <DailyPulseStat
+                        label="Active Routes"
+                        value={summary.activeRouteCount}
+                        helper={`${summary.routedTechnicianCount} routed tech${summary.routedTechnicianCount === 1 ? '' : 's'}`}
+                        tone="blue"
+                    />
+                    <DailyPulseStat
+                        label="In Progress"
+                        value={summary.inProgressStops}
+                        helper="currently started"
+                        tone="amber"
+                    />
+                    <DailyPulseStat
+                        label="Open Stops"
+                        value={summary.openStops}
+                        helper="unfinished or movable"
+                    />
+                </div>
+
+                <div className="mt-4">
+                    <div className="flex items-center justify-between gap-3 text-xs font-semibold text-slate-500">
+                        <span>Finished</span>
+                        <span>{summary.notStartedStops} not started</span>
+                    </div>
+                    <div className="mt-2 flex h-3 overflow-hidden rounded-full bg-slate-100">
+                        <span className="bg-emerald-500" style={{ width: finishedWidth }} />
+                        <span className="bg-blue-500" style={{ width: inProgressWidth }} />
+                        <span className="bg-amber-300" style={{ width: notStartedWidth }} />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold text-slate-500">
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" /> Finished</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-blue-500" /> In progress</span>
+                        <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-amber-300" /> Not started</span>
+                    </div>
+                </div>
+            </div>
+
+            <aside className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex items-start justify-between gap-3">
+                    <div>
+                        <p className="text-xs font-bold uppercase tracking-wide text-amber-700">Follow-up Queue</p>
+                        <h2 className="mt-1 text-xl font-bold text-slate-950">Needs attention</h2>
+                    </div>
+                    <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">{followUpItems.length}</span>
+                </div>
+
+                <div className="mt-4 space-y-2">
+                    {followUpItems.length ? followUpItems.map((item) => {
+                        const clickable = item.stopId || item.routeId;
+                        const handleClick = () => {
+                            if (item.stopId) {
+                                onOpenStop(item.stopId);
+                                return;
+                            }
+
+                            if (item.routeId) onSelectRoute(item.routeId);
+                        };
+
+                        return (
+                            <button
+                                key={item.id}
+                                type="button"
+                                onClick={handleClick}
+                                disabled={!clickable}
+                                className="w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-left transition hover:border-blue-200 hover:bg-blue-50 disabled:cursor-default disabled:hover:border-slate-200 disabled:hover:bg-slate-50"
+                            >
+                                <div className="flex items-start justify-between gap-3">
+                                    <span className="min-w-0">
+                                        <span className="block truncate text-sm font-bold text-slate-900">{item.title}</span>
+                                        <span className="mt-0.5 block truncate text-xs text-slate-500">{item.helper}</span>
+                                    </span>
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ring-1 ${followUpToneClass[item.tone] || followUpToneClass.slate}`}>
+                                        {item.type}
+                                    </span>
+                                </div>
+                            </button>
+                        );
+                    }) : (
+                        <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm font-semibold text-slate-500">
+                            No follow-up items for this date.
+                        </div>
+                    )}
+                </div>
+            </aside>
+        </section>
+    );
+};
+
 const getRouteStatusClass = (status) => {
     switch (status) {
         case 'Finished':
@@ -2934,12 +3165,20 @@ const getRouteStatusClass = (status) => {
     }
 };
 
-const RouteSummaryDatum = ({ label, value, helper }) => (
-    <div className="min-w-0">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</p>
-        <p className="truncate text-sm font-bold text-gray-900">{value}</p>
-        {helper && <p className="truncate text-xs text-gray-500">{helper}</p>}
+const RouteSummaryDatum = ({ label, value, helper, compact = false }) => (
+    <div className={`min-w-0 ${compact ? 'leading-tight' : ''}`}>
+        <p className={`${compact ? 'text-[9px]' : 'text-[10px]'} font-bold uppercase tracking-wide text-gray-500`}>{label}</p>
+        <p className={`truncate ${compact ? 'text-xs' : 'text-sm'} font-bold text-gray-900`}>{value}</p>
+        {helper && <p className={`truncate ${compact ? 'text-[11px]' : 'text-xs'} text-gray-500`}>{helper}</p>}
     </div>
+);
+
+const RouteCompactStat = ({ label, value, helper }) => (
+    <span className="inline-flex min-w-0 items-center gap-1 rounded-md bg-gray-50 px-2 py-1 text-xs font-semibold text-gray-700 ring-1 ring-gray-100">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{label}</span>
+        <span className="font-bold text-gray-900">{value}</span>
+        {helper && <span className="hidden truncate text-[11px] font-medium text-gray-500 sm:inline">{helper}</span>}
+    </span>
 );
 
 const RouteTechnicianSummary = ({
@@ -2968,9 +3207,9 @@ const RouteTechnicianSummary = ({
             : 'N/A';
 
     return (
-        <div className="mt-3 grid gap-3 border-t border-gray-200 pt-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-2 grid gap-2 border-t border-gray-200 pt-2 sm:grid-cols-2 xl:grid-cols-[minmax(180px,1.35fr)_repeat(3,minmax(0,0.8fr))]">
             <div className="min-w-0 sm:col-span-2 xl:col-span-1">
-                <div className="mb-1 flex items-center justify-between gap-2">
+                <div className="mb-0.5 flex items-center justify-between gap-2">
                     <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Vehicle</p>
                     <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-gray-500 ring-1 ring-gray-200">
                         {routeVehicleSourceLabel(route)}
@@ -2980,7 +3219,7 @@ const RouteTechnicianSummary = ({
                     value={routeVehicleSelectionValue(route)}
                     onChange={(event) => onVehicleChange(route, event.target.value)}
                     disabled={isVehicleUpdating}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    className="w-full rounded-md border border-gray-300 bg-white px-2 py-1 text-xs font-semibold text-gray-700 focus:border-blue-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
                 >
                     {vehicleOptions.map(option => (
                         <option key={option.value} value={option.value}>
@@ -2988,20 +3227,22 @@ const RouteTechnicianSummary = ({
                         </option>
                     ))}
                 </select>
-                <p className="mt-1 truncate text-xs text-gray-500">
+                <p className="mt-0.5 truncate text-[11px] leading-tight text-gray-500">
                     {routeVehicleSummary(route, fleetVehicles, technicians)}
                 </p>
             </div>
-            <RouteSummaryDatum label="Mileage" value={mileageText} />
+            <RouteSummaryDatum label="Mileage" value={mileageText} compact />
             <RouteSummaryDatum
                 label={activeStart ? 'Timer' : 'Duration'}
                 value={durationText}
                 helper={activeStart ? `Started ${formatTimeValue(activeStart)}` : ''}
+                compact
             />
             <RouteSummaryDatum
                 label="Active Stop"
                 value={activeStop?.customerName || 'None'}
                 helper={activeStop?.address?.streetAddress || ''}
+                compact
             />
         </div>
     );
@@ -3078,8 +3319,8 @@ const RouteWorkloadBoard = ({
                 </div>
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
-                <div className="space-y-3">
+            <div className="grid gap-3 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)]">
+                <div className="space-y-2">
                     <div className="flex items-center justify-between gap-3">
                         <div>
                             <h3 className="text-sm font-bold uppercase tracking-wide text-gray-500">Active Routes</h3>
@@ -3106,16 +3347,16 @@ const RouteWorkloadBoard = ({
                             className={`overflow-hidden rounded-lg border-l-4 bg-white shadow-sm transition ${isFocused ? 'border-y-blue-300 border-r-blue-300 ring-2 ring-blue-100' : 'border-y-gray-200 border-r-gray-200 hover:border-y-gray-300 hover:border-r-gray-300'}`}
                             style={{ borderLeftColor: group.routeColor }}
                         >
-                            <div className="px-4 py-3">
-                                <div className="flex items-start justify-between gap-3">
-                                    <div className="flex min-w-0 items-start gap-3">
+                            <div className="px-3 py-2">
+                                <div className="flex items-center justify-between gap-3">
+                                    <div className="flex min-w-0 items-center gap-2">
                                         <span
-                                            className="mt-1 h-3 w-3 shrink-0 rounded-full"
+                                            className="h-2.5 w-2.5 shrink-0 rounded-full"
                                             style={{ backgroundColor: group.routeColor }}
                                             aria-hidden="true"
                                         />
-                                        <div className="min-w-0">
-                                            <p className="truncate font-semibold text-gray-900">
+                                        <div className="min-w-0 leading-tight">
+                                            <p className="truncate text-sm font-semibold text-gray-900">
                                                 {group.route?.name || group.techName}
                                             </p>
                                             <p className="truncate text-xs text-gray-500">
@@ -3123,15 +3364,15 @@ const RouteWorkloadBoard = ({
                                             </p>
                                         </div>
                                     </div>
-                                    <span className={`shrink-0 rounded-full px-2 py-1 text-[11px] font-semibold ${getRouteStatusClass(group.route?.status)}`}>
+                                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] font-semibold ${getRouteStatusClass(group.route?.status)}`}>
                                         {group.route?.status || 'Unassigned'}
                                     </span>
                                 </div>
 
-                                <div className="mt-3 grid grid-cols-3 gap-2">
-                                    <RouteSummaryDatum label="Stops" value={`${finishedCount}/${group.stops.length}`} helper="finished" />
-                                    <RouteSummaryDatum label="Open" value={openCount} helper={`${inProgressCount} active`} />
-                                    <RouteSummaryDatum label="Selected" value={selectedInRoute} helper="move queue" />
+                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                    <RouteCompactStat label="Stops" value={`${finishedCount}/${group.stops.length}`} helper="finished" />
+                                    <RouteCompactStat label="Open" value={openCount} helper={`${inProgressCount} active`} />
+                                    <RouteCompactStat label="Selected" value={selectedInRoute} helper="move queue" />
                                 </div>
 
                                 {group.route && (
@@ -3146,12 +3387,12 @@ const RouteWorkloadBoard = ({
                                     />
                                 )}
 
-                                <div className="mt-3 flex flex-wrap items-center gap-2">
+                                <div className="mt-2 flex flex-wrap items-center gap-1.5">
                                     {group.route && (
                                         <button
                                             type="button"
                                             onClick={() => onSelectRoute(group.route.id)}
-                                            className={`rounded-md border px-3 py-1.5 text-xs font-semibold transition ${isFocused
+                                            className={`rounded-md border px-2.5 py-1 text-xs font-semibold transition ${isFocused
                                                     ? 'border-slate-900 bg-slate-900 text-white hover:bg-slate-800'
                                                     : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-100'
                                                 }`}

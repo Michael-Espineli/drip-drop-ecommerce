@@ -32,6 +32,7 @@ const Chat = lazy(() => import("../../views/tech/techChat/Chat"));
 const WorkInProgress = lazy(() => import("../../views/company/WorkInProgress"))
 
 const Customers = lazy(() => import("../../views/company/customers/Customers"))
+const ActiveCustomersWithoutCoverage = lazy(() => import("../../views/company/customers/ActiveCustomersWithoutCoverage"))
 const CustomerTagManager = lazy(() => import("../../views/company/customers/CustomerTagManager"))
 const CustomerDetails = lazy(() => import("../../views/company/customers/CustomerDetails"))
 const CreateNewCustomer = lazy(() => import("../../views/company/customers/CreateNewCustomer"))
@@ -126,6 +127,7 @@ const CustomerExportImport = lazy(() => import("../../views/company/migration/Cu
 const EquipmentImport = lazy(() => import("../../views/company/migration/EquipmentImport"))
 const SkimmerPreviousDosagesUpload = lazy(() => import("../../views/company/migration/SkimmerPreviousDosagesUpload"))
 const PerformanceHistoryImport = lazy(() => import("../../views/company/migration/PerformanceHistoryImport"))
+const CompanyDataExport = lazy(() => import("../../views/company/migration/CompanyDataExport"))
 
 const ChemicalHistory = lazy(() => import("../../views/company/history/ChemicalHistory"))
 const ServiceHistory = lazy(() => import("../../views/company/history/ServiceHistory"))
@@ -157,6 +159,7 @@ const Cancel = lazy(() => import("../../views/Cancel"))
 const Leads = lazy(() => import('../../views/company/marketing/Leads'));
 const LeadDetail = lazy(() => import('../../views/company/marketing/LeadDetail'));
 const AddLead = lazy(() => import('../../views/company/marketing/AddLead'));
+const InitialEstimates = lazy(() => import('../../views/company/marketing/InitialEstimates'));
 const CreateCustomerFromLead = lazy(() => import('../../views/company/customers/CreateCustomerFromLead'));
 
 const CreateEstimate = lazy(() => import('../../views/company/marketing/CreateEstimate'));
@@ -952,6 +955,11 @@ export const sellerRoutes = [
         ability: ['Admin', 'Seller'],
         role: 'Company'
     }, {
+        path: '/company/recurringServiceStop/active-customers-without-recurring-service-stops',
+        element: <ActiveCustomersWithoutCoverage mode="recurringServiceStops" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company'
+    }, {
         path: '/company/recurring-service-stops/create',
         element: <CreateNewRecurringServiceStops />,
         ability: ['Admin', 'Seller'],
@@ -1091,6 +1099,51 @@ export const sellerRoutes = [
     {
         path: '/company/migration/performance-history-import',
         element: <PerformanceHistoryImport />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/customer-export',
+        element: <CompanyDataExport exportType="customer-export" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/service-location-export',
+        element: <CompanyDataExport exportType="service-location-export" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/equipment-export',
+        element: <CompanyDataExport exportType="equipment-export" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+        featureFlagId: 'feature_flag_008',
+    }
+    ,
+    {
+        path: '/company/migration/service-history-export',
+        element: <CompanyDataExport exportType="service-history-export" />,
+        ability: ['Admin', 'Seller'],
+        role: 'Company',
+        permissionId: '910',
+        featureFlagIds: ['feature_flag_008', 'feature_flag_009'],
+    }
+    ,
+    {
+        path: '/company/migration/performance-history-export',
+        element: <CompanyDataExport exportType="performance-history-export" />,
         ability: ['Admin', 'Seller'],
         role: 'Company',
         permissionId: '910',
@@ -1246,6 +1299,12 @@ export const sellerRoutes = [
         element: <CreateCustomerFromLead />,
         role: 'Company',
     }, {
+        path: '/company/initial-estimates',
+        element: <InitialEstimates />,
+        role: 'Company',
+        permissionId: '620',
+        featureFlagId: 'feature_flag_007',
+    }, {
         path: '/company/estimates',
         element: <Estimates />,
         role: 'Company',
@@ -1317,6 +1376,11 @@ export const sellerRoutes = [
     }, {
         path: '/company/sales/agreements/needs-routing',
         element: <SalesAgreements routingQueueOnly />,
+        role: 'Company',
+        featureFlagId: 'feature_flag_004',
+    }, {
+        path: '/company/sales/agreements/active-customers-without-service-agreements',
+        element: <ActiveCustomersWithoutCoverage mode="serviceAgreements" />,
         role: 'Company',
         featureFlagId: 'feature_flag_004',
     }, {
